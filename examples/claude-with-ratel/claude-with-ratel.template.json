@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ratel-mcp": {
+      "command": "node",
+      "args": [
+        "<REPO_ROOT>/dist/bin.js",
+        "serve",
+        "--config",
+        "<REPO_ROOT>/examples/claude-with-ratel/ratel-config.json"
+      ]
+    }
+  }
+}

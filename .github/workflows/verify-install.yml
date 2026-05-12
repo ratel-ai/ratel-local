@@ -1,0 +1,25 @@
+name: Verify install
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version tag to test (e.g. 0.2.0 or rc)
+        required: false
+        default: latest
+  schedule:
+    - cron: '17 5 * * *'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: npx --help
+        env:
+          VERSION: ${{ inputs.version || 'latest' }}
+        run: |
+          set -e
+          npx -y "@ratel-ai/mcp-server@${VERSION}" --help

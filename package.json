@@ -1,0 +1,68 @@
+{
+  "name": "@ratel-ai/mcp-server",
+  "version": "0.2.0",
+  "description": "MCP server library + ratel-mcp CLI: expose a Ratel tool catalog as a Model Context Protocol server. Manage upstream MCP servers, OAuth, and Claude Code import from one binary.",
+  "private": false,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "author": "Agentified",
+  "homepage": "https://github.com/ratel-ai/ratel-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ratel-ai/ratel-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ratel-ai/ratel-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "tool-calling",
+    "ratel",
+    "context-engineering",
+    "gateway",
+    "claude-code",
+    "cli",
+    "oauth"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "ratel-mcp": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE.md",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepack": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src",
+    "test": "vitest run",
+    "start": "node dist/bin.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.13",
+    "@types/node": "^24.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.3.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@ratel-ai/sdk": "^0.1.5",
+    "proper-lockfile": "^4.1.2"
+  }
+}
