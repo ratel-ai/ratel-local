@@ -1,6 +1,6 @@
 {
   "name": "@ratel-ai/mcp-server",
-  "version": "0.2.0",
+  "version": "0.2.1-rc.0",
   "description": "MCP server library + ratel-mcp CLI: expose a Ratel tool catalog as a Model Context Protocol server. Manage upstream MCP servers, OAuth, and Claude Code import from one binary.",
   "private": false,
   "type": "module",

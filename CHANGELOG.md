@@ -4,6 +4,8 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.1-rc.0] - 2026-05-14
+
 ### Added
 - `ratel-mcp ui` subcommand — local browser UI mirroring the CLI. Loopback-only HTTP server with a per-session bearer token. Lets you view, add, edit, remove, and OAuth-authorize MCP servers across all three scopes; trigger Claude Code import/link; and undo the latest backup. Flags: `--port N`, `--no-open`.
 
