@@ -295,6 +295,10 @@ function applyConflictStrategy(
   const out: Record<string, ServerEntry> = ratel ? { ...ratel.mcpServers } : {};
   for (const name of bundle.movableNames.slice()) {
     if (out[name]) {
+      if (entriesEquivalent(out[name], bundle.movableEntries[name])) {
+        bundle.movableEntries[name] = out[name];
+        continue;
+      }
       conflicts.push({ name, scope, incoming: bundle.movableEntries[name], existing: out[name] });
       const shouldReplace =
         strategy === "replace-from-agent" ||
@@ -317,6 +321,30 @@ function applyConflictStrategy(
 
 export function conflictKey(scope: ClaudeScope, name: string): string {
   return `${scope}:${name}`;
+}
+
+function entriesEquivalent(a: ServerEntry, b: ServerEntry): boolean {
+  return canonicalJson(normalizeEntry(a)) === canonicalJson(normalizeEntry(b));
+}
+
+function normalizeEntry(entry: ServerEntry): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...entry };
+  if (out.type === undefined) out.type = "stdio";
+  return out;
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!isPlainObject(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    out[key] = sortJsonValue(value[key]);
+  }
+  return out;
 }
 
 function makeRatelEntry(bin: ResolvedBin, configArgs: string[]): ServerEntry {

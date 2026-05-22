@@ -462,6 +462,48 @@ describe("runImport", () => {
     expect(ratelUser.mcpServers.other).toEqual({ type: "stdio", command: "existing-other" });
   });
 
+  it("rejects replace-selected conflict strategy with --yes", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "incoming", description: "incoming fs" } },
+      }),
+    );
+    fs.files.set(
+      RATEL_USER,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "existing" } },
+      }),
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await expect(
+      runImport(ctx, { bin: BIN, yes: true, conflictStrategy: "replace-selected" }),
+    ).rejects.toThrow(/replace-selected cannot be combined with --yes or --dry-run/);
+  });
+
+  it("rejects replace-selected conflict strategy with --dry-run", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "incoming", description: "incoming fs" } },
+      }),
+    );
+    fs.files.set(
+      RATEL_USER,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "existing" } },
+      }),
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await expect(
+      runImport(ctx, { bin: BIN, dryRun: true, conflictStrategy: "replace-selected" }),
+    ).rejects.toThrow(/replace-selected cannot be combined with --yes or --dry-run/);
+  });
+
   it("canceling at the conflict prompt exits before writes or backups", async () => {
     const fs = new MemFs();
     fs.files.set(

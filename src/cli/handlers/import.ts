@@ -1,4 +1,5 @@
 import type { RatelConfig, ServerEntry } from "../../lib/index.js";
+import { ArgError } from "../args.js";
 import type { BackupManifest } from "../backup.js";
 import { type ClaudeConfigDoc, type ClaudeScope, readClaudeConfig } from "../claude.js";
 import { ratelConfigPath } from "../hierarchy.js";
@@ -172,6 +173,11 @@ async function resolveConflictStrategy(
   if (plan.summary.conflicts.length === 0) return { conflictStrategy: "add-missing-only" };
   ctx.prompts.note(renderConflicts(plan.summary.conflicts), "Conflicts");
   if (opts.conflictStrategy) {
+    if (opts.conflictStrategy === "replace-selected" && (opts.yes || opts.dryRun)) {
+      throw new ArgError(
+        "--conflict-strategy replace-selected cannot be combined with --yes or --dry-run",
+      );
+    }
     return resolveSelectedConflicts(ctx, plan, opts.conflictStrategy);
   }
   if (opts.dryRun) {

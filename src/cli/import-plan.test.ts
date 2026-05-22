@@ -232,6 +232,39 @@ describe("buildImportPlan", () => {
     ]);
   });
 
+  it("does not prompt a conflict when the existing Ratel entry is equivalent to the Claude entry", () => {
+    const incoming = {
+      command: "echo",
+      args: ["fs"],
+      env: { B: "2", A: "1" },
+    } as ServerEntry;
+    const existingRatelEntry: ServerEntry = {
+      type: "stdio",
+      env: { A: "1", B: "2" },
+      args: ["fs"],
+      command: "echo",
+    };
+    const plan = buildImportPlan(
+      emptyInputs({
+        claudeUser: claudeDoc("user", { fs: incoming }),
+        ratelUser: { mcpServers: { fs: existingRatelEntry } },
+      }),
+    );
+
+    expect(findWrite(plan, RATEL_USER)).toBeUndefined();
+    expect(plan.summary.conflicts).toEqual([]);
+    expect(plan.summary.skipped).toEqual([]);
+    expect(plan.summary.movedFromUser).toEqual(["fs"]);
+    const claudeUser = parseAfter(plan, HOME_CLAUDE);
+    expect(claudeUser.mcpServers).toEqual({
+      "ratel-mcp": {
+        type: "stdio",
+        command: "ratel-mcp",
+        args: ["serve", "--config", RATEL_USER],
+      },
+    });
+  });
+
   it("replaces Ratel entries on conflicts when requested", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
     const plan = buildImportPlan(
