@@ -119,10 +119,9 @@ export async function runImport(
     return null;
   }
 
-  // Stage A — Ratel writes
   let stageAManifest: BackupManifest | null = null;
   if (plan.ratelChanges.length > 0) {
-    ctx.prompts.note(renderDiff(plan.ratelChanges), "Stage A · Ratel config writes");
+    ctx.prompts.note(renderDiff(plan.ratelChanges), "Ratel config changes");
     if (!opts.yes) {
       const ok = await ctx.prompts.confirm({
         message: `Apply ${plan.ratelChanges.length} Ratel config change(s)?`,
@@ -136,13 +135,12 @@ export async function runImport(
     stageAManifest = await tryExecute(ctx, plan.ratelChanges, "import");
   }
 
-  // Stage B — Claude rewrites
   if (plan.claudeChanges.length === 0) {
     ctx.prompts.outro("import complete · no Claude changes needed");
     return stageAManifest;
   }
 
-  ctx.prompts.note(renderClaudeStage(plan), "Stage B · Claude config rewrites");
+  ctx.prompts.note(renderClaudeStage(plan), "Claude Code config changes");
   if (!opts.yes) {
     const ok = await ctx.prompts.confirm({
       message: `Replace ${plan.claudeChanges.length} Claude entr${
@@ -152,9 +150,9 @@ export async function runImport(
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
       ctx.log(
-        "Stage B skipped. Run `ratel-mcp link` (or re-run `ratel-mcp import`) to point Claude at Ratel later.",
+        "Claude Code config changes skipped. Run `ratel-mcp link` (or re-run `ratel-mcp import`) to point Claude at Ratel later.",
       );
-      ctx.prompts.outro("Stage A applied · Stage B deferred");
+      ctx.prompts.outro("Ratel config changes applied · Claude Code config changes skipped");
       return stageAManifest;
     }
   }
@@ -186,30 +184,12 @@ async function resolveConflictStrategy(
   }
   if (opts.yes) return { conflictStrategy: "add-missing-only" };
   const picked = await ctx.prompts.select<ImportConflictStrategy | "cancel">({
-    message: "How should conflicting MCP server names be handled?",
+    message:
+      plan.summary.conflicts.length === 1
+        ? "How should this conflicting MCP server name be handled?"
+        : "How should conflicting MCP server names be handled?",
     initialValue: "add-missing-only",
-    options: [
-      {
-        value: "add-missing-only",
-        label: "Add missing only",
-        hint: "Keep existing Ratel entries and import non-conflicting entries.",
-      },
-      {
-        value: "replace-selected",
-        label: "Replace selected conflicts",
-        hint: "Choose which conflicting Ratel entries to overwrite.",
-      },
-      {
-        value: "replace-from-agent",
-        label: "Replace conflicts from agent",
-        hint: "Overwrite conflicting Ratel entries with Claude Code entries.",
-      },
-      {
-        value: "cancel",
-        label: "Cancel",
-        hint: "Exit before writing files.",
-      },
-    ],
+    options: conflictStrategyOptions(plan.summary.conflicts.length),
   });
   if (ctx.prompts.isCancel(picked) || picked === "cancel") return null;
   return resolveSelectedConflicts(ctx, plan, picked as ImportConflictStrategy);
@@ -234,6 +214,47 @@ async function resolveSelectedConflicts(
   });
   if (ctx.prompts.isCancel(selected)) return null;
   return { conflictStrategy, replaceConflicts: new Set(selected as string[]) };
+}
+
+function conflictStrategyOptions(conflictCount: number) {
+  const options: Array<{
+    value: ImportConflictStrategy | "cancel";
+    label: string;
+    hint: string;
+  }> = [
+    {
+      value: "add-missing-only",
+      label: conflictCount === 1 ? "Keep existing Ratel entry" : "Keep existing Ratel entries",
+      hint:
+        conflictCount === 1
+          ? "Keep the existing Ratel entry and import non-conflicting entries."
+          : "Keep existing Ratel entries and import non-conflicting entries.",
+    },
+  ];
+  if (conflictCount > 1) {
+    options.push({
+      value: "replace-selected",
+      label: "Replace selected conflicts",
+      hint: "Choose which conflicting Ratel entries to overwrite.",
+    });
+  }
+  options.push(
+    {
+      value: "replace-from-agent",
+      label:
+        conflictCount === 1 ? "Replace from Claude Code" : "Replace conflicts from Claude Code",
+      hint:
+        conflictCount === 1
+          ? "Overwrite the conflicting Ratel entry with the Claude Code entry."
+          : "Overwrite conflicting Ratel entries with Claude Code entries.",
+    },
+    {
+      value: "cancel",
+      label: "Cancel",
+      hint: "Exit before writing files.",
+    },
+  );
+  return options;
 }
 
 function collectCandidates(

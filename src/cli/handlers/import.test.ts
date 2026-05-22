@@ -114,16 +114,24 @@ function conflictStrategyPrompts(
 ): {
   prompts: PromptAdapter;
   conflictMessages: string[];
+  selectOptions: string[];
 } {
   const conflictMessages: string[] = [];
+  const selectOptions: string[] = [];
   return {
     conflictMessages,
+    selectOptions,
     prompts: {
       ...autoConfirm(),
       note(message, title) {
         if (title === "Conflicts") conflictMessages.push(message);
       },
-      async select() {
+      async select(opts) {
+        selectOptions.splice(
+          0,
+          selectOptions.length,
+          ...opts.options.map((o) => o.value as string),
+        );
         return strategy;
       },
       async multiselect(opts) {
@@ -143,7 +151,7 @@ function decliningStageB(): PromptAdapter {
     ...autoConfirm(),
     async confirm() {
       stage += 1;
-      return stage === 1; // accept Stage A, decline Stage B
+      return stage === 1; // accept Ratel config changes, decline Claude Code config changes
     },
   };
 }
@@ -347,12 +355,14 @@ describe("runImport", () => {
         mcpServers: { fs: { type: "stdio", command: "existing" } },
       }),
     );
-    const { prompts, conflictMessages } = conflictStrategyPrompts("replace-from-agent");
+    const { prompts, conflictMessages, selectOptions } =
+      conflictStrategyPrompts("replace-from-agent");
     const { ctx } = ctxOf(fs, prompts, false);
     await runImport(ctx, { bin: BIN });
 
     expect(conflictMessages.join("\n")).toMatch(/source agent/i);
     expect(conflictMessages.join("\n")).toMatch(/existing Ratel/i);
+    expect(selectOptions).toEqual(["add-missing-only", "replace-from-agent", "cancel"]);
     const ratelUser = JSON.parse(fs.files.get(RATEL_USER) as string);
     expect(ratelUser.mcpServers.fs).toEqual({ type: "stdio", command: "incoming" });
   });
@@ -377,10 +387,16 @@ describe("runImport", () => {
         },
       }),
     );
-    const { prompts } = conflictStrategyPrompts("replace-selected", ["user:other"]);
+    const { prompts, selectOptions } = conflictStrategyPrompts("replace-selected", ["user:other"]);
     const { ctx } = ctxOf(fs, prompts, false);
     await runImport(ctx, { bin: BIN });
 
+    expect(selectOptions).toEqual([
+      "add-missing-only",
+      "replace-selected",
+      "replace-from-agent",
+      "cancel",
+    ]);
     const ratelUser = JSON.parse(fs.files.get(RATEL_USER) as string);
     expect(ratelUser.mcpServers.fs).toEqual({ type: "stdio", command: "existing-fs" });
     expect(ratelUser.mcpServers.other).toEqual({ type: "stdio", command: "incoming-other" });
@@ -545,7 +561,7 @@ describe("runImport", () => {
     expect(logs.join("\n")).toMatch(/ratel-mcp backup undo/);
   });
 
-  it("declining Stage B leaves Ratel configs in place and Claude untouched, with an undo+link hint", async () => {
+  it("declining Claude Code config changes leaves Ratel configs in place and Claude untouched, with an undo+link hint", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -559,13 +575,13 @@ describe("runImport", () => {
     const { ctx, logs } = ctxOf(fs, decliningStageB(), false);
     await runImport(ctx, { bin: BIN });
 
-    // Stage A applied: Ratel global has the entries.
+    // Ratel config changes applied: Ratel global has the entries.
     expect(fs.files.has(RATEL_USER)).toBe(true);
     const ratelUser = JSON.parse(fs.files.get(RATEL_USER) as string);
     expect(ratelUser.mcpServers.fs).toBeDefined();
     expect(ratelUser.mcpServers.other).toBeDefined();
 
-    // Stage B declined: Claude is untouched.
+    // Claude Code config changes declined: Claude is untouched.
     const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
     expect(claude.mcpServers["ratel-mcp"]).toBeUndefined();
     expect(claude.mcpServers.fs).toBeDefined();
@@ -599,7 +615,7 @@ describe("runImport", () => {
     expect(claude.mcpServers.fs).toBeUndefined();
   });
 
-  it("after declining Stage B, re-running offers Stage B again (Stage A is a no-op)", async () => {
+  it("after declining Claude Code config changes, re-running offers them again", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -611,7 +627,7 @@ describe("runImport", () => {
     await runImport(ctx, { bin: BIN });
     expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-mcp"]).toBeUndefined();
 
-    // Re-run: this time accept both stages.
+    // Re-run: this time accept both change groups.
     const { ctx: ctx2 } = ctxOf(fs, autoConfirm(), false);
     await runImport(ctx2, { bin: BIN });
     expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-mcp"]).toBeDefined();
