@@ -4,7 +4,6 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { TransportFactory } from "../lib/index.js";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import type { BackupFs } from "./backup.js";
-import type { ClaudeFs } from "./claude.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { runServe } from "./handlers/serve.js";
@@ -22,7 +21,7 @@ export interface RunCliOptions {
   serverName?: string;
   serverVersion?: string;
   prompts?: PromptAdapter;
-  fs?: JsonFs & BackupFs & ClaudeFs;
+  fs?: JsonFs & BackupFs;
   env?: HierarchyEnv;
   now?: () => Date;
 }

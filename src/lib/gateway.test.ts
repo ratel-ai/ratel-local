@@ -7,7 +7,12 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildGatewayFromConfig, redirectUrlFromStoredFile } from "./gateway.js";
+import {
+  buildGatewayFromConfig,
+  expandEnvPlaceholders,
+  redirectUrlFromStoredFile,
+  resolveHttpHeaders,
+} from "./gateway.js";
 import { RefreshFailedError } from "./oauth/refresh.js";
 import { RatelOAuthStore } from "./oauth/store.js";
 
@@ -15,6 +20,10 @@ interface UpstreamSpec {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+}
+
+function envRef(name: string): string {
+  return ["$", `{${name}}`].join("");
 }
 
 async function startUpstream(tools: UpstreamSpec[], instructions?: string) {
@@ -531,5 +540,38 @@ describe("buildGatewayFromConfig", () => {
     const results = await handle.runAuthFlow({});
     expect(results).toEqual([]);
     await handle.close();
+  });
+});
+
+describe("resolveHttpHeaders", () => {
+  it("expands environment placeholders in static headers", () => {
+    const headers = resolveHttpHeaders(
+      {
+        type: "http",
+        url: "https://example.com/mcp",
+        headers: {
+          "X-Static": "static",
+          "X-API-Key": envRef("MCP_API_KEY"),
+          Authorization: `Bearer ${envRef("MCP_TOKEN")}`,
+        },
+      },
+      { MCP_API_KEY: "api-key", MCP_TOKEN: "token" },
+    );
+
+    expect(headers).toEqual({
+      "X-Static": "static",
+      "X-API-Key": "api-key",
+      Authorization: "Bearer token",
+    });
+  });
+});
+
+describe("expandEnvPlaceholders", () => {
+  it("expands environment placeholders and leaves missing placeholders visible", () => {
+    expect(
+      expandEnvPlaceholders(`https://${envRef("MCP_HOST")}/mcp/${envRef("MISSING")}`, {
+        MCP_HOST: "example.com",
+      }),
+    ).toBe(`https://example.com/mcp/${envRef("MISSING")}`);
   });
 });

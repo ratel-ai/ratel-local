@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BackupFs } from "../backup.js";
 import { startBackup } from "../backup.js";
-import type { ClaudeFs } from "../claude.js";
 import type { JsonFs } from "../io.js";
 import { silentPromptAdapter } from "../prompts.js";
 import { runListBackups } from "./list.js";
@@ -9,7 +8,7 @@ import type { HandlerCtx } from "./types.js";
 
 const HOME = "/home/u";
 
-class MemFs implements BackupFs, JsonFs, ClaudeFs {
+class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
   async read(p: string) {
     return this.files.has(p) ? (this.files.get(p) as string) : null;

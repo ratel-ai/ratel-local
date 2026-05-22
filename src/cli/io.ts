@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import type { BackupFs } from "./backup.js";
-import type { ClaudeFs } from "./claude.js";
 import * as fsAdapter from "./io-fs.js";
 
 export interface JsonFs {
@@ -41,7 +40,7 @@ export const nodeJsonFs: JsonFs = {
   },
 };
 
-export const nodeFs: JsonFs & BackupFs & ClaudeFs = {
+export const nodeFs: JsonFs & BackupFs = {
   ...nodeJsonFs,
   async write(path, contents) {
     await fsAdapter.mkdir(dirname(path), { recursive: true });

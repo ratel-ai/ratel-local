@@ -196,12 +196,12 @@ export const INDEX_HTML = `<!doctype html>
   </div>
 
   <div class="panel">
-    <h2>Claude Code interop</h2>
+    <h2>Agent interop</h2>
     <div class="actions">
-      <button class="action" id="import-btn">Import from Claude Code</button>
-      <button class="action" id="link-btn">Link Claude Code to Ratel</button>
+      <button class="action" id="import-btn">Import from agent</button>
+      <button class="action" id="link-btn">Link agent to Ratel</button>
     </div>
-    <p class="meta" style="margin-top: 8px;">Import migrates Claude entries into Ratel. Link rewrites Claude to point at Ratel for entries already in Ratel.</p>
+    <p class="meta" style="margin-top: 8px;">Import migrates agent entries into Ratel. Link rewrites the detected agent to point at Ratel for entries already in Ratel.</p>
   </div>
 
   <div class="panel">
@@ -551,7 +551,7 @@ export const INDEX_HTML = `<!doctype html>
   }
 
   async function doImport() {
-    if (!confirm("Import all Claude Code MCP servers into Ratel?")) return;
+    if (!confirm("Import all detected agent MCP servers into Ratel?")) return;
     try {
       const res = await api("/api/import", { method: "POST", body: {} });
       toast("Import complete\\n" + (res.log || []).slice(-3).join("\\n"));
@@ -560,7 +560,7 @@ export const INDEX_HTML = `<!doctype html>
   }
 
   async function doLink() {
-    if (!confirm("Rewrite Claude Code to point at Ratel for shared entries?")) return;
+    if (!confirm("Rewrite the detected agent to point at Ratel for shared entries?")) return;
     try {
       const res = await api("/api/link", { method: "POST", body: {} });
       toast("Link complete\\n" + (res.log || []).slice(-3).join("\\n"));

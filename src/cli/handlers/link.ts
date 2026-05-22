@@ -1,8 +1,9 @@
 import type { RatelConfig } from "../../lib/index.js";
+import { type AgentHostState, AutomaticAgentHostAdapter } from "../agent-host/index.js";
 import type { BackupManifest } from "../backup.js";
-import { type ClaudeConfigDoc, readClaudeConfig } from "../claude.js";
+import { isRatelGatewayEntry } from "../gateway-entry.js";
 import { ratelConfigPath } from "../hierarchy.js";
-import { buildImportPlan } from "../import-plan.js";
+import { buildAgentImportPlan, type buildImportPlan } from "../import-plan.js";
 import { readJson } from "../io.js";
 import { locateRatelBin, type ResolvedBin } from "../locate-bin.js";
 import { executePlan } from "../plan-exec.js";
@@ -21,13 +22,16 @@ export async function runLink(
   ctx: HandlerCtx,
   opts: LinkOptions = {},
 ): Promise<BackupManifest | null> {
-  ctx.prompts.intro("Ratel · link Claude Code at Ratel");
+  ctx.prompts.intro("Ratel · link agent at Ratel");
 
-  const claudeUser = await readClaudeConfig("user", ctx.env, ctx.fs);
-  const claudeProject = ctx.env.projectRoot
-    ? await readClaudeConfig("project", ctx.env, ctx.fs)
-    : null;
-  const claudeLocal = ctx.env.projectRoot ? await readClaudeConfig("local", ctx.env, ctx.fs) : null;
+  const agentHost = new AutomaticAgentHostAdapter();
+  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
+  if (!detection.present) {
+    ctx.prompts.note("No supported agent config found. Nothing to link.");
+    ctx.prompts.outro("done");
+    return null;
+  }
+  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
 
   const ratelUserPath = ratelConfigPath("user", ctx.env);
   const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
@@ -49,11 +53,11 @@ export async function runLink(
     return null;
   }
 
-  const claudeKnown = collectClaudeNames(claudeUser, claudeProject, claudeLocal);
-  const overlap = [...claudeKnown].filter((n) => ratelKnown.has(n));
+  const agentKnown = collectAgentNames(agentState);
+  const overlap = [...agentKnown].filter((n) => ratelKnown.has(n));
   if (overlap.length === 0) {
     ctx.prompts.note(
-      "No Claude entries match any Ratel entry. Run `import` to migrate Claude entries first.",
+      `No ${agentState.host.displayName} entries match any Ratel entry. Run \`import\` to migrate agent entries first.`,
     );
     ctx.prompts.outro("done");
     return null;
@@ -61,11 +65,10 @@ export async function runLink(
 
   const bin = opts.bin ?? (await resolveBin(ctx, opts));
 
-  const plan = buildImportPlan(
+  const plan = await buildAgentImportPlan(
     {
-      claudeUser,
-      claudeProject,
-      claudeLocal,
+      agentHost,
+      agentState,
       ratelUser,
       ratelProject,
       ratelLocal,
@@ -78,16 +81,18 @@ export async function runLink(
     { selection: new Set(overlap) },
   );
 
-  if (plan.claudeChanges.length === 0) {
-    ctx.prompts.outro("nothing to do (Claude already points at Ratel)");
+  if (plan.agentChanges.length === 0) {
+    ctx.prompts.outro(`nothing to do (${agentState.host.displayName} already points at Ratel)`);
     return null;
   }
 
-  ctx.prompts.note(renderClaudeStage(plan), "Claude rewrites");
+  ctx.prompts.note(renderAgentStage(plan), `${agentState.host.displayName} rewrites`);
 
   if (!opts.yes) {
     const ok = await ctx.prompts.confirm({
-      message: "Replace Claude Code MCP entries now managed by Ratel with the ratel-mcp entry?",
+      message: `Replace ${plan.agentChanges.length} ${agentState.host.displayName} entr${
+        plan.agentChanges.length === 1 ? "y" : "ies"
+      } with the ratel-mcp entry?`,
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
@@ -96,26 +101,23 @@ export async function runLink(
     }
   }
 
-  const manifest = await executePlan(plan.claudeChanges, {
+  const manifest = await executePlan(plan.agentChanges, {
     fs: ctx.fs,
     env: ctx.env,
     action: "link",
   });
   ctx.prompts.note(`Backup created. Run \`ratel-mcp backup undo\` to revert.`, "Done");
-  ctx.prompts.outro("link complete · restart Claude to pick up the new MCP entry");
+  ctx.prompts.outro(
+    `link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
+  );
   return manifest;
 }
 
-function collectClaudeNames(
-  global: ClaudeConfigDoc | null,
-  project: ClaudeConfigDoc | null,
-  local: ClaudeConfigDoc | null,
-): Set<string> {
+function collectAgentNames(state: AgentHostState): Set<string> {
   const out = new Set<string>();
-  for (const doc of [global, project, local]) {
-    if (!doc) continue;
-    for (const name of Object.keys(doc.mcpServers)) {
-      if (name !== "ratel" && name !== "ratel-mcp") out.add(name);
+  for (const scope of state.scopes) {
+    for (const [name, entry] of Object.entries(scope.mcpServers)) {
+      if (!isRatelGatewayEntry(name, entry)) out.add(name);
     }
   }
   return out;
@@ -148,13 +150,13 @@ async function whichRatelBin(): Promise<string | undefined> {
   }
 }
 
-function renderClaudeStage(plan: ReturnType<typeof buildImportPlan>): string {
-  const lines = plan.claudeChanges.map(
+function renderAgentStage(plan: ReturnType<typeof buildImportPlan>): string {
+  const lines = plan.agentChanges.map(
     (c) => `write ${c.path}${c.before === null ? " (new file)" : ""}`,
   );
   lines.push("");
   lines.push(
-    "Claude Code MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other Claude Code MCP entries are preserved.",
+    "MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other agent MCP entries are preserved.",
   );
   return lines.join("\n");
 }

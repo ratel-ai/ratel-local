@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { BackupFs } from "../backup.js";
-import type { ClaudeFs } from "../claude.js";
 import type { JsonFs } from "../io.js";
 import type { ResolvedBin } from "../locate-bin.js";
 import { type PromptAdapter, silentPromptAdapter } from "../prompts.js";
@@ -16,7 +15,7 @@ const PROJECT_MCP = "/r/.mcp.json";
 const RATEL_USER = "/home/u/.ratel/config.json";
 const RATEL_PROJECT = "/r/.ratel/config.json";
 
-class MemFs implements BackupFs, JsonFs, ClaudeFs {
+class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
   async read(p: string) {
     return this.files.has(p) ? (this.files.get(p) as string) : null;
@@ -125,7 +124,7 @@ describe("runLink", () => {
     expect(fs.files.get(RATEL_USER)).toBe(ratelBefore);
   });
 
-  it("no-ops when no Claude entries are also in Ratel", async () => {
+  it("no-ops when no agent entries are also in Ratel", async () => {
     const fs = new MemFs();
     fs.files.set(
       RATEL_USER,
