@@ -52,12 +52,32 @@ const AUTH_SHAPED_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
   /prepareTokenRequest/i,
   /authorizationCode is required/i,
   /invalid_grant/i,
+  /\b(401|403|unauthori[sz]ed|forbidden)\b/i,
 ];
 
 function isAuthShapedError(err: unknown): boolean {
   const msg = (err as { message?: unknown } | null)?.message;
   if (typeof msg !== "string") return false;
   return AUTH_SHAPED_ERROR_PATTERNS.some((re) => re.test(msg));
+}
+
+function isAuthRequiredError(err: unknown): boolean {
+  if (isUnauthorized(err) || isAuthShapedError(err)) return true;
+
+  const status = getAuthStatus(err);
+  if (status === 401 || status === 403) return true;
+
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === 401 || code === 403 || code === "Unauthorized" || code === "ERR_UNAUTHORIZED";
+}
+
+function getAuthStatus(err: unknown): unknown {
+  const shaped = err as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  } | null;
+  return shaped?.status ?? shaped?.statusCode ?? shaped?.response?.status;
 }
 
 export interface GatewayHandle {
@@ -120,7 +140,7 @@ export async function buildGatewayFromConfig(
       if (handle.serverInstructions) info.instructions = handle.serverInstructions;
       upstreamServers.push(info);
     } catch (err) {
-      if (isUnauthorized(err) || (isHttpOrSse(entry) && isAuthShapedError(err))) {
+      if (isHttpOrSse(entry) && isAuthRequiredError(err)) {
         markNeedsAuth(upstreamServers, name, entry);
         catalog.recordEvent({ type: "auth_needs", upstream: name });
         log(
@@ -252,9 +272,14 @@ function markNeedsAuth(
   name: string,
   entry: ServerEntry,
 ): void {
-  const info: UpstreamServerInfo = { name, needsAuth: true };
+  let info = upstreamServers.find((u) => u.name === name);
+  if (!info) {
+    info = { name };
+    upstreamServers.push(info);
+  }
+  info.needsAuth = true;
+  delete info.toolCount;
   if (entry.description) info.description = entry.description;
-  upstreamServers.push(info);
 }
 
 const defaultRefreshTokens: RefreshTokensFn = async (store) => {

@@ -298,6 +298,49 @@ describe("buildGatewayFromConfig", () => {
     await ok.server.close();
   });
 
+  it.each([
+    Object.assign(new Error("request failed"), { status: 401 }),
+    Object.assign(new Error("request failed"), { statusCode: 403 }),
+    Object.assign(new Error("request failed"), { response: { status: 401 } }),
+    new Error("401 Unauthorized"),
+    Object.assign(new Error("request failed"), { code: "ERR_UNAUTHORIZED" }),
+  ])("flags HTTP upstreams as needsAuth when boot register throws an auth-shaped error %#", async (authError) => {
+    const logs: string[] = [];
+
+    const handle = await buildGatewayFromConfig(
+      {
+        mcpServers: {
+          linear: {
+            type: "http",
+            url: "https://mcp.linear.example/mcp",
+            description: "Linear workspace tools",
+          },
+        },
+      },
+      {
+        transportFactory: () => ({
+          async start() {
+            throw authError;
+          },
+          async send() {},
+          async close() {},
+        }),
+        logger: (m) => logs.push(m),
+      },
+    );
+
+    expect(handle.upstreamServers).toEqual([
+      {
+        name: "linear",
+        description: "Linear workspace tools",
+        needsAuth: true,
+      },
+    ]);
+    expect(logs.join("\n")).toMatch(/linear requires authorization/);
+
+    await handle.close();
+  });
+
   describe("OAuth boot path", () => {
     let oauthDir: string;
     beforeEach(async () => {
