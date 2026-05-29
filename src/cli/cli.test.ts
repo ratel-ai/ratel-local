@@ -177,6 +177,7 @@ describe("runCli — help and routing", () => {
     await runCli(["backup"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
     expect(out).toMatch(/list/);
+    expect(out).toMatch(/undo/);
   });
 
   it("rejects an unknown command with ArgError", async () => {

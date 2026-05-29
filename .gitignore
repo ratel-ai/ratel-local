@@ -1,5 +1,8 @@
 # Node
 node_modules/
+.pnpm-store/
+.ratel/
+tmp/
 
 # Build output
 dist/

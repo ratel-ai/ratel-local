@@ -1,8 +1,16 @@
 import type { RatelConfig, ServerEntry } from "../../lib/index.js";
+import { ArgError } from "../args.js";
 import type { BackupManifest } from "../backup.js";
 import { type ClaudeConfigDoc, type ClaudeScope, readClaudeConfig } from "../claude.js";
 import { ratelConfigPath } from "../hierarchy.js";
-import { buildImportPlan, type FileChange, type ImportPlan } from "../import-plan.js";
+import {
+  buildImportPlan,
+  conflictKey,
+  type FileChange,
+  type ImportConflict,
+  type ImportConflictStrategy,
+  type ImportPlan,
+} from "../import-plan.js";
 import { readJson } from "../io.js";
 import { locateRatelBin, type ResolvedBin } from "../locate-bin.js";
 import { executePlan } from "../plan-exec.js";
@@ -14,6 +22,7 @@ export type ProbeFn = (name: string, entry: ServerEntry) => Promise<string | und
 export interface ImportFlowOptions {
   yes?: boolean;
   dryRun?: boolean;
+  conflictStrategy?: ImportConflictStrategy;
   bin?: ResolvedBin;
   envVar?: string;
   whichResult?: string;
@@ -27,6 +36,15 @@ interface Candidate {
   scope: ClaudeScope;
   hasDescription: boolean;
 }
+
+interface ConflictResolution {
+  conflictStrategy: ImportConflictStrategy;
+  replaceConflicts?: Set<string>;
+}
+
+type ConflictResolutionResult =
+  | { kind: "resolved"; resolution: ConflictResolution }
+  | { kind: "cancelled" };
 
 export async function runImport(
   ctx: HandlerCtx,
@@ -67,22 +85,28 @@ export async function runImport(
 
   await captureDescriptions(ctx, selection, claudeUser, claudeProject, claudeLocal, opts);
 
-  const plan = buildImportPlan(
-    {
-      claudeUser,
-      claudeProject,
-      claudeLocal,
-      ratelUser,
-      ratelProject,
-      ratelLocal,
-      bin,
-      ratelUserPath,
-      ratelProjectPath,
-      ratelLocalPath,
-      projectRoot: ctx.env.projectRoot,
-    },
-    { selection: new Set(selection.map((c) => c.name)) },
-  );
+  const planInputs = {
+    claudeUser,
+    claudeProject,
+    claudeLocal,
+    ratelUser,
+    ratelProject,
+    ratelLocal,
+    bin,
+    ratelUserPath,
+    ratelProjectPath,
+    ratelLocalPath,
+    projectRoot: ctx.env.projectRoot,
+  };
+  const planOptions = { selection: new Set(selection.map((c) => c.name)) };
+  const initialPlan = buildImportPlan(planInputs, planOptions);
+  const conflictResolution = await resolveConflictStrategy(ctx, initialPlan, opts);
+  if (conflictResolution.kind === "cancelled") {
+    ctx.prompts.cancel("import cancelled (no writes)");
+    return null;
+  }
+
+  const plan = buildImportPlan(planInputs, { ...planOptions, ...conflictResolution.resolution });
 
   ctx.prompts.note(renderSummary(plan), "Summary");
 
@@ -99,10 +123,9 @@ export async function runImport(
     return null;
   }
 
-  // Stage A — Ratel writes
   let stageAManifest: BackupManifest | null = null;
   if (plan.ratelChanges.length > 0) {
-    ctx.prompts.note(renderDiff(plan.ratelChanges), "Stage A · Ratel config writes");
+    ctx.prompts.note(renderDiff(plan.ratelChanges), "Ratel config changes");
     if (!opts.yes) {
       const ok = await ctx.prompts.confirm({
         message: `Apply ${plan.ratelChanges.length} Ratel config change(s)?`,
@@ -116,33 +139,134 @@ export async function runImport(
     stageAManifest = await tryExecute(ctx, plan.ratelChanges, "import");
   }
 
-  // Stage B — Claude rewrites
   if (plan.claudeChanges.length === 0) {
     ctx.prompts.outro("import complete · no Claude changes needed");
     return stageAManifest;
   }
 
-  ctx.prompts.note(renderClaudeStage(plan), "Stage B · Claude config rewrites");
+  ctx.prompts.note(renderClaudeStage(plan), "Claude Code config changes");
   if (!opts.yes) {
     const ok = await ctx.prompts.confirm({
-      message: `Replace ${plan.claudeChanges.length} Claude entr${
-        plan.claudeChanges.length === 1 ? "y" : "ies"
-      } with the ratel-mcp entry?`,
+      message: "Replace Claude Code MCP entries now managed by Ratel with the ratel-mcp entry?",
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
       ctx.log(
-        "Stage B skipped. Run `ratel-mcp link` (or re-run `ratel-mcp import`) to point Claude at Ratel later.",
+        "Claude Code config changes skipped. Run `ratel-mcp link` (or re-run `ratel-mcp import`) to point Claude at Ratel later.",
       );
-      ctx.prompts.outro("Stage A applied · Stage B deferred");
+      ctx.prompts.outro("Ratel config changes applied · Claude Code config changes skipped");
       return stageAManifest;
     }
   }
 
   const stageBManifest = await tryExecute(ctx, plan.claudeChanges, "import");
-  ctx.prompts.note(`Backup created. Run \`ratel-mcp undo\` to revert.`, "Done");
+  ctx.prompts.note(`Backup created. Run \`ratel-mcp backup undo\` to revert.`, "Done");
   ctx.prompts.outro("import complete · restart Claude to pick up the new MCP entry");
   return stageBManifest;
+}
+
+async function resolveConflictStrategy(
+  ctx: HandlerCtx,
+  plan: ImportPlan,
+  opts: ImportFlowOptions,
+): Promise<ConflictResolutionResult> {
+  if (plan.summary.conflicts.length === 0) {
+    return { kind: "resolved", resolution: { conflictStrategy: "add-missing-only" } };
+  }
+  ctx.prompts.note(renderConflicts(plan.summary.conflicts), "Ratel import conflicts");
+  if (opts.conflictStrategy) {
+    if (opts.conflictStrategy === "replace-selected" && (opts.yes || opts.dryRun)) {
+      throw new ArgError(
+        "--conflict-strategy replace-selected cannot be combined with --yes or --dry-run",
+      );
+    }
+    return resolveSelectedConflicts(ctx, plan, opts.conflictStrategy);
+  }
+  if (opts.dryRun) {
+    ctx.prompts.note("Ratel conflict strategy: keep existing Ratel definitions", "Dry run");
+    return { kind: "resolved", resolution: { conflictStrategy: "add-missing-only" } };
+  }
+  if (opts.yes) return { kind: "resolved", resolution: { conflictStrategy: "add-missing-only" } };
+  const picked = await ctx.prompts.select<ImportConflictStrategy | "cancel">({
+    message:
+      plan.summary.conflicts.length === 1
+        ? "This name already exists in Ratel. What should Ratel contain?"
+        : "These names already exist in Ratel. What should Ratel contain?",
+    initialValue: "add-missing-only",
+    options: conflictStrategyOptions(plan.summary.conflicts.length),
+  });
+  if (ctx.prompts.isCancel(picked) || picked === "cancel") return { kind: "cancelled" };
+  return resolveSelectedConflicts(ctx, plan, picked as ImportConflictStrategy);
+}
+
+async function resolveSelectedConflicts(
+  ctx: HandlerCtx,
+  plan: ImportPlan,
+  conflictStrategy: ImportConflictStrategy,
+): Promise<ConflictResolutionResult> {
+  if (conflictStrategy !== "replace-selected") {
+    return { kind: "resolved", resolution: { conflictStrategy } };
+  }
+
+  const selected = await ctx.prompts.multiselect<string>({
+    message: "Pick Ratel entries to replace from Claude Code",
+    required: false,
+    options: plan.summary.conflicts.map((c) => ({
+      value: conflictKey(c.scope, c.name),
+      label: `${c.name} [${c.scope}]`,
+      hint: `${summarizeEntry(c.existing)} -> ${summarizeEntry(c.incoming)}`,
+    })),
+    initialValues: [],
+  });
+  if (ctx.prompts.isCancel(selected)) return { kind: "cancelled" };
+  return {
+    kind: "resolved",
+    resolution: { conflictStrategy, replaceConflicts: new Set(selected as string[]) },
+  };
+}
+
+function conflictStrategyOptions(conflictCount: number) {
+  const options: Array<{
+    value: ImportConflictStrategy | "cancel";
+    label: string;
+    hint: string;
+  }> = [
+    {
+      value: "add-missing-only",
+      label:
+        conflictCount === 1 ? "Keep existing Ratel definition" : "Keep existing Ratel definitions",
+      hint:
+        conflictCount === 1
+          ? "Do not import the conflicting Claude Code definition."
+          : "Do not import the conflicting Claude Code definitions.",
+    },
+  ];
+  if (conflictCount > 1) {
+    options.push({
+      value: "replace-selected",
+      label: "Replace selected Ratel definitions",
+      hint: "Choose which existing Ratel definitions to overwrite with Claude Code definitions.",
+    });
+  }
+  options.push(
+    {
+      value: "replace-from-agent",
+      label:
+        conflictCount === 1
+          ? "Replace Ratel definition from Claude Code"
+          : "Replace all Ratel definitions from Claude Code",
+      hint:
+        conflictCount === 1
+          ? "Overwrite the existing Ratel definition with the Claude Code definition."
+          : "Overwrite each existing Ratel definition with its Claude Code definition.",
+    },
+    {
+      value: "cancel",
+      label: "Cancel",
+      hint: "Exit before writing files.",
+    },
+  );
+  return options;
 }
 
 function collectCandidates(
@@ -257,7 +381,9 @@ async function tryExecute(
     return await executePlan(changes, { fs: ctx.fs, env: ctx.env, action });
   } catch (err) {
     ctx.log(`error during execution: ${(err as Error).message}`);
-    ctx.log(`partial backup may exist under ~/.ratel/backups/. Run \`ratel-mcp undo\` to revert.`);
+    ctx.log(
+      `partial backup may exist under ~/.ratel/backups/. Run \`ratel-mcp backup undo\` to revert.`,
+    );
     throw err;
   }
 }
@@ -304,10 +430,18 @@ function renderSummary(plan: ImportPlan): string {
   }
   if (plan.summary.skipped.length > 0) {
     lines.push("");
-    lines.push("Skipped (will stay in their current Claude config):");
+    lines.push("Not copied into Ratel:");
     for (const s of plan.summary.skipped) {
       lines.push(`  - ${s.name} (${s.scope}): ${s.reason}`);
     }
+  }
+  if (plan.summary.conflicts.length > 0) {
+    lines.push("");
+    lines.push(
+      `Ratel import conflicts: ${plan.summary.conflicts.length} (${renderConflictStrategyName(
+        plan.summary.conflictStrategy,
+      )})`,
+    );
   }
   if (plan.summary.overwrittenRatelEntries.length > 0) {
     lines.push("");
@@ -318,6 +452,33 @@ function renderSummary(plan: ImportPlan): string {
     );
   }
   return lines.length > 0 ? lines.join("\n") : "(no changes)";
+}
+
+function renderConflicts(conflicts: readonly ImportConflict[]): string {
+  return conflicts
+    .map((c) =>
+      [
+        `- ${c.name} (${c.scope})`,
+        `  Claude Code definition: ${summarizeEntry(c.incoming)}`,
+        `  Existing Ratel definition: ${summarizeEntry(c.existing)}`,
+      ].join("\n"),
+    )
+    .join("\n");
+}
+
+function summarizeEntry(entry: ServerEntry): string {
+  if (entry.type === "http" || entry.type === "sse") {
+    return `${entry.type} ${entry.url ?? "(missing url)"}`;
+  }
+  const command = entry.command ?? "(missing command)";
+  const args = entry.args && entry.args.length > 0 ? ` ${entry.args.join(" ")}` : "";
+  return `${entry.type ?? "stdio"} ${command}${args}`;
+}
+
+function renderConflictStrategyName(strategy: ImportConflictStrategy): string {
+  if (strategy === "replace-from-agent") return "replace all Ratel definitions from Claude Code";
+  if (strategy === "replace-selected") return "replace selected Ratel definitions";
+  return "keep existing Ratel definitions";
 }
 
 function renderDiff(changes: readonly FileChange[]): string {
@@ -332,9 +493,13 @@ function renderDiff(changes: readonly FileChange[]): string {
 function renderClaudeStage(plan: ImportPlan): string {
   const lines: string[] = [];
   lines.push(renderDiff(plan.claudeChanges));
+  lines.push("");
+  lines.push(
+    "Claude Code MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other Claude Code MCP entries are preserved.",
+  );
   if (plan.summary.skipped.length > 0) {
     lines.push("");
-    lines.push("Entries that will remain in Claude as-is:");
+    lines.push("Not copied into Ratel:");
     for (const s of plan.summary.skipped) {
       lines.push(`  - ${s.name} (${s.scope})`);
     }

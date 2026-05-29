@@ -125,7 +125,7 @@ For summarizing the resulting JSONL stream, see [`@ratel-ai/cli`'s `ratel inspec
 
 ### Backups & undo
 
-Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available; `ratel-mcp backup undo` (deliberately hidden from `--help`) restores the most recent set.
+Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available; `ratel-mcp backup undo` restores the most recent set.
 
 ### Browser UI
 

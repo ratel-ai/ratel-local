@@ -87,9 +87,7 @@ export async function runLink(
 
   if (!opts.yes) {
     const ok = await ctx.prompts.confirm({
-      message: `Replace ${plan.claudeChanges.length} Claude entr${
-        plan.claudeChanges.length === 1 ? "y" : "ies"
-      } with the ratel-mcp entry?`,
+      message: "Replace Claude Code MCP entries now managed by Ratel with the ratel-mcp entry?",
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
@@ -103,7 +101,7 @@ export async function runLink(
     env: ctx.env,
     action: "link",
   });
-  ctx.prompts.note(`Backup created. Run \`ratel-mcp undo\` to revert.`, "Done");
+  ctx.prompts.note(`Backup created. Run \`ratel-mcp backup undo\` to revert.`, "Done");
   ctx.prompts.outro("link complete · restart Claude to pick up the new MCP entry");
   return manifest;
 }
@@ -151,7 +149,12 @@ async function whichRatelBin(): Promise<string | undefined> {
 }
 
 function renderClaudeStage(plan: ReturnType<typeof buildImportPlan>): string {
-  return plan.claudeChanges
-    .map((c) => `write ${c.path}${c.before === null ? " (new file)" : ""}`)
-    .join("\n");
+  const lines = plan.claudeChanges.map(
+    (c) => `write ${c.path}${c.before === null ? " (new file)" : ""}`,
+  );
+  lines.push("");
+  lines.push(
+    "Claude Code MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other Claude Code MCP entries are preserved.",
+  );
+  return lines.join("\n");
 }

@@ -36,7 +36,7 @@ const TOP_USAGE = `usage: ratel-mcp <command> [args...]
 Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge)
   mcp      manage MCP servers (add, remove, list, get, edit, import, link, auth)
-  backup   manage backup snapshots (list)
+  backup   manage backup snapshots (list, undo)
   ui       launch a local browser UI mirroring the CLI [--port N] [--no-open]
 
 Run \`ratel-mcp <group>\` for the verbs available in a group.`;

@@ -211,7 +211,7 @@ describe("buildImportPlan", () => {
     expect(findWrite(plan, RATEL_USER)).toBeUndefined();
   });
 
-  it("logs collisions when an entry exists both in Claude and the existing Ratel target (Ratel wins)", () => {
+  it("keeps Ratel entries on conflicts by default and exposes structured conflict data", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
     const plan = buildImportPlan(
       emptyInputs({
@@ -226,6 +226,87 @@ describe("buildImportPlan", () => {
     expect(plan.summary.skipped).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "fs", scope: "user" })]),
     );
+    expect(plan.summary.conflictStrategy).toBe("add-missing-only");
+    expect(plan.summary.conflicts).toEqual([
+      { name: "fs", scope: "user", incoming: FS_ENTRY, existing: existingRatelEntry },
+    ]);
+  });
+
+  it("does not prompt a conflict when the existing Ratel entry is equivalent to the Claude entry", () => {
+    const incoming = {
+      command: "echo",
+      args: ["fs"],
+      env: { B: "2", A: "1" },
+    } as ServerEntry;
+    const existingRatelEntry: ServerEntry = {
+      type: "stdio",
+      env: { A: "1", B: "2" },
+      args: ["fs"],
+      command: "echo",
+    };
+    const plan = buildImportPlan(
+      emptyInputs({
+        claudeUser: claudeDoc("user", { fs: incoming }),
+        ratelUser: { mcpServers: { fs: existingRatelEntry } },
+      }),
+    );
+
+    expect(findWrite(plan, RATEL_USER)).toBeUndefined();
+    expect(plan.summary.conflicts).toEqual([]);
+    expect(plan.summary.skipped).toEqual([]);
+    expect(plan.summary.movedFromUser).toEqual(["fs"]);
+    const claudeUser = parseAfter(plan, HOME_CLAUDE);
+    expect(claudeUser.mcpServers).toEqual({
+      "ratel-mcp": {
+        type: "stdio",
+        command: "ratel-mcp",
+        args: ["serve", "--config", RATEL_USER],
+      },
+    });
+  });
+
+  it("replaces Ratel entries on conflicts when requested", () => {
+    const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
+    const plan = buildImportPlan(
+      emptyInputs({
+        claudeUser: claudeDoc("user", { fs: FS_ENTRY, other: REMOTE_ENTRY }),
+        ratelUser: { mcpServers: { fs: existingRatelEntry } },
+      }),
+      { conflictStrategy: "replace-from-agent" },
+    );
+
+    const ratelUser = parseAfter(plan, RATEL_USER);
+    expect(ratelUser.mcpServers.fs).toEqual(FS_ENTRY);
+    expect(ratelUser.mcpServers.other).toEqual(REMOTE_ENTRY);
+    expect(plan.summary.skipped).toEqual([]);
+    expect(plan.summary.conflictStrategy).toBe("replace-from-agent");
+    expect(plan.summary.conflicts).toEqual([
+      { name: "fs", scope: "user", incoming: FS_ENTRY, existing: existingRatelEntry },
+    ]);
+  });
+
+  it("replaces only selected conflicts when requested", () => {
+    const existingFs: ServerEntry = { type: "stdio", command: "kept-fs" };
+    const existingRemote: ServerEntry = { type: "http", url: "https://kept" };
+    const plan = buildImportPlan(
+      emptyInputs({
+        claudeUser: claudeDoc("user", { fs: FS_ENTRY, remote: REMOTE_ENTRY }),
+        ratelUser: { mcpServers: { fs: existingFs, remote: existingRemote } },
+      }),
+      { conflictStrategy: "replace-selected", replaceConflicts: ["user:remote"] },
+    );
+
+    const ratelUser = parseAfter(plan, RATEL_USER);
+    expect(ratelUser.mcpServers.fs).toEqual(existingFs);
+    expect(ratelUser.mcpServers.remote).toEqual(REMOTE_ENTRY);
+    expect(plan.summary.skipped).toEqual([
+      { name: "fs", scope: "user", reason: "conflicts with existing Ratel user config" },
+    ]);
+    expect(plan.summary.conflictStrategy).toBe("replace-selected");
+    expect(plan.summary.conflicts.map((c) => `${c.scope}:${c.name}`).sort()).toEqual([
+      "user:fs",
+      "user:remote",
+    ]);
   });
 
   it("does not emit a ratel-mcp entry into a Claude scope that had no MCPs", () => {

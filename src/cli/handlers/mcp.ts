@@ -1,4 +1,5 @@
 import { ArgError } from "../args.js";
+import type { ImportConflictStrategy } from "../import-plan.js";
 import { runAdd } from "./add.js";
 import { runEdit } from "./edit.js";
 import { runMcpGet } from "./get.js";
@@ -46,6 +47,7 @@ export async function runMcp(ctx: HandlerCtx): Promise<void> {
       await runImport(ctx, {
         yes: flags.yes === true,
         dryRun: flags["dry-run"] === true,
+        conflictStrategy: resolveImportConflictStrategy(flags["conflict-strategy"]),
       });
       return;
     case "link":
@@ -57,4 +59,23 @@ export async function runMcp(ctx: HandlerCtx): Promise<void> {
     default:
       throw new ArgError(`unknown mcp verb: ${verb}`);
   }
+}
+
+function resolveImportConflictStrategy(value: unknown): ImportConflictStrategy | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (typeof value !== "string") {
+    throw new ArgError(
+      "--conflict-strategy must be one of add-missing-only|replace-selected|replace-from-agent",
+    );
+  }
+  if (
+    value !== "add-missing-only" &&
+    value !== "replace-selected" &&
+    value !== "replace-from-agent"
+  ) {
+    throw new ArgError(
+      `--conflict-strategy must be one of add-missing-only|replace-selected|replace-from-agent, got "${value}"`,
+    );
+  }
+  return value;
 }

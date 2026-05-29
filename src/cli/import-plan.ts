@@ -30,6 +30,15 @@ export interface SkippedEntry {
   reason: string;
 }
 
+export interface ImportConflict {
+  name: string;
+  scope: ClaudeScope;
+  incoming: ServerEntry;
+  existing: ServerEntry;
+}
+
+export type ImportConflictStrategy = "add-missing-only" | "replace-from-agent" | "replace-selected";
+
 export interface ImportPlan {
   ratelChanges: FileChange[];
   claudeChanges: FileChange[];
@@ -38,6 +47,8 @@ export interface ImportPlan {
     movedFromProject: string[];
     movedFromLocal: string[];
     skipped: SkippedEntry[];
+    conflicts: ImportConflict[];
+    conflictStrategy: ImportConflictStrategy;
     ratelEntryArgsByScope: Partial<Record<ClaudeScope, string[]>>;
     overwrittenRatelEntries: ClaudeScope[];
   };
@@ -45,6 +56,8 @@ export interface ImportPlan {
 
 export interface BuildImportPlanOptions {
   selection?: ReadonlySet<string> | readonly string[];
+  conflictStrategy?: ImportConflictStrategy;
+  replaceConflicts?: ReadonlySet<string> | readonly string[];
 }
 
 const RATEL_NAME = "ratel-mcp";
@@ -76,7 +89,10 @@ export function buildImportPlan(
   options: BuildImportPlanOptions = {},
 ): ImportPlan {
   const skipped: SkippedEntry[] = [];
+  const conflicts: ImportConflict[] = [];
   const selection = normalizeSelection(options.selection);
+  const conflictStrategy = options.conflictStrategy ?? "add-missing-only";
+  const replaceConflicts = normalizeSelection(options.replaceConflicts);
 
   const g = bundleClaudeScope(inputs.claudeUser);
   const p = bundleClaudeScope(inputs.claudeProject);
@@ -129,13 +145,37 @@ export function buildImportPlan(
   const claudeRewriteP = p.movableNames.slice();
   const claudeRewriteL = l.movableNames.slice();
 
-  // Apply Ratel-wins on collisions.
-  const ratelUserNew = applyRatelWins(inputs.ratelUser, g, "user", skipped);
+  // Apply conflict policy on collisions.
+  const ratelUserNew = applyConflictStrategy(
+    inputs.ratelUser,
+    g,
+    "user",
+    skipped,
+    conflicts,
+    conflictStrategy,
+    replaceConflicts,
+  );
   const ratelProjectNew = inputs.ratelProjectPath
-    ? applyRatelWins(inputs.ratelProject, p, "project", skipped)
+    ? applyConflictStrategy(
+        inputs.ratelProject,
+        p,
+        "project",
+        skipped,
+        conflicts,
+        conflictStrategy,
+        replaceConflicts,
+      )
     : null;
   const ratelLocalNew = inputs.ratelLocalPath
-    ? applyRatelWins(inputs.ratelLocal, l, "local", skipped)
+    ? applyConflictStrategy(
+        inputs.ratelLocal,
+        l,
+        "local",
+        skipped,
+        conflicts,
+        conflictStrategy,
+        replaceConflicts,
+      )
     : null;
 
   // Compute ratel-mcp entry per scope: gated on the Claude-rewrite snapshot.
@@ -216,6 +256,8 @@ export function buildImportPlan(
       movedFromProject: p.movableNames.slice(),
       movedFromLocal: l.movableNames.slice(),
       skipped,
+      conflicts,
+      conflictStrategy,
       ratelEntryArgsByScope,
       overwrittenRatelEntries,
     },
@@ -241,27 +283,68 @@ function filterBundle(bundle: ScopeBundle, selection: ReadonlySet<string>): void
   }
 }
 
-function applyRatelWins(
+function applyConflictStrategy(
   ratel: RatelConfig | null,
   bundle: ScopeBundle,
   scope: ClaudeScope,
   skipped: SkippedEntry[],
+  conflicts: ImportConflict[],
+  strategy: ImportConflictStrategy,
+  replaceConflicts: ReadonlySet<string> | null,
 ): RatelConfig | null {
   const out: Record<string, ServerEntry> = ratel ? { ...ratel.mcpServers } : {};
   for (const name of bundle.movableNames.slice()) {
     if (out[name]) {
-      skipped.push({
-        name,
-        scope,
-        reason: `already present in Ratel ${scope} config`,
-      });
-      removeFromBundle(bundle, name);
-      continue;
+      if (entriesEquivalent(out[name], bundle.movableEntries[name])) {
+        bundle.movableEntries[name] = out[name];
+        continue;
+      }
+      conflicts.push({ name, scope, incoming: bundle.movableEntries[name], existing: out[name] });
+      const shouldReplace =
+        strategy === "replace-from-agent" ||
+        (strategy === "replace-selected" && replaceConflicts?.has(conflictKey(scope, name)));
+      if (!shouldReplace) {
+        skipped.push({
+          name,
+          scope,
+          reason: `conflicts with existing Ratel ${scope} config`,
+        });
+        removeFromBundle(bundle, name);
+        continue;
+      }
     }
     out[name] = bundle.movableEntries[name];
   }
   if (!ratel && Object.keys(out).length === 0) return null;
   return { mcpServers: out };
+}
+
+export function conflictKey(scope: ClaudeScope, name: string): string {
+  return `${scope}:${name}`;
+}
+
+function entriesEquivalent(a: ServerEntry, b: ServerEntry): boolean {
+  return canonicalJson(normalizeEntry(a)) === canonicalJson(normalizeEntry(b));
+}
+
+function normalizeEntry(entry: ServerEntry): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...entry };
+  if (out.type === undefined) out.type = "stdio";
+  return out;
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortJsonValue(value));
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!isPlainObject(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    out[key] = sortJsonValue(value[key]);
+  }
+  return out;
 }
 
 function makeRatelEntry(bin: ResolvedBin, configArgs: string[]): ServerEntry {
