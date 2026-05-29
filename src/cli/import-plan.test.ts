@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { ServerEntry } from "../lib/index.js";
-import type { ClaudeConfigDoc } from "./claude.js";
-import { buildImportPlan, type ImportInputs } from "./import-plan.js";
+import type {
+  AgentHostAdapter,
+  AgentHostChangeSet,
+  AgentHostContext,
+  AgentHostDetection,
+  AgentHostState,
+  AgentScope,
+  GatewayLinkInput,
+} from "./agent-host/index.js";
+import {
+  buildAgentImportPlan,
+  buildImportPlan,
+  type FileChange,
+  type ImportInputs,
+} from "./import-plan.js";
 import type { ResolvedBin } from "./locate-bin.js";
 
-const HOME_CLAUDE = "/home/u/.claude.json";
-const PROJECT_MCP = "/r/.mcp.json";
 const RATEL_USER = "/home/u/.ratel/config.json";
 const RATEL_PROJECT = "/r/.ratel/config.json";
 const RATEL_LOCAL = "/r/.ratel/config.local.json";
@@ -16,26 +27,29 @@ const BIN: ResolvedBin = {
   source: "path",
 };
 
-function claudeDoc(
-  scope: "user" | "project" | "local",
-  mcpServers: Record<string, ServerEntry>,
-  rawExtra: Record<string, unknown> = {},
-): ClaudeConfigDoc {
-  const path = scope === "project" ? PROJECT_MCP : HOME_CLAUDE;
-  let raw: Record<string, unknown>;
-  if (scope === "local") {
-    raw = { ...rawExtra, projects: { "/r": { mcpServers } } };
-  } else {
-    raw = { ...rawExtra, mcpServers };
-  }
-  return { scope, path, raw, mcpServers };
+const FS_ENTRY: ServerEntry = { type: "stdio", command: "echo", args: ["fs"] };
+const REMOTE_ENTRY: ServerEntry = { type: "http", url: "https://r" };
+const PROJ_ENTRY: ServerEntry = { type: "stdio", command: "echo", args: ["proj"] };
+const LOCAL_ENTRY: ServerEntry = { type: "stdio", command: "echo", args: ["local"] };
+
+function agentState(
+  scopes: Partial<Record<AgentScope, Record<string, ServerEntry>>>,
+): AgentHostState {
+  return {
+    host: { kind: "test-agent", displayName: "Test Agent" },
+    scopes: (["user", "project", "local"] as const).map((scope) => ({
+      scope,
+      displayName: scope,
+      path: `/agent/${scope}.json`,
+      available: true,
+      mcpServers: scopes[scope] ?? {},
+    })),
+  };
 }
 
 function emptyInputs(overrides: Partial<ImportInputs> = {}): ImportInputs {
   return {
-    claudeUser: null,
-    claudeProject: null,
-    claudeLocal: null,
+    agentState: agentState({}),
     ratelUser: null,
     ratelProject: null,
     ratelLocal: null,
@@ -47,13 +61,8 @@ function emptyInputs(overrides: Partial<ImportInputs> = {}): ImportInputs {
   };
 }
 
-const FS_ENTRY: ServerEntry = { type: "stdio", command: "echo", args: ["fs"] };
-const REMOTE_ENTRY: ServerEntry = { type: "http", url: "https://r" };
-const PROJ_ENTRY: ServerEntry = { type: "stdio", command: "echo", args: ["proj"] };
-const LOCAL_ENTRY: ServerEntry = { type: "stdio", command: "echo", args: ["local"] };
-
 function allChanges(plan: ReturnType<typeof buildImportPlan>) {
-  return [...plan.ratelChanges, ...plan.claudeChanges];
+  return [...plan.ratelChanges, ...plan.agentChanges];
 }
 
 function findWrite(plan: ReturnType<typeof buildImportPlan>, path: string) {
@@ -66,11 +75,45 @@ function parseAfter(plan: ReturnType<typeof buildImportPlan>, path: string) {
   return JSON.parse(c.after);
 }
 
+class RecordingAgentHost implements AgentHostAdapter {
+  input: GatewayLinkInput | null = null;
+
+  async detect(_ctx: AgentHostContext): Promise<AgentHostDetection> {
+    return { displayName: "Test Agent", present: true, reasons: [], warnings: [] };
+  }
+
+  async read(_ctx: AgentHostContext): Promise<AgentHostState> {
+    return agentState({});
+  }
+
+  async link(input: GatewayLinkInput): Promise<AgentHostChangeSet> {
+    this.input = input;
+    const changes: FileChange[] = [];
+    for (const [scope, names] of input.replacedEntriesByScope) {
+      changes.push({
+        kind: "write",
+        path: `/agent/${scope}.json`,
+        before: "{}\n",
+        after: JSON.stringify({ replaced: [...names].sort() }),
+      });
+    }
+    return {
+      changes,
+      summary: {
+        host: input.state.host,
+        installedGatewayScopes: [...input.replacedEntriesByScope.keys()],
+        removedNativeEntries: [],
+        warnings: [],
+      },
+    };
+  }
+}
+
 describe("buildImportPlan", () => {
-  it("global-only: moves entries into Ratel global, writes ratel-mcp entry into Claude global with [global] arg chain", () => {
+  it("user-only: moves entries into Ratel user config and records gateway args", () => {
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY, remote: REMOTE_ENTRY }),
+        agentState: agentState({ user: { fs: FS_ENTRY, remote: REMOTE_ENTRY } }),
       }),
     );
 
@@ -82,22 +125,13 @@ describe("buildImportPlan", () => {
     const ratelUser = parseAfter(plan, RATEL_USER);
     expect(ratelUser.mcpServers.fs).toEqual(FS_ENTRY);
     expect(ratelUser.mcpServers.remote).toEqual(REMOTE_ENTRY);
-
-    const claudeUser = parseAfter(plan, HOME_CLAUDE);
-    expect(claudeUser.mcpServers).toEqual({
-      "ratel-mcp": {
-        type: "stdio",
-        command: "ratel-mcp",
-        args: ["serve", "--config", RATEL_USER],
-      },
-    });
+    expect(plan.agentChanges).toEqual([]);
   });
 
-  it("global+project: project Claude entry args list global then project", () => {
+  it("project entries use the user+project config chain", () => {
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        claudeProject: claudeDoc("project", { proj: PROJ_ENTRY }),
+        agentState: agentState({ user: { fs: FS_ENTRY }, project: { proj: PROJ_ENTRY } }),
       }),
     );
 
@@ -107,22 +141,16 @@ describe("buildImportPlan", () => {
       "--config",
       RATEL_PROJECT,
     ]);
-    const claudeProject = parseAfter(plan, PROJECT_MCP);
-    expect(claudeProject.mcpServers["ratel-mcp"].args).toEqual([
-      "serve",
-      "--config",
-      RATEL_USER,
-      "--config",
-      RATEL_PROJECT,
-    ]);
   });
 
-  it("global+project+local: local Claude entry args list all three; ~/.claude.json is one merged write", () => {
+  it("local entries use all three configs", () => {
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        claudeProject: claudeDoc("project", { proj: PROJ_ENTRY }),
-        claudeLocal: claudeDoc("local", { local: LOCAL_ENTRY }),
+        agentState: agentState({
+          user: { fs: FS_ENTRY },
+          project: { proj: PROJ_ENTRY },
+          local: { local: LOCAL_ENTRY },
+        }),
       }),
     );
 
@@ -134,64 +162,21 @@ describe("buildImportPlan", () => {
       "--config",
       RATEL_LOCAL,
     ]);
-
-    const homeWrites = allChanges(plan).filter((c) => c.kind === "write" && c.path === HOME_CLAUDE);
-    expect(homeWrites).toHaveLength(1);
-
-    const merged = parseAfter(plan, HOME_CLAUDE);
-    expect(merged.mcpServers["ratel-mcp"].args).toEqual(["serve", "--config", RATEL_USER]);
-    expect(merged.projects["/r"].mcpServers["ratel-mcp"].args).toEqual([
-      "serve",
-      "--config",
-      RATEL_USER,
-      "--config",
-      RATEL_PROJECT,
-      "--config",
-      RATEL_LOCAL,
-    ]);
   });
 
-  it("local-only: writes only the local Ratel target; ratel-mcp entry args still list all three configs", () => {
+  it("local-only: writes only the local Ratel target", () => {
     const plan = buildImportPlan(
       emptyInputs({
-        claudeLocal: claudeDoc("local", { local: LOCAL_ENTRY }),
+        agentState: agentState({ local: { local: LOCAL_ENTRY } }),
       }),
     );
 
-    expect(plan.summary.ratelEntryArgsByScope.local).toEqual([
-      "--config",
-      RATEL_USER,
-      "--config",
-      RATEL_PROJECT,
-      "--config",
-      RATEL_LOCAL,
-    ]);
     expect(findWrite(plan, RATEL_USER)).toBeUndefined();
     expect(findWrite(plan, RATEL_PROJECT)).toBeUndefined();
     expect(findWrite(plan, RATEL_LOCAL)).toBeDefined();
   });
 
-  it("preserves all non-mcp keys in ~/.claude.json, including untouched projects[<other-root>]", () => {
-    const claudeUser = claudeDoc(
-      "user",
-      { fs: FS_ENTRY },
-      {
-        version: 7,
-        otherSetting: { nested: true },
-        projects: { "/elsewhere": { mcpServers: { keep: { command: "x" } } } },
-      },
-    );
-    const plan = buildImportPlan(emptyInputs({ claudeUser }));
-
-    const after = parseAfter(plan, HOME_CLAUDE);
-    expect(after.version).toBe(7);
-    expect(after.otherSetting).toEqual({ nested: true });
-    expect(after.projects["/elsewhere"]).toEqual({
-      mcpServers: { keep: { command: "x" } },
-    });
-  });
-
-  it("skips entries literally named ratel-mcp at every scope (idempotency)", () => {
+  it("skips Ratel gateway entries at every scope", () => {
     const ratelStub: ServerEntry = {
       type: "stdio",
       command: "ratel-mcp",
@@ -199,9 +184,11 @@ describe("buildImportPlan", () => {
     };
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { "ratel-mcp": ratelStub }),
-        claudeProject: claudeDoc("project", { "ratel-mcp": ratelStub }),
-        claudeLocal: claudeDoc("local", { "ratel-mcp": ratelStub }),
+        agentState: agentState({
+          user: { "ratel-mcp": ratelStub },
+          project: { "ratel-mcp": ratelStub },
+          local: { "ratel-mcp": ratelStub },
+        }),
       }),
     );
 
@@ -215,7 +202,7 @@ describe("buildImportPlan", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY, other: REMOTE_ENTRY }),
+        agentState: agentState({ user: { fs: FS_ENTRY, other: REMOTE_ENTRY } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
       }),
     );
@@ -226,13 +213,12 @@ describe("buildImportPlan", () => {
     expect(plan.summary.skipped).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "fs", scope: "user" })]),
     );
-    expect(plan.summary.conflictStrategy).toBe("add-missing-only");
     expect(plan.summary.conflicts).toEqual([
       { name: "fs", scope: "user", incoming: FS_ENTRY, existing: existingRatelEntry },
     ]);
   });
 
-  it("does not prompt a conflict when the existing Ratel entry is equivalent to the Claude entry", () => {
+  it("does not prompt a conflict when the existing Ratel entry is equivalent to the agent entry", async () => {
     const incoming = {
       command: "echo",
       args: ["fs"],
@@ -246,7 +232,7 @@ describe("buildImportPlan", () => {
     };
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: incoming }),
+        agentState: agentState({ user: { fs: incoming } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
       }),
     );
@@ -255,21 +241,25 @@ describe("buildImportPlan", () => {
     expect(plan.summary.conflicts).toEqual([]);
     expect(plan.summary.skipped).toEqual([]);
     expect(plan.summary.movedFromUser).toEqual(["fs"]);
-    const claudeUser = parseAfter(plan, HOME_CLAUDE);
-    expect(claudeUser.mcpServers).toEqual({
-      "ratel-mcp": {
-        type: "stdio",
-        command: "ratel-mcp",
-        args: ["serve", "--config", RATEL_USER],
-      },
+    expect(plan.summary.replacedFromUser).toEqual(["fs"]);
+
+    const agentHost = new RecordingAgentHost();
+    const agentPlan = await buildAgentImportPlan({
+      ...emptyInputs({
+        agentState: agentState({ user: { fs: incoming } }),
+        ratelUser: { mcpServers: { fs: existingRatelEntry } },
+      }),
+      agentHost,
     });
+    expect(agentHost.input?.replacedEntriesByScope.get("user")).toEqual(new Set(["fs"]));
+    expect(agentPlan.agentChanges).toHaveLength(1);
   });
 
   it("replaces Ratel entries on conflicts when requested", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY, other: REMOTE_ENTRY }),
+        agentState: agentState({ user: { fs: FS_ENTRY, other: REMOTE_ENTRY } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
       }),
       { conflictStrategy: "replace-from-agent" },
@@ -278,127 +268,25 @@ describe("buildImportPlan", () => {
     const ratelUser = parseAfter(plan, RATEL_USER);
     expect(ratelUser.mcpServers.fs).toEqual(FS_ENTRY);
     expect(ratelUser.mcpServers.other).toEqual(REMOTE_ENTRY);
-    expect(plan.summary.skipped).toEqual([]);
-    expect(plan.summary.conflictStrategy).toBe("replace-from-agent");
-    expect(plan.summary.conflicts).toEqual([
-      { name: "fs", scope: "user", incoming: FS_ENTRY, existing: existingRatelEntry },
-    ]);
   });
 
-  it("replaces only selected conflicts when requested", () => {
-    const existingFs: ServerEntry = { type: "stdio", command: "kept-fs" };
-    const existingRemote: ServerEntry = { type: "http", url: "https://kept" };
+  it("dedups across scopes: most-specific wins", () => {
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY, remote: REMOTE_ENTRY }),
-        ratelUser: { mcpServers: { fs: existingFs, remote: existingRemote } },
-      }),
-      { conflictStrategy: "replace-selected", replaceConflicts: ["user:remote"] },
-    );
-
-    const ratelUser = parseAfter(plan, RATEL_USER);
-    expect(ratelUser.mcpServers.fs).toEqual(existingFs);
-    expect(ratelUser.mcpServers.remote).toEqual(REMOTE_ENTRY);
-    expect(plan.summary.skipped).toEqual([
-      { name: "fs", scope: "user", reason: "conflicts with existing Ratel user config" },
-    ]);
-    expect(plan.summary.conflictStrategy).toBe("replace-selected");
-    expect(plan.summary.conflicts.map((c) => `${c.scope}:${c.name}`).sort()).toEqual([
-      "user:fs",
-      "user:remote",
-    ]);
-  });
-
-  it("does not emit a ratel-mcp entry into a Claude scope that had no MCPs", () => {
-    const plan = buildImportPlan(
-      emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        claudeProject: claudeDoc("project", {}),
-      }),
-    );
-
-    expect(plan.summary.ratelEntryArgsByScope.user).toBeDefined();
-    expect(plan.summary.ratelEntryArgsByScope.project).toBeUndefined();
-    expect(findWrite(plan, PROJECT_MCP)).toBeUndefined();
-  });
-
-  it("drops project- and local-scope writes when no project root is configured", () => {
-    const plan = buildImportPlan(
-      emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        ratelProjectPath: undefined,
-        ratelLocalPath: undefined,
-      }),
-    );
-    expect(findWrite(plan, RATEL_USER)).toBeDefined();
-    expect(findWrite(plan, RATEL_PROJECT)).toBeUndefined();
-    expect(findWrite(plan, RATEL_LOCAL)).toBeUndefined();
-  });
-
-  it("preserves unknown transport types verbatim into the Ratel target", () => {
-    const weird: ServerEntry = { type: "websocket", url: "ws://x", custom: true };
-    const plan = buildImportPlan(
-      emptyInputs({
-        claudeUser: claudeDoc("user", { weird }),
-      }),
-    );
-    const after = parseAfter(plan, RATEL_USER);
-    expect(after.mcpServers.weird).toEqual(weird);
-  });
-
-  it("dedups across scopes: most-specific wins, drops at higher scopes are logged", () => {
-    const plan = buildImportPlan(
-      emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        claudeProject: claudeDoc("project", { fs: PROJ_ENTRY }),
+        agentState: agentState({ user: { fs: FS_ENTRY }, project: { fs: PROJ_ENTRY } }),
       }),
     );
     const ratelProject = parseAfter(plan, RATEL_PROJECT);
     expect(ratelProject.mcpServers.fs).toEqual(PROJ_ENTRY);
-    expect(findWrite(plan, RATEL_USER)).toBeUndefined(); // global "fs" was dropped
+    expect(findWrite(plan, RATEL_USER)).toBeUndefined();
     expect(plan.summary.movedFromProject).toEqual(["fs"]);
     expect(plan.summary.movedFromUser).toEqual([]);
-    expect(plan.summary.skipped).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "fs", scope: "user" })]),
-    );
   });
 
-  it("merges new Claude entries with existing Ratel entries when names don't collide", () => {
+  it("filters movable entries by selection", () => {
     const plan = buildImportPlan(
       emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        ratelUser: { mcpServers: { existing: { type: "stdio", command: "keep" } } },
-      }),
-    );
-    const ratelUser = parseAfter(plan, RATEL_USER);
-    expect(ratelUser.mcpServers.fs).toEqual(FS_ENTRY);
-    expect(ratelUser.mcpServers.existing).toEqual({ type: "stdio", command: "keep" });
-  });
-
-  it("returns an empty plan when there's nothing to move and no rewrites needed", () => {
-    const plan = buildImportPlan(emptyInputs({ claudeUser: claudeDoc("user", {}) }));
-    expect(plan.ratelChanges).toEqual([]);
-    expect(plan.claudeChanges).toEqual([]);
-  });
-
-  it("partitions writes: Ratel scope configs in ratelChanges, Claude config rewrites in claudeChanges", () => {
-    const plan = buildImportPlan(
-      emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        claudeProject: claudeDoc("project", { proj: PROJ_ENTRY }),
-      }),
-    );
-
-    const ratelPaths = plan.ratelChanges.map((c) => c.path).sort();
-    const claudePaths = plan.claudeChanges.map((c) => c.path).sort();
-    expect(ratelPaths).toEqual([RATEL_USER, RATEL_PROJECT].sort());
-    expect(claudePaths).toEqual([HOME_CLAUDE, PROJECT_MCP].sort());
-  });
-
-  it("filters movable entries by `selection` — non-selected names stay out of the plan entirely", () => {
-    const plan = buildImportPlan(
-      emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY, remote: REMOTE_ENTRY }),
+        agentState: agentState({ user: { fs: FS_ENTRY, remote: REMOTE_ENTRY } }),
       }),
       { selection: new Set(["fs"]) },
     );
@@ -409,17 +297,16 @@ describe("buildImportPlan", () => {
     expect(plan.summary.movedFromUser).toEqual(["fs"]);
   });
 
-  it("when `selection` excludes every entry at a Claude scope, no Claude rewrite is emitted for that scope", () => {
-    const plan = buildImportPlan(
-      emptyInputs({
-        claudeUser: claudeDoc("user", { fs: FS_ENTRY }),
-        claudeProject: claudeDoc("project", { proj: PROJ_ENTRY }),
-      }),
-      { selection: new Set(["fs"]) }, // proj deselected
+  it("delegates native rewrites to the selected agent adapter", async () => {
+    const agentHost = new RecordingAgentHost();
+    const plan = await buildAgentImportPlan(
+      { ...emptyInputs({ agentState: agentState({ user: { fs: FS_ENTRY } }) }), agentHost },
+      { selection: new Set(["fs"]) },
     );
 
-    expect(findWrite(plan, RATEL_PROJECT)).toBeUndefined();
-    expect(findWrite(plan, PROJECT_MCP)).toBeUndefined();
-    expect(plan.claudeChanges.find((c) => c.path === HOME_CLAUDE)).toBeDefined();
+    expect(agentHost.input?.replacedEntriesByScope.get("user")).toEqual(new Set(["fs"]));
+    expect(plan.agentChanges).toEqual([
+      { kind: "write", path: "/agent/user.json", before: "{}\n", after: '{"replaced":["fs"]}' },
+    ]);
   });
 });

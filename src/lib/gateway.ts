@@ -181,9 +181,10 @@ export const defaultTransportFactory: TransportFactory = (name, entry) => {
 };
 
 function buildHttpTransport(name: string, entry: ServerEntry): Transport {
-  const url = new URL(entry.url ?? "");
-  const opts: ConstructorParameters<typeof StreamableHTTPClientTransport>[1] = entry.headers
-    ? { requestInit: { headers: entry.headers } }
+  const url = new URL(expandEnvPlaceholders(entry.url ?? ""));
+  const headers = resolveHttpHeaders(entry);
+  const opts: ConstructorParameters<typeof StreamableHTTPClientTransport>[1] = headers
+    ? { requestInit: { headers } }
     : {};
   const path = defaultOAuthStorePath(name);
   if (existsSync(path)) {
@@ -200,6 +201,25 @@ function buildHttpTransport(name: string, entry: ServerEntry): Transport {
     return new StreamableHTTPClientTransport(url, { ...opts, authProvider: provider });
   }
   return new StreamableHTTPClientTransport(url, opts);
+}
+
+export function resolveHttpHeaders(
+  entry: ServerEntry,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  if (entry.headers) {
+    for (const [name, value] of Object.entries(entry.headers)) {
+      headers[name] = expandEnvPlaceholders(value, env);
+    }
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+export function expandEnvPlaceholders(value: string, env: NodeJS.ProcessEnv = process.env): string {
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => {
+    return env[name] ?? match;
+  });
 }
 
 /** Test seam: read `client_information.redirect_uris[0]` from an on-disk OAuth store. */

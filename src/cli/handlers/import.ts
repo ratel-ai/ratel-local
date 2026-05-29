@@ -1,10 +1,15 @@
 import type { RatelConfig, ServerEntry } from "../../lib/index.js";
+import {
+  type AgentHostState,
+  type AgentScope,
+  AutomaticAgentHostAdapter,
+} from "../agent-host/index.js";
 import { ArgError } from "../args.js";
 import type { BackupManifest } from "../backup.js";
-import { type ClaudeConfigDoc, type ClaudeScope, readClaudeConfig } from "../claude.js";
+import { isRatelGatewayEntry } from "../gateway-entry.js";
 import { ratelConfigPath } from "../hierarchy.js";
 import {
-  buildImportPlan,
+  buildAgentImportPlan,
   conflictKey,
   type FileChange,
   type ImportConflict,
@@ -33,7 +38,7 @@ export interface ImportFlowOptions {
 
 interface Candidate {
   name: string;
-  scope: ClaudeScope;
+  scope: AgentScope;
   hasDescription: boolean;
 }
 
@@ -50,20 +55,26 @@ export async function runImport(
   ctx: HandlerCtx,
   opts: ImportFlowOptions = {},
 ): Promise<BackupManifest | null> {
-  ctx.prompts.intro("Ratel · import Claude Code MCP servers");
+  ctx.prompts.intro("Ratel · import agent MCP servers");
 
-  const claudeUser = await readClaudeConfig("user", ctx.env, ctx.fs);
-  const claudeProject = ctx.env.projectRoot
-    ? await readClaudeConfig("project", ctx.env, ctx.fs)
-    : null;
-  const claudeLocal = ctx.env.projectRoot ? await readClaudeConfig("local", ctx.env, ctx.fs) : null;
-
-  const candidates = collectCandidates(claudeUser, claudeProject, claudeLocal);
-  if (candidates.length === 0) {
-    ctx.prompts.note("No Claude Code MCP servers found at any scope. Nothing to import.");
+  const agentHost = new AutomaticAgentHostAdapter();
+  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
+  if (!detection.present) {
+    ctx.prompts.note("No supported agent MCP servers found at any scope. Nothing to import.");
     ctx.prompts.outro("done");
     return null;
   }
+  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+
+  const candidates = collectCandidates(agentState);
+  if (candidates.length === 0) {
+    ctx.prompts.note(
+      `No ${agentState.host.displayName} MCP servers found at any scope. Nothing to import.`,
+    );
+    ctx.prompts.outro("done");
+    return null;
+  }
+  ctx.prompts.note(renderDetectedAgentSources(agentState), "Detected agent");
 
   const ratelUserPath = ratelConfigPath("user", ctx.env);
   const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
@@ -83,12 +94,11 @@ export async function runImport(
     return null;
   }
 
-  await captureDescriptions(ctx, selection, claudeUser, claudeProject, claudeLocal, opts);
+  await captureDescriptions(ctx, selection, agentState, opts);
 
   const planInputs = {
-    claudeUser,
-    claudeProject,
-    claudeLocal,
+    agentHost,
+    agentState,
     ratelUser,
     ratelProject,
     ratelLocal,
@@ -99,24 +109,32 @@ export async function runImport(
     projectRoot: ctx.env.projectRoot,
   };
   const planOptions = { selection: new Set(selection.map((c) => c.name)) };
-  const initialPlan = buildImportPlan(planInputs, planOptions);
-  const conflictResolution = await resolveConflictStrategy(ctx, initialPlan, opts);
+  const initialPlan = await buildAgentImportPlan(planInputs, planOptions);
+  const conflictResolution = await resolveConflictStrategy(
+    ctx,
+    initialPlan,
+    opts,
+    agentState.host.displayName,
+  );
   if (conflictResolution.kind === "cancelled") {
     ctx.prompts.cancel("import cancelled (no writes)");
     return null;
   }
 
-  const plan = buildImportPlan(planInputs, { ...planOptions, ...conflictResolution.resolution });
+  const plan = await buildAgentImportPlan(planInputs, {
+    ...planOptions,
+    ...conflictResolution.resolution,
+  });
 
-  ctx.prompts.note(renderSummary(plan), "Summary");
+  ctx.prompts.note(renderSummary(plan, agentState.host.displayName), "Summary");
 
-  if (plan.ratelChanges.length === 0 && plan.claudeChanges.length === 0) {
+  if (plan.ratelChanges.length === 0 && plan.agentChanges.length === 0) {
     ctx.prompts.outro("nothing to do");
     return null;
   }
 
   if (opts.dryRun) {
-    for (const c of [...plan.ratelChanges, ...plan.claudeChanges]) {
+    for (const c of [...plan.ratelChanges, ...plan.agentChanges]) {
       if (c.kind === "write") ctx.log(`would write ${c.path}`);
     }
     ctx.prompts.outro("dry-run complete");
@@ -139,29 +157,38 @@ export async function runImport(
     stageAManifest = await tryExecute(ctx, plan.ratelChanges, "import");
   }
 
-  if (plan.claudeChanges.length === 0) {
-    ctx.prompts.outro("import complete · no Claude changes needed");
+  if (plan.agentChanges.length === 0) {
+    ctx.prompts.outro(`import complete · no ${agentState.host.displayName} changes needed`);
     return stageAManifest;
   }
 
-  ctx.prompts.note(renderClaudeStage(plan), "Claude Code config changes");
+  ctx.prompts.note(
+    renderAgentStage(plan, agentState.host.displayName),
+    `${agentState.host.displayName} config changes`,
+  );
   if (!opts.yes) {
     const ok = await ctx.prompts.confirm({
-      message: "Replace Claude Code MCP entries now managed by Ratel with the ratel-mcp entry?",
+      message: `Replace ${plan.agentChanges.length} ${agentState.host.displayName} entr${
+        plan.agentChanges.length === 1 ? "y" : "ies"
+      } with the ratel-mcp entry?`,
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
       ctx.log(
-        "Claude Code config changes skipped. Run `ratel-mcp link` (or re-run `ratel-mcp import`) to point Claude at Ratel later.",
+        `${agentState.host.displayName} config changes skipped. Run \`ratel-mcp link\` (or re-run \`ratel-mcp import\`) to point ${agentState.host.displayName} at Ratel later.`,
       );
-      ctx.prompts.outro("Ratel config changes applied · Claude Code config changes skipped");
+      ctx.prompts.outro(
+        `Ratel config changes applied · ${agentState.host.displayName} config changes skipped`,
+      );
       return stageAManifest;
     }
   }
 
-  const stageBManifest = await tryExecute(ctx, plan.claudeChanges, "import");
+  const stageBManifest = await tryExecute(ctx, plan.agentChanges, "import");
   ctx.prompts.note(`Backup created. Run \`ratel-mcp backup undo\` to revert.`, "Done");
-  ctx.prompts.outro("import complete · restart Claude to pick up the new MCP entry");
+  ctx.prompts.outro(
+    `import complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
+  );
   return stageBManifest;
 }
 
@@ -169,18 +196,22 @@ async function resolveConflictStrategy(
   ctx: HandlerCtx,
   plan: ImportPlan,
   opts: ImportFlowOptions,
+  agentHostName: string,
 ): Promise<ConflictResolutionResult> {
   if (plan.summary.conflicts.length === 0) {
     return { kind: "resolved", resolution: { conflictStrategy: "add-missing-only" } };
   }
-  ctx.prompts.note(renderConflicts(plan.summary.conflicts), "Ratel import conflicts");
+  ctx.prompts.note(
+    renderConflicts(plan.summary.conflicts, agentHostName),
+    "Ratel import conflicts",
+  );
   if (opts.conflictStrategy) {
     if (opts.conflictStrategy === "replace-selected" && (opts.yes || opts.dryRun)) {
       throw new ArgError(
         "--conflict-strategy replace-selected cannot be combined with --yes or --dry-run",
       );
     }
-    return resolveSelectedConflicts(ctx, plan, opts.conflictStrategy);
+    return resolveSelectedConflicts(ctx, plan, opts.conflictStrategy, agentHostName);
   }
   if (opts.dryRun) {
     ctx.prompts.note("Ratel conflict strategy: keep existing Ratel definitions", "Dry run");
@@ -193,23 +224,24 @@ async function resolveConflictStrategy(
         ? "This name already exists in Ratel. What should Ratel contain?"
         : "These names already exist in Ratel. What should Ratel contain?",
     initialValue: "add-missing-only",
-    options: conflictStrategyOptions(plan.summary.conflicts.length),
+    options: conflictStrategyOptions(plan.summary.conflicts.length, agentHostName),
   });
   if (ctx.prompts.isCancel(picked) || picked === "cancel") return { kind: "cancelled" };
-  return resolveSelectedConflicts(ctx, plan, picked as ImportConflictStrategy);
+  return resolveSelectedConflicts(ctx, plan, picked as ImportConflictStrategy, agentHostName);
 }
 
 async function resolveSelectedConflicts(
   ctx: HandlerCtx,
   plan: ImportPlan,
   conflictStrategy: ImportConflictStrategy,
+  agentHostName: string,
 ): Promise<ConflictResolutionResult> {
   if (conflictStrategy !== "replace-selected") {
     return { kind: "resolved", resolution: { conflictStrategy } };
   }
 
   const selected = await ctx.prompts.multiselect<string>({
-    message: "Pick Ratel entries to replace from Claude Code",
+    message: `Pick conflicts to replace from ${agentHostName}`,
     required: false,
     options: plan.summary.conflicts.map((c) => ({
       value: conflictKey(c.scope, c.name),
@@ -225,7 +257,7 @@ async function resolveSelectedConflicts(
   };
 }
 
-function conflictStrategyOptions(conflictCount: number) {
+function conflictStrategyOptions(conflictCount: number, agentHostName: string) {
   const options: Array<{
     value: ImportConflictStrategy | "cancel";
     label: string;
@@ -237,15 +269,15 @@ function conflictStrategyOptions(conflictCount: number) {
         conflictCount === 1 ? "Keep existing Ratel definition" : "Keep existing Ratel definitions",
       hint:
         conflictCount === 1
-          ? "Do not import the conflicting Claude Code definition."
-          : "Do not import the conflicting Claude Code definitions.",
+          ? `Do not import the conflicting ${agentHostName} definition.`
+          : `Do not import the conflicting ${agentHostName} definitions.`,
     },
   ];
   if (conflictCount > 1) {
     options.push({
       value: "replace-selected",
       label: "Replace selected Ratel definitions",
-      hint: "Choose which existing Ratel definitions to overwrite with Claude Code definitions.",
+      hint: `Choose which existing Ratel definitions to overwrite with ${agentHostName} definitions.`,
     });
   }
   options.push(
@@ -253,12 +285,12 @@ function conflictStrategyOptions(conflictCount: number) {
       value: "replace-from-agent",
       label:
         conflictCount === 1
-          ? "Replace Ratel definition from Claude Code"
-          : "Replace all Ratel definitions from Claude Code",
+          ? `Replace Ratel definition from ${agentHostName}`
+          : `Replace all Ratel definitions from ${agentHostName}`,
       hint:
         conflictCount === 1
-          ? "Overwrite the existing Ratel definition with the Claude Code definition."
-          : "Overwrite each existing Ratel definition with its Claude Code definition.",
+          ? `Overwrite the existing Ratel definition with the ${agentHostName} definition.`
+          : `Overwrite each existing Ratel definition with its ${agentHostName} definition.`,
     },
     {
       value: "cancel",
@@ -269,24 +301,35 @@ function conflictStrategyOptions(conflictCount: number) {
   return options;
 }
 
-function collectCandidates(
-  user: ClaudeConfigDoc | null,
-  project: ClaudeConfigDoc | null,
-  local: ClaudeConfigDoc | null,
-): Candidate[] {
+function collectCandidates(state: AgentHostState): Candidate[] {
   const out: Candidate[] = [];
-  for (const [scope, doc] of [
-    ["user", user],
-    ["project", project],
-    ["local", local],
-  ] as const) {
-    if (!doc) continue;
-    for (const [name, entry] of Object.entries(doc.mcpServers)) {
-      if (name === "ratel" || name === "ratel-mcp") continue;
-      out.push({ name, scope, hasDescription: typeof entry.description === "string" });
+  for (const scopeState of state.scopes) {
+    for (const [name, entry] of Object.entries(scopeState.mcpServers)) {
+      if (isRatelGatewayEntry(name, entry)) continue;
+      out.push({
+        name,
+        scope: scopeState.scope,
+        hasDescription: typeof entry.description === "string",
+      });
     }
   }
   return out;
+}
+
+function renderDetectedAgentSources(state: AgentHostState): string {
+  const lines = [`${state.host.displayName} (${state.host.kind})`];
+  for (const scopeState of state.scopes) {
+    const nativeEntries = Object.entries(scopeState.mcpServers).filter(
+      ([name, entry]) => !isRatelGatewayEntry(name, entry),
+    );
+    if (nativeEntries.length === 0) continue;
+    lines.push(
+      `- ${scopeState.scope}: ${scopeState.path} (${nativeEntries.length} MCP${
+        nativeEntries.length === 1 ? "" : "s"
+      })`,
+    );
+  }
+  return lines.join("\n");
 }
 
 async function selectCandidates(
@@ -317,16 +360,14 @@ function tagOf(c: Candidate): string {
 async function captureDescriptions(
   ctx: HandlerCtx,
   selected: Candidate[],
-  user: ClaudeConfigDoc | null,
-  project: ClaudeConfigDoc | null,
-  local: ClaudeConfigDoc | null,
+  state: AgentHostState,
   opts: ImportFlowOptions,
 ): Promise<void> {
   if (opts.yes) return;
-  const docByScope: Record<ClaudeScope, ClaudeConfigDoc | null> = { user, project, local };
+  const entriesByScope = new Map(state.scopes.map((scope) => [scope.scope, scope.mcpServers]));
   const targets = selected
     .filter((c) => !c.hasDescription)
-    .map((c) => ({ c, entry: docByScope[c.scope]?.mcpServers[c.name] }))
+    .map((c) => ({ c, entry: entriesByScope.get(c.scope)?.[c.name] }))
     .filter((t): t is { c: Candidate; entry: ServerEntry } => Boolean(t.entry));
   if (targets.length === 0) return;
 
@@ -417,7 +458,7 @@ async function whichRatelBin(): Promise<string | undefined> {
   }
 }
 
-function renderSummary(plan: ImportPlan): string {
+function renderSummary(plan: ImportPlan, agentHostName: string): string {
   const lines: string[] = [];
   if (plan.summary.movedFromUser.length > 0) {
     lines.push(`user: ${plan.summary.movedFromUser.join(", ")}`);
@@ -440,13 +481,14 @@ function renderSummary(plan: ImportPlan): string {
     lines.push(
       `Ratel import conflicts: ${plan.summary.conflicts.length} (${renderConflictStrategyName(
         plan.summary.conflictStrategy,
+        agentHostName,
       )})`,
     );
   }
   if (plan.summary.overwrittenRatelEntries.length > 0) {
     lines.push("");
     lines.push(
-      `Overwriting existing Claude ratel-mcp entry at: ${plan.summary.overwrittenRatelEntries.join(
+      `Overwriting existing ${agentHostName} ratel-mcp entry at: ${plan.summary.overwrittenRatelEntries.join(
         ", ",
       )}`,
     );
@@ -454,12 +496,12 @@ function renderSummary(plan: ImportPlan): string {
   return lines.length > 0 ? lines.join("\n") : "(no changes)";
 }
 
-function renderConflicts(conflicts: readonly ImportConflict[]): string {
+function renderConflicts(conflicts: readonly ImportConflict[], agentHostName: string): string {
   return conflicts
     .map((c) =>
       [
         `- ${c.name} (${c.scope})`,
-        `  Claude Code definition: ${summarizeEntry(c.incoming)}`,
+        `  ${agentHostName} definition: ${summarizeEntry(c.incoming)}`,
         `  Existing Ratel definition: ${summarizeEntry(c.existing)}`,
       ].join("\n"),
     )
@@ -475,8 +517,12 @@ function summarizeEntry(entry: ServerEntry): string {
   return `${entry.type ?? "stdio"} ${command}${args}`;
 }
 
-function renderConflictStrategyName(strategy: ImportConflictStrategy): string {
-  if (strategy === "replace-from-agent") return "replace all Ratel definitions from Claude Code";
+function renderConflictStrategyName(
+  strategy: ImportConflictStrategy,
+  agentHostName: string,
+): string {
+  if (strategy === "replace-from-agent")
+    return `replace all Ratel definitions from ${agentHostName}`;
   if (strategy === "replace-selected") return "replace selected Ratel definitions";
   return "keep existing Ratel definitions";
 }
@@ -490,12 +536,12 @@ function renderDiff(changes: readonly FileChange[]): string {
     .join("\n");
 }
 
-function renderClaudeStage(plan: ImportPlan): string {
+function renderAgentStage(plan: ImportPlan, hostName = "agent"): string {
   const lines: string[] = [];
-  lines.push(renderDiff(plan.claudeChanges));
+  lines.push(renderDiff(plan.agentChanges));
   lines.push("");
   lines.push(
-    "Claude Code MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other Claude Code MCP entries are preserved.",
+    `${hostName} MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other ${hostName} MCP entries are preserved.`,
   );
   if (plan.summary.skipped.length > 0) {
     lines.push("");

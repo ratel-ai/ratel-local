@@ -1,0 +1,78 @@
+import { describe, expect, it } from "vitest";
+import {
+  type AgentHostAdapter,
+  type AgentHostContext,
+  AutomaticAgentHostAdapter,
+} from "./index.js";
+
+function adapter(input: {
+  kind: string;
+  displayName: string;
+  present: boolean;
+  mcpServers?: Record<string, { type: string; command?: string; args?: string[] }>;
+}): AgentHostAdapter {
+  return {
+    async detect() {
+      return {
+        displayName: input.displayName,
+        present: input.present,
+        reasons: input.present ? [`Found ${input.displayName}`] : [],
+        warnings: [],
+      };
+    },
+    async read() {
+      return {
+        host: { kind: input.kind, displayName: input.displayName },
+        scopes: [
+          {
+            scope: "user",
+            displayName: "User",
+            path: `/${input.kind}.json`,
+            available: input.present,
+            mcpServers: input.mcpServers ?? {},
+          },
+        ],
+      };
+    },
+    async link() {
+      return {
+        changes: [],
+        summary: {
+          host: { kind: input.kind, displayName: input.displayName },
+          installedGatewayScopes: [],
+          removedNativeEntries: [],
+          warnings: [],
+        },
+      };
+    },
+  };
+}
+
+const CTX: AgentHostContext = {
+  env: { homeDir: "/home/u", projectRoot: "/r" },
+  fs: {
+    read: async () => null,
+    writeAtomic: async () => {},
+    exists: async () => false,
+  },
+};
+
+describe("AutomaticAgentHostAdapter", () => {
+  it("prefers a later present host with native MCPs over an earlier empty host", async () => {
+    const automatic = new AutomaticAgentHostAdapter([
+      adapter({ kind: "claude-code", displayName: "Claude Code", present: true }),
+      adapter({
+        kind: "codex",
+        displayName: "Codex",
+        present: true,
+        mcpServers: { filesystem: { type: "stdio", command: "npx" } },
+      }),
+    ]);
+
+    const detection = await automatic.detect(CTX);
+    const state = await automatic.read(CTX);
+
+    expect(detection.displayName).toBe("Codex");
+    expect(state.host.kind).toBe("codex");
+  });
+});

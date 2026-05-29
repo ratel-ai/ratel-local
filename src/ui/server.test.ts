@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BackupFs } from "../cli/backup.js";
-import type { ClaudeFs } from "../cli/claude.js";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import type { HierarchyEnv } from "../cli/hierarchy.js";
 import type { JsonFs } from "../cli/io.js";
@@ -14,7 +13,7 @@ const USER_PATH = "/home/u/.ratel/config.json";
 const PROJECT_PATH = "/r/.ratel/config.json";
 const LOCAL_PATH = "/r/.ratel/config.local.json";
 
-class MemFs implements BackupFs, JsonFs, ClaudeFs {
+class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
   async read(p: string) {
     return this.files.has(p) ? (this.files.get(p) as string) : null;

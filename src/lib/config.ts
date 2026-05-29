@@ -18,7 +18,7 @@ export interface ServerEntry {
   [k: string]: unknown;
 }
 
-const OAUTH_FIELDS = ["clientId", "clientSecret", "callbackPort", "scope"] as const;
+const HTTP_ONLY_FIELDS = ["callbackPort", "clientId", "clientSecret", "scope"] as const;
 
 export interface RatelConfig {
   mcpServers: Record<string, ServerEntry>;
@@ -68,7 +68,7 @@ function validateDescription(path: string, obj: Record<string, unknown>): void {
 }
 
 function parseStdio(path: string, obj: Record<string, unknown>): ServerEntry {
-  for (const field of OAUTH_FIELDS) {
+  for (const field of HTTP_ONLY_FIELDS) {
     if (obj[field] !== undefined) {
       throw new ConfigError(`${path}.${field} is only valid on http/sse entries`);
     }

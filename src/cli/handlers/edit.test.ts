@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ParsedArgs } from "../args.js";
 import type { BackupFs } from "../backup.js";
-import type { ClaudeFs } from "../claude.js";
 import type { HierarchyEnv } from "../hierarchy.js";
 import type { JsonFs } from "../io.js";
 import { CANCEL_SYMBOL, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
@@ -12,7 +11,7 @@ const HOME = "/home/u";
 const ROOT = "/r";
 const GLOBAL_PATH = "/home/u/.ratel/config.json";
 
-class MemFs implements BackupFs, JsonFs, ClaudeFs {
+class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
   async read(p: string) {
     return this.files.has(p) ? (this.files.get(p) as string) : null;

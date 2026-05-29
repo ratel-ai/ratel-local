@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { BackupFs } from "../backup.js";
-import type { ClaudeFs } from "../claude.js";
 import type { JsonFs } from "../io.js";
 import type { ResolvedBin } from "../locate-bin.js";
 import { CANCEL_SYMBOL, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
@@ -17,7 +16,7 @@ const RATEL_USER = "/home/u/.ratel/config.json";
 const RATEL_PROJECT = "/r/.ratel/config.json";
 const RATEL_LOCAL = "/r/.ratel/config.local.json";
 
-class MemFs implements BackupFs, JsonFs, ClaudeFs {
+class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
   failNextWriteAt: string | null = null;
   async read(p: string) {
@@ -135,7 +134,7 @@ function conflictStrategyPrompts(
         return strategy;
       },
       async multiselect(opts) {
-        if (opts.message.includes("Ratel entries")) {
+        if (opts.message.includes("conflicts")) {
           const available = new Set(opts.options.map((o) => o.value as string));
           return selectedConflictKeys.filter((k) => available.has(k)) as unknown as never;
         }
@@ -164,7 +163,7 @@ describe("runImport", () => {
     const { ctx } = ctxOf(fs, stub);
     const m = await runImport(ctx, { bin: BIN });
     expect(m).toBeNull();
-    expect(notes.join("\n")).toMatch(/no Claude/i);
+    expect(notes.join("\n")).toMatch(/no supported agent/i);
     expect(fs.files.size).toBe(0);
   });
 
@@ -189,6 +188,34 @@ describe("runImport", () => {
       command: "ratel-mcp",
       args: ["serve", "--config", RATEL_USER],
     });
+  });
+
+  it("shows the detected agent and MCP source paths before selection", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "echo" } },
+      }),
+    );
+    fs.files.set(
+      PROJECT_MCP,
+      JSON.stringify({
+        mcpServers: { postgres: { type: "stdio", command: "pg" } },
+      }),
+    );
+    const notes: Array<{ message: string; title: string | undefined }> = [];
+    const { ctx } = ctxOf(fs, {
+      ...autoConfirm(),
+      note: (message, title) => notes.push({ message, title }),
+    });
+
+    await runImport(ctx, { bin: BIN, yes: true });
+
+    const detected = notes.find((note) => note.title === "Detected agent");
+    expect(detected?.message).toContain("Claude Code (claude-code)");
+    expect(detected?.message).toContain(`/home/u/.claude.json (1 MCP)`);
+    expect(detected?.message).toContain(`/r/.mcp.json (1 MCP)`);
   });
 
   it("global+project: writes both Claude files with the right --config arg lists", async () => {
@@ -461,7 +488,7 @@ describe("runImport", () => {
         return "add-missing-only";
       },
       async multiselect(opts) {
-        if (opts.message.includes("Ratel entries")) {
+        if (opts.message.includes("conflicts")) {
           multiselectCalled = true;
           return ["user:fs"] as unknown as never;
         }
