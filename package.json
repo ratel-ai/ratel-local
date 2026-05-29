@@ -1,70 +1,24 @@
 {
-  "name": "@ratel-ai/mcp-server",
+  "name": "ratel-mcp-workspace",
   "version": "0.2.1-rc.0",
-  "description": "MCP server library + ratel-mcp CLI: expose a Ratel tool catalog as a Model Context Protocol server. Manage upstream MCP servers, OAuth, and Claude Code import from one binary.",
-  "private": false,
+  "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "license": "SEE LICENSE IN LICENSE.md",
-  "author": "Agentified",
-  "homepage": "https://github.com/ratel-ai/ratel-mcp",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ratel-ai/ratel-mcp.git"
-  },
-  "bugs": {
-    "url": "https://github.com/ratel-ai/ratel-mcp/issues"
-  },
-  "keywords": [
-    "mcp",
-    "model-context-protocol",
-    "ai-agents",
-    "tool-calling",
-    "ratel",
-    "context-engineering",
-    "gateway",
-    "claude-code",
-    "cli",
-    "oauth"
-  ],
-  "engines": {
-    "node": ">=20.0.0"
-  },
   "packageManager": "pnpm@10.33.0",
-  "bin": {
-    "ratel-mcp": "./dist/bin.js"
-  },
-  "files": [
-    "dist",
-    "LICENSE.md",
-    "README.md",
-    "CHANGELOG.md"
-  ],
   "scripts": {
-    "build": "tsc",
-    "prepack": "tsc",
-    "typecheck": "tsc --noEmit",
-    "lint": "biome check src",
-    "test": "vitest run",
-    "start": "node dist/bin.js"
-  },
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "build": "pnpm --filter @ratel-ai/mcp-core build && pnpm --filter @ratel-ai/mcp-ui build && pnpm --filter @ratel-ai/mcp-server build",
+    "typecheck": "pnpm --filter @ratel-ai/mcp-core typecheck && pnpm --filter @ratel-ai/mcp-ui typecheck && pnpm --filter @ratel-ai/mcp-server typecheck",
+    "lint": "biome check .",
+    "test": "pnpm --filter @ratel-ai/mcp-core test && pnpm --filter @ratel-ai/mcp-ui test && pnpm --filter @ratel-ai/mcp-server test",
+    "pack:server": "pnpm --filter @ratel-ai/mcp-server pack",
+    "check:pack": "pnpm --filter @ratel-ai/mcp-server check:pack"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
     "@types/node": "^24.0.0",
     "@types/proper-lockfile": "^4.1.4",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.6.0",
     "vitest": "^4.1.5"
-  },
-  "dependencies": {
-    "@clack/prompts": "^1.3.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@ratel-ai/sdk": "^0.1.5",
-    "proper-lockfile": "^4.1.2",
-    "smol-toml": "^1.6.1"
   }
 }
