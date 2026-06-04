@@ -2,7 +2,7 @@ export type Group = "mcp" | "backup" | "serve" | "ui" | "help";
 
 export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "import" | "link" | "auth";
 
-export type BackupVerb = "list" | "undo";
+export type BackupVerb = "list";
 
 const MCP_VERBS: ReadonlySet<string> = new Set([
   "add",
@@ -15,7 +15,7 @@ const MCP_VERBS: ReadonlySet<string> = new Set([
   "auth",
 ]);
 
-const BACKUP_VERBS: ReadonlySet<string> = new Set(["list", "undo"]);
+const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
 
 const SHORT_FLAG_ALIASES: Record<string, string> = {
   e: "env",

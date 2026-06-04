@@ -19,7 +19,6 @@ import {
   type BackupFs,
   type BackupManifest,
   listBackups,
-  restoreLatest,
   startBackup,
 } from "./backup.js";
 import { isRatelGatewayEntry } from "./gateway-entry.js";
@@ -197,10 +196,6 @@ export async function removeServerEntry(
   delete current.mcpServers[input.name];
   await writeJson(ctx.fs, path, current);
   return { name: input.name, scope: input.scope, path, manifest };
-}
-
-export async function undoLatestBackup(ctx: CoreContext): Promise<BackupManifest | null> {
-  return restoreLatest(ctx.env, ctx.fs);
 }
 
 export async function loadMergedConfig(ctx: CoreContext): Promise<RatelConfig | undefined> {

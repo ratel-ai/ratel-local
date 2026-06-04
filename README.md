@@ -68,7 +68,7 @@ Run `ratel-mcp <group>` for the verbs in a group:
 | Group | Verbs |
 |---|---|
 | `mcp` | `add`, `remove`, `list`, `get`, `edit`, `import`, `link`, `auth` |
-| `backup` | `list`, `undo` |
+| `backup` | `list` |
 | (top-level) | `serve`, `ui` |
 
 ### `ratel-mcp mcp add` — Claude-compatible
@@ -126,9 +126,9 @@ When the gateway boots, every HTTP/SSE upstream with stored tokens runs through 
 
 For summarizing the resulting JSONL stream, see [`@ratel-ai/cli`'s `ratel inspect`](https://github.com/ratel-ai/ratel/tree/main/src/integrations/cli) — it shares the on-disk format.
 
-### Backups & undo
+### Backups
 
-Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available; `ratel-mcp backup undo` restores the most recent set.
+Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available.
 
 ### Browser UI
 
@@ -138,7 +138,7 @@ ratel-mcp ui --port 5731  # bind a specific port
 ratel-mcp ui --no-open    # print the URL without launching a browser
 ```
 
-The UI mirrors the CLI verbs across all three scopes: view/add/edit/remove servers, drive OAuth, import/link from Claude Code, and undo the latest backup. The server binds to `127.0.0.1` only and gates every request on a single-use session token printed in the launch URL. Stop it with `Ctrl-C`.
+The UI mirrors the CLI verbs across all three scopes: view/add/edit/remove servers, drive OAuth, import/link from Claude Code, and inspect backups. The server binds to `127.0.0.1` only and gates every request on a single-use session token printed in the launch URL. Stop it with `Ctrl-C`.
 
 ## Library quickstart
 

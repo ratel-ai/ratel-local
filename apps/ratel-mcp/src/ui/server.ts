@@ -26,7 +26,6 @@ import {
   previewImport,
   previewLink,
   removeServer,
-  undoLatest,
 } from "./routes.js";
 import {
   constantTimeEqual,
@@ -186,10 +185,6 @@ async function route(
     const body = await readJsonBody(req);
     return applyLink(ctx, body);
   }
-  if (method === "POST" && path === "/api/backups/undo") {
-    return undoLatest(ctx);
-  }
-
   return null;
 }
 

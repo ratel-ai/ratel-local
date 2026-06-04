@@ -82,6 +82,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -467,7 +468,7 @@ function ToolSourceRow(props: {
   busy: boolean;
   entry: ServerEntry;
   name: string;
-  onAuthorize: () => void;
+  onAuthorize: () => Promise<void> | void;
   onOpen: () => void;
 }) {
   const canAuthorize =
@@ -810,8 +811,11 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
             </AlertDialogMedia>
             <AlertDialogTitle>Remove tool source</AlertDialogTitle>
             <AlertDialogDescription>
-              Remove {props.name} from the {scope} scope. The server creates a restore point before
-              touching config files.
+              Would you like to remove <strong>{props.name}</strong> from the tool sources of the{" "}
+              <Badge className="inline-flex align-baseline font-mono" variant="secondary">
+                {scope}
+              </Badge>
+              ?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1425,12 +1429,24 @@ function AuthBadge({ status }: { status?: AuthStatus }) {
 function AuthStatusControl(props: {
   busy: boolean;
   canAuthorize: boolean;
-  onAuthorize: () => void;
+  onAuthorize: () => Promise<void> | void;
   status?: AuthStatus;
 }) {
+  const [authorizing, setAuthorizing] = useState(false);
+  const handleAuthorize = async () => {
+    setAuthorizing(true);
+    try {
+      await props.onAuthorize();
+    } finally {
+      setAuthorizing(false);
+    }
+  };
+
   if (!props.canAuthorize) {
     return <AuthBadge status={props.status} />;
   }
+
+  const disabled = props.busy || authorizing;
 
   return (
     <ButtonGroup className="w-fit">
@@ -1440,13 +1456,13 @@ function AuthStatusControl(props: {
       <Button
         aria-label={props.status === "expired" ? "Reauthorize" : "Authorize"}
         className={authControlButtonClassName(props.status)}
-        disabled={props.busy}
-        onClick={props.onAuthorize}
+        disabled={disabled}
+        onClick={() => void handleAuthorize()}
         size="icon-xs"
         title={props.status === "expired" ? "Reauthorize" : "Authorize"}
         variant="outline"
       >
-        <ExternalLink />
+        {authorizing ? <Spinner /> : <ExternalLink />}
       </Button>
     </ButtonGroup>
   );

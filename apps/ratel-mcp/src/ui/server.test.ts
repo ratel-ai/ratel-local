@@ -449,7 +449,7 @@ describe("UI server — backups", () => {
     expect((cfg as { backups: unknown[] }).backups.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("undoes the latest backup via POST /api/backups/undo", async () => {
+  it("does not expose backup undo", async () => {
     await fetch(apiUrl("/api/servers"), {
       method: "POST",
       headers: authHeaders(),
@@ -466,9 +466,8 @@ describe("UI server — backups", () => {
       headers: authHeaders(),
       body: "{}",
     });
-    expect(res.status).toBe(200);
-    // The original file did not exist before the add, so undo deletes it.
-    expect(session.fs.files.has(USER_PATH)).toBe(false);
+    expect(res.status).toBe(404);
+    expect(session.fs.files.has(USER_PATH)).toBe(true);
   });
 });
 

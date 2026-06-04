@@ -572,7 +572,7 @@ describe("runImport", () => {
     expect(backupKeys).toEqual([]);
   });
 
-  it("logs an undo hint if executor fails mid-flight", async () => {
+  it("logs a backup location if executor fails mid-flight", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -583,10 +583,11 @@ describe("runImport", () => {
     fs.failNextWriteAt = HOME_CLAUDE;
     const { ctx, logs } = ctxOf(fs, autoConfirm(), false);
     await expect(runImport(ctx, { bin: BIN, yes: true })).rejects.toThrow();
-    expect(logs.join("\n")).toMatch(/ratel-mcp backup undo/);
+    expect(logs.join("\n")).toMatch(/partial backup may exist under ~\/\.ratel\/backups\//);
+    expect(logs.join("\n")).not.toMatch(/ratel-mcp backup undo/);
   });
 
-  it("declining Claude Code config changes leaves Ratel configs in place and Claude untouched, with an undo+link hint", async () => {
+  it("declining Claude Code config changes leaves Ratel configs in place and Claude untouched, with a link hint", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,

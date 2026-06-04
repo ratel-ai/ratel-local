@@ -42,7 +42,7 @@ function PageHeaderSidebarTrigger({ className, ...props }: ComponentProps<typeof
     <Button
       aria-label="Toggle menu"
       className={cn(
-        "size-10 rounded-[min(var(--radius-md),12px)] border border-border bg-card hover:bg-muted/60 md:hidden",
+        "h-10 min-h-10 w-10 min-w-10 rounded-[min(var(--radius-md),12px)] border border-border bg-card hover:bg-muted/60 md:hidden",
         className,
       )}
       onClick={toggleSidebar}

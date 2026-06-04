@@ -18,7 +18,6 @@ import {
   removeServerEntry,
   type ServerEntry,
   type SupportedAgentHostKind,
-  undoLatestBackup,
 } from "@ratel-ai/mcp-core";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 
@@ -174,13 +173,6 @@ export async function applyLink(
     applyAgentLink(c, normalizeApplyLinkBody(body), { envVar: resolveRatelBin() }),
   );
   if (!result) log.push("nothing to apply");
-  return ok({ log });
-}
-
-export async function undoLatest(ctx: HandlerCtx): Promise<ApiResponse> {
-  const restored = await undoLatestBackup(ctx);
-  if (!restored) return ok({ log: ["nothing to undo"] });
-  const log = restored.entries.map((e) => `restored ${e.originalPath}`);
   return ok({ log });
 }
 

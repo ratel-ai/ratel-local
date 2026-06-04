@@ -183,7 +183,7 @@ export async function runImport(
   }
 
   const stageBManifest = await tryExecute(ctx, plan.agentChanges, "import");
-  ctx.prompts.note(`Backup created. Run \`ratel-mcp backup undo\` to revert.`, "Done");
+  ctx.prompts.note(`Backup created. Run \`ratel-mcp backup list\` to inspect backups.`, "Done");
   ctx.prompts.outro(
     `import complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
   );
@@ -420,9 +420,7 @@ async function tryExecute(
     return await executePlan(changes, { fs: ctx.fs, env: ctx.env, action });
   } catch (err) {
     ctx.log(`error during execution: ${(err as Error).message}`);
-    ctx.log(
-      `partial backup may exist under ~/.ratel/backups/. Run \`ratel-mcp backup undo\` to revert.`,
-    );
+    ctx.log(`partial backup may exist under ~/.ratel/backups/.`);
     throw err;
   }
 }

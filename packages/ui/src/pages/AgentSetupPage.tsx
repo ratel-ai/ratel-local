@@ -8,7 +8,6 @@ import {
   LinkIcon,
   RefreshCw,
   SearchIcon,
-  Undo2,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -30,20 +29,10 @@ import {
   ResponsiveToolbarGroup,
 } from "@/components/responsive-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogMedia,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -51,7 +40,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
 type AgentHostKind = "claude-code" | "codex";
@@ -174,6 +162,9 @@ const POSTURE_COPY: Record<
   },
 };
 
+const CODEX_ICON_SRC = new URL("../assets/codex-color.svg", import.meta.url).href;
+const CLAUDE_CODE_ICON_SRC = new URL("../assets/claudecode-color.svg", import.meta.url).href;
+
 export function AgentSetupPage() {
   const {
     clearSetupIntent,
@@ -181,7 +172,6 @@ export function AgentSetupPage() {
     openCommandMenu,
     refresh,
     request,
-    runAction,
     setupIntent,
     token,
   } = useRatelApp();
@@ -255,7 +245,7 @@ export function AgentSetupPage() {
               <PageHeaderSidebarTrigger />
             </div>
           </PageHeaderBackRow>
-          <PageHeaderDescription>
+          <PageHeaderDescription className="max-w-sm sm:max-w-2xl">
             Inspect supported agent configs, then open an agent to import or link MCP entries.
           </PageHeaderDescription>
         </PageHeaderContent>
@@ -289,7 +279,7 @@ export function AgentSetupPage() {
         </div>
       </section>
 
-      <RestorePoints backups={backups} request={request} runAction={runAction} />
+      <Backups backups={backups} />
     </main>
   );
 }
@@ -299,7 +289,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
   const navigate = useNavigate();
   const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
   const [scanning, setScanning] = useState(false);
-  const [operation, setOperation] = useState<SetupFlow>(props.operation ?? "import");
 
   const scanHosts = useCallback(async () => {
     setScanning(true);
@@ -315,10 +304,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
     void scanHosts();
   }, [scanHosts]);
 
-  useEffect(() => {
-    if (props.operation) setOperation(props.operation);
-  }, [props.operation]);
-
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
     const target = token ? `/agent-setup?t=${encodeURIComponent(token)}` : "/agent-setup";
@@ -327,7 +312,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
   const switchHost = (kind: AgentHostKind) => {
     const search = new URLSearchParams();
     if (token) search.set("t", token);
-    search.set("operation", operation);
     void navigate({ to: `/agent-setup/${kind}?${search.toString()}` } as never);
   };
   const primaryPath = host?.scopes.find((scope) => scope.available)?.path ?? host?.scopes[0]?.path;
@@ -378,6 +362,14 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
               ? POSTURE_COPY[host.posture].description
               : "Reading the supported agent configuration."}
           </PageHeaderDescription>
+          {host ? (
+            <AgentPageSwitcher
+              className="mt-4 w-full sm:hidden"
+              currentKind={host.kind}
+              hosts={hosts}
+              onHostKindChange={switchHost}
+            />
+          ) : null}
         </PageHeaderContent>
 
         <PageHeaderActions className="hidden sm:flex">
@@ -411,17 +403,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
       </PageHeader>
 
       {host ? (
-        <section className="-mx-4 grid gap-2 border-border border-y bg-muted/10 px-4 py-2 sm:hidden">
-          <AgentPageSwitcher
-            className="w-full"
-            currentKind={host.kind}
-            hosts={hosts}
-            onHostKindChange={switchHost}
-          />
-        </section>
-      ) : null}
-
-      {host ? (
         <section className="grid gap-5">
           <div className="-mx-4 grid gap-3 border-border border-y bg-muted/15 px-4 py-4 sm:-mx-6 sm:px-6 md:grid-cols-[10rem_minmax(0,1fr)]">
             <span className="text-xs font-medium text-muted-foreground uppercase">Host</span>
@@ -431,19 +412,26 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
             </div>
             <span className="text-xs font-medium text-muted-foreground uppercase">Status</span>
             <LinkStatusBadge host={host} />
+            {missingRatelEntryNames(host).length > 0 ? (
+              <>
+                <span className="text-xs font-medium text-muted-foreground uppercase">
+                  Coverage
+                </span>
+                <p className="text-sm text-amber-700 dark:text-amber-400">
+                  {missingRatelEntryNames(host).length} native tool
+                  {missingRatelEntryNames(host).length === 1 ? "" : "s"} not in Ratel.
+                </p>
+              </>
+            ) : null}
             <span className="text-xs font-medium text-muted-foreground uppercase">Config</span>
             <code className="min-w-0 truncate rounded-md bg-background px-2 py-1.5 font-mono text-xs text-muted-foreground">
               {primaryPath ?? "Known paths unavailable"}
             </code>
           </div>
 
-          <AgentCoverageNotice host={host} />
-          <AgentScopePanel host={host} />
           <AgentOperationPanel
-            flow={operation}
             host={host}
             hostKind={host.kind}
-            onFlowChange={setOperation}
             onScanHosts={scanHosts}
             request={request}
           />
@@ -527,92 +515,76 @@ function AgentDirectoryCard(props: { host: DetectedAgentHostSummary; onOpen: () 
   );
 }
 
-function AgentCoverageNotice(props: { host: DetectedAgentHostSummary }) {
-  const missing = missingRatelEntryNames(props.host);
-  if (missing.length === 0) return null;
+function AgentOperationPanel(props: {
+  host: DetectedAgentHostSummary;
+  hostKind: AgentHostKind;
+  onScanHosts: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+}) {
+  const canImport = missingRatelEntryNames(props.host).length > 0;
+  const canLink = props.host.posture !== "unavailable" && props.host.ratelEntryCount === 0;
   return (
-    <Alert>
-      <AlertTitle>Native tools are not in Ratel</AlertTitle>
-      <AlertDescription>
-        {missing.join(", ")} exist in {props.host.displayName} but are not present in the Ratel
-        config yet.
-      </AlertDescription>
-    </Alert>
-  );
-}
-
-function AgentScopePanel(props: { host: DetectedAgentHostSummary }) {
-  return (
-    <section className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
-      <div className="border-border border-b bg-muted/35 px-4 py-2 sm:px-6">
-        <h3 className="font-medium">Config scopes</h3>
-      </div>
-      <div className="divide-y divide-border">
-        {props.host.scopes.map((scope) => (
-          <div
-            className="grid gap-2 px-4 py-3 sm:px-6 lg:grid-cols-[10rem_minmax(0,1fr)_auto] lg:items-center"
-            key={scope.scope}
-          >
-            <div className="flex items-center gap-2">
-              <span className="font-medium capitalize">{scope.scope}</span>
-              <ScopeLinkStatusBadge scope={scope} />
-            </div>
-            <p className="truncate font-mono text-xs text-muted-foreground">{scope.path}</p>
-            <div className="flex flex-wrap gap-1 lg:justify-end">
-              <Badge variant="outline">{scope.nativeEntryCount} native</Badge>
-              <Badge variant="outline">{scope.ratelEntryCount} Ratel</Badge>
-            </div>
-          </div>
-        ))}
-      </div>
+    <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+      {canImport ? (
+        <SetupActionSection
+          description="Copy native MCP entries into Ratel. After review, selected entries are removed from the agent config."
+          icon={<Download />}
+          title="Import native entries"
+        >
+          <PreviewFlow
+            flow="import"
+            host={props.host}
+            hostKind={props.hostKind}
+            key={`import:${props.hostKind}`}
+            onScanHosts={props.onScanHosts}
+            request={props.request}
+          />
+        </SetupActionSection>
+      ) : null}
+      {canLink ? (
+        <SetupActionSection
+          description="Write the Ratel gateway entry into this agent config."
+          icon={<LinkIcon />}
+          title="Link Ratel gateway"
+        >
+          <PreviewFlow
+            flow="link"
+            host={props.host}
+            hostKind={props.hostKind}
+            key={`link:${props.hostKind}`}
+            onScanHosts={props.onScanHosts}
+            request={props.request}
+          />
+        </SetupActionSection>
+      ) : null}
+      {!canImport && !canLink ? (
+        <div>
+          <h3 className="text-lg font-semibold tracking-tight">Nothing to do</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            This agent is linked, and all native entries are already in Ratel.
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function AgentOperationPanel(props: {
-  flow: SetupFlow;
-  host: DetectedAgentHostSummary;
-  hostKind: AgentHostKind;
-  onFlowChange: (flow: SetupFlow) => void;
-  onScanHosts: () => Promise<void>;
-  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+function SetupActionSection(props: {
+  children: React.ReactNode;
+  description: string;
+  icon: React.ReactNode;
+  title: string;
 }) {
-  const description =
-    props.flow === "import"
-      ? "Move native entries into Ratel, then clean the agent config."
-      : "Write the Ratel gateway. Native entries stay where they are.";
   return (
-    <section className="-mx-4 grid gap-3 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h3 className="text-lg font-semibold tracking-tight">Setup flow</h3>
-          <p className="text-sm text-muted-foreground">{description}</p>
-        </div>
-        <Tabs
-          className="w-fit"
-          onValueChange={(value) => props.onFlowChange(value as SetupFlow)}
-          value={props.flow}
-        >
-          <TabsList>
-            <TabsTrigger value="import">
-              <Download />
-              Import
-            </TabsTrigger>
-            <TabsTrigger value="link">
-              <LinkIcon />
-              Link
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+    <section className="grid gap-3">
+      <div>
+        <h3 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+          {props.icon}
+          {props.title}
+        </h3>
+        <p className="mt-1 text-sm text-muted-foreground">{props.description}</p>
       </div>
-      <PreviewFlow
-        flow={props.flow}
-        host={props.host}
-        hostKind={props.hostKind}
-        key={`${props.flow}:${props.hostKind}`}
-        onScanHosts={props.onScanHosts}
-        request={props.request}
-      />
+      {props.children}
     </section>
   );
 }
@@ -627,9 +599,6 @@ function PreviewFlow(props: {
   const { runAction } = useRatelApp();
   const [preview, setPreview] = useState<AgentPlanPreview | null>(null);
   const [loading, setLoading] = useState(false);
-  const [selection, setSelection] = useState<string[] | null>(null);
-  const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("add-missing-only");
-  const [replaceConflicts, setReplaceConflicts] = useState<string[]>([]);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const endpoint =
@@ -645,14 +614,10 @@ function PreviewFlow(props: {
           method: "POST",
           body: {
             hostKind: props.hostKind,
-            selection: props.flow === "import" ? (selection ?? undefined) : undefined,
-            conflictStrategy: props.flow === "import" ? conflictStrategy : undefined,
-            replaceConflicts: props.flow === "import" ? replaceConflicts : undefined,
           },
         });
         if (cancelled) return;
         setPreview(body);
-        if (props.flow === "import") setSelection((current) => current ?? body.selected);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -661,34 +626,27 @@ function PreviewFlow(props: {
     return () => {
       cancelled = true;
     };
-  }, [
-    conflictStrategy,
-    previewPath,
-    props.flow,
-    props.hostKind,
-    props.request,
-    replaceConflicts,
-    selection,
-  ]);
+  }, [previewPath, props.hostKind, props.request]);
 
-  const ratelChanges = preview?.plan.ratelChanges ?? [];
   const agentChanges = preview?.plan.agentChanges ?? [];
-  const selectedSet = new Set(selection ?? preview?.selected ?? []);
   const linkedAndCovered =
     props.host.ratelEntryCount > 0 && missingRatelEntryNames(props.host).length === 0;
   const friendlyNoOp = Boolean(preview?.emptyReason && linkedAndCovered);
 
-  const applyRatel = async () => {
-    if (!preview) return false;
+  const applyRatel = async (
+    importPreview: AgentPlanPreview,
+    conflictStrategy: ConflictStrategy,
+    replaceConflicts: string[],
+  ) => {
     const applied = await runAction("Ratel config changes applied", () =>
       props.request("/api/agent-apply/import/ratel", {
         method: "POST",
         body: {
           hostKind: props.hostKind,
-          selection: preview.selected,
+          selection: importPreview.selected,
           conflictStrategy,
           replaceConflicts,
-          planHash: preview.stageHashes.ratel,
+          planHash: importPreview.stageHashes.ratel,
         },
       }),
     );
@@ -698,8 +656,13 @@ function PreviewFlow(props: {
     return true;
   };
 
-  const applyAgent = async () => {
-    if (!preview) return false;
+  const applyAgent = async (
+    activePreview: AgentPlanPreview,
+    options?: {
+      conflictStrategy?: ConflictStrategy;
+      replaceConflicts?: string[];
+    },
+  ) => {
     const path =
       props.flow === "import" ? "/api/agent-apply/import/agent" : "/api/agent-apply/link";
     const applied = await runAction(
@@ -709,10 +672,10 @@ function PreviewFlow(props: {
           method: "POST",
           body: {
             hostKind: props.hostKind,
-            selection: props.flow === "import" ? preview.selected : undefined,
-            conflictStrategy: props.flow === "import" ? conflictStrategy : undefined,
-            replaceConflicts: props.flow === "import" ? replaceConflicts : undefined,
-            planHash: preview.stageHashes.agent,
+            selection: props.flow === "import" ? activePreview.selected : undefined,
+            conflictStrategy: props.flow === "import" ? options?.conflictStrategy : undefined,
+            replaceConflicts: props.flow === "import" ? options?.replaceConflicts : undefined,
+            planHash: activePreview.stageHashes.agent,
           },
         }),
     );
@@ -722,14 +685,20 @@ function PreviewFlow(props: {
     return true;
   };
 
-  const commitImport = async () => {
-    if (!preview) return false;
-    if (ratelChanges.length > 0) {
-      const ratelApplied = await applyRatel();
+  const commitImport = async (
+    importPreview: AgentPlanPreview,
+    conflictStrategy: ConflictStrategy,
+    replaceConflicts: string[],
+  ) => {
+    if (importPreview.plan.ratelChanges.length > 0) {
+      const ratelApplied = await applyRatel(importPreview, conflictStrategy, replaceConflicts);
       if (!ratelApplied) return false;
     }
-    if (agentChanges.length > 0) {
-      const agentApplied = await applyAgent();
+    if (importPreview.plan.agentChanges.length > 0) {
+      const agentApplied = await applyAgent(importPreview, {
+        conflictStrategy,
+        replaceConflicts,
+      });
       if (!agentApplied) return false;
     }
     setDialogOpen(false);
@@ -739,7 +708,7 @@ function PreviewFlow(props: {
   const commitLink = async () => {
     if (!preview) return false;
     if (agentChanges.length > 0) {
-      const linked = await applyAgent();
+      const linked = await applyAgent(preview);
       if (!linked) return false;
     }
     setDialogOpen(false);
@@ -759,16 +728,8 @@ function PreviewFlow(props: {
           {friendlyNoOp ? (
             <LinkedCoveredPreview flow={props.flow} host={props.host} />
           ) : (
-            <SetupRecap
-              flow={props.flow}
-              host={props.host}
-              onOpen={() => setDialogOpen(true)}
-              preview={preview}
-            />
+            <SetupRecap flow={props.flow} onOpen={() => setDialogOpen(true)} preview={preview} />
           )}
-          {props.flow === "link" && missingRatelEntryNames(props.host).length > 0 ? (
-            <LinkKeepsNativeEntriesNotice host={props.host} />
-          ) : null}
           {preview.emptyReason && !friendlyNoOp ? (
             <Alert>
               <AlertTitle>No changes available</AlertTitle>
@@ -777,17 +738,12 @@ function PreviewFlow(props: {
           ) : null}
           {!friendlyNoOp && props.flow === "import" ? (
             <ImportSceneDialog
-              conflictStrategy={conflictStrategy}
               onCommit={commitImport}
-              onConflictStrategyChange={setConflictStrategy}
               onOpenChange={setDialogOpen}
-              onToggleReplace={(key) =>
-                setReplaceConflicts((current) => toggleSelection(current, key))
-              }
               open={dialogOpen}
               preview={preview}
-              replaceConflicts={new Set(replaceConflicts)}
-              selected={selectedSet}
+              request={props.request}
+              hostKind={props.hostKind}
             />
           ) : null}
           {!friendlyNoOp && props.flow === "link" ? (
@@ -804,89 +760,40 @@ function PreviewFlow(props: {
   );
 }
 
-function RestorePoints(props: {
-  backups: BackupManifest[];
-  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
-  runAction: (
-    label: string,
-    action: () => Promise<{ log?: string[] } | unknown>,
-  ) => Promise<boolean>;
-}) {
-  const [restoreBackup, setRestoreBackup] = useState<BackupManifest | null>(null);
-  const restoreLatest = async () => {
-    const restored = await props.runAction("Restore complete", () =>
-      props.request("/api/backups/undo", { method: "POST", body: {} }),
-    );
-    if (restored) setRestoreBackup(null);
-  };
-
+function Backups(props: { backups: BackupManifest[] }) {
   return (
     <section className="grid gap-3 border-border border-t pt-4">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
-          <h3 className="font-medium">Restore Points</h3>
+          <h3 className="font-medium">Backups</h3>
           <p className="text-sm text-muted-foreground">
             Recent changes created by import, link, and other config writes.
           </p>
         </div>
         <p className="text-sm text-muted-foreground">
-          {props.backups.length} restore point{props.backups.length === 1 ? "" : "s"}
+          {props.backups.length} backup{props.backups.length === 1 ? "" : "s"}
         </p>
       </div>
       {props.backups.length === 0 ? (
-        <div className="py-6 text-sm text-muted-foreground">No restore points yet.</div>
+        <div className="py-6 text-sm text-muted-foreground">No backups yet.</div>
       ) : (
         <div className="divide-y divide-border border border-border">
           {props.backups.map((backup, index) => (
-            <RestorePointRow
+            <BackupRow
               backup={backup}
               key={`${backup.createdAt}-${backup.action}`}
               latest={index === 0}
-              onRestore={() => setRestoreBackup(backup)}
             />
           ))}
         </div>
       )}
-      <AlertDialog
-        open={restoreBackup !== null}
-        onOpenChange={(open) => !open && setRestoreBackup(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogMedia>
-              <Undo2 />
-            </AlertDialogMedia>
-            <AlertDialogTitle>Restore latest point</AlertDialogTitle>
-            <AlertDialogDescription>
-              Restore the latest config backup created by{" "}
-              {restoreBackup?.action ?? "the last write"}. The current config files will be replaced
-              with the saved versions.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {restoreBackup ? (
-            <div className="rounded-md bg-muted/60 p-3">
-              <p className="text-sm font-medium">{restoreBackup.action}</p>
-              <p className="mt-1 font-mono text-xs text-muted-foreground">
-                {restoreBackup.entries.map((entry) => entry.originalPath).join(", ")}
-              </p>
-            </div>
-          ) : null}
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void restoreLatest()} variant="destructive">
-              Restore
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </section>
   );
 }
 
-function RestorePointRow(props: {
+function BackupRow(props: {
   backup: BackupManifest;
   latest: boolean;
-  onRestore: () => void;
 }) {
   const paths = props.backup.entries.map((entry) => entry.originalPath).join(", ");
   return (
@@ -905,21 +812,13 @@ function RestorePointRow(props: {
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
           <span className={cn(props.latest && "font-medium text-foreground")}>
-            {props.latest ? "Latest restore point" : "Previous restore point"}
+            {props.latest ? "Latest backup" : "Previous backup"}
           </span>
           <span aria-hidden="true">/</span>
-          <span>{restoreFileSummary(props.backup.entries.length)}</span>
+          <span>{backupFileSummary(props.backup.entries.length)}</span>
         </div>
         <p className="truncate font-mono text-xs text-muted-foreground">{paths}</p>
       </div>
-      {props.latest ? (
-        <Button onClick={props.onRestore} size="sm" variant="outline">
-          <Undo2 />
-          Restore latest
-        </Button>
-      ) : (
-        <span className="text-sm text-muted-foreground md:text-right">Only latest can restore</span>
-      )}
     </div>
   );
 }
@@ -947,54 +846,30 @@ function restoreCreatedLabel(createdAt: string) {
   });
 }
 
-function restoreFileSummary(count: number) {
+function backupFileSummary(count: number) {
   return `${count} config file${count === 1 ? "" : "s"} backed up`;
 }
 
-function SetupRecap(props: {
-  flow: SetupFlow;
-  host: DetectedAgentHostSummary;
-  onOpen: () => void;
-  preview: AgentPlanPreview;
-}) {
-  const summary = props.preview.plan.summary;
+function SetupRecap(props: { flow: SetupFlow; onOpen: () => void; preview: AgentPlanPreview }) {
   const changes = props.preview.plan.ratelChanges.length + props.preview.plan.agentChanges.length;
   const actionLabel = props.flow === "import" ? "Import" : "Link";
   return (
     <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-      <div className="grid gap-3">
-        <div className="flex flex-wrap gap-2">
-          <StatusBadge tone={props.flow === "import" ? "success" : "muted"}>
-            {props.flow === "import"
-              ? `${props.preview.selected.length} sources`
-              : `${props.host.ratelEntryCount} Ratel entries`}
-          </StatusBadge>
-          <StatusBadge tone={changes > 0 ? "success" : "muted"}>
-            {changes} file change{changes === 1 ? "" : "s"}
-          </StatusBadge>
-          {props.flow === "import" ? (
-            <StatusBadge tone={summary.conflicts.length > 0 ? "muted" : "success"}>
-              {summary.conflicts.length} conflicts
-            </StatusBadge>
-          ) : null}
-        </div>
-        <div>
-          <h4 className="font-medium">
-            {props.flow === "import" ? "Ready to import native sources" : "Ready to link gateway"}
-          </h4>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {props.flow === "import"
-              ? "Review the import, resolve conflicts, inspect the diff, then commit."
-              : "Review the agent config diff, then write the gateway."}
-          </p>
-        </div>
-        {props.flow === "import" && summary.skipped.length > 0 ? (
-          <p className="text-xs text-muted-foreground">
-            {summary.skipped.length} source{summary.skipped.length === 1 ? "" : "s"} skipped.
-          </p>
-        ) : null}
+      <div>
+        <h4 className="font-medium">
+          {props.flow === "import" ? "Import native entries" : "Link Ratel gateway"}
+        </h4>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {props.flow === "import"
+            ? "Choose entries, resolve conflicts if needed, then review the exact config changes."
+            : "Review the exact agent config change before writing it."}
+        </p>
       </div>
-      <Button disabled={changes === 0} onClick={props.onOpen}>
+      <Button
+        className="min-h-12 px-6 text-base md:min-w-40"
+        disabled={changes === 0}
+        onClick={props.onOpen}
+      >
         {props.flow === "import" ? <Download /> : <LinkIcon />}
         {actionLabel}
       </Button>
@@ -1005,28 +880,70 @@ function SetupRecap(props: {
 type ImportScene = "recap" | "strategy" | "pick-conflicts" | "review";
 
 function ImportSceneDialog(props: {
-  conflictStrategy: ConflictStrategy;
-  onCommit: () => Promise<boolean>;
-  onConflictStrategyChange: (strategy: ConflictStrategy) => void;
+  hostKind: AgentHostKind;
+  onCommit: (
+    preview: AgentPlanPreview,
+    conflictStrategy: ConflictStrategy,
+    replaceConflicts: string[],
+  ) => Promise<boolean>;
   onOpenChange: (open: boolean) => void;
-  onToggleReplace: (key: string) => void;
   open: boolean;
   preview: AgentPlanPreview;
-  replaceConflicts: Set<string>;
-  selected: Set<string>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
   const [scene, setScene] = useState<ImportScene>("recap");
   const [committing, setCommitting] = useState(false);
-  const conflicts = props.preview.plan.summary.conflicts;
-  const requiresConflictSelection =
-    conflicts.length > 0 && props.conflictStrategy === "replace-selected";
+  const [draftPreview, setDraftPreview] = useState<AgentPlanPreview>(props.preview);
+  const [draftSelection, setDraftSelection] = useState<string[]>(props.preview.selected);
+  const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("add-missing-only");
+  const [replaceConflicts, setReplaceConflicts] = useState<string[]>([]);
+  const selected = new Set(draftSelection);
+  const conflicts = draftPreview.plan.summary.conflicts;
+  const requiresConflictSelection = conflicts.length > 0 && conflictStrategy === "replace-selected";
   const goAfterRecap = () => setScene(conflicts.length > 0 ? "strategy" : "review");
   const goAfterStrategy = () =>
-    setScene(props.conflictStrategy === "replace-selected" ? "pick-conflicts" : "review");
+    setScene(conflictStrategy === "replace-selected" ? "pick-conflicts" : "review");
+
+  useEffect(() => {
+    if (!props.open) return;
+    setDraftPreview(props.preview);
+    setDraftSelection(props.preview.selected);
+    setConflictStrategy("add-missing-only");
+    setReplaceConflicts([]);
+  }, [props.open, props.preview]);
+
+  useEffect(() => {
+    if (!props.open) return;
+    let cancelled = false;
+    const loadDraftPreview = async () => {
+      const body = await props.request<AgentPlanPreview>("/api/agent-preview/import", {
+        method: "POST",
+        body: {
+          hostKind: props.hostKind,
+          selection: draftSelection,
+          conflictStrategy,
+          replaceConflicts,
+        },
+      });
+      if (!cancelled) setDraftPreview(body);
+    };
+    void loadDraftPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    conflictStrategy,
+    draftSelection,
+    props.hostKind,
+    props.open,
+    props.request,
+    replaceConflicts,
+  ]);
+
   const commit = async () => {
     setCommitting(true);
     try {
-      await props.onCommit();
+      await props.onCommit(draftPreview, conflictStrategy, replaceConflicts);
     } finally {
       setCommitting(false);
     }
@@ -1054,35 +971,42 @@ function ImportSceneDialog(props: {
               </Button>
             </>
           }
-          kicker="Recap"
-          title="Native sources found"
+          kicker="Entries"
+          title="Choose entries to import"
         >
           <div className="grid gap-3">
-            <div className="grid gap-2 sm:grid-cols-3">
-              <SceneMetric label="Selected" value={props.selected.size} />
-              <SceneMetric label="Conflicts" value={conflicts.length} />
-              <SceneMetric
-                label="Files"
-                value={
-                  props.preview.plan.ratelChanges.length + props.preview.plan.agentChanges.length
-                }
-              />
-            </div>
             <div className="max-h-60 overflow-auto border border-border">
-              {props.preview.candidates.map((candidate) => (
-                <div
-                  className="grid gap-1 border-border border-b px-3 py-2 last:border-b-0"
-                  key={`${candidate.scope}:${candidate.name}`}
-                >
-                  <div className="flex min-w-0 items-center justify-between gap-2">
-                    <span className="truncate font-medium">{candidate.name}</span>
-                    <Badge variant="outline">{candidate.scope}</Badge>
-                  </div>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {summarizeEntry(candidate.entry)}
-                  </span>
-                </div>
-              ))}
+              {props.preview.candidates.map((candidate) => {
+                const isSelected = selected.has(candidate.name);
+                return (
+                  <button
+                    className={cn(
+                      "grid w-full gap-1 border-border border-b px-3 py-2 text-left transition-colors last:border-b-0",
+                      isSelected ? "bg-brand-green/10" : "bg-background hover:bg-muted/35",
+                    )}
+                    key={`${candidate.scope}:${candidate.name}`}
+                    onClick={() =>
+                      setDraftSelection((current) => toggleSelection(current, candidate.name))
+                    }
+                    type="button"
+                  >
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <Checkbox
+                          checked={isSelected}
+                          className="pointer-events-none"
+                          tabIndex={-1}
+                        />
+                        <span className="truncate font-medium">{candidate.name}</span>
+                      </span>
+                      <Badge variant="outline">{candidate.scope}</Badge>
+                    </div>
+                    <span className="truncate pl-6 text-xs text-muted-foreground">
+                      {summarizeEntry(candidate.entry)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </ScenePanel>
@@ -1100,26 +1024,26 @@ function ImportSceneDialog(props: {
             </>
           }
           kicker="Conflicts"
-          title="Choose what wins"
+          title="Resolve matching names"
         >
           <div className="grid gap-2">
             <ConflictStrategyButton
-              active={props.conflictStrategy === "add-missing-only"}
-              detail="Keep existing Ratel entries and import only missing names."
-              label="Keep Ratel"
-              onClick={() => props.onConflictStrategyChange("add-missing-only")}
+              active={conflictStrategy === "add-missing-only"}
+              detail="Leave existing Ratel entries unchanged and import only new names."
+              label="Import new only"
+              onClick={() => setConflictStrategy("add-missing-only")}
             />
             <ConflictStrategyButton
-              active={props.conflictStrategy === "replace-from-agent"}
-              detail="Replace every conflicting Ratel entry with the agent version."
-              label="Replace all"
-              onClick={() => props.onConflictStrategyChange("replace-from-agent")}
+              active={conflictStrategy === "replace-from-agent"}
+              detail="Use the agent version for every matching name."
+              label="Use all agent versions"
+              onClick={() => setConflictStrategy("replace-from-agent")}
             />
             <ConflictStrategyButton
-              active={props.conflictStrategy === "replace-selected"}
-              detail="Pick conflict names one by one."
-              label="Choose entries"
-              onClick={() => props.onConflictStrategyChange("replace-selected")}
+              active={conflictStrategy === "replace-selected"}
+              detail="Pick which matching names should use the agent version."
+              label="Choose per entry"
+              onClick={() => setConflictStrategy("replace-selected")}
             />
           </div>
         </ScenePanel>
@@ -1136,13 +1060,19 @@ function ImportSceneDialog(props: {
               </Button>
             </>
           }
-          kicker="Selection"
-          title="Pick replacements"
+          kicker="Conflicts"
+          title="Pick agent versions"
         >
+          <p className="text-sm text-muted-foreground">
+            Selected entries will overwrite the matching Ratel entry. Unselected entries keep the
+            current Ratel version.
+          </p>
           <ConflictPickList
             conflicts={conflicts}
-            onToggleReplace={props.onToggleReplace}
-            replaceConflicts={props.replaceConflicts}
+            onToggleReplace={(key) =>
+              setReplaceConflicts((current) => toggleSelection(current, key))
+            }
+            replaceConflicts={new Set(replaceConflicts)}
           />
         </ScenePanel>
       ) : null}
@@ -1172,19 +1102,15 @@ function ImportSceneDialog(props: {
             </>
           }
           kicker="Review"
-          title="Diff before write"
+          title="Review config changes"
           wide
         >
           <div className="grid max-h-[65vh] gap-4 overflow-auto pr-1">
+            <ChangeList changes={draftPreview.plan.ratelChanges} defaultOpen title="Ratel config" />
             <ChangeList
-              changes={props.preview.plan.ratelChanges}
+              changes={draftPreview.plan.agentChanges}
               defaultOpen
-              title="Ratel changes"
-            />
-            <ChangeList
-              changes={props.preview.plan.agentChanges}
-              defaultOpen
-              title={`${props.preview.host.displayName} cleanup`}
+              title={`${props.preview.host.displayName} config`}
             />
           </div>
         </ScenePanel>
@@ -1199,7 +1125,6 @@ function LinkSceneDialog(props: {
   open: boolean;
   preview: AgentPlanPreview;
 }) {
-  const [scene, setScene] = useState<"recap" | "review">("recap");
   const [committing, setCommitting] = useState(false);
   const commit = async () => {
     setCommitting(true);
@@ -1211,62 +1136,31 @@ function LinkSceneDialog(props: {
   };
 
   return (
-    <SceneDialog
-      open={props.open}
-      onOpenChange={(open) => {
-        props.onOpenChange(open);
-        if (open) setScene("recap");
-      }}
-      scene={scene}
-      title="Link"
-    >
-      {scene === "recap" ? (
-        <ScenePanel
-          footer={
-            <>
-              <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
-                Cancel
-              </Button>
-              <Button onClick={() => setScene("review")} type="button">
-                Review diff
-              </Button>
-            </>
-          }
-          kicker="Recap"
-          title="Gateway write"
-        >
-          <div className="grid gap-2 sm:grid-cols-2">
-            <SceneMetric label="Agent files" value={props.preview.plan.agentChanges.length} />
-            <SceneMetric label="Ratel entries" value={props.preview.host.ratelEntryCount} />
-          </div>
-        </ScenePanel>
-      ) : null}
-      {scene === "review" ? (
-        <ScenePanel
-          footer={
-            <>
-              <Button onClick={() => setScene("recap")} type="button" variant="outline">
-                Back
-              </Button>
-              <Button disabled={committing} onClick={() => void commit()} type="button">
-                <LinkIcon />
-                Commit link
-              </Button>
-            </>
-          }
-          kicker="Review"
-          title="Diff before write"
-          wide
-        >
-          <div className="max-h-[65vh] overflow-auto pr-1">
-            <ChangeList
-              changes={props.preview.plan.agentChanges}
-              defaultOpen
-              title={`${props.preview.host.displayName} changes`}
-            />
-          </div>
-        </ScenePanel>
-      ) : null}
+    <SceneDialog open={props.open} onOpenChange={props.onOpenChange} scene="review" title="Link">
+      <ScenePanel
+        footer={
+          <>
+            <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button disabled={committing} onClick={() => void commit()} type="button">
+              <LinkIcon />
+              Commit link
+            </Button>
+          </>
+        }
+        kicker="Review"
+        title="Review config changes"
+        wide
+      >
+        <div className="max-h-[65vh] overflow-auto pr-1">
+          <ChangeList
+            changes={props.preview.plan.agentChanges}
+            defaultOpen
+            title={`${props.preview.host.displayName} changes`}
+          />
+        </div>
+      </ScenePanel>
     </SceneDialog>
   );
 }
@@ -1358,15 +1252,6 @@ function ScenePanel(props: {
   );
 }
 
-function SceneMetric(props: { label: string; value: number }) {
-  return (
-    <div className="border border-border bg-muted/20 px-3 py-3">
-      <p className="text-2xl font-semibold leading-none">{props.value}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{props.label}</p>
-    </div>
-  );
-}
-
 function ConflictStrategyButton(props: {
   active: boolean;
   detail: string;
@@ -1421,19 +1306,6 @@ function ConflictPickList(props: {
           </button>
         );
       })}
-    </div>
-  );
-}
-
-function LinkKeepsNativeEntriesNotice(props: { host: DetectedAgentHostSummary }) {
-  const missing = missingRatelEntryNames(props.host);
-  return (
-    <div className="flex flex-wrap items-center gap-2 border border-border bg-muted/20 px-3 py-2">
-      <StatusBadge tone="muted">Native entries remain</StatusBadge>
-      <span className="text-sm text-muted-foreground">
-        {missing.length} native source{missing.length === 1 ? "" : "s"} stay in{" "}
-        {props.host.displayName}. Import moves them into Ratel.
-      </span>
     </div>
   );
 }
@@ -1652,12 +1524,6 @@ function LinkStatusBadge(props: { host: DetectedAgentHostSummary }) {
   return <StatusBadge tone="muted">Not linked</StatusBadge>;
 }
 
-function ScopeLinkStatusBadge(props: { scope: AgentScopePosture }) {
-  if (!props.scope.available) return <StatusBadge tone="muted">Unavailable</StatusBadge>;
-  if (props.scope.ratelEntryCount > 0) return <StatusBadge tone="success">Linked</StatusBadge>;
-  return <StatusBadge tone="muted">Not linked</StatusBadge>;
-}
-
 function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "success" }) {
   return (
     <Badge
@@ -1712,38 +1578,23 @@ function AgentIconFrame(props: { kind: AgentHostKind }) {
 
 function ClaudeMark(props: { className?: string } = {}) {
   return (
-    <svg
+    <img
+      alt=""
       aria-hidden="true"
       className={cn("size-2/3", props.className)}
-      fill="none"
-      viewBox="0 0 600 600"
-    >
-      <title>Claude Code</title>
-      <path
-        clipRule="evenodd"
-        d="M525 273.7h75v77.6h-75V427h-37.2v73H450v-73h-37.2v73H375v-73H225v73h-37.8v-73H150v73h-37.8v-73H75v-75.7H0v-77.6h75V125h450zm-375 0h37.2v-71.1H150zm262.8 0H450v-71.1h-37.2z"
-        fill="#D97757"
-        fillRule="evenodd"
-      />
-    </svg>
+      src={CLAUDE_CODE_ICON_SRC}
+    />
   );
 }
 
 function CodexMark(props: { className?: string } = {}) {
   return (
-    <svg
+    <img
+      alt=""
       aria-hidden="true"
-      className={cn("size-2/3 text-foreground", props.className)}
-      fill="currentColor"
-      fillRule="evenodd"
-      viewBox="0 0 24 24"
-    >
-      <title>Codex (OpenAI)</title>
-      <path
-        clipRule="evenodd"
-        d="M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 00.107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 01-.18 1.631.167.167 0 00.04.155 5.982 5.982 0 011.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 01-2.934 1.851.162.162 0 00-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 00-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 01-2.595-.622 6.058 6.058 0 01-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 01-.495-1.283 6.11 6.11 0 01-.017-3.064.166.166 0 00.008-.074.115.115 0 00-.037-.064 5.958 5.958 0 01-1.38-2.202 5.196 5.196 0 01-.333-1.589 6.915 6.915 0 01.188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 00.087-.087A6.016 6.016 0 015.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 00-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 001.46.864l1.94-3.272a.849.849 0 00.007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 000 1.695h4.848a.849.849 0 000-1.696h-4.848z"
-      />
-    </svg>
+      className={cn("size-2/3", props.className)}
+      src={CODEX_ICON_SRC}
+    />
   );
 }
 

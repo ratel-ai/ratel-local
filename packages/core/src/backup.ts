@@ -100,21 +100,3 @@ export async function listBackups(env: HierarchyEnv, fs: BackupFs): Promise<Back
   manifests.sort((a, b) => (a.name < b.name ? 1 : -1));
   return manifests.map((m) => m.manifest);
 }
-
-export async function restoreLatest(
-  env: HierarchyEnv,
-  fs: BackupFs,
-): Promise<BackupManifest | null> {
-  const all = await listBackups(env, fs);
-  if (all.length === 0) return null;
-  const latest = all[0];
-  for (const e of latest.entries) {
-    if (e.existedBefore) {
-      const text = await fs.read(e.backupPath);
-      if (text !== null) await fs.write(e.originalPath, text);
-    } else {
-      await fs.remove(e.originalPath);
-    }
-  }
-  return latest;
-}

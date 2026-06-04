@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listBackups, restoreLatest, startBackup } from "./backup.js";
+import { listBackups, startBackup } from "./backup.js";
 
 const HOME = "/home/u";
 
@@ -120,51 +120,5 @@ describe("listBackups", () => {
     const fs = new MemFs();
     fs.files.set("/home/u/.ratel/backups/abandoned/something.txt", "x");
     expect(await listBackups({ homeDir: HOME }, fs)).toEqual([]);
-  });
-});
-
-describe("restoreLatest", () => {
-  it("returns null when no backups exist", async () => {
-    expect(await restoreLatest({ homeDir: HOME }, new MemFs())).toBeNull();
-  });
-
-  it("restores the most recent set's contents byte-for-byte", async () => {
-    const fs = new MemFs();
-    fs.files.set("/a.json", "OLD");
-    const s = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
-    await s.capture("/a.json");
-    await s.finalize("add");
-    fs.files.set("/a.json", "NEW");
-
-    await restoreLatest({ homeDir: HOME }, fs);
-    expect(fs.files.get("/a.json")).toBe("OLD");
-  });
-
-  it("deletes files that did not exist before the captured action", async () => {
-    const fs = new MemFs();
-    const s = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
-    await s.capture("/created.json"); // existedBefore=false
-    await s.finalize("add");
-    fs.files.set("/created.json", "wrote-after");
-
-    await restoreLatest({ homeDir: HOME }, fs);
-    expect(fs.files.has("/created.json")).toBe(false);
-  });
-
-  it("restores only the most recent set when multiple exist", async () => {
-    const fs = new MemFs();
-    fs.files.set("/a.json", "v1");
-    const s1 = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
-    await s1.capture("/a.json");
-    await s1.finalize("add");
-    fs.files.set("/a.json", "v2");
-
-    const s2 = startBackup({ homeDir: HOME }, fs, () => stableNow(1));
-    await s2.capture("/a.json");
-    await s2.finalize("remove");
-    fs.files.set("/a.json", "v3");
-
-    await restoreLatest({ homeDir: HOME }, fs);
-    expect(fs.files.get("/a.json")).toBe("v2");
   });
 });

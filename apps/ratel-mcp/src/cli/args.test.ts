@@ -49,10 +49,14 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
-  it.each(["list", "undo"] as const)("recognizes backup %s", (verb) => {
-    const r = parseArgs(["backup", verb]);
+  it("recognizes backup list", () => {
+    const r = parseArgs(["backup", "list"]);
     expect(r.group).toBe("backup");
-    expect(r.verb).toBe(verb);
+    expect(r.verb).toBe("list");
+  });
+
+  it("rejects backup undo", () => {
+    expect(() => parseArgs(["backup", "undo"])).toThrow(/unknown backup verb: undo/);
   });
 
   it("rejects an unknown group", () => {

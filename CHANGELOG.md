@@ -7,12 +7,12 @@ All notable changes to this package are documented here. The format is based on 
 ## [0.2.1-rc.0] - 2026-05-14
 
 ### Added
-- `ratel-mcp ui` subcommand — local browser UI mirroring the CLI. Loopback-only HTTP server with a per-session bearer token. Lets you view, add, edit, remove, and OAuth-authorize MCP servers across all three scopes; trigger Claude Code import/link; and undo the latest backup. Flags: `--port N`, `--no-open`.
+- `ratel-mcp ui` subcommand — local browser UI mirroring the CLI. Loopback-only HTTP server with a per-session bearer token. Lets you view, add, edit, remove, and OAuth-authorize MCP servers across all three scopes; trigger Claude Code import/link; and inspect backups. Flags: `--port N`, `--no-open`.
 
 ## [0.2.0] - 2026-05-12
 
 ### Added
-- `ratel-mcp` CLI bin shipped alongside the library. Subcommands: `serve`, `mcp add` / `remove` / `list` / `get` / `edit` / `import` / `link` / `auth`, `backup list` / `undo`. Run via `npx @ratel-ai/mcp-server <verb>` or a global `pnpm add -g`.
+- `ratel-mcp` CLI bin shipped alongside the library. Subcommands: `serve`, `mcp add` / `remove` / `list` / `get` / `edit` / `import` / `link` / `auth`, `backup list`. Run via `npx @ratel-ai/mcp-server <verb>` or a global `pnpm add -g`.
 - Source split: `src/lib/` (library) + `src/cli/` (CLI) + `src/index.ts` (library entrypoint) + `src/bin.ts` (CLI entrypoint).
 
 ### Changed
