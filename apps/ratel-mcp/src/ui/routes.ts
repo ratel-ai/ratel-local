@@ -1,14 +1,23 @@
+import { type SpawnOptions, spawn } from "node:child_process";
 import {
   type AuthFlowResult,
   addServerEntry,
+  applyAgentImportAgent,
+  applyAgentImportRatel,
+  applyAgentLink,
   assertRatelScope,
   authorizeServer,
   editServerEntry,
+  getAgentHostsState,
   getConfigState,
+  type ImportConflictStrategy,
   importAgentServers,
   linkAgentToRatel,
+  previewAgentImport,
+  previewAgentLink,
   removeServerEntry,
   type ServerEntry,
+  type SupportedAgentHostKind,
   undoLatestBackup,
 } from "@ratel-ai/mcp-core";
 import type { HandlerCtx } from "../cli/handlers/types.js";
@@ -36,6 +45,27 @@ function withCapture<T>(
 
 export async function getConfig(ctx: HandlerCtx): Promise<ApiResponse> {
   return ok(await getConfigState(ctx));
+}
+
+export async function getAgentHosts(ctx: HandlerCtx): Promise<ApiResponse> {
+  return ok(await getAgentHostsState(ctx));
+}
+
+export async function openFile(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  const path = requiredString(body.path, "path");
+  const hosts = await getAgentHostsState(ctx);
+  const allowed = new Set<string>();
+  for (const host of hosts.hosts) {
+    for (const scope of host.scopes) {
+      if (scope.available) allowed.add(scope.path);
+    }
+  }
+  if (!allowed.has(path)) throw new Error("path is not a detected agent config");
+  openPath(path);
+  return ok({ log: [`opened ${path}`] });
 }
 
 export async function addServer(
@@ -98,6 +128,55 @@ export async function doLink(ctx: HandlerCtx): Promise<ApiResponse> {
   return ok({ log });
 }
 
+export async function previewImport(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  return ok(
+    await previewAgentImport(ctx, normalizeImportBody(body), { envVar: resolveRatelBin() }),
+  );
+}
+
+export async function previewLink(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  return ok(await previewAgentLink(ctx, normalizeLinkBody(body), { envVar: resolveRatelBin() }));
+}
+
+export async function applyImportRatel(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  const { result, log } = await withCapture(ctx, (c) =>
+    applyAgentImportRatel(c, normalizeApplyImportBody(body), { envVar: resolveRatelBin() }),
+  );
+  if (!result) log.push("nothing to apply");
+  return ok({ log });
+}
+
+export async function applyImportAgent(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  const { result, log } = await withCapture(ctx, (c) =>
+    applyAgentImportAgent(c, normalizeApplyImportBody(body), { envVar: resolveRatelBin() }),
+  );
+  if (!result) log.push("nothing to apply");
+  return ok({ log });
+}
+
+export async function applyLink(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  const { result, log } = await withCapture(ctx, (c) =>
+    applyAgentLink(c, normalizeApplyLinkBody(body), { envVar: resolveRatelBin() }),
+  );
+  if (!result) log.push("nothing to apply");
+  return ok({ log });
+}
+
 export async function undoLatest(ctx: HandlerCtx): Promise<ApiResponse> {
   const restored = await undoLatestBackup(ctx);
   if (!restored) return ok({ log: ["nothing to undo"] });
@@ -115,4 +194,77 @@ function formatAuthResults(results: AuthFlowResult[]): string[] {
     const tail = r.reason ? `: ${r.reason}` : "";
     return `${r.name.padEnd(20)} ${r.status}${annotation}${tail}`;
   });
+}
+
+function normalizeImportBody(body: Record<string, unknown>) {
+  return {
+    hostKind: requiredHostKind(body.hostKind),
+    selection: optionalStringArray(body.selection, "selection"),
+    conflictStrategy: optionalConflictStrategy(body.conflictStrategy),
+    replaceConflicts: optionalStringArray(body.replaceConflicts, "replaceConflicts"),
+  };
+}
+
+function normalizeApplyImportBody(body: Record<string, unknown>) {
+  return {
+    ...normalizeImportBody(body),
+    planHash: requiredString(body.planHash, "planHash"),
+  };
+}
+
+function normalizeLinkBody(body: Record<string, unknown>) {
+  return {
+    hostKind: requiredHostKind(body.hostKind),
+  };
+}
+
+function normalizeApplyLinkBody(body: Record<string, unknown>) {
+  return {
+    ...normalizeLinkBody(body),
+    planHash: requiredString(body.planHash, "planHash"),
+  };
+}
+
+function requiredString(value: unknown, name: string): string {
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  throw new Error(`${name} is required`);
+}
+
+function requiredHostKind(value: unknown): SupportedAgentHostKind {
+  if (value === "claude-code" || value === "codex") return value;
+  throw new Error("hostKind must be claude-code|codex");
+}
+
+function openPath(path: string): void {
+  const { command, args, options } = openCommand(path);
+  const child = spawn(command, args, options);
+  child.unref();
+}
+
+function openCommand(path: string): { command: string; args: string[]; options: SpawnOptions } {
+  const options: SpawnOptions = { detached: true, stdio: "ignore" };
+  if (process.platform === "darwin") return { command: "open", args: [path], options };
+  if (process.platform === "win32")
+    return { command: "cmd", args: ["/c", "start", "", path], options };
+  return { command: "xdg-open", args: [path], options };
+}
+
+function optionalConflictStrategy(value: unknown): ImportConflictStrategy | undefined {
+  if (value === undefined) return undefined;
+  if (
+    value === "add-missing-only" ||
+    value === "replace-from-agent" ||
+    value === "replace-selected"
+  ) {
+    return value;
+  }
+  throw new Error("conflictStrategy must be add-missing-only|replace-from-agent|replace-selected");
+}
+
+function optionalStringArray(value: unknown, name: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`${name} must be an array of strings`);
+  }
+  return value;
 }

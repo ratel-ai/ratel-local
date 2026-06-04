@@ -13,11 +13,18 @@ import type { HandlerCtx } from "../cli/handlers/types.js";
 import {
   type ApiResponse,
   addServer,
+  applyImportAgent,
+  applyImportRatel,
+  applyLink,
   authServer,
   doImport,
   doLink,
   editServer,
+  getAgentHosts,
   getConfig,
+  openFile,
+  previewImport,
+  previewLink,
   removeServer,
   undoLatest,
 } from "./routes.js";
@@ -122,6 +129,13 @@ async function route(
   if (method === "GET" && path === "/api/config") {
     return getConfig(ctx);
   }
+  if (method === "GET" && path === "/api/agent-hosts") {
+    return getAgentHosts(ctx);
+  }
+  if (method === "POST" && path === "/api/open-file") {
+    const body = await readJsonBody(req);
+    return openFile(ctx, body);
+  }
   if (method === "POST" && path === "/api/servers") {
     const body = await readJsonBody(req);
     return addServer(ctx, body);
@@ -151,6 +165,26 @@ async function route(
   }
   if (method === "POST" && path === "/api/link") {
     return doLink(ctx);
+  }
+  if (method === "POST" && path === "/api/agent-preview/import") {
+    const body = await readJsonBody(req);
+    return previewImport(ctx, body);
+  }
+  if (method === "POST" && path === "/api/agent-preview/link") {
+    const body = await readJsonBody(req);
+    return previewLink(ctx, body);
+  }
+  if (method === "POST" && path === "/api/agent-apply/import/ratel") {
+    const body = await readJsonBody(req);
+    return applyImportRatel(ctx, body);
+  }
+  if (method === "POST" && path === "/api/agent-apply/import/agent") {
+    const body = await readJsonBody(req);
+    return applyImportAgent(ctx, body);
+  }
+  if (method === "POST" && path === "/api/agent-apply/link") {
+    const body = await readJsonBody(req);
+    return applyLink(ctx, body);
   }
   if (method === "POST" && path === "/api/backups/undo") {
     return undoLatest(ctx);

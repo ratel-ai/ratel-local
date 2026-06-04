@@ -208,7 +208,7 @@ function FamilyDrawerContent({ children, className, asChild = false }: FamilyDra
     return (
       <Drawer.Content
         className={clsx(
-          "fixed inset-x-4 bottom-4 z-10 mx-auto max-w-[380px] overflow-hidden rounded-xl border border-border bg-background shadow-2xl outline-none [--initial-transform:calc(100%+1.25rem)] md:mx-auto md:w-full",
+          "fixed inset-x-4 bottom-4 z-20 mx-auto max-w-[380px] overflow-hidden rounded-xl border border-border bg-background shadow-2xl outline-none [--initial-transform:calc(100%+1.25rem)] md:mx-auto md:w-full",
           className,
         )}
         render={<Slot />}
@@ -221,7 +221,7 @@ function FamilyDrawerContent({ children, className, asChild = false }: FamilyDra
   return (
     <Drawer.Content
       className={clsx(
-        "fixed inset-x-4 bottom-4 z-10 mx-auto max-w-[380px] overflow-hidden rounded-xl border border-border bg-background shadow-2xl outline-none [--initial-transform:calc(100%+1.25rem)] md:mx-auto md:w-full",
+        "fixed inset-x-4 bottom-4 z-20 mx-auto max-w-[380px] overflow-hidden rounded-xl border border-border bg-background shadow-2xl outline-none [--initial-transform:calc(100%+1.25rem)] md:mx-auto md:w-full",
         className,
       )}
     >

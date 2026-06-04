@@ -1,7 +1,20 @@
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { AgentHostState, AgentScope } from "./agent-host/index.js";
-import { AutomaticAgentHostAdapter } from "./agent-host/index.js";
+import type {
+  AgentHostAdapter,
+  AgentHostDetection,
+  AgentHostState,
+  AgentScope,
+  AgentScopeState,
+  SupportedAgentHostKind,
+} from "./agent-host/index.js";
+import {
+  AutomaticAgentHostAdapter,
+  isSupportedAgentHostKind,
+  NamedAgentHostAdapter,
+  SUPPORTED_AGENT_HOSTS,
+} from "./agent-host/index.js";
 import {
   type BackupFs,
   type BackupManifest,
@@ -13,6 +26,8 @@ import { isRatelGatewayEntry } from "./gateway-entry.js";
 import { ProjectRootNotFoundError, type RatelScope, ratelConfigPath } from "./hierarchy.js";
 import {
   buildAgentImportPlan,
+  buildAgentLinkPlan,
+  type FileChange,
   type ImportConflictStrategy,
   type ImportPlan,
 } from "./import-plan.js";
@@ -235,6 +250,209 @@ export interface ImportAgentServersOptions extends AgentInteropOptions {
   conflictStrategy?: ImportConflictStrategy;
 }
 
+export type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mixed";
+
+export interface AgentScopePosture {
+  scope: AgentScope;
+  displayName: string;
+  path: string;
+  available: boolean;
+  posture: AgentPosture;
+  nativeEntryCount: number;
+  ratelEntryCount: number;
+  entryCount: number;
+  nativeEntryNames: string[];
+  ratelEntryNames: string[];
+}
+
+export interface DetectedAgentHostSummary {
+  kind: SupportedAgentHostKind;
+  displayName: string;
+  detection: AgentHostDetection;
+  posture: AgentPosture;
+  nativeEntryCount: number;
+  ratelEntryCount: number;
+  entryCount: number;
+  nativeEntryNames: string[];
+  ratelEntryNames: string[];
+  missingRatelEntryNames: string[];
+  scopes: AgentScopePosture[];
+}
+
+export interface AgentHostsState {
+  hosts: DetectedAgentHostSummary[];
+}
+
+export interface AgentCandidate {
+  name: string;
+  scope: AgentScope;
+  entry: ServerEntry;
+}
+
+export interface AgentPlanStageHashes {
+  ratel: string;
+  agent: string;
+}
+
+export interface AgentPlanPreview {
+  flow: "import" | "link";
+  host: DetectedAgentHostSummary;
+  candidates: AgentCandidate[];
+  selected: string[];
+  plan: ImportPlan;
+  stageHashes: AgentPlanStageHashes;
+  emptyReason: string | null;
+}
+
+export interface PreviewAgentImportInput {
+  hostKind: SupportedAgentHostKind;
+  selection?: string[];
+  conflictStrategy?: ImportConflictStrategy;
+  replaceConflicts?: string[];
+}
+
+export interface PreviewAgentLinkInput {
+  hostKind: SupportedAgentHostKind;
+}
+
+export interface ApplyAgentImportInput extends PreviewAgentImportInput {
+  planHash: string;
+}
+
+export interface ApplyAgentLinkInput extends PreviewAgentLinkInput {
+  planHash: string;
+}
+
+export async function getAgentHostsState(ctx: CoreContext): Promise<AgentHostsState> {
+  const hosts: DetectedAgentHostSummary[] = [];
+  const ratelKnownNames = collectRatelKnownNames(await readAllRatelConfigs(ctx));
+  for (const host of SUPPORTED_AGENT_HOSTS) {
+    const adapter = new NamedAgentHostAdapter(host.kind);
+    const detection = await adapter.detect({ env: ctx.env, fs: ctx.fs });
+    let state: AgentHostState | null = null;
+    try {
+      state = await adapter.read({ env: ctx.env, fs: ctx.fs });
+    } catch (err) {
+      detection.warnings.push(`Failed to read ${host.displayName}: ${(err as Error).message}`);
+    }
+    hosts.push(
+      summarizeDetectedAgentHost(host.kind, host.displayName, detection, state, ratelKnownNames),
+    );
+  }
+  return { hosts };
+}
+
+export async function previewAgentImport(
+  ctx: CoreContext,
+  input: PreviewAgentImportInput,
+  opts: AgentInteropOptions = {},
+): Promise<AgentPlanPreview> {
+  const hostKind = assertSupportedAgentHostKind(input.hostKind);
+  const agentHost = new NamedAgentHostAdapter(hostKind);
+  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
+  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const host = summarizeDetectedAgentHost(
+    hostKind,
+    agentState.host.displayName,
+    detection,
+    agentState,
+    collectRatelKnownNames(await readAllRatelConfigs(ctx)),
+  );
+  const candidates = collectAgentCandidates(agentState);
+  const selected = normalizeAgentSelection(input.selection, candidates);
+
+  if (candidates.length === 0 || selected.length === 0) {
+    const plan = emptyAgentPlan(input.conflictStrategy ?? "add-missing-only");
+    return toAgentPlanPreview("import", host, candidates, selected, plan, input, {
+      emptyReason:
+        candidates.length === 0
+          ? `No native ${agentState.host.displayName} MCP entries found.`
+          : "No entries selected.",
+    });
+  }
+
+  const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
+  const plan = await buildAgentImportPlan(inputs, {
+    selection: new Set(selected),
+    conflictStrategy: input.conflictStrategy ?? "add-missing-only",
+    replaceConflicts: input.replaceConflicts ?? [],
+  });
+  return toAgentPlanPreview("import", host, candidates, selected, plan, input);
+}
+
+export async function previewAgentLink(
+  ctx: CoreContext,
+  input: PreviewAgentLinkInput,
+  opts: AgentInteropOptions = {},
+): Promise<AgentPlanPreview> {
+  const hostKind = assertSupportedAgentHostKind(input.hostKind);
+  const agentHost = new NamedAgentHostAdapter(hostKind);
+  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
+  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const host = summarizeDetectedAgentHost(
+    hostKind,
+    agentState.host.displayName,
+    detection,
+    agentState,
+    collectRatelKnownNames(await readAllRatelConfigs(ctx)),
+  );
+  const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
+  const ratelKnown = collectRatelKnownNames([
+    inputs.ratelUser,
+    inputs.ratelProject,
+    inputs.ratelLocal,
+  ]);
+
+  if (ratelKnown.size === 0) {
+    const plan = emptyAgentPlan("add-missing-only");
+    return toAgentPlanPreview("link", host, [], [], plan, input, {
+      emptyReason:
+        "No Ratel entries found at any scope. Import entries first, then link the agent.",
+    });
+  }
+
+  const plan = await buildAgentLinkPlan(inputs);
+  return toAgentPlanPreview("link", host, [], [], plan, input, {
+    emptyReason:
+      plan.agentChanges.length === 0
+        ? `${agentState.host.displayName} already has the Ratel gateway configured for the available Ratel scopes.`
+        : null,
+  });
+}
+
+export async function applyAgentImportRatel(
+  ctx: CoreContext,
+  input: ApplyAgentImportInput,
+  opts: AgentInteropOptions = {},
+): Promise<BackupManifest | null> {
+  const preview = await previewAgentImport(ctx, input, opts);
+  assertPlanHash(input.planHash, preview.stageHashes.ratel);
+  if (preview.plan.ratelChanges.length === 0) return null;
+  return executePlan(preview.plan.ratelChanges, { fs: ctx.fs, env: ctx.env, action: "import" });
+}
+
+export async function applyAgentImportAgent(
+  ctx: CoreContext,
+  input: ApplyAgentImportInput,
+  opts: AgentInteropOptions = {},
+): Promise<BackupManifest | null> {
+  const preview = await previewAgentImport(ctx, input, opts);
+  assertPlanHash(input.planHash, preview.stageHashes.agent);
+  if (preview.plan.agentChanges.length === 0) return null;
+  return executePlan(preview.plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "import" });
+}
+
+export async function applyAgentLink(
+  ctx: CoreContext,
+  input: ApplyAgentLinkInput,
+  opts: AgentInteropOptions = {},
+): Promise<BackupManifest | null> {
+  const preview = await previewAgentLink(ctx, input, opts);
+  assertPlanHash(input.planHash, preview.stageHashes.agent);
+  if (preview.plan.agentChanges.length === 0) return null;
+  return executePlan(preview.plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "link" });
+}
+
 export async function importAgentServers(
   ctx: CoreContext,
   opts: ImportAgentServersOptions = {},
@@ -294,16 +512,7 @@ export async function linkAgentToRatel(
     return null;
   }
 
-  const agentKnown = collectAgentNames(agentState);
-  const overlap = [...agentKnown].filter((n) => ratelKnown.has(n));
-  if (overlap.length === 0) {
-    ctx.log?.(
-      `No ${agentState.host.displayName} entries match any Ratel entry. Run import to migrate agent entries first.`,
-    );
-    return null;
-  }
-
-  const plan = await buildAgentImportPlan(inputs, { selection: new Set(overlap) });
+  const plan = await buildAgentLinkPlan(inputs);
   if (plan.agentChanges.length === 0) {
     ctx.log?.(`nothing to do (${agentState.host.displayName} already points at Ratel)`);
     return null;
@@ -340,19 +549,230 @@ function collectCandidates(state: AgentHostState): Candidate[] {
   return out;
 }
 
-function collectAgentNames(state: AgentHostState): Set<string> {
-  const out = new Set<string>();
-  for (const scope of state.scopes) {
-    for (const [name, entry] of Object.entries(scope.mcpServers)) {
-      if (!isRatelGatewayEntry(name, entry)) out.add(name);
+function assertSupportedAgentHostKind(value: unknown): SupportedAgentHostKind {
+  if (isSupportedAgentHostKind(value)) return value;
+  throw new Error(`agent host must be one of claude-code|codex, got ${JSON.stringify(value)}`);
+}
+
+function summarizeDetectedAgentHost(
+  kind: SupportedAgentHostKind,
+  displayName: string,
+  detection: AgentHostDetection,
+  state: AgentHostState | null,
+  ratelKnownNames: ReadonlySet<string> = new Set(),
+): DetectedAgentHostSummary {
+  const scopes = state?.scopes.map(summarizeAgentScope) ?? [];
+  const nativeEntryCount = scopes.reduce((sum, scope) => sum + scope.nativeEntryCount, 0);
+  const ratelEntryCount = scopes.reduce((sum, scope) => sum + scope.ratelEntryCount, 0);
+  const entryCount = nativeEntryCount + ratelEntryCount;
+  const nativeEntryNames = [...new Set(scopes.flatMap((scope) => scope.nativeEntryNames))].sort();
+  const ratelEntryNames = [...new Set(scopes.flatMap((scope) => scope.ratelEntryNames))].sort();
+  return {
+    kind,
+    displayName,
+    detection,
+    posture: detection.present
+      ? classifyPosture({ available: true, nativeEntryCount, ratelEntryCount })
+      : "unavailable",
+    nativeEntryCount,
+    ratelEntryCount,
+    entryCount,
+    nativeEntryNames,
+    ratelEntryNames,
+    missingRatelEntryNames: nativeEntryNames.filter((name) => !ratelKnownNames.has(name)),
+    scopes,
+  };
+}
+
+function summarizeAgentScope(scope: AgentScopeState): AgentScopePosture {
+  let nativeEntryCount = 0;
+  let ratelEntryCount = 0;
+  const nativeEntryNames: string[] = [];
+  const ratelEntryNames: string[] = [];
+  for (const [name, entry] of Object.entries(scope.mcpServers)) {
+    if (isRatelGatewayEntry(name, entry)) {
+      ratelEntryCount++;
+      ratelEntryNames.push(name);
+    } else {
+      nativeEntryCount++;
+      nativeEntryNames.push(name);
+    }
+  }
+  return {
+    scope: scope.scope,
+    displayName: scope.displayName,
+    path: scope.path,
+    available: scope.available,
+    posture: classifyPosture({ available: scope.available, nativeEntryCount, ratelEntryCount }),
+    nativeEntryCount,
+    ratelEntryCount,
+    entryCount: nativeEntryCount + ratelEntryCount,
+    nativeEntryNames: nativeEntryNames.sort(),
+    ratelEntryNames: ratelEntryNames.sort(),
+  };
+}
+
+function classifyPosture(input: {
+  available: boolean;
+  nativeEntryCount: number;
+  ratelEntryCount: number;
+}): AgentPosture {
+  if (!input.available) return "unavailable";
+  if (input.nativeEntryCount === 0 && input.ratelEntryCount === 0) return "empty";
+  if (input.nativeEntryCount === 0) return "ratel-only";
+  if (input.ratelEntryCount === 0) return "not-linked";
+  return "mixed";
+}
+
+function collectAgentCandidates(state: AgentHostState): AgentCandidate[] {
+  const out: AgentCandidate[] = [];
+  for (const scopeState of state.scopes) {
+    for (const [name, entry] of Object.entries(scopeState.mcpServers)) {
+      if (isRatelGatewayEntry(name, entry)) continue;
+      out.push({ name, scope: scopeState.scope, entry });
     }
   }
   return out;
 }
 
+function normalizeAgentSelection(
+  selection: readonly string[] | undefined,
+  candidates: readonly AgentCandidate[],
+): string[] {
+  const available = new Set(candidates.map((candidate) => candidate.name));
+  if (!selection) return [...available].sort();
+  return [...new Set(selection)].filter((name) => available.has(name)).sort();
+}
+
+function collectRatelKnownNames(configs: readonly (RatelConfig | null)[]): Set<string> {
+  const out = new Set<string>();
+  for (const cfg of configs) {
+    if (!cfg) continue;
+    for (const name of Object.keys(cfg.mcpServers)) out.add(name);
+  }
+  return out;
+}
+
+async function readAllRatelConfigs(ctx: CoreContext): Promise<(RatelConfig | null)[]> {
+  const configs: (RatelConfig | null)[] = [];
+  for (const scope of SCOPES) {
+    try {
+      configs.push(await readJson<RatelConfig>(ctx.fs, ratelConfigPath(scope, ctx.env)));
+    } catch (err) {
+      if (err instanceof ProjectRootNotFoundError) {
+        configs.push(null);
+        continue;
+      }
+      throw err;
+    }
+  }
+  return configs;
+}
+
+function emptyAgentPlan(conflictStrategy: ImportConflictStrategy): ImportPlan {
+  return {
+    ratelChanges: [],
+    agentChanges: [],
+    summary: {
+      movedFromUser: [],
+      movedFromProject: [],
+      movedFromLocal: [],
+      replacedFromUser: [],
+      replacedFromProject: [],
+      replacedFromLocal: [],
+      skipped: [],
+      conflicts: [],
+      conflictStrategy,
+      ratelEntryArgsByScope: {},
+      overwrittenRatelEntries: [],
+    },
+  };
+}
+
+function toAgentPlanPreview(
+  flow: "import" | "link",
+  host: DetectedAgentHostSummary,
+  candidates: AgentCandidate[],
+  selected: string[],
+  plan: ImportPlan,
+  input: PreviewAgentImportInput | PreviewAgentLinkInput,
+  opts: { emptyReason?: string | null } = {},
+): AgentPlanPreview {
+  return {
+    flow,
+    host,
+    candidates,
+    selected,
+    plan,
+    stageHashes: {
+      ratel: hashPlanStage(
+        flow,
+        "ratel",
+        host.kind,
+        { ...input, selection: selected },
+        plan.ratelChanges,
+      ),
+      agent: hashPlanStage(
+        flow,
+        "agent",
+        host.kind,
+        { ...input, selection: selected },
+        plan.agentChanges,
+      ),
+    },
+    emptyReason:
+      opts.emptyReason ?? emptyReasonForPreview(flow, host.displayName, candidates, selected, plan),
+  };
+}
+
+function emptyReasonForPreview(
+  flow: "import" | "link",
+  hostName: string,
+  candidates: readonly AgentCandidate[],
+  selected: readonly string[],
+  plan: ImportPlan,
+): string | null {
+  if (plan.ratelChanges.length > 0 || plan.agentChanges.length > 0) return null;
+  if (candidates.length === 0) {
+    return flow === "import"
+      ? `No ${hostName} MCP servers found at any scope.`
+      : `No ${hostName} config changes needed.`;
+  }
+  if (selected.length === 0) return "No entries selected.";
+  return "No file changes needed.";
+}
+
+function hashPlanStage(
+  flow: "import" | "link",
+  stage: "ratel" | "agent",
+  hostKind: SupportedAgentHostKind,
+  input: PreviewAgentImportInput | PreviewAgentLinkInput,
+  changes: readonly FileChange[],
+): string {
+  const selection = "selection" in input ? (input.selection ?? []) : [];
+  const payload = {
+    flow,
+    stage,
+    hostKind,
+    selection: [...new Set(selection)].sort(),
+    conflictStrategy:
+      "conflictStrategy" in input ? (input.conflictStrategy ?? "add-missing-only") : undefined,
+    replaceConflicts:
+      "replaceConflicts" in input ? [...new Set(input.replaceConflicts ?? [])].sort() : [],
+    changes,
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function assertPlanHash(received: string, expected: string): void {
+  if (received !== expected) {
+    throw new Error("preview is stale; scan again and review the latest changes before applying");
+  }
+}
+
 async function buildAgentPlanInputs(
   ctx: CoreContext,
-  agentHost: AutomaticAgentHostAdapter,
+  agentHost: AgentHostAdapter,
   agentState: AgentHostState,
   opts: AgentInteropOptions,
 ) {

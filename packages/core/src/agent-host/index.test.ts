@@ -3,6 +3,7 @@ import {
   type AgentHostAdapter,
   type AgentHostContext,
   AutomaticAgentHostAdapter,
+  NamedAgentHostAdapter,
 } from "./index.js";
 
 function adapter(input: {
@@ -74,5 +75,15 @@ describe("AutomaticAgentHostAdapter", () => {
 
     expect(detection.displayName).toBe("Codex");
     expect(state.host.kind).toBe("codex");
+  });
+});
+
+describe("NamedAgentHostAdapter", () => {
+  it("resolves concrete supported adapters by kind", async () => {
+    const claude = await new NamedAgentHostAdapter("claude-code").detect(CTX);
+    const codex = await new NamedAgentHostAdapter("codex").detect(CTX);
+
+    expect(claude.displayName).toBe("Claude Code");
+    expect(codex.displayName).toBe("Codex");
   });
 });

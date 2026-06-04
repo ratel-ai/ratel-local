@@ -75,18 +75,23 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     const userRemove = input.replacedEntriesByScope.get("user");
     const projectRemove = input.replacedEntriesByScope.get("project");
     const localRemove = input.replacedEntriesByScope.get("local");
-    const userGateway = userRemove?.size
+    const userInstall = Boolean(userRemove?.size || input.installGatewayScopes?.has("user"));
+    const projectInstall = Boolean(
+      projectRemove?.size || input.installGatewayScopes?.has("project"),
+    );
+    const localInstall = Boolean(localRemove?.size || input.installGatewayScopes?.has("local"));
+    const userGateway = userInstall
       ? makeRatelGatewayEntry({ bin: input.bin, configPaths: [input.ratelConfigPaths.user] })
       : undefined;
     const projectGateway =
-      projectRemove?.size && input.ratelConfigPaths.project
+      projectInstall && input.ratelConfigPaths.project
         ? makeRatelGatewayEntry({
             bin: input.bin,
             configPaths: [input.ratelConfigPaths.user, input.ratelConfigPaths.project],
           })
         : undefined;
     const localGateway =
-      localRemove?.size && input.ratelConfigPaths.project && input.ratelConfigPaths.local
+      localInstall && input.ratelConfigPaths.project && input.ratelConfigPaths.local
         ? makeRatelGatewayEntry({
             bin: input.bin,
             configPaths: [
@@ -98,19 +103,19 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
         : undefined;
 
     const home = user ?? local;
-    if (home?.raw && (userRemove?.size || localRemove?.size)) {
+    if (home?.raw && (userInstall || localInstall)) {
       const next = rewriteHomeClaude(
         home.raw,
         userGateway,
         localGateway,
-        userRemove?.size ? userRemove : null,
-        localRemove?.size ? localRemove : null,
+        userInstall ? (userRemove ?? new Set()) : null,
+        localInstall ? (localRemove ?? new Set()) : null,
         deriveProjectRoot(input.ratelConfigPaths),
       );
       pushJsonWrite(changes, home.path, home.raw, next);
     }
-    if (project?.raw && projectRemove?.size && projectGateway) {
-      const next = rewriteProjectClaude(project.raw, projectGateway, projectRemove);
+    if (project?.raw && projectInstall && projectGateway) {
+      const next = rewriteProjectClaude(project.raw, projectGateway, projectRemove ?? new Set());
       pushJsonWrite(changes, project.path, project.raw, next);
     }
 
@@ -118,6 +123,9 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
       if (names.size === 0) continue;
       installedGatewayScopes.push(scope);
       for (const name of names) removedNativeEntries.push({ scope, name });
+    }
+    for (const scope of input.installGatewayScopes ?? []) {
+      if (!installedGatewayScopes.includes(scope)) installedGatewayScopes.push(scope);
     }
     return {
       changes,

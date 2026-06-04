@@ -49,6 +49,7 @@ export interface GatewayLinkInput {
   state: AgentHostState;
   bin: ResolvedBin;
   ratelConfigPaths: RatelConfigPaths;
+  installGatewayScopes?: Set<AgentScope>;
   replacedEntriesByScope: Map<AgentScope, Set<string>>;
 }
 
@@ -73,6 +74,60 @@ export interface AgentHostChangeSummary {
 export interface AgentHostRemovedEntry {
   scope: AgentScope;
   name: string;
+}
+
+export type SupportedAgentHostKind = "claude-code" | "codex";
+
+export interface SupportedAgentHost {
+  kind: SupportedAgentHostKind;
+  displayName: string;
+}
+
+export const SUPPORTED_AGENT_HOSTS: readonly SupportedAgentHost[] = [
+  { kind: "claude-code", displayName: "Claude Code" },
+  { kind: "codex", displayName: "Codex" },
+];
+
+export function isSupportedAgentHostKind(value: unknown): value is SupportedAgentHostKind {
+  return value === "claude-code" || value === "codex";
+}
+
+export async function createSupportedAgentHostAdapter(
+  kind: SupportedAgentHostKind,
+): Promise<AgentHostAdapter> {
+  switch (kind) {
+    case "claude-code": {
+      const { ClaudeCodeAgentHostAdapter } = await import("./claude-code.js");
+      return new ClaudeCodeAgentHostAdapter();
+    }
+    case "codex": {
+      const { CodexAgentHostAdapter } = await import("./codex.js");
+      return new CodexAgentHostAdapter();
+    }
+  }
+}
+
+export class NamedAgentHostAdapter implements AgentHostAdapter {
+  private adapter: AgentHostAdapter | null = null;
+
+  constructor(readonly kind: SupportedAgentHostKind) {}
+
+  async detect(ctx: AgentHostContext): Promise<AgentHostDetection> {
+    return (await this.ensureAdapter()).detect(ctx);
+  }
+
+  async read(ctx: AgentHostContext): Promise<AgentHostState> {
+    return (await this.ensureAdapter()).read(ctx);
+  }
+
+  async link(input: GatewayLinkInput): Promise<AgentHostChangeSet> {
+    return (await this.ensureAdapter()).link(input);
+  }
+
+  private async ensureAdapter(): Promise<AgentHostAdapter> {
+    this.adapter ??= await createSupportedAgentHostAdapter(this.kind);
+    return this.adapter;
+  }
 }
 
 export class AutomaticAgentHostAdapter implements AgentHostAdapter {
@@ -129,11 +184,9 @@ export class AutomaticAgentHostAdapter implements AgentHostAdapter {
 
   private async resolveAdapters(): Promise<AgentHostAdapter[]> {
     if (this.adapters) return this.adapters;
-    const [{ ClaudeCodeAgentHostAdapter }, { CodexAgentHostAdapter }] = await Promise.all([
-      import("./claude-code.js"),
-      import("./codex.js"),
-    ]);
-    return [new ClaudeCodeAgentHostAdapter(), new CodexAgentHostAdapter()];
+    return Promise.all(
+      SUPPORTED_AGENT_HOSTS.map((host) => createSupportedAgentHostAdapter(host.kind)),
+    );
   }
 }
 

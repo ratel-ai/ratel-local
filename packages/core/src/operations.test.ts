@@ -3,10 +3,16 @@ import type { BackupFs } from "./backup.js";
 import type { JsonFs } from "./io.js";
 import {
   addServerEntry,
+  applyAgentImportAgent,
+  applyAgentImportRatel,
+  applyAgentLink,
   editServerEntry,
+  getAgentHostsState,
   getConfigState,
   importAgentServers,
   linkAgentToRatel,
+  previewAgentImport,
+  previewAgentLink,
   removeServerEntry,
 } from "./operations.js";
 
@@ -114,6 +120,213 @@ describe("core operations — config state", () => {
 });
 
 describe("core operations — agent interop", () => {
+  it("reports detected agent posture for supported hosts", async () => {
+    const fs = new MemFs();
+    let state = await getAgentHostsState(ctx(fs));
+    expect(state.hosts.map((host) => [host.kind, host.posture])).toEqual([
+      ["claude-code", "unavailable"],
+      ["codex", "unavailable"],
+    ]);
+
+    fs.files.set(CLAUDE_PATH, JSON.stringify({}));
+    state = await getAgentHostsState(ctx(fs));
+    expect(state.hosts.find((host) => host.kind === "claude-code")?.posture).toBe("empty");
+
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    state = await getAgentHostsState(ctx(fs));
+    expect(state.hosts.find((host) => host.kind === "claude-code")?.posture).toBe("not-linked");
+
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { "ratel-mcp": { type: "stdio", command: "ratel-mcp" } } }),
+    );
+    state = await getAgentHostsState(ctx(fs));
+    expect(state.hosts.find((host) => host.kind === "claude-code")?.posture).toBe("ratel-only");
+
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        mcpServers: {
+          fs: { type: "stdio", command: "echo" },
+          "ratel-mcp": { type: "stdio", command: "ratel-mcp" },
+        },
+      }),
+    );
+    state = await getAgentHostsState(ctx(fs));
+    expect(state.hosts.find((host) => host.kind === "claude-code")?.posture).toBe("mixed");
+  });
+
+  it("previews and applies import in Ratel and agent stages", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+
+    const preview = await previewAgentImport(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    expect(preview.candidates.map((candidate) => candidate.name)).toEqual(["fs"]);
+    expect(preview.plan.ratelChanges).toHaveLength(1);
+    expect(preview.plan.agentChanges).toHaveLength(1);
+
+    await applyAgentImportRatel(
+      ctx(fs),
+      {
+        hostKind: "claude-code",
+        selection: preview.selected,
+        planHash: preview.stageHashes.ratel,
+      },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    expect(JSON.parse(fs.files.get(USER_PATH) as string).mcpServers.fs.command).toBe("echo");
+    expect(JSON.parse(fs.files.get(CLAUDE_PATH) as string).mcpServers.fs.command).toBe("echo");
+
+    await applyAgentImportAgent(
+      ctx(fs),
+      {
+        hostKind: "claude-code",
+        selection: preview.selected,
+        planHash: preview.stageHashes.agent,
+      },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
+    expect(claude.mcpServers.fs).toBeUndefined();
+    expect(claude.mcpServers["ratel-mcp"].command).toBe("/usr/local/bin/ratel-mcp");
+  });
+
+  it("rejects stale import plan hashes before applying", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+
+    const preview = await previewAgentImport(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "node" } } }),
+    );
+
+    await expect(
+      applyAgentImportRatel(
+        ctx(fs),
+        {
+          hostKind: "claude-code",
+          selection: preview.selected,
+          planHash: preview.stageHashes.ratel,
+        },
+        { envVar: "/usr/local/bin/ratel-mcp" },
+      ),
+    ).rejects.toThrow(/preview is stale/);
+  });
+
+  it("previews and applies link without removing native agent entries", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      USER_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        mcpServers: {
+          fs: { type: "stdio", command: "echo" },
+          other: { type: "stdio", command: "node" },
+        },
+      }),
+    );
+
+    const preview = await previewAgentLink(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    expect(preview.candidates).toEqual([]);
+    expect(preview.selected).toEqual([]);
+    expect(preview.plan.ratelChanges).toHaveLength(0);
+    expect(preview.plan.agentChanges).toHaveLength(1);
+
+    await applyAgentLink(
+      ctx(fs),
+      {
+        hostKind: "claude-code",
+        planHash: preview.stageHashes.agent,
+      },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
+    expect(claude.mcpServers.fs.command).toBe("echo");
+    expect(claude.mcpServers.other.command).toBe("node");
+    expect(claude.mcpServers["ratel-mcp"].args).toContain(USER_PATH);
+  });
+
+  it("links the Ratel gateway even when native agent entries do not match Ratel entries", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      USER_PATH,
+      JSON.stringify({ mcpServers: { stripe: { type: "http", url: "https://mcp.stripe.com" } } }),
+    );
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        mcpServers: {
+          fs: { type: "stdio", command: "echo" },
+        },
+      }),
+    );
+
+    const preview = await previewAgentLink(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    expect(preview.candidates).toEqual([]);
+    expect(preview.selected).toEqual([]);
+    expect(preview.plan.ratelChanges).toHaveLength(0);
+    expect(preview.plan.agentChanges).toHaveLength(1);
+
+    await applyAgentLink(
+      ctx(fs),
+      {
+        hostKind: "claude-code",
+        planHash: preview.stageHashes.agent,
+      },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+    const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
+    expect(claude.mcpServers.fs.command).toBe("echo");
+    expect(claude.mcpServers["ratel-mcp"].args).toContain(USER_PATH);
+  });
+
+  it("links the Ratel gateway into an empty Claude Code config", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      USER_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(CLAUDE_PATH, JSON.stringify({}));
+
+    const preview = await previewAgentLink(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-mcp" },
+    );
+
+    expect(preview.plan.agentChanges).toHaveLength(1);
+    expect(preview.emptyReason).toBeNull();
+  });
+
   it("imports Claude Code entries non-interactively", async () => {
     const fs = new MemFs();
     fs.files.set(
@@ -129,7 +342,7 @@ describe("core operations — agent interop", () => {
     expect(claude.mcpServers["ratel-mcp"].command).toBe("/usr/local/bin/ratel-mcp");
   });
 
-  it("links matching Claude Code entries non-interactively", async () => {
+  it("links Claude Code non-interactively without removing native entries", async () => {
     const fs = new MemFs();
     fs.files.set(
       USER_PATH,
@@ -143,7 +356,7 @@ describe("core operations — agent interop", () => {
     await linkAgentToRatel(ctx(fs), { envVar: "/usr/local/bin/ratel-mcp" });
 
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
-    expect(claude.mcpServers.fs).toBeUndefined();
+    expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers["ratel-mcp"].args).toContain(USER_PATH);
   });
 });

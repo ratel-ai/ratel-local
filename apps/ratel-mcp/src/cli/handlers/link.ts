@@ -1,11 +1,9 @@
 import type { BackupManifest, RatelConfig } from "@ratel-ai/mcp-core";
 import {
-  type AgentHostState,
   AutomaticAgentHostAdapter,
-  buildAgentImportPlan,
+  buildAgentLinkPlan,
   type buildImportPlan,
   executePlan,
-  isRatelGatewayEntry,
   locateRatelBin,
   type ResolvedBin,
   ratelConfigPath,
@@ -57,33 +55,20 @@ export async function runLink(
     return null;
   }
 
-  const agentKnown = collectAgentNames(agentState);
-  const overlap = [...agentKnown].filter((n) => ratelKnown.has(n));
-  if (overlap.length === 0) {
-    ctx.prompts.note(
-      `No ${agentState.host.displayName} entries match any Ratel entry. Run \`import\` to migrate agent entries first.`,
-    );
-    ctx.prompts.outro("done");
-    return null;
-  }
-
   const bin = opts.bin ?? (await resolveBin(ctx, opts));
 
-  const plan = await buildAgentImportPlan(
-    {
-      agentHost,
-      agentState,
-      ratelUser,
-      ratelProject,
-      ratelLocal,
-      bin,
-      ratelUserPath,
-      ratelProjectPath,
-      ratelLocalPath,
-      projectRoot: ctx.env.projectRoot,
-    },
-    { selection: new Set(overlap) },
-  );
+  const plan = await buildAgentLinkPlan({
+    agentHost,
+    agentState,
+    ratelUser,
+    ratelProject,
+    ratelLocal,
+    bin,
+    ratelUserPath,
+    ratelProjectPath,
+    ratelLocalPath,
+    projectRoot: ctx.env.projectRoot,
+  });
 
   if (plan.agentChanges.length === 0) {
     ctx.prompts.outro(`nothing to do (${agentState.host.displayName} already points at Ratel)`);
@@ -94,9 +79,9 @@ export async function runLink(
 
   if (!opts.yes) {
     const ok = await ctx.prompts.confirm({
-      message: `Replace ${plan.agentChanges.length} ${agentState.host.displayName} entr${
-        plan.agentChanges.length === 1 ? "y" : "ies"
-      } with the ratel-mcp entry?`,
+      message: `Write the ratel-mcp gateway into ${plan.agentChanges.length} ${
+        agentState.host.displayName
+      } config file${plan.agentChanges.length === 1 ? "" : "s"}?`,
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
@@ -115,16 +100,6 @@ export async function runLink(
     `link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
   );
   return manifest;
-}
-
-function collectAgentNames(state: AgentHostState): Set<string> {
-  const out = new Set<string>();
-  for (const scope of state.scopes) {
-    for (const [name, entry] of Object.entries(scope.mcpServers)) {
-      if (!isRatelGatewayEntry(name, entry)) out.add(name);
-    }
-  }
-  return out;
 }
 
 async function resolveBin(ctx: HandlerCtx, opts: LinkOptions): Promise<ResolvedBin> {
@@ -160,7 +135,7 @@ function renderAgentStage(plan: ReturnType<typeof buildImportPlan>): string {
   );
   lines.push("");
   lines.push(
-    "MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other agent MCP entries are preserved.",
+    "The ratel-mcp gateway entry will be written for the available Ratel scopes. Native agent MCP entries are preserved.",
   );
   return lines.join("\n");
 }

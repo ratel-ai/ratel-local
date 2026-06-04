@@ -1,13 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ToolsPage } from "@/pages/ToolsPage";
+import { AgentSetupPage } from "@/pages/AgentSetupPage";
 
 type AppSearch = {
   t?: string;
 };
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/agent-setup")({
   validateSearch,
-  component: ToolsPage,
+  component: AgentSetupPage,
 });
 
 function validateSearch(search: Record<string, unknown>): AppSearch {

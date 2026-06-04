@@ -73,7 +73,7 @@ function autoConfirm(): PromptAdapter {
 }
 
 describe("runLink", () => {
-  it("rewrites Claude global to point at Ratel for entries already in Ratel global", async () => {
+  it("writes the Ratel gateway without removing Claude native entries", async () => {
     const fs = new MemFs();
     fs.files.set(
       RATEL_USER,
@@ -99,9 +99,7 @@ describe("runLink", () => {
       command: "ratel-mcp",
       args: ["serve", "--config", RATEL_USER],
     });
-    // The covered entry was removed from Claude.
-    expect(claude.mcpServers.fs).toBeUndefined();
-    // The uncovered entry stays.
+    expect(claude.mcpServers.fs).toEqual({ type: "stdio", command: "echo" });
     expect(claude.mcpServers.other).toEqual({ type: "stdio", command: "elsewhere" });
   });
 
@@ -122,7 +120,7 @@ describe("runLink", () => {
     expect(fs.files.get(RATEL_USER)).toBe(ratelBefore);
   });
 
-  it("no-ops when no agent entries are also in Ratel", async () => {
+  it("links even when no agent entries are also in Ratel", async () => {
     const fs = new MemFs();
     fs.files.set(
       RATEL_USER,
@@ -136,10 +134,11 @@ describe("runLink", () => {
         mcpServers: { other: { type: "stdio", command: "elsewhere" } },
       }),
     );
-    const claudeBefore = fs.files.get(HOME_CLAUDE);
     const { ctx } = ctxOf(fs, autoConfirm(), false);
     await runLink(ctx, { bin: BIN, yes: true });
-    expect(fs.files.get(HOME_CLAUDE)).toBe(claudeBefore);
+    const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
+    expect(claude.mcpServers.other).toEqual({ type: "stdio", command: "elsewhere" });
+    expect(claude.mcpServers["ratel-mcp"].args).toEqual(["serve", "--config", RATEL_USER]);
   });
 
   it("idempotent: running twice produces no further changes", async () => {

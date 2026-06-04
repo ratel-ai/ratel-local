@@ -1,72 +1,69 @@
+import { useHotkey } from "@tanstack/react-hotkeys";
+import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import {
+  ChevronsUpDown,
   Download,
-  Info,
-  KeyRound,
+  FolderOpen,
+  House,
   LinkIcon,
-  Palette,
-  Pencil,
   Plus,
-  RefreshCw,
-  Trash2,
-  Undo2,
+  Server,
+  Settings2,
+  Sparkles,
+  UserCircle,
 } from "lucide-react";
-import {
-  type FormEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useId,
-  useState,
-} from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand-logo";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+  CommandShortcut,
+} from "@/components/ui/command";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  useSidebar,
+} from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import "./App.css";
 
-type RatelScope = "user" | "project" | "local";
-type AuthStatus = "n/a" | "needs auth" | "expired" | "ok";
+export type RatelScope = "user" | "project" | "local";
+export type AuthStatus = "n/a" | "needs auth" | "expired" | "ok";
+type AgentHostKind = "claude-code" | "codex";
+type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mixed";
 
-interface ServerEntry {
+export interface ServerEntry {
   type: string;
   command?: string;
   args?: string[];
@@ -82,17 +79,17 @@ interface ServerEntry {
   [key: string]: unknown;
 }
 
-interface RatelConfig {
+export interface RatelConfig {
   mcpServers: Record<string, ServerEntry>;
 }
 
-interface BackupManifest {
+export interface BackupManifest {
   createdAt: string;
   action: "import" | "add" | "remove" | "edit" | "link";
   entries: Array<{ originalPath: string; backupPath: string; existedBefore: boolean }>;
 }
 
-type ScopeState =
+export type ScopeState =
   | {
       available: true;
       path: string;
@@ -101,35 +98,83 @@ type ScopeState =
     }
   | { available: false };
 
-interface ConfigResponse {
+export interface ConfigResponse {
   homeDir: string;
   projectRoot: string | null;
   scopes: Record<RatelScope, ScopeState>;
   backups: BackupManifest[];
 }
 
-type Modal =
-  | { kind: "details"; name: string; entry: ServerEntry }
-  | { kind: "add" }
-  | { kind: "edit"; name: string; entry: ServerEntry };
-type ConfirmRequest = {
-  actionLabel: string;
-  description: string;
-  onConfirm: () => void | Promise<void>;
-  title: string;
-  variant?: "default" | "destructive";
-};
-type JsonRequestInit = Omit<RequestInit, "body"> & { body?: unknown };
+interface AgentHostDetection {
+  displayName: string;
+  present: boolean;
+  reasons: string[];
+  warnings: string[];
+}
 
-const SCOPES: RatelScope[] = ["user", "project", "local"];
+interface AgentScopePosture {
+  scope: RatelScope;
+  displayName: string;
+  path: string;
+  available: boolean;
+  posture: AgentPosture;
+  nativeEntryCount: number;
+  ratelEntryCount: number;
+  entryCount: number;
+  nativeEntryNames?: string[];
+  ratelEntryNames?: string[];
+}
 
-function App({ token }: { token: string }) {
+interface DetectedAgentHostSummary {
+  kind: AgentHostKind;
+  displayName: string;
+  detection: AgentHostDetection;
+  posture: AgentPosture;
+  nativeEntryCount: number;
+  ratelEntryCount: number;
+  entryCount: number;
+  nativeEntryNames?: string[];
+  ratelEntryNames?: string[];
+  missingRatelEntryNames?: string[];
+  scopes: AgentScopePosture[];
+}
+
+interface AgentHostsResponse {
+  hosts: DetectedAgentHostSummary[];
+}
+
+export type JsonRequestInit = Omit<RequestInit, "body"> & { body?: unknown };
+type SetupIntent = { id: number; kind: "import" | "link" };
+
+interface RatelAppContextValue {
+  busy: boolean;
+  config: ConfigResponse | null;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+  refresh: () => Promise<void>;
+  runAction: (
+    label: string,
+    action: () => Promise<{ log?: string[] } | unknown>,
+  ) => Promise<boolean>;
+  setupIntent: SetupIntent | null;
+  token: string;
+  clearSetupIntent: () => void;
+  openCommandMenu: () => void;
+  triggerSetupIntent: (kind: SetupIntent["kind"]) => void;
+}
+
+const RatelAppContext = createContext<RatelAppContextValue | null>(null);
+
+export const SCOPES: RatelScope[] = ["user", "project", "local"];
+
+export function AppShell() {
+  const location = useLocation();
   const navigate = useNavigate();
-  const [scope, setScope] = useState<RatelScope>("user");
+  const token = tokenFromSearch(location.searchStr);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const [modal, setModal] = useState<Modal | null>(null);
-  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [agentHosts, setAgentHosts] = useState<DetectedAgentHostSummary[]>([]);
   const [busy, setBusy] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [setupIntent, setSetupIntent] = useState<SetupIntent | null>(null);
 
   const notify = useCallback((message: string, kind?: "error") => {
     const [title, ...description] = message.split("\n");
@@ -180,6 +225,24 @@ function App({ token }: { token: string }) {
     if (token) void refresh();
   }, [refresh, token]);
 
+  const refreshAgentHosts = useCallback(async () => {
+    if (!token) return;
+    try {
+      const body = await request<AgentHostsResponse>("/api/agent-hosts");
+      setAgentHosts(body.hosts);
+    } catch (err) {
+      notify((err as Error).message, "error");
+    }
+  }, [notify, request, token]);
+
+  useEffect(() => {
+    if (token) void refreshAgentHosts();
+  }, [refreshAgentHosts, token]);
+
+  useEffect(() => {
+    if (commandOpen && token) void refreshAgentHosts();
+  }, [commandOpen, refreshAgentHosts, token]);
+
   const runAction = useCallback(
     async (label: string, action: () => Promise<{ log?: string[] } | unknown>) => {
       setBusy(true);
@@ -188,8 +251,10 @@ function App({ token }: { token: string }) {
         const log = isLogResult(result) ? result.log.slice(-3).join("\n") : "";
         notify(log ? `${label}\n${log}` : label);
         await refresh();
+        return true;
       } catch (err) {
         notify((err as Error).message, "error");
+        return false;
       } finally {
         setBusy(false);
       }
@@ -197,591 +262,551 @@ function App({ token }: { token: string }) {
     [notify, refresh],
   );
 
-  if (!token) {
-    return (
-      <>
-        <main className="mx-auto max-w-5xl px-6 py-6">
-          <Alert>
-            <AlertTitle>Missing session token</AlertTitle>
-            <AlertDescription>Open the URL printed by ratel-mcp ui.</AlertDescription>
-          </Alert>
-        </main>
-        <Toaster />
-      </>
-    );
-  }
+  const goTo = useCallback(
+    (to: "/" | "/agent-setup" | "/skills") => {
+      const tokenizedPath = token ? `${to}?t=${encodeURIComponent(token)}` : to;
+      void navigate({ to: tokenizedPath } as never);
+    },
+    [navigate, token],
+  );
 
-  const scopeData = config?.scopes[scope];
-  const servers = scopeData?.available ? scopeData.config.mcpServers : {};
-  const names = Object.keys(servers);
+  const goToToolSource = useCallback(
+    (scope: RatelScope, name: string) => {
+      const path = toolSourcePath(scope, name, token);
+      void navigate({ to: path } as never);
+    },
+    [navigate, token],
+  );
+
+  const goToAgent = useCallback(
+    (kind: AgentHostKind) => {
+      const path = agentSetupHostPath(kind, token);
+      void navigate({ to: path } as never);
+    },
+    [navigate, token],
+  );
+
+  useHotkey("Mod+K", () => setCommandOpen((open) => !open), {
+    meta: {
+      name: "Open command menu",
+      description: "Toggle the Ratel command menu.",
+    },
+  });
+  useHotkey("Mod+R", () => void refresh(), {
+    meta: {
+      name: "Refresh configuration",
+      description: "Reload the current Ratel MCP configuration.",
+    },
+    preventDefault: true,
+  });
+
+  const context: RatelAppContextValue = {
+    busy,
+    config,
+    request,
+    refresh,
+    runAction,
+    setupIntent,
+    token,
+    clearSetupIntent: () => setSetupIntent(null),
+    openCommandMenu: () => setCommandOpen(true),
+    triggerSetupIntent: (kind) => setSetupIntent({ id: Date.now(), kind }),
+  };
 
   return (
-    <>
-      <header className="border-border border-b bg-background px-6 py-5">
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="flex min-w-0 items-end gap-2 text-2xl leading-none font-semibold tracking-tight text-brand-green">
-              <BrandLogo className="h-9 w-auto max-w-[154px]" />
-              <span>MCP</span>
-            </h1>
-            <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-mono text-xs text-muted-foreground">
-              <span>home: {config?.homeDir ?? ""}</span>
-              <span>
-                {config?.projectRoot ? `project: ${config.projectRoot}` : "no project root"}
-              </span>
-            </div>
-          </div>
-          <Button
-            onClick={() =>
-              void navigate({ to: "/lab/kitchen", search: token ? { t: token } : {} })
-            }
-            size="sm"
-            variant="outline"
-          >
-            <Palette />
-            Kitchen sink
-          </Button>
-        </div>
-      </header>
-
-      <main className="mx-auto grid max-w-6xl gap-4 px-6 py-6">
-        <Tabs value={scope} onValueChange={(value) => setScope(value as RatelScope)}>
-          <TabsList variant="line" className="justify-start">
-            {SCOPES.map((item) => (
-              <TabsTrigger
-                className="font-mono text-[11px] tracking-[0.14em] uppercase data-active:text-brand-green"
-                key={item}
-                value={item}
-              >
-                {item}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="capitalize">{scope}</CardTitle>
-            <CardDescription>
-              {scopeData?.available ? scopeData.path : "scope unavailable"}
-            </CardDescription>
-            <CardAction className="flex gap-2">
-              <Button
-                aria-label="Refresh"
-                onClick={refresh}
-                size="icon"
-                title="Refresh"
-                variant="outline"
-              >
-                <RefreshCw />
-              </Button>
-              <Button
-                aria-label="Add server"
-                disabled={!scopeData?.available}
-                onClick={() => setModal({ kind: "add" })}
-                size="icon"
-                title="Add server"
-              >
-                <Plus />
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
-            {!scopeData?.available ? (
-              <EmptyState>Scope not available.</EmptyState>
-            ) : names.length === 0 ? (
-              <EmptyState>No servers in this scope.</EmptyState>
-            ) : (
-              <div className="divide-border divide-y">
-                {names.map((name) => {
-                  const entry = servers[name];
-                  const authStatus = scopeData.authStatus[name];
-                  return (
-                    <div
-                      className="flex min-h-16 items-center justify-between gap-4 py-3 max-md:block"
-                      key={name}
-                    >
-                      <div className="min-w-0">
-                        <div className="mb-1 flex flex-wrap items-center gap-2">
-                          <strong className="font-medium">{name}</strong>
-                          <AuthBadge status={authStatus} />
-                        </div>
-                        <code className="block max-w-full overflow-hidden rounded-md border border-brand-green/20 bg-brand-green px-2 py-1 font-mono text-xs text-brand-green-foreground text-ellipsis whitespace-nowrap">
-                          {summaryOf(entry)}
-                        </code>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1.5 max-md:mt-3">
-                        <Button
-                          aria-label="Details"
-                          onClick={() => setModal({ kind: "details", name, entry })}
-                          size="icon"
-                          title="Details"
-                          variant="outline"
-                        >
-                          <Info />
-                        </Button>
-                        <Button
-                          aria-label="Edit"
-                          onClick={() => setModal({ kind: "edit", name, entry })}
-                          size="icon"
-                          title="Edit"
-                          variant="outline"
-                        >
-                          <Pencil />
-                        </Button>
-                        {(entry.type === "http" || entry.type === "sse") && (
-                          <Button
-                            aria-label="Authorize"
-                            disabled={busy}
-                            onClick={() =>
-                              runAction("Auth complete", () =>
-                                request(`/api/auth/${encodeURIComponent(name)}`, {
-                                  method: "POST",
-                                  body: {},
-                                }),
-                              )
-                            }
-                            size="icon"
-                            title="Authorize"
-                            variant="outline"
-                          >
-                            <KeyRound />
-                          </Button>
-                        )}
-                        <Button
-                          aria-label="Remove"
-                          disabled={busy}
-                          onClick={() =>
-                            setConfirm({
-                              actionLabel: "Remove",
-                              description: `Remove "${name}" from the ${scope} scope?`,
-                              title: "Remove server",
-                              variant: "destructive",
-                              onConfirm: () =>
-                                runAction(`Removed ${name}`, () =>
-                                  request(`/api/servers/${encodeURIComponent(name)}`, {
-                                    method: "DELETE",
-                                    body: { scope },
-                                  }),
-                                ),
-                            })
-                          }
-                          size="icon"
-                          title="Remove"
-                          variant="destructive"
-                        >
-                          <Trash2 />
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <section className="grid gap-4 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-          <Card>
-            <CardHeader>
-              <CardTitle>Agent interop</CardTitle>
-              <CardDescription>Import native entries or link an agent to Ratel.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  setConfirm({
-                    actionLabel: "Import",
-                    description: "Import all detected agent MCP servers into Ratel?",
-                    title: "Import agent MCP servers",
-                    onConfirm: () =>
-                      runAction("Import complete", () =>
-                        request("/api/import", { method: "POST", body: {} }),
-                      ),
-                  })
-                }
-                variant="outline"
-              >
-                <Download />
-                Import
-              </Button>
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  setConfirm({
-                    actionLabel: "Link",
-                    description: "Rewrite the detected agent to point at Ratel?",
-                    title: "Link agent to Ratel",
-                    onConfirm: () =>
-                      runAction("Link complete", () =>
-                        request("/api/link", { method: "POST", body: {} }),
-                      ),
-                  })
-                }
-                variant="outline"
-              >
-                <LinkIcon />
-                Link
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Backups</CardTitle>
-              <CardDescription>Latest snapshots created by write operations.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!config?.backups.length ? (
-                <EmptyState compact>No backups.</EmptyState>
-              ) : (
-                <div className="grid gap-2">
-                  {config.backups.map((backup, index) => (
-                    <div
-                      className="border-border flex items-center justify-between gap-3 border-t pt-3 first:border-t-0 first:pt-0 max-md:block"
-                      key={`${backup.createdAt}-${backup.action}`}
-                    >
-                      <div className="min-w-0">
-                        <strong className="font-medium">
-                          {backup.action} · {backup.createdAt}
-                        </strong>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {backup.entries.map((entry) => entry.originalPath).join(", ")}
-                        </p>
-                      </div>
-                      {index === 0 && (
-                        <Button
-                          disabled={busy}
-                          onClick={() =>
-                            setConfirm({
-                              actionLabel: "Restore",
-                              description: "Restore files from the latest backup?",
-                              title: "Undo latest backup",
-                              onConfirm: () =>
-                                runAction("Undo complete", () =>
-                                  request("/api/backups/undo", { method: "POST", body: {} }),
-                                ),
-                            })
-                          }
-                          size="sm"
-                          variant="outline"
-                        >
-                          <Undo2 />
-                          Undo
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </section>
-      </main>
-
-      <Dialog open={modal !== null} onOpenChange={(open) => !open && setModal(null)}>
-        {modal?.kind === "details" && (
-          <DialogContent className="max-h-[90vh] overflow-auto sm:max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>Server: {modal.name}</DialogTitle>
-            </DialogHeader>
-            <pre className="max-h-[60vh] overflow-auto rounded-md border border-brand-green/20 bg-brand-green p-3 font-mono text-xs text-brand-green-foreground">
-              {JSON.stringify(modal.entry, null, 2)}
-            </pre>
-          </DialogContent>
-        )}
-
-        {(modal?.kind === "add" || modal?.kind === "edit") && (
-          <EntryModal
-            entry={modal.kind === "edit" ? modal.entry : undefined}
-            name={modal.kind === "edit" ? modal.name : undefined}
-            onClose={() => setModal(null)}
-            onSubmit={async (name, entry) => {
-              const path =
-                modal.kind === "edit" ? `/api/servers/${encodeURIComponent(name)}` : "/api/servers";
-              const body = modal.kind === "edit" ? { scope, entry } : { scope, name, entry };
-              await runAction(modal.kind === "edit" ? `Updated ${name}` : `Added ${name}`, () =>
-                request(path, {
-                  method: modal.kind === "edit" ? "PATCH" : "POST",
-                  body,
-                }),
-              );
-              setModal(null);
-            }}
-          />
-        )}
-      </Dialog>
-
-      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
-      <Toaster />
-    </>
-  );
-}
-
-function EntryModal(props: {
-  entry?: ServerEntry;
-  name?: string;
-  onClose: () => void;
-  onSubmit: (name: string, entry: ServerEntry) => Promise<void>;
-}) {
-  const id = useId();
-  const [name, setName] = useState(props.name ?? "");
-  const [type, setType] = useState(props.entry?.type ?? "stdio");
-  const [description, setDescription] = useState(props.entry?.description ?? "");
-  const [command, setCommand] = useState(props.entry?.command ?? "");
-  const [args, setArgs] = useState((props.entry?.args ?? []).join("\n"));
-  const [env, setEnv] = useState(keyValsToText(props.entry?.env, "="));
-  const [cwd, setCwd] = useState(props.entry?.cwd ?? "");
-  const [url, setUrl] = useState(props.entry?.url ?? "");
-  const [headers, setHeaders] = useState(keyValsToText(props.entry?.headers, ": "));
-  const [clientId, setClientId] = useState(props.entry?.clientId ?? "");
-  const [clientSecret, setClientSecret] = useState(props.entry?.clientSecret ?? "");
-  const [callbackPort, setCallbackPort] = useState(
-    props.entry?.callbackPort === undefined ? "" : String(props.entry.callbackPort),
-  );
-  const [oauthScope, setOauthScope] = useState(props.entry?.scope ?? "");
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError(null);
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setError("Name is required.");
-      return;
-    }
-    try {
-      await props.onSubmit(trimmedName, buildEntry());
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
-  function buildEntry(): ServerEntry {
-    const entry: ServerEntry = { type };
-    if (description.trim()) entry.description = description.trim();
-    if (type === "stdio") {
-      if (command.trim()) entry.command = command.trim();
-      const parsedArgs = lines(args);
-      if (parsedArgs.length) entry.args = parsedArgs;
-      const parsedEnv = parseKeyValueLines(env, "=");
-      if (Object.keys(parsedEnv).length) entry.env = parsedEnv;
-      if (cwd.trim()) entry.cwd = cwd.trim();
-      return entry;
-    }
-
-    if (url.trim()) entry.url = url.trim();
-    const parsedHeaders = parseKeyValueLines(headers, ":");
-    if (Object.keys(parsedHeaders).length) entry.headers = parsedHeaders;
-    if (clientId.trim()) entry.clientId = clientId.trim();
-    if (clientSecret.trim()) entry.clientSecret = clientSecret.trim();
-    if (callbackPort.trim()) {
-      const parsed = Number(callbackPort);
-      if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 65535) {
-        entry.callbackPort = parsed;
-      }
-    }
-    if (oauthScope.trim()) entry.scope = oauthScope.trim();
-    return entry;
-  }
-
-  return (
-    <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-      <DialogHeader>
-        <DialogTitle>{props.name ? `Edit ${props.name}` : "Add server"}</DialogTitle>
-      </DialogHeader>
-      <form className="grid gap-4" onSubmit={submit}>
-        <div className="grid gap-3">
-          {!props.name && (
-            <Field label="Name" name={`${id}-name`}>
-              <Input
-                id={`${id}-name`}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </Field>
-          )}
-
-          <Field label="Type" name={`${id}-type`}>
-            <Select value={type} onValueChange={setType}>
-              <SelectTrigger id={`${id}-type`} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="stdio">stdio</SelectItem>
-                <SelectItem value="http">http</SelectItem>
-                <SelectItem value="sse">sse</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-
-          <Field label="Description" name={`${id}-description`}>
-            <Textarea
-              id={`${id}-description`}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </Field>
-
-          {type === "stdio" ? (
-            <>
-              <Field label="Command" name={`${id}-command`}>
-                <Input
-                  id={`${id}-command`}
-                  value={command}
-                  onChange={(event) => setCommand(event.target.value)}
-                />
-              </Field>
-              <Field label="Args" name={`${id}-args`}>
-                <Textarea
-                  id={`${id}-args`}
-                  value={args}
-                  onChange={(event) => setArgs(event.target.value)}
-                />
-              </Field>
-              <Field label="Env" name={`${id}-env`}>
-                <Textarea
-                  id={`${id}-env`}
-                  value={env}
-                  onChange={(event) => setEnv(event.target.value)}
-                />
-              </Field>
-              <Field label="CWD" name={`${id}-cwd`}>
-                <Input
-                  id={`${id}-cwd`}
-                  value={cwd}
-                  onChange={(event) => setCwd(event.target.value)}
-                />
-              </Field>
-            </>
+    <RatelAppContext.Provider value={context}>
+      <SidebarProvider>
+        <ProductSidebar config={config} onNavigate={goTo} pathname={location.pathname} />
+        <SidebarInset>
+          {!token ? (
+            <main className="w-full px-4 py-6 sm:px-6">
+              <Alert>
+                <AlertTitle>Missing session token</AlertTitle>
+                <AlertDescription>Open the URL printed by ratel-mcp ui.</AlertDescription>
+              </Alert>
+            </main>
           ) : (
-            <>
-              <Field label="URL" name={`${id}-url`}>
-                <Input
-                  id={`${id}-url`}
-                  value={url}
-                  onChange={(event) => setUrl(event.target.value)}
-                />
-              </Field>
-              <Field label="Headers" name={`${id}-headers`}>
-                <Textarea
-                  id={`${id}-headers`}
-                  value={headers}
-                  onChange={(event) => setHeaders(event.target.value)}
-                />
-              </Field>
-              <Field label="OAuth client_id" name={`${id}-client-id`}>
-                <Input
-                  id={`${id}-client-id`}
-                  value={clientId}
-                  onChange={(event) => setClientId(event.target.value)}
-                />
-              </Field>
-              <Field label="OAuth client_secret" name={`${id}-client-secret`}>
-                <Input
-                  id={`${id}-client-secret`}
-                  value={clientSecret}
-                  onChange={(event) => setClientSecret(event.target.value)}
-                />
-              </Field>
-              <Field label="OAuth callback port" name={`${id}-callback-port`}>
-                <Input
-                  id={`${id}-callback-port`}
-                  value={callbackPort}
-                  onChange={(event) => setCallbackPort(event.target.value)}
-                />
-              </Field>
-              <Field label="OAuth scope" name={`${id}-oauth-scope`}>
-                <Input
-                  id={`${id}-oauth-scope`}
-                  value={oauthScope}
-                  onChange={(event) => setOauthScope(event.target.value)}
-                />
-              </Field>
-            </>
+            <Outlet />
           )}
-        </div>
+        </SidebarInset>
+      </SidebarProvider>
 
-        {error && (
-          <Alert variant="destructive">
-            <AlertTitle>Could not save server</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        <DialogFooter>
-          <Button onClick={props.onClose} type="button" variant="outline">
-            Cancel
-          </Button>
-          <Button type="submit">{props.name ? "Save" : "Add"}</Button>
-        </DialogFooter>
-      </form>
-    </DialogContent>
+      <CommandMenu
+        agentHosts={agentHosts}
+        config={config}
+        onAddToolSource={() => {
+          setCommandOpen(false);
+          void navigate({ to: toolSourceCreatePath("user", token) } as never);
+        }}
+        onImport={() => {
+          setCommandOpen(false);
+          context.triggerSetupIntent("import");
+          goTo("/agent-setup");
+        }}
+        onLink={() => {
+          setCommandOpen(false);
+          context.triggerSetupIntent("link");
+          goTo("/agent-setup");
+        }}
+        onNavigate={(to) => {
+          setCommandOpen(false);
+          goTo(to);
+        }}
+        onSelectToolSource={(scope, name) => {
+          setCommandOpen(false);
+          goToToolSource(scope, name);
+        }}
+        onSelectAgent={(kind) => {
+          setCommandOpen(false);
+          goToAgent(kind);
+        }}
+        open={commandOpen}
+        setOpen={setCommandOpen}
+      />
+      <Toaster />
+    </RatelAppContext.Provider>
   );
 }
 
-function Field(props: { children: ReactNode; label: string; name: string }) {
+function ProductSidebar(props: {
+  config: ConfigResponse | null;
+  onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
+  pathname: string;
+}) {
   return (
-    <div className="grid gap-1.5">
-      <Label htmlFor={props.name}>{props.label}</Label>
-      {props.children}
-    </div>
+    <Sidebar collapsible="icon" variant="inset">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton className="cursor-default hover:bg-transparent" size="lg">
+              <BrandLogo className="h-5 w-fit max-w-[92px] transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu className="gap-1.5">
+              <ProductSidebarItem
+                active={props.pathname === "/" || props.pathname.startsWith("/tools/")}
+                icon={<Server />}
+                label="Tools"
+                onClick={() => props.onNavigate("/")}
+              />
+              <ProductSidebarItem
+                active={props.pathname === "/agent-setup"}
+                icon={<Settings2 />}
+                label="Agent Setup"
+                onClick={() => props.onNavigate("/agent-setup")}
+              />
+              <ProductSidebarItem
+                active={props.pathname === "/skills"}
+                icon={<Sparkles />}
+                label="Skills"
+                onClick={() => props.onNavigate("/skills")}
+                suffix={
+                  <Badge
+                    className="ml-auto h-5 px-1.5 text-[10px] transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]"
+                    variant="outline"
+                  >
+                    Soon
+                  </Badge>
+                }
+              />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter>
+        <SessionMenu config={props.config} />
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 
-function ConfirmDialog(props: { request: ConfirmRequest | null; onClose: () => void }) {
-  const request = props.request;
+function ProductSidebarItem(props: {
+  active: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  suffix?: ReactNode;
+}) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  const handleClick = () => {
+    props.onClick();
+    if (isMobile) setOpenMobile(false);
+  };
+
   return (
-    <AlertDialog open={request !== null} onOpenChange={(open) => !open && props.onClose()}>
-      {request && (
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{request.title}</AlertDialogTitle>
-            <AlertDialogDescription>{request.description}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                void Promise.resolve(request.onConfirm()).finally(props.onClose);
-              }}
-              variant={request.variant === "destructive" ? "destructive" : "default"}
+    <SidebarMenuItem>
+      <SidebarMenuButton isActive={props.active} onClick={handleClick} tooltip={props.label}>
+        {props.icon}
+        <span className="transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
+          {props.label}
+        </span>
+        {props.suffix}
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function SessionMenu(props: { compact?: boolean; config: ConfigResponse | null }) {
+  const { isMobile } = useSidebar();
+  const homeLabel = compactPathLabel(props.config?.homeDir) ?? "Local machine";
+  const projectLabel = compactPathLabel(props.config?.projectRoot) ?? "No project root";
+
+  return (
+    <DropdownMenu>
+      {props.compact ? (
+        <DropdownMenuTrigger
+          render={<Button aria-label="Session menu" size="icon-sm" variant="ghost" />}
+        >
+          <UserCircle />
+        </DropdownMenuTrigger>
+      ) : (
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <DropdownMenuTrigger
+              render={
+                <SidebarMenuButton
+                  className="data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground group-data-[collapsible=icon]:w-10! group-data-[collapsible=icon]:justify-start! group-data-[collapsible=icon]:p-2!"
+                  size="lg"
+                />
+              }
             >
-              {request.actionLabel}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
+              <Avatar size="sm">
+                <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground [&>svg]:size-3.5">
+                  <UserCircle />
+                </AvatarFallback>
+              </Avatar>
+              <div className="grid flex-1 text-left text-sm leading-tight transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
+                <span className="truncate font-medium">Session</span>
+                <span className="truncate text-xs">{homeLabel}</span>
+              </div>
+              <ChevronsUpDown className="ml-auto size-4 transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
+            </DropdownMenuTrigger>
+          </SidebarMenuItem>
+        </SidebarMenu>
       )}
-    </AlertDialog>
+      <DropdownMenuContent
+        align="end"
+        className="min-w-64 rounded-lg"
+        side={props.compact || isMobile ? "bottom" : "right"}
+        sideOffset={4}
+      >
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="p-0 font-normal">
+            <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+              <Avatar>
+                <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground [&>svg]:size-4">
+                  <UserCircle />
+                </AvatarFallback>
+              </Avatar>
+              <div className="grid flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-medium">Session</span>
+                <span className="truncate text-xs text-muted-foreground">{homeLabel}</span>
+              </div>
+            </div>
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem className="grid cursor-default grid-cols-[1rem_minmax(0,1fr)] gap-x-2 gap-y-0.5 p-2 hover:bg-transparent focus:bg-transparent">
+            <House className="mt-0.5 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">Home</span>
+            <span className="col-start-2 truncate font-mono text-xs">
+              {props.config?.homeDir ?? "Not loaded"}
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem className="grid cursor-default grid-cols-[1rem_minmax(0,1fr)] gap-x-2 gap-y-0.5 p-2 hover:bg-transparent focus:bg-transparent">
+            <FolderOpen className="mt-0.5 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">Project</span>
+            <span className="col-start-2 truncate font-mono text-xs">{projectLabel}</span>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
-function EmptyState(props: { children: ReactNode; compact?: boolean }) {
+function compactPathLabel(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const parts = path.split("/").filter(Boolean);
+  return parts.at(-1) ?? path;
+}
+
+function CommandMenu(props: {
+  agentHosts: DetectedAgentHostSummary[];
+  config: ConfigResponse | null;
+  onAddToolSource: () => void;
+  onImport: () => void;
+  onLink: () => void;
+  onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
+  onSelectAgent: (kind: AgentHostKind) => void;
+  onSelectToolSource: (scope: RatelScope, name: string) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const agentItems = commandAgentItems(props.agentHosts);
+  const mcpItems = commandMcpItems(props.config);
+
   return (
-    <div
-      className={
-        props.compact ? "text-sm text-muted-foreground" : "py-4 text-sm text-muted-foreground"
-      }
+    <Dialog open={props.open} onOpenChange={props.setOpen}>
+      <DialogContent
+        className="top-1/3 translate-y-0 overflow-hidden p-0"
+        showCloseButton={false}
+        style={{ maxWidth: "min(calc(100% - 2.75rem), 36rem)" }}
+      >
+        <Command>
+          <CommandInput placeholder="Search Ratel..." />
+          <CommandList>
+            <CommandEmpty>No matching command.</CommandEmpty>
+            <CommandGroup heading="Navigate">
+              <CommandItem onSelect={() => props.onNavigate("/")}>
+                <Server />
+                Tools
+                <CommandShortcut>G T</CommandShortcut>
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/agent-setup")}>
+                <Settings2 />
+                Agent Setup
+                <CommandShortcut>G A</CommandShortcut>
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/skills")}>
+                <Sparkles />
+                Skills
+                <Badge className="ml-auto" variant="outline">
+                  Soon
+                </Badge>
+              </CommandItem>
+            </CommandGroup>
+            {agentItems.length > 0 && (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading="Agents">
+                  {agentItems.map((item) => (
+                    <CommandItem
+                      className="items-start py-2"
+                      key={item.kind}
+                      onSelect={() => props.onSelectAgent(item.kind)}
+                      value={`${item.displayName} ${item.kind} ${item.statusLabel} ${item.postureLabel} ${item.nativeEntryCount} native ${item.ratelEntryCount} ratel ${item.missingRatelEntryCount} missing ${item.searchText}`}
+                    >
+                      <Settings2 className="mt-0.5" />
+                      <span className="grid min-w-0 flex-1 gap-1">
+                        <span className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="truncate font-medium">{item.displayName}</span>
+                          <CommandStatusBadge tone={item.statusTone}>
+                            {item.statusLabel}
+                          </CommandStatusBadge>
+                        </span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {item.postureLabel} / {item.nativeEntryCount} native /{" "}
+                          {item.ratelEntryCount} Ratel
+                          {item.missingRatelEntryCount > 0
+                            ? ` / ${item.missingRatelEntryCount} missing`
+                            : ""}
+                        </span>
+                      </span>
+                      <CommandShortcut className="font-mono tracking-normal">
+                        {item.kind}
+                      </CommandShortcut>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </>
+            )}
+            {mcpItems.length > 0 && (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading="MCP Sources">
+                  {mcpItems.map((item) => (
+                    <CommandItem
+                      className="items-start py-2"
+                      key={`${item.scope}:${item.name}`}
+                      onSelect={() => props.onSelectToolSource(item.scope, item.name)}
+                      value={`${item.name} ${item.scope} ${item.type} ${item.summary}`}
+                    >
+                      <Server className="mt-0.5" />
+                      <span className="grid min-w-0 flex-1 gap-0.5">
+                        <span className="truncate font-medium">{item.name}</span>
+                        <span className="truncate font-mono text-xs text-muted-foreground">
+                          {item.summary}
+                        </span>
+                      </span>
+                      <CommandShortcut className="font-mono tracking-normal">
+                        {item.scope}
+                      </CommandShortcut>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </>
+            )}
+            <CommandSeparator />
+            <CommandGroup heading="Actions">
+              <CommandItem onSelect={props.onAddToolSource}>
+                <Plus />
+                Add tool source
+              </CommandItem>
+              <CommandItem onSelect={props.onImport}>
+                <Download />
+                Import from agent
+              </CommandItem>
+              <CommandItem onSelect={props.onLink}>
+                <LinkIcon />
+                Link agent to Ratel
+              </CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function commandMcpItems(config: ConfigResponse | null) {
+  return SCOPES.flatMap((scope) => {
+    const scopeState = config?.scopes[scope];
+    if (!scopeState?.available) return [];
+    return Object.entries(scopeState.config.mcpServers).map(([name, entry]) => ({
+      entry,
+      name,
+      scope,
+      summary: summaryOf(entry),
+      type: entry.type || "stdio",
+    }));
+  }).sort((a, b) => a.name.localeCompare(b.name) || a.scope.localeCompare(b.scope));
+}
+
+function commandAgentItems(hosts: readonly DetectedAgentHostSummary[]) {
+  return hosts
+    .map((host) => {
+      const status = commandAgentStatus(host);
+      return {
+        displayName: host.displayName,
+        kind: host.kind,
+        missingRatelEntryCount: host.missingRatelEntryNames?.length ?? 0,
+        nativeEntryCount: host.nativeEntryCount,
+        postureLabel: AGENT_POSTURE_LABELS[host.posture],
+        ratelEntryCount: host.ratelEntryCount,
+        searchText: [
+          host.detection.reasons.join(" "),
+          host.detection.warnings.join(" "),
+          host.nativeEntryNames?.join(" "),
+          host.ratelEntryNames?.join(" "),
+          host.scopes.map((scope) => scope.path).join(" "),
+        ].join(" "),
+        statusLabel: status.label,
+        statusTone: status.tone,
+      };
+    })
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+const AGENT_POSTURE_LABELS: Record<AgentPosture, string> = {
+  empty: "No MCP entries",
+  mixed: "Native and Ratel entries",
+  "not-linked": "Native entries only",
+  "ratel-only": "Ratel gateway configured",
+  unavailable: "Config unavailable",
+};
+
+function commandAgentStatus(host: DetectedAgentHostSummary): {
+  label: string;
+  tone: "muted" | "success" | "warning";
+} {
+  if (host.posture === "unavailable") return { label: "Unavailable", tone: "muted" };
+  if (host.ratelEntryCount > 0 && (host.missingRatelEntryNames?.length ?? 0) === 0) {
+    return { label: "Linked", tone: "success" };
+  }
+  if (host.ratelEntryCount > 0) return { label: "Mixed", tone: "warning" };
+  return { label: "Not linked", tone: "muted" };
+}
+
+function CommandStatusBadge(props: { children: ReactNode; tone: "muted" | "success" | "warning" }) {
+  return (
+    <Badge
+      className={cn(
+        "h-5 rounded-full px-2 text-[10px]",
+        props.tone === "success" &&
+          "border-emerald-300/70 bg-emerald-50 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200",
+        props.tone === "warning" &&
+          "border-amber-300/70 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200",
+        props.tone === "muted" && "border-border bg-muted text-muted-foreground",
+      )}
+      variant="outline"
     >
       {props.children}
-    </div>
+    </Badge>
   );
 }
 
-function AuthBadge({ status }: { status?: AuthStatus }) {
-  if (!status || status === "n/a") return null;
-  if (status === "ok") {
-    return (
-      <Badge variant="outline" className="border-brand-green/30 bg-brand-green/5 text-brand-green">
-        ok
-      </Badge>
-    );
+export function useRatelApp() {
+  const context = useContext(RatelAppContext);
+  if (!context) {
+    throw new Error("useRatelApp must be used within AppShell");
   }
-  if (status === "expired") {
-    return <Badge variant="secondary">expired</Badge>;
+  return context;
+}
+
+export function authBadgeVariant(status?: AuthStatus) {
+  if (status === "needs auth") return "warning" as const;
+  if (status === "expired") return "muted" as const;
+  return "outline" as const;
+}
+
+export function toolSourcePath(scope: RatelScope, name: string, token?: string) {
+  const path = `/tools/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`;
+  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+}
+
+export function toolSourceCreatePath(scope: RatelScope, token?: string) {
+  const search = new URLSearchParams({ scope });
+  if (token) search.set("t", token);
+  return `/tools/new?${search.toString()}`;
+}
+
+function agentSetupHostPath(kind: AgentHostKind, token?: string) {
+  const path = `/agent-setup/${kind}`;
+  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+}
+
+export function summaryOf(entry: ServerEntry): string {
+  const type = entry.type || "stdio";
+  if (type === "stdio") {
+    const args = entry.args && entry.args.length > 0 ? ` ${entry.args.join(" ")}` : "";
+    return `${entry.command ?? "<no command>"}${args}`;
   }
-  return <Badge variant="warning">needs auth</Badge>;
+  return entry.url ?? "<no url>";
+}
+
+export function lines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+export function parseKeyValueLines(value: string, separator: "=" | ":"): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const raw of value.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const index = line.indexOf(separator);
+    if (index <= 0) continue;
+    out[line.slice(0, index).trim()] = line.slice(index + 1).trim();
+  }
+  return out;
+}
+
+export function keyValsToText(
+  value: Record<string, string> | undefined,
+  separator: string,
+): string {
+  return Object.entries(value ?? {})
+    .map(([key, val]) => `${key}${separator}${val}`)
+    .join("\n");
 }
 
 async function readJson(res: Response): Promise<Record<string, unknown> | null> {
@@ -798,38 +823,9 @@ function isLogResult(value: unknown): value is { log: string[] } {
   );
 }
 
-function summaryOf(entry: ServerEntry): string {
-  const type = entry.type || "stdio";
-  if (type === "stdio") {
-    const args = entry.args && entry.args.length > 0 ? ` ${entry.args.join(" ")}` : "";
-    return `[${type}] ${entry.command ?? "<no command>"}${args}`;
-  }
-  return `[${type}] ${entry.url ?? "<no url>"}`;
+function tokenFromSearch(searchStr: string | undefined): string {
+  const search = searchStr ?? window.location.search;
+  return new URLSearchParams(search.startsWith("?") ? search : `?${search}`).get("t") ?? "";
 }
 
-function lines(value: string): string[] {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function parseKeyValueLines(value: string, separator: "=" | ":"): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const raw of value.split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    const index = line.indexOf(separator);
-    if (index <= 0) continue;
-    out[line.slice(0, index).trim()] = line.slice(index + 1).trim();
-  }
-  return out;
-}
-
-function keyValsToText(value: Record<string, string> | undefined, separator: string): string {
-  return Object.entries(value ?? {})
-    .map(([key, val]) => `${key}${separator}${val}`)
-    .join("\n");
-}
-
-export default App;
+export default AppShell;

@@ -57,7 +57,7 @@
   --sidebar-foreground: var(--brand-green);
   --sidebar-primary: var(--brand-orange);
   --sidebar-primary-foreground: var(--brand-orange-foreground);
-  --sidebar-accent: color-mix(in srgb, var(--brand-orange) 12%, white);
+  --sidebar-accent: color-mix(in srgb, var(--brand-azure) 22%, var(--brand-cream));
   --sidebar-accent-foreground: var(--brand-ink);
   --sidebar-border: color-mix(in srgb, var(--brand-azure) 24%, var(--brand-cream));
   --sidebar-ring: var(--brand-orange);
@@ -335,7 +335,7 @@ textarea {
   --sidebar-foreground: var(--brand-cream);
   --sidebar-primary: var(--brand-orange);
   --sidebar-primary-foreground: var(--brand-orange-foreground);
-  --sidebar-accent: color-mix(in srgb, var(--brand-green) 72%, var(--brand-azure));
+  --sidebar-accent: color-mix(in srgb, var(--brand-green) 82%, var(--brand-azure));
   --sidebar-accent-foreground: var(--brand-cream);
   --sidebar-border: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
   --sidebar-ring: var(--brand-orange);

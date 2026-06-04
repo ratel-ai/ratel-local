@@ -53,10 +53,13 @@ ratel-mcp mcp add --scope user stripe https://mcp.stripe.com --transport http
 # List what's configured
 ratel-mcp mcp list
 
-# Import your existing Claude Code MCP setup into ratel-mcp's scopes, then point Claude at ratel-mcp
+# Import your existing Claude Code MCP setup into ratel-mcp's scopes
 ratel-mcp mcp import
 
-# Start the gateway over stdio (this is what Claude Code spawns after `import`)
+# Point Claude at the Ratel gateway without removing native Claude Code MCP entries
+ratel-mcp mcp link
+
+# Start the gateway over stdio (this is what Claude Code spawns after `link`)
 ratel-mcp serve --config ~/.ratel/config.json
 ```
 
@@ -98,7 +101,7 @@ By default, `mcp add` connects to the upstream and stores its server-level `inst
 | project | `<root>/.ratel/config.json` | Committed alongside the repo. |
 | local | `<root>/.ratel/config.local.json` | Per-user-per-project; add to your project's `.gitignore`. |
 
-When you run `ratel-mcp serve --config a.json --config b.json --config c.json`, the configs are merged in order — last wins on `mcpServers` key collisions. The `import` wizard wires the right `--config` chain into Claude Code at each scope.
+When you run `ratel-mcp serve --config a.json --config b.json --config c.json`, the configs are merged in order — last wins on `mcpServers` key collisions. The `link` command wires the right `--config` chain into Claude Code at each scope. The `import` wizard migrates selected native MCP entries into Ratel and can clean those imported entries out of the agent config as its second stage.
 
 ### OAuth flow
 

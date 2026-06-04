@@ -6,13 +6,13 @@ type ScrollMask = "none" | "x" | "y" | "both" | "top" | "bottom" | "left" | "rig
 
 const scrollMaskClassName: Record<ScrollMask, string | undefined> = {
   none: undefined,
-  x: "scroll-mask-x scroll-mask-x-from-78%",
-  y: "scroll-mask-y scroll-mask-y-from-78%",
-  both: "scroll-mask-x scroll-mask-y scroll-mask-x-from-78% scroll-mask-y-from-78%",
-  top: "scroll-mask-t scroll-mask-t-from-78%",
-  bottom: "scroll-mask-b scroll-mask-b-from-78%",
-  left: "scroll-mask-l scroll-mask-l-from-78%",
-  right: "scroll-mask-r scroll-mask-r-from-78%",
+  x: "scroll-mask-x scroll-mask-x-from-88%",
+  y: "scroll-mask-y scroll-mask-y-from-88%",
+  both: "scroll-mask-x scroll-mask-y scroll-mask-x-from-88% scroll-mask-y-from-88%",
+  top: "scroll-mask-t scroll-mask-t-from-88%",
+  bottom: "scroll-mask-b scroll-mask-b-from-88%",
+  left: "scroll-mask-l scroll-mask-l-from-88%",
+  right: "scroll-mask-r scroll-mask-r-from-88%",
 };
 
 function ScrollArea({

@@ -63,9 +63,10 @@ export class CodexAgentHostAdapter implements AgentHostAdapter {
       const names = input.replacedEntriesByScope.get(scope);
       const state = byScope[scope];
       const configPaths = configChainForScope(scope, input.ratelConfigPaths);
-      if (!state || !names?.size || configPaths.length === 0) continue;
+      const shouldInstall = Boolean(names?.size || input.installGatewayScopes?.has(scope));
+      if (!state || !shouldInstall || configPaths.length === 0) continue;
       const gateway = makeRatelGatewayEntry({ bin: input.bin, configPaths });
-      const next = rewriteCodexConfig(state.rawText ?? "", names, gateway);
+      const next = rewriteCodexConfig(state.rawText ?? "", names ?? new Set(), gateway);
       if (next !== state.rawText) {
         changes.push({
           kind: "write",
@@ -75,7 +76,7 @@ export class CodexAgentHostAdapter implements AgentHostAdapter {
         });
       }
       installedGatewayScopes.push(scope);
-      for (const name of names) removedNativeEntries.push({ scope, name });
+      for (const name of names ?? []) removedNativeEntries.push({ scope, name });
     }
     return {
       changes,

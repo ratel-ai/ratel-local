@@ -49,6 +49,7 @@ function CommandDialog({
       <DialogContent
         className={cn("top-1/3 translate-y-0 overflow-hidden rounded-2xl! p-0", className)}
         showCloseButton={showCloseButton}
+        style={{ maxWidth: "min(calc(100% - 2.75rem), 36rem)" }}
       >
         {children}
       </DialogContent>
@@ -84,7 +85,7 @@ function CommandList({ className, ...props }: React.ComponentProps<typeof Comman
     <CommandPrimitive.List
       data-slot="command-list"
       className={cn(
-        "no-scrollbar max-h-72 scroll-mask-y scroll-mask-y-from-78% scroll-py-1 overflow-x-hidden overflow-y-auto px-3 pb-3 outline-none",
+        "no-scrollbar max-h-72 scroll-mask-y scroll-mask-y-from-88% scroll-py-1 overflow-x-hidden overflow-y-auto pb-3 outline-none",
         className,
       )}
       {...props}
@@ -113,7 +114,7 @@ function CommandGroup({
     <CommandPrimitive.Group
       data-slot="command-group"
       className={cn(
-        "overflow-hidden p-1 text-foreground **:[[cmdk-group-heading]]:px-2 **:[[cmdk-group-heading]]:py-1.5 **:[[cmdk-group-heading]]:text-xs **:[[cmdk-group-heading]]:font-medium **:[[cmdk-group-heading]]:text-muted-foreground",
+        "overflow-hidden px-3 py-1 text-foreground **:[[cmdk-group-heading]]:px-2 **:[[cmdk-group-heading]]:py-1.5 **:[[cmdk-group-heading]]:text-xs **:[[cmdk-group-heading]]:font-medium **:[[cmdk-group-heading]]:text-muted-foreground",
         className,
       )}
       {...props}
@@ -128,7 +129,7 @@ function CommandSeparator({
   return (
     <CommandPrimitive.Separator
       data-slot="command-separator"
-      className={cn("-mx-1 h-px bg-border", className)}
+      className={cn("h-px bg-border", className)}
       {...props}
     />
   );

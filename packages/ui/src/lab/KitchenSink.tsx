@@ -174,7 +174,6 @@ import {
   MenubarSeparator,
   MenubarTrigger,
 } from "@/components/ui/menubar";
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   NavigationMenu,
   NavigationMenuContent,
@@ -1578,11 +1577,16 @@ function ShadcnComponentGallery(props: { onOpenCommandMenu: () => void }) {
                   <InputGroupInput defaultValue="pnpm dlx @modelcontextprotocol/server" />
                 </InputGroup>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  <NativeSelect defaultValue="project">
-                    <NativeSelectOption value="user">User</NativeSelectOption>
-                    <NativeSelectOption value="project">Project</NativeSelectOption>
-                    <NativeSelectOption value="local">Local</NativeSelectOption>
-                  </NativeSelect>
+                  <Select defaultValue="project">
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="user">User</SelectItem>
+                      <SelectItem value="project">Project</SelectItem>
+                      <SelectItem value="local">Local</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <InputOTP maxLength={6} defaultValue="024018">
                     <InputOTPGroup>
                       {otpSlotIndexes.map((index) => (

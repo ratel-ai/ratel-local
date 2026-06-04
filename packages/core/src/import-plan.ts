@@ -272,6 +272,57 @@ export async function buildAgentImportPlan(
   };
 }
 
+export async function buildAgentLinkPlan(
+  inputs: ImportInputs & { agentHost: AgentHostAdapter; agentState: AgentHostState },
+): Promise<ImportPlan> {
+  const installGatewayScopes = collectRatelScopesWithEntries(inputs);
+  const agentHostChanges = await inputs.agentHost.link({
+    state: inputs.agentState,
+    bin: inputs.bin,
+    ratelConfigPaths: {
+      user: inputs.ratelUserPath,
+      project: inputs.ratelProjectPath,
+      local: inputs.ratelLocalPath,
+    },
+    installGatewayScopes,
+    replacedEntriesByScope: new Map(),
+  });
+  return {
+    ratelChanges: [],
+    agentChanges: agentHostChanges.changes,
+    agentHostChanges,
+    summary: emptyImportSummary("add-missing-only"),
+  };
+}
+
+function collectRatelScopesWithEntries(inputs: ImportInputs): Set<AgentScope> {
+  const out = new Set<AgentScope>();
+  if (Object.keys(inputs.ratelUser?.mcpServers ?? {}).length > 0) out.add("user");
+  if (inputs.ratelProjectPath && Object.keys(inputs.ratelProject?.mcpServers ?? {}).length > 0) {
+    out.add("project");
+  }
+  if (inputs.ratelLocalPath && Object.keys(inputs.ratelLocal?.mcpServers ?? {}).length > 0) {
+    out.add("local");
+  }
+  return out;
+}
+
+function emptyImportSummary(conflictStrategy: ImportConflictStrategy): ImportPlan["summary"] {
+  return {
+    movedFromUser: [],
+    movedFromProject: [],
+    movedFromLocal: [],
+    replacedFromUser: [],
+    replacedFromProject: [],
+    replacedFromLocal: [],
+    skipped: [],
+    conflicts: [],
+    conflictStrategy,
+    ratelEntryArgsByScope: {},
+    overwrittenRatelEntries: [],
+  };
+}
+
 function removeFromBundle(bundle: ScopeBundle, name: string): void {
   delete bundle.movableEntries[name];
   const idx = bundle.movableNames.indexOf(name);
