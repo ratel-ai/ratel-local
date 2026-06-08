@@ -20,8 +20,14 @@ export interface ServerEntry {
 
 const HTTP_ONLY_FIELDS = ["callbackPort", "clientId", "clientSecret", "scope"] as const;
 
+/** Ratel-managed skills: directories scanned for `<name>/SKILL.md`. */
+export interface SkillsConfig {
+  dirs?: string[];
+}
+
 export interface RatelConfig {
   mcpServers: Record<string, ServerEntry>;
+  skills?: SkillsConfig;
 }
 
 export function parseConfig(input: unknown): RatelConfig {
@@ -37,7 +43,27 @@ export function parseConfig(input: unknown): RatelConfig {
   for (const [name, raw] of Object.entries(mcpServers)) {
     out[name] = parseEntry(`mcpServers.${name}`, raw);
   }
-  return { mcpServers: out };
+
+  const config: RatelConfig = { mcpServers: out };
+  const skills = (input as Record<string, unknown>).skills;
+  if (skills !== undefined) {
+    config.skills = parseSkills(skills);
+  }
+  return config;
+}
+
+function parseSkills(raw: unknown): SkillsConfig {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError("`skills` must be a JSON object");
+  }
+  const skills: SkillsConfig = {};
+  if (raw.dirs !== undefined) {
+    if (!Array.isArray(raw.dirs) || raw.dirs.some((d) => typeof d !== "string")) {
+      throw new ConfigError("`skills.dirs` must be an array of strings");
+    }
+    skills.dirs = raw.dirs as string[];
+  }
+  return skills;
 }
 
 function parseEntry(path: string, raw: unknown): ServerEntry {
@@ -166,12 +192,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 export function mergeConfigs(configs: readonly RatelConfig[]): RatelConfig {
   const out: Record<string, ServerEntry> = {};
+  let skills: SkillsConfig | undefined;
   for (const c of configs) {
     for (const [name, entry] of Object.entries(c.mcpServers)) {
       out[name] = entry;
     }
+    if (c.skills) skills = c.skills;
   }
-  return { mcpServers: out };
+  return skills ? { mcpServers: out, skills } : { mcpServers: out };
 }
 
 export class ConfigError extends Error {

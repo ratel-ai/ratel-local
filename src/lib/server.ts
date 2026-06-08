@@ -4,7 +4,10 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import {
   type ExecutableTool,
   formatUpstreamLine,
+  invokeSkillTool,
   invokeToolTool,
+  type SkillCatalog,
+  searchSkillsTool,
   searchToolsTool,
   type ToolCatalog,
   type UpstreamServerInfo,
@@ -19,6 +22,8 @@ export interface CreateMcpServerOptions {
   upstreamServers?: UpstreamServerInfo[];
   /** When provided, registers the `auth` tool and declares `tools.listChanged` so hosts refresh on auth state changes. */
   runAuthFlow?: AuthRunner;
+  /** When non-empty, registers `search_skills` / `invoke_skill` for on-demand skill dispatch. */
+  skillCatalog?: SkillCatalog;
 }
 
 export interface McpServerHandle {
@@ -31,13 +36,14 @@ export async function createMcpServer(
   catalog: ToolCatalog,
   options: CreateMcpServerOptions,
 ): Promise<McpServerHandle> {
-  const { name, version, transport, upstreamServers, runAuthFlow } = options;
+  const { name, version, transport, upstreamServers, runAuthFlow, skillCatalog } = options;
+  const hasSkills = skillCatalog !== undefined && skillCatalog.size() > 0;
 
   const server = new Server(
     { name, version },
     {
       capabilities: { tools: { listChanged: true } },
-      instructions: buildServerInstructions(upstreamServers),
+      instructions: buildServerInstructions(upstreamServers, hasSkills),
     },
   );
 
@@ -51,11 +57,17 @@ export async function createMcpServer(
   };
 
   const gateway: Record<string, ExecutableTool> = {};
+  const skills = hasSkills ? skillCatalog : undefined;
   for (const tool of [
-    searchToolsTool(catalog, { upstreamServers }),
-    invokeToolTool(catalog, { onUnauthorized }),
+    searchToolsTool(catalog, { upstreamServers, ...(skills ? { skillCatalog: skills } : {}) }),
+    invokeToolTool(catalog, { onUnauthorized, ...(skills ? { skillCatalog: skills } : {}) }),
   ]) {
     gateway[tool.name] = tool;
+  }
+  if (skills) {
+    for (const tool of [searchSkillsTool(skills), invokeSkillTool(skills)]) {
+      gateway[tool.name] = tool;
+    }
   }
   if (runAuthFlow) {
     const t = authTool(upstreamServers ?? [], runAuthFlow);
@@ -95,15 +107,23 @@ export async function createMcpServer(
   };
 }
 
-function buildServerInstructions(upstreams?: readonly UpstreamServerInfo[]): string {
+function buildServerInstructions(
+  upstreams?: readonly UpstreamServerInfo[],
+  hasSkills = false,
+): string {
   const base =
     "This is the Ratel context-engineering gateway. Before reaching for any built-in capability " +
     "(web fetch, shell, search, automation, etc.), call `search_tools` first — Ratel may have a " +
     "purpose-built tool registered for the task. If `search_tools` returns a relevant hit, run it " +
     "via `invoke_tool` instead of falling back to a generic capability.";
-  if (!upstreams || upstreams.length === 0) return base;
+  const skills = hasSkills
+    ? " For multi-step tasks, also call `search_skills` — Ratel may have a reusable playbook; load it " +
+      "in full via `invoke_skill`."
+    : "";
+  const intro = `${base}${skills}`;
+  if (!upstreams || upstreams.length === 0) return intro;
   const list = upstreams.map(formatUpstreamLine).join("\n");
-  return `${base}\n\nThis catalog aggregates tools from these upstream MCP servers:\n${list}`;
+  return `${intro}\n\nThis catalog aggregates tools from these upstream MCP servers:\n${list}`;
 }
 
 function isObjectSchema(schema: unknown): boolean {

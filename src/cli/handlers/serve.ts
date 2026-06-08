@@ -57,6 +57,7 @@ export async function runServe(
     transport: downstream,
     upstreamServers: gateway.upstreamServers,
     runAuthFlow: gateway.runAuthFlow,
+    skillCatalog: gateway.skillCatalog,
   });
   gateway.setListChangedNotifier(exposed.notifyToolListChanged);
 

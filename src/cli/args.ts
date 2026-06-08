@@ -1,8 +1,17 @@
-export type Group = "mcp" | "backup" | "serve" | "ui" | "help";
+export type Group = "mcp" | "backup" | "skill" | "serve" | "ui" | "help";
 
 export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "import" | "link" | "auth";
 
 export type BackupVerb = "list" | "undo";
+
+export type SkillVerb =
+  | "activate"
+  | "deactivate"
+  | "list"
+  | "suggest"
+  | "preload-hook"
+  | "install-hook"
+  | "uninstall-hook";
 
 const MCP_VERBS: ReadonlySet<string> = new Set([
   "add",
@@ -16,6 +25,16 @@ const MCP_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list", "undo"]);
+
+const SKILL_VERBS: ReadonlySet<string> = new Set([
+  "activate",
+  "deactivate",
+  "list",
+  "suggest",
+  "preload-hook",
+  "install-hook",
+  "uninstall-hook",
+]);
 
 const SHORT_FLAG_ALIASES: Record<string, string> = {
   e: "env",
@@ -93,6 +112,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const candidate = argv[1];
       if (!BACKUP_VERBS.has(candidate)) {
         throw new ArgError(`unknown backup verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "skill") {
+    group = "skill";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!SKILL_VERBS.has(candidate)) {
+        throw new ArgError(`unknown skill verb: ${candidate}`);
       }
       verb = candidate;
       i = 2;

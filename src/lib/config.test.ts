@@ -263,3 +263,45 @@ describe("mergeConfigs", () => {
     expect(Object.keys(bFrozen.mcpServers)).toEqual(["fs", "extra"]);
   });
 });
+
+describe("parseConfig skills", () => {
+  it("parses an optional skills.dirs array", () => {
+    const config = parseConfig({
+      mcpServers: {},
+      skills: { dirs: ["~/.ratel/skills", "/abs/skills"] },
+    });
+    expect(config.skills?.dirs).toEqual(["~/.ratel/skills", "/abs/skills"]);
+  });
+
+  it("leaves skills undefined when the block is absent", () => {
+    const config = parseConfig({ mcpServers: {} });
+    expect(config.skills).toBeUndefined();
+  });
+
+  it("rejects a non-object skills block", () => {
+    expect(() => parseConfig({ mcpServers: {}, skills: "nope" })).toThrow(/skills.*object/i);
+  });
+
+  it("rejects skills.dirs that is not an array of strings", () => {
+    expect(() => parseConfig({ mcpServers: {}, skills: { dirs: "x" } })).toThrow(/skills\.dirs/);
+    expect(() => parseConfig({ mcpServers: {}, skills: { dirs: [1] } })).toThrow(/skills\.dirs/);
+  });
+});
+
+describe("mergeConfigs skills", () => {
+  it("carries skills through and lets the right-most config win", () => {
+    const merged = mergeConfigs([
+      { mcpServers: {}, skills: { dirs: ["/one"] } },
+      { mcpServers: {}, skills: { dirs: ["/two"] } },
+    ]);
+    expect(merged.skills?.dirs).toEqual(["/two"]);
+  });
+
+  it("preserves an earlier skills block when later configs omit one", () => {
+    const merged = mergeConfigs([
+      { mcpServers: {}, skills: { dirs: ["/one"] } },
+      { mcpServers: {} },
+    ]);
+    expect(merged.skills?.dirs).toEqual(["/one"]);
+  });
+});

@@ -1,4 +1,4 @@
-export type { RatelConfig, ServerEntry } from "./config.js";
+export type { RatelConfig, ServerEntry, SkillsConfig } from "./config.js";
 export { ConfigError, mergeConfigs, parseConfig } from "./config.js";
 export type {
   BuildGatewayOptions,
@@ -20,4 +20,6 @@ export { RatelOAuthProvider } from "./oauth/provider.js";
 export { RatelOAuthStore } from "./oauth/store.js";
 export type { CreateMcpServerOptions, McpServerHandle } from "./server.js";
 export { createMcpServer } from "./server.js";
+export type { LoadSkillsOptions } from "./skills/load.js";
+export { defaultSkillDirs, loadSkills, parseSkillMd, SkillLoadError } from "./skills/load.js";
 export { AUTH_TOOL_ID } from "./tools/auth.js";

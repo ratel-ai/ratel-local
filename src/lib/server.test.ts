@@ -6,7 +6,16 @@ import {
   ListToolsRequestSchema,
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { INVOKE_TOOL_ID, registerMcpServer, SEARCH_TOOLS_ID, ToolCatalog } from "@ratel-ai/sdk";
+import {
+  INVOKE_SKILL_ID,
+  INVOKE_TOOL_ID,
+  registerMcpServer,
+  SEARCH_SKILLS_ID,
+  SEARCH_TOOLS_ID,
+  type Skill,
+  SkillCatalog,
+  ToolCatalog,
+} from "@ratel-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { createMcpServer } from "./server.js";
 import { AUTH_TOOL_ID } from "./tools/auth.js";
@@ -533,5 +542,130 @@ describe("createMcpServer", () => {
     await handle.close();
     await upstreamHandle.close();
     await upstream.server.close();
+  });
+});
+
+describe("createMcpServer skills", () => {
+  function skillCatalogWith(...skills: Skill[]): SkillCatalog {
+    const catalog = new SkillCatalog();
+    for (const s of skills) catalog.register(s);
+    return catalog;
+  }
+
+  const apiDesign: Skill = {
+    id: "api-design",
+    name: "api-design",
+    description: "REST API design patterns and conventions.",
+    tags: ["backend", "api"],
+    body: "# API Design\n\nUse nouns for resources.",
+  };
+
+  it("registers search_skills and invoke_skill when the skill catalog is non-empty", async () => {
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handle = await createMcpServer(new ToolCatalog(), {
+      name: "ratel-test",
+      version: "0.0.0",
+      transport: serverTransport,
+      skillCatalog: skillCatalogWith(apiDesign),
+    });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientTransport);
+
+    const { tools } = await client.listTools();
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual(
+      [INVOKE_SKILL_ID, INVOKE_TOOL_ID, SEARCH_SKILLS_ID, SEARCH_TOOLS_ID].sort(),
+    );
+
+    await client.close();
+    await handle.close();
+  });
+
+  it("omits the skill tools when the skill catalog is empty", async () => {
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handle = await createMcpServer(new ToolCatalog(), {
+      name: "ratel-test",
+      version: "0.0.0",
+      transport: serverTransport,
+      skillCatalog: skillCatalogWith(),
+    });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientTransport);
+
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual([SEARCH_TOOLS_ID, INVOKE_TOOL_ID].sort());
+
+    await client.close();
+    await handle.close();
+  });
+
+  it("surfaces related skills on search_tools when a tool maps to a skill", async () => {
+    const toolCatalog = new ToolCatalog();
+    toolCatalog.register({
+      id: "vercel__deploy",
+      name: "deploy",
+      description: "Deploy the current project to Vercel.",
+      inputSchema: { type: "object" } as Record<string, unknown>,
+      outputSchema: { type: "object" } as Record<string, unknown>,
+      execute: async () => ({ url: "https://x.vercel.app" }),
+    });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handle = await createMcpServer(toolCatalog, {
+      name: "ratel-test",
+      version: "0.0.0",
+      transport: serverTransport,
+      skillCatalog: skillCatalogWith({
+        id: "vercel-deploy",
+        name: "vercel-deploy",
+        description: "How to deploy to Vercel: env vars, preview vs production, rollbacks.",
+        tags: ["vercel", "deployment"],
+        body: "# Vercel Deploy",
+      }),
+    });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientTransport);
+
+    const found = await client.callTool({
+      name: SEARCH_TOOLS_ID,
+      arguments: { query: "deploy to vercel" },
+    });
+    const related = (found.structuredContent as { relatedSkills?: Array<{ skillId: string }> })
+      .relatedSkills;
+    expect(related?.[0]?.skillId).toBe("vercel-deploy");
+
+    await client.close();
+    await handle.close();
+  });
+
+  it("invoke_skill returns the skill body and mentions search_skills in the instructions", async () => {
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handle = await createMcpServer(new ToolCatalog(), {
+      name: "ratel-test",
+      version: "0.0.0",
+      transport: serverTransport,
+      skillCatalog: skillCatalogWith(apiDesign),
+    });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientTransport);
+
+    expect(client.getInstructions()).toMatch(/search_skills/);
+
+    const found = await client.callTool({
+      name: SEARCH_SKILLS_ID,
+      arguments: { query: "design a REST API" },
+    });
+    const skills = (found.structuredContent as { skills: Array<{ skillId: string }> }).skills;
+    expect(skills[0]?.skillId).toBe("api-design");
+
+    const loaded = await client.callTool({
+      name: INVOKE_SKILL_ID,
+      arguments: { skillId: "api-design" },
+    });
+    expect((loaded.structuredContent as { body: string }).body).toContain(
+      "Use nouns for resources",
+    );
+
+    await client.close();
+    await handle.close();
   });
 });

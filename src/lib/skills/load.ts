@@ -1,0 +1,211 @@
+import type { Dirent } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { Skill } from "@ratel-ai/sdk";
+
+/** The Ratel-managed skill folder scanned by default. */
+export function defaultSkillDirs(): string[] {
+  return [join(homedir(), ".ratel", "skills")];
+}
+
+export interface LoadSkillsOptions {
+  logger?: (message: string) => void;
+}
+
+/**
+ * Scan Ratel-managed skill directories and return the discovered skills.
+ *
+ * Each `<dir>/<name>/SKILL.md` becomes one {@link Skill}: frontmatter supplies
+ * `name` / `description` / `tags`; the Markdown body is the dispatch payload,
+ * with any bundled `scripts/` and sibling `*.md` files appended as absolute
+ * paths so the agent can reach them after `invoke_skill`.
+ *
+ * Loading is fail-soft per skill: a malformed `SKILL.md` is logged and skipped,
+ * never crashing gateway boot. Missing directories are silently ignored. When
+ * the same skill id appears in multiple directories, the later directory wins.
+ */
+export async function loadSkills(
+  dirs: string[],
+  options: LoadSkillsOptions = {},
+): Promise<Skill[]> {
+  const log = options.logger ?? (() => {});
+  const byId = new Map<string, Skill>();
+
+  for (const rawDir of dirs) {
+    const dir = expandHome(rawDir);
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log(`[ratel] could not read skills dir ${dir}: ${(err as Error).message}`);
+      }
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillDir = join(dir, entry.name);
+      const skillMd = join(skillDir, "SKILL.md");
+
+      let raw: string;
+      try {
+        raw = await readFile(skillMd, "utf8");
+      } catch (err) {
+        // A subdirectory without a SKILL.md simply isn't a skill — ignore it.
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          log(`[ratel] could not read ${skillMd}: ${(err as Error).message}`);
+        }
+        continue;
+      }
+
+      try {
+        const parsed = parseSkillMd(raw, skillMd);
+        const body = await appendBundledResources(parsed.body, skillDir);
+        byId.set(parsed.name, {
+          id: parsed.name,
+          name: parsed.name,
+          description: parsed.description,
+          tags: parsed.tags,
+          body,
+        });
+      } catch (err) {
+        log(`[ratel] skipping skill ${entry.name}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  return Array.from(byId.values());
+}
+
+interface ParsedSkill {
+  name: string;
+  description: string;
+  tags: string[];
+  body: string;
+}
+
+/**
+ * Parse a `SKILL.md` into frontmatter fields + body. Frontmatter is the block
+ * between the leading `---` fences; values are flat inline scalars (the same
+ * constraint Claude Code's skill validator enforces).
+ */
+export function parseSkillMd(raw: string, source: string): ParsedSkill {
+  const fm = extractFrontmatter(raw);
+  if (!fm) {
+    throw new SkillLoadError(`${source}: missing YAML frontmatter`);
+  }
+  const name = fm.data.name;
+  if (!name) {
+    throw new SkillLoadError(`${source}: frontmatter 'name' is required`);
+  }
+  const description = fm.data.description;
+  if (!description) {
+    throw new SkillLoadError(`${source}: frontmatter 'description' is required`);
+  }
+  return {
+    name,
+    description,
+    tags: parseTags(fm.data.tags),
+    body: fm.body.trim(),
+  };
+}
+
+interface Frontmatter {
+  data: Record<string, string>;
+  body: string;
+}
+
+function extractFrontmatter(raw: string): Frontmatter | undefined {
+  const lines = raw.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length && lines[i].trim() === "") i++;
+  if (lines[i]?.trim() !== "---") return undefined;
+  const start = i + 1;
+  let end = -1;
+  for (let j = start; j < lines.length; j++) {
+    if (lines[j].trim() === "---") {
+      end = j;
+      break;
+    }
+  }
+  if (end === -1) return undefined;
+
+  const data: Record<string, string> = {};
+  for (const line of lines.slice(start, end)) {
+    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+    const sep = line.indexOf(":");
+    if (sep === -1) continue;
+    const key = line.slice(0, sep).trim();
+    if (key) data[key] = stripQuotes(line.slice(sep + 1).trim());
+  }
+  return { data, body: lines.slice(end + 1).join("\n") };
+}
+
+function parseTags(value: string | undefined): string[] {
+  if (!value) return [];
+  const inner = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  return inner
+    .split(",")
+    .map((t) => stripQuotes(t.trim()))
+    .filter((t) => t.length > 0);
+}
+
+function stripQuotes(s: string): string {
+  if (
+    s.length >= 2 &&
+    ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))
+  ) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
+/**
+ * Append an absolute-path index of bundled resources (a `scripts/` directory
+ * and any sibling `*.md` reference files) so the agent can run or read them
+ * once the body is in context. Returns the body unchanged when there are none.
+ */
+async function appendBundledResources(body: string, skillDir: string): Promise<string> {
+  const resources: string[] = [];
+
+  let entries: Dirent[];
+  try {
+    entries = await readdir(skillDir, { withFileTypes: true });
+  } catch {
+    return body;
+  }
+
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name === "scripts") {
+      try {
+        const scripts = await readdir(join(skillDir, "scripts"), { withFileTypes: true });
+        for (const s of scripts) {
+          if (s.isFile()) resources.push(join(skillDir, "scripts", s.name));
+        }
+      } catch {
+        // ignore an unreadable scripts dir
+      }
+    } else if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "SKILL.md") {
+      resources.push(join(skillDir, entry.name));
+    }
+  }
+
+  if (resources.length === 0) return body;
+  const list = resources.map((p) => `- ${p}`).join("\n");
+  return `${body}\n\n---\n\n## Bundled resources (absolute paths)\n\n${list}\n`;
+}
+
+function expandHome(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+
+export class SkillLoadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SkillLoadError";
+  }
+}

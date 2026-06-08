@@ -6,6 +6,8 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   type McpServerHandle,
   registerMcpServer,
+  type Skill,
+  SkillCatalog,
   ToolCatalog,
   type TraceSinkConfig,
   type UpstreamServerInfo,
@@ -23,6 +25,7 @@ import { RatelOAuthProvider } from "./oauth/provider.js";
 import { refreshIfNeeded } from "./oauth/refresh.js";
 import { RatelOAuthStore } from "./oauth/store.js";
 import { wrapTransportWithSendMutex } from "./oauth/transport-mutex.js";
+import { defaultSkillDirs, loadSkills } from "./skills/load.js";
 
 export type TransportFactory = (name: string, entry: ServerEntry) => Transport | undefined;
 
@@ -44,6 +47,10 @@ export interface BuildGatewayOptions {
   refreshTokens?: RefreshTokensFn;
   /** Trace sink configuration; forwarded to the catalog. Default: noop (no events captured). */
   trace?: TraceSinkConfig;
+  /** Override the Ratel-managed skill directories. Default: `config.skills.dirs` then `~/.ratel/skills`. */
+  skillDirs?: string[];
+  /** Override skill discovery (mainly for tests / DI). Default: scan {@link skillDirs}. */
+  loadSkills?: (dirs: string[], opts: { logger?: (message: string) => void }) => Promise<Skill[]>;
 }
 
 const PLACEHOLDER_REDIRECT_URL = "http://127.0.0.1:0/cb";
@@ -82,6 +89,8 @@ function getAuthStatus(err: unknown): unknown {
 
 export interface GatewayHandle {
   catalog: ToolCatalog;
+  /** Ratel-managed skills, ranked by the same engine and dispatched on demand. */
+  skillCatalog: SkillCatalog;
   upstreamServers: UpstreamServerInfo[];
   close: () => Promise<void>;
   /** Drives an interactive OAuth flow for one or all upstreams marked `needsAuth`. */
@@ -101,6 +110,7 @@ export async function buildGatewayFromConfig(
   const refreshTokens = options.refreshTokens ?? defaultRefreshTokens;
 
   const catalog = new ToolCatalog(options.trace ? { trace: options.trace } : {});
+  const skillCatalog = await buildSkillCatalog(config, options, log);
   const handles = new Map<string, McpServerHandle>();
   const upstreamServers: UpstreamServerInfo[] = [];
   const configEntries: Record<string, ServerEntry> = { ...config.mcpServers };
@@ -154,6 +164,7 @@ export async function buildGatewayFromConfig(
 
   return {
     catalog,
+    skillCatalog,
     upstreamServers,
     close: async () => {
       const results = await Promise.allSettled(Array.from(handles.values()).map((h) => h.close()));
@@ -178,6 +189,31 @@ export async function buildGatewayFromConfig(
       listChangedNotifier = fn;
     },
   };
+}
+
+/**
+ * Build and populate the skill catalog from the Ratel-managed folder(s). Shares
+ * the upstream trace sink so skill events land in the same telemetry stream.
+ * Skill discovery failures degrade gracefully — an empty catalog, never a crash.
+ */
+async function buildSkillCatalog(
+  config: RatelConfig,
+  options: BuildGatewayOptions,
+  log: (message: string) => void,
+): Promise<SkillCatalog> {
+  const skillCatalog = new SkillCatalog(options.trace ? { trace: options.trace } : {});
+  const dirs = options.skillDirs ?? config.skills?.dirs ?? defaultSkillDirs();
+  const load = options.loadSkills ?? loadSkills;
+  try {
+    const skills = await load(dirs, { logger: log });
+    for (const skill of skills) skillCatalog.register(skill);
+    if (skills.length > 0) {
+      log(`[ratel] loaded ${skills.length} skill(s)`);
+    }
+  } catch (err) {
+    log(`[ratel] skill loading failed: ${(err as Error).message}`);
+  }
+  return skillCatalog;
 }
 
 export const defaultTransportFactory: TransportFactory = (name, entry) => {
