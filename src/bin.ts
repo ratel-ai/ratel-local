@@ -1,10 +1,15 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 import { runCli } from "./cli/cli.js";
 import { defaultPromptAdapter } from "./cli/prompts.js";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version?: string };
 
 async function main() {
   const result = await runCli(process.argv.slice(2), {
     prompts: defaultPromptAdapter(),
+    cliVersion: pkg.version ?? "0.0.0",
   });
 
   if (!result.shutdown) return;

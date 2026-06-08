@@ -17,6 +17,12 @@ describe("parseArgs — group/verb routing", () => {
     expect(parseArgs(["help"]).group).toBe("help");
   });
 
+  it("treats top-level version flags as the version group", () => {
+    expect(parseArgs(["--version"]).group).toBe("version");
+    expect(parseArgs(["-V"]).group).toBe("version");
+    expect(parseArgs(["version"]).group).toBe("version");
+  });
+
   it("recognizes the mcp group with no verb", () => {
     const r = parseArgs(["mcp"]);
     expect(r.group).toBe("mcp");

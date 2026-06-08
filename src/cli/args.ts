@@ -1,4 +1,4 @@
-export type Group = "mcp" | "backup" | "serve" | "ui" | "help";
+export type Group = "mcp" | "backup" | "serve" | "ui" | "help" | "version";
 
 export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "import" | "link" | "auth";
 
@@ -69,6 +69,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const first = argv[0];
   if (first === "--help" || first === "-h" || first === "help") {
     return { group: "help", configPaths, rest, extras, flags };
+  }
+  if (first === "--version" || first === "-V" || first === "version") {
+    return { group: "version", configPaths, rest, extras, flags };
   }
 
   let group: Group;
