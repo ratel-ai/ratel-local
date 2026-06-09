@@ -62,11 +62,11 @@ export function parseHookInput(raw: string): HookInput {
 function buildPointer(suggestions: Suggestion[]): string {
   const lines = suggestions.map(
     (s) =>
-      `- ${s.skillId}${s.description ? ` — ${s.description}` : ""}  →  invoke_skill("${s.skillId}")`,
+      `- ${s.skillId}${s.description ? ` — ${s.description}` : ""}  →  get_skill_content("${s.skillId}")`,
   );
   return [
     "Ratel: project-relevant skill(s) may apply to this task. Before writing code, load the relevant " +
-      "one(s) with the `invoke_skill` tool and follow them:",
+      "one(s) with the `get_skill_content` tool and follow them:",
     ...lines,
   ].join("\n");
 }

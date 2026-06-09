@@ -68,6 +68,8 @@ export async function loadSkills(
           name: parsed.name,
           description: parsed.description,
           tags: parsed.tags,
+          triggers: parsed.triggers,
+          stacks: parsed.stacks,
           body,
         });
       } catch (err) {
@@ -83,6 +85,10 @@ interface ParsedSkill {
   name: string;
   description: string;
   tags: string[];
+  /** Author-declared task phrases ("dashboard", "login form"); indexed for the push path. */
+  triggers: string[];
+  /** Project stacks the skill applies to ("react", "django"); used to boost by context. */
+  stacks: string[];
   body: string;
 }
 
@@ -107,7 +113,9 @@ export function parseSkillMd(raw: string, source: string): ParsedSkill {
   return {
     name,
     description,
-    tags: parseTags(fm.data.tags),
+    tags: parseList(fm.data.tags),
+    triggers: parseList(fm.data.triggers),
+    stacks: parseList(fm.data.stacks),
     body: fm.body.trim(),
   };
 }
@@ -143,7 +151,7 @@ function extractFrontmatter(raw: string): Frontmatter | undefined {
   return { data, body: lines.slice(end + 1).join("\n") };
 }
 
-function parseTags(value: string | undefined): string[] {
+function parseList(value: string | undefined): string[] {
   if (!value) return [];
   const inner = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
   return inner

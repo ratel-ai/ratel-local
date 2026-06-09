@@ -147,7 +147,8 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
         const limit = numFlag(ctx.argv.flags.limit) ?? 1;
         const minScore = numFlag(ctx.argv.flags["min-score"]) ?? 0;
         const additionalContext = await runPreloadHook(input, {
-          suggest: (prompt, cwd) => suggestSkills({ prompt, cwd, dirs, limit, minScore }),
+          suggest: (prompt, cwd) =>
+            suggestSkills({ prompt, cwd, dirs, limit, minScore, requireClearWinner: true }),
           loadNudged: (sessionId) => loadNudged(stateDir, sessionId),
           recordNudged: (sessionId, ids) => recordNudged(stateDir, sessionId, ids),
         });

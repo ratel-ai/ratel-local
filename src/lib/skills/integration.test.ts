@@ -50,20 +50,20 @@ describe("skills end-to-end via the gateway", () => {
 
     // The two skill gateway tools are exposed.
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toContain("search_skills");
-    expect(tools.map((t) => t.name)).toContain("invoke_skill");
+    expect(tools.map((t) => t.name)).toContain("search_capabilities");
+    expect(tools.map((t) => t.name)).toContain("get_skill_content");
 
-    // search_skills ranks the disk-loaded skill.
+    // search_capabilities ranks the disk-loaded skill into its skills bucket.
     const found = await client.callTool({
-      name: "search_skills",
+      name: "search_capabilities",
       arguments: { query: "design a REST endpoint with pagination" },
     });
     const hits = (found.structuredContent as { skills: Array<{ skillId: string }> }).skills;
     expect(hits[0]?.skillId).toBe("api-design");
 
-    // invoke_skill returns the body (with bundled-resource footer absent here).
+    // get_skill_content returns the body (with bundled-resource footer absent here).
     const loaded = await client.callTool({
-      name: "invoke_skill",
+      name: "get_skill_content",
       arguments: { skillId: "api-design" },
     });
     expect((loaded.structuredContent as { body: string }).body).toContain(

@@ -41,13 +41,13 @@ describe("parseHookInput", () => {
 });
 
 describe("runPreloadHook", () => {
-  it("injects a pointer naming the skill id and invoke_skill", async () => {
+  it("injects a pointer naming the skill id and get_skill_content", async () => {
     const out = await runPreloadHook(
       { prompt: "build a dashboard", session_id: "s1" },
       { suggest: async () => [FRONTEND], ...memoryState() },
     );
     expect(out).toContain("frontend-patterns");
-    expect(out).toContain('invoke_skill("frontend-patterns")');
+    expect(out).toContain('get_skill_content("frontend-patterns")');
   });
 
   it("returns null when nothing matches", async () => {
