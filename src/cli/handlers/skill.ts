@@ -153,10 +153,14 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
           recordNudged: (sessionId, ids) => recordNudged(stateDir, sessionId, ids),
         });
         if (additionalContext) {
-          ctx.log(
-            JSON.stringify({
+          // Claude Code reads the UserPromptSubmit hook's STDOUT for this JSON.
+          // ctx.log is stderr (kept clean for human/diagnostic logs), so the
+          // machine-read hook payload must go to stdout directly — otherwise the
+          // injected context is silently dropped.
+          process.stdout.write(
+            `${JSON.stringify({
               hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext },
-            }),
+            })}\n`,
           );
         }
       } catch {
