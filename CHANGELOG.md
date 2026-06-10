@@ -4,7 +4,7 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-06-04
+## [0.3.0-rc.0] - 2026-06-10
 
 ### Added
 - `ratel-mcp ui` subcommand — a loopback-only browser UI mirroring the CLI, protected by a per-session bearer token. It can view, add, edit, remove, and OAuth-authorize MCP servers across all three scopes; inspect backups; and run agent setup flows. Flags: `--port N`, `--no-open`.
