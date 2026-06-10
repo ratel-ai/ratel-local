@@ -28,6 +28,7 @@ export interface RunCliOptions {
   fs?: JsonFs & BackupFs;
   env?: HierarchyEnv;
   now?: () => Date;
+  cliVersion?: string;
 }
 
 export interface RunCliResult {
@@ -58,6 +59,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "help") {
     log(TOP_USAGE);
+    return {};
+  }
+
+  if (parsed.group === "version") {
+    log(options.cliVersion ?? options.serverVersion ?? "0.0.0");
     return {};
   }
 

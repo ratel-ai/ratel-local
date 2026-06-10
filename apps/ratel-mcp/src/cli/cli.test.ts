@@ -164,6 +164,12 @@ describe("runCli — help and routing", () => {
     expect(out).toMatch(/backup/);
   });
 
+  it("--version logs the injected package version", async () => {
+    const logs: string[] = [];
+    await runCli(["--version"], { cliVersion: "1.2.3", logger: (m) => logs.push(m) });
+    expect(logs).toEqual(["1.2.3"]);
+  });
+
   it("`ratel-mcp mcp` (no verb) logs the mcp group usage", async () => {
     const logs: string[] = [];
     await runCli(["mcp"], { logger: (m) => logs.push(m) });
