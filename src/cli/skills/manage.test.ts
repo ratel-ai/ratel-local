@@ -130,6 +130,41 @@ describe("deactivateSkills", () => {
     const result = await deactivateSkills(paths);
     expect(result.restored).toEqual([]);
   });
+
+  it("restores to the canonical native path, ignoring a stale/crafted originalPath (#7)", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths);
+    // Tamper the manifest: point originalPath outside ~/.claude/skills (e.g. a
+    // different machine's $HOME, or a crafted escape).
+    const evil = join(home, "evil-target");
+    await writeFile(
+      paths.manifestPath,
+      JSON.stringify({
+        version: 1,
+        managed: [{ id: "api-design", originalPath: join(evil, "api-design"), movedAt: "x" }],
+      }),
+    );
+
+    await deactivateSkills(paths);
+    // Restored to the canonical native dir, NOT the crafted path.
+    expect(await exists(join(paths.nativeDir, "api-design", "SKILL.md"))).toBe(true);
+    expect(await exists(join(evil, "api-design", "SKILL.md"))).toBe(false);
+  });
+
+  it("skips a manifest entry whose id is not a safe path segment (#7)", async () => {
+    await mkdir(paths.managedDir, { recursive: true });
+    await writeFile(
+      paths.manifestPath,
+      JSON.stringify({
+        version: 1,
+        managed: [{ id: "../escape", originalPath: "/tmp/x", movedAt: "x" }],
+      }),
+    );
+
+    const result = await deactivateSkills(paths);
+    expect(result.restored).toEqual([]);
+    expect(result.skipped[0]?.reason).toMatch(/unsafe/);
+  });
 });
 
 describe("activate/deactivate round-trip", () => {

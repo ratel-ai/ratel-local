@@ -63,6 +63,13 @@ export async function loadSkills(
       try {
         const parsed = parseSkillMd(raw, skillMd);
         const body = await appendBundledResources(parsed.body, skillDir);
+        if (byId.has(parsed.name)) {
+          // Two SKILL.md files declare the same frontmatter `name`; the catalog
+          // keys on it, so one would silently shadow the other. Warn — don't hide it.
+          log(
+            `[ratel] duplicate skill name "${parsed.name}" (${skillMd}) — overriding the earlier one`,
+          );
+        }
         byId.set(parsed.name, {
           id: parsed.name,
           name: parsed.name,

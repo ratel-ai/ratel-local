@@ -91,6 +91,23 @@ describe("suggestSkills — clear-winner gate (push path)", () => {
     );
     expect(out[0]?.skillId).toBe("frontend-react");
   });
+
+  it("a clear lexical winner is NOT overridden by the project stack (#4)", async () => {
+    // The prompt is strongly about supabase auth (clear lexical winner), but the
+    // project is React — so frontend-react is stack-matched and supabase-auth is
+    // not. The stack must bias ties, never override a clearly-stronger match.
+    const out = await suggestSkills(
+      {
+        prompt: "supabase auth sessions and rls policies",
+        cwd: "/proj",
+        dirs: ["x"],
+        requireClearWinner: true,
+        limit: 1,
+      },
+      { ...deps, detectProjectSignals: async () => ["react", "next"] },
+    );
+    expect(out[0]?.skillId).toBe("supabase-auth");
+  });
 });
 
 describe("suggestSkills — guards", () => {

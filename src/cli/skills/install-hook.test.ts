@@ -117,6 +117,13 @@ describe("installHook / uninstallHook (fs)", () => {
     expect(second.changed).toBe(false);
   });
 
+  it("fails with a clear message when settings.json is not valid JSON (#6)", async () => {
+    const fs = memFs();
+    // a hand-edited settings.json with a // comment (JSONC) — JSON.parse rejects it
+    fs.files.set(path, '{\n  // preload\n  "hooks": {}\n}');
+    await expect(installHook(path, COMMAND, deps(fs))).rejects.toThrow(/not valid JSON/);
+  });
+
   it("uninstall removes the hook; no-op when absent", async () => {
     const fs = memFs();
     await installHook(path, COMMAND, deps(fs));

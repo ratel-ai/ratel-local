@@ -103,7 +103,17 @@ async function applyHookEdit(
   transform: (s: Record<string, unknown>) => Record<string, unknown>,
   deps: HookFsDeps,
 ): Promise<{ changed: boolean }> {
-  const before = ((await readJson(deps.fs, settingsPath)) as Record<string, unknown> | null) ?? {};
+  let before: Record<string, unknown>;
+  try {
+    before = ((await readJson(deps.fs, settingsPath)) as Record<string, unknown> | null) ?? {};
+  } catch (err) {
+    // settings.json exists but isn't valid JSON (e.g. hand-edited with comments).
+    // Refuse with an actionable message rather than risk clobbering it.
+    throw new Error(
+      `${settingsPath} is not valid JSON (${(err as Error).message}). ` +
+        "Fix or remove it, then re-run — Claude Code settings must be plain JSON without comments.",
+    );
+  }
   const after = transform(before);
   if (after === before) return { changed: false };
 

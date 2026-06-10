@@ -224,7 +224,7 @@ Arrays (e.g. the tool hits returned by `search_capabilities`) only travel in `co
 
 When `invoke_tool` drives a tool that was itself registered via `registerMcpServer`, the upstream's MCP-shaped result (`{ content, structuredContent }`) is nested inside our `structuredContent` one level deeper.
 
-`invokeToolTool`'s wrapped error payload (`{ error: "..." }` for unknown ids or executor throws) flows through as an ordinary structured result rather than an MCP `isError: true` — clients can branch on the field.
+`invoke_tool`'s and `get_skill_content`'s error payloads (`{ error: "...", isError: true }` for unknown ids, bad args, or executor throws) are promoted to an MCP `isError: true` result by the server, so the host and model can tell a failed call from real content — the `error` field still carries the reason.
 
 ## Examples
 

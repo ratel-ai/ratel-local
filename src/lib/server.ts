@@ -136,8 +136,13 @@ function isObjectSchema(schema: unknown): boolean {
 function wrapResult(out: unknown) {
   const text = JSON.stringify(out);
   const isPlainObject = out !== null && typeof out === "object" && !Array.isArray(out);
+  // Gateway tools signal a failed call by returning `{ isError: true, ... }`
+  // (e.g. unknown toolId/skillId). Promote it to MCP's `isError` so the host and
+  // model can tell a failure from real content, not just read it as data.
+  const isError = isPlainObject && (out as { isError?: unknown }).isError === true;
   return {
     content: [{ type: "text" as const, text }],
+    ...(isError ? { isError: true } : {}),
     ...(isPlainObject ? { structuredContent: out as Record<string, unknown> } : {}),
   };
 }

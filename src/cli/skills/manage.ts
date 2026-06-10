@@ -116,27 +116,39 @@ export async function deactivateSkills(
   const remaining: ManagedEntry[] = [];
 
   for (const entry of manifest.managed) {
+    if (!isSafeSkillId(entry.id)) {
+      // The manifest is untrusted on read (stale cross-machine copy, corruption,
+      // tampering). Never move based on an id that isn't a single safe segment.
+      skipped.push({ id: String(entry.id), reason: "unsafe skill id in manifest" });
+      remaining.push(entry);
+      log(`[ratel] skill ${String(entry.id)}: unsafe id in manifest — leaving managed`);
+      continue;
+    }
     const from = join(paths.managedDir, entry.id);
+    // Restore to the canonical native path derived from the id — do NOT trust the
+    // manifest's `originalPath`, which can be stale (synced from another machine
+    // with a different $HOME) or crafted to escape ~/.claude/skills.
+    const dest = join(paths.nativeDir, entry.id);
     if (!(await exists(from))) {
       skipped.push({ id: entry.id, reason: "no longer in managed folder" });
       log(`[ratel] skill ${entry.id}: gone from managed folder — dropping from manifest`);
       continue;
     }
-    if (await exists(entry.originalPath)) {
+    if (await exists(dest)) {
       skipped.push({ id: entry.id, reason: "destination already occupied" });
       remaining.push(entry);
-      log(`[ratel] skill ${entry.id}: ${entry.originalPath} already exists — leaving managed`);
+      log(`[ratel] skill ${entry.id}: ${dest} already exists — leaving managed`);
       continue;
     }
     if (options.dryRun) {
-      log(`[ratel] would restore skill ${entry.id} → ${entry.originalPath}`);
+      log(`[ratel] would restore skill ${entry.id} → ${dest}`);
       restored.push(entry);
       continue;
     }
-    await mkdir(dirname(entry.originalPath), { recursive: true });
-    await moveDir(from, entry.originalPath);
+    await mkdir(dirname(dest), { recursive: true });
+    await moveDir(from, dest);
     restored.push(entry);
-    log(`[ratel] restored skill ${entry.id} → ${entry.originalPath}`);
+    log(`[ratel] restored skill ${entry.id} → ${dest}`);
   }
 
   if (!options.dryRun) {
@@ -191,6 +203,18 @@ async function readManifest(path: string): Promise<SkillManifest> {
 async function writeManifest(path: string, manifest: SkillManifest): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/** A manifest skill id must be a single safe path segment (no separators, no `..`). */
+function isSafeSkillId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    !id.includes("/") &&
+    !id.includes("\\") &&
+    id !== "." &&
+    id !== ".."
+  );
 }
 
 async function exists(path: string): Promise<boolean> {
