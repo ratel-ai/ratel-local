@@ -49,6 +49,23 @@ describe("parseSkillMd", () => {
   it("throws when frontmatter is absent", () => {
     expect(() => parseSkillMd(`# no frontmatter`, "x")).toThrow(/frontmatter/);
   });
+
+  it("parses both inline [a, b] and block-list YAML for triggers/stacks/tags", () => {
+    const inline = parseSkillMd(
+      `---\nname: n\ndescription: d\ntriggers: [dashboard, login form]\nstacks: [react, next]\n---\nbody`,
+      "x",
+    );
+    expect(inline.triggers).toEqual(["dashboard", "login form"]);
+    expect(inline.stacks).toEqual(["react", "next"]);
+
+    // The common YAML block style must NOT silently become [] (it used to).
+    const block = parseSkillMd(
+      `---\nname: n\ndescription: d\ntriggers:\n  - dashboard\n  - login form\nstacks:\n  - react\n---\nbody`,
+      "x",
+    );
+    expect(block.triggers).toEqual(["dashboard", "login form"]);
+    expect(block.stacks).toEqual(["react"]);
+  });
 });
 
 describe("loadSkills", () => {

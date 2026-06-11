@@ -1,6 +1,13 @@
-import { access, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { access, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
+
+/** Skip pathological multi-MB manifests (vendored monorepos, generated files). */
+const MAX_MANIFEST_BYTES = 1_000_000;
+/** Cap how many terms a single project can push into the BM25 query. */
+const MAX_SIGNAL_TERMS = 200;
 
 /**
  * Infer query terms describing a project's stack from files in `cwd`, so skill
@@ -30,7 +37,92 @@ export async function detectProjectSignals(cwd: string): Promise<string[]> {
     }
   }
 
-  return [...terms];
+  return [...terms].slice(0, MAX_SIGNAL_TERMS);
+}
+
+// ── Cached detection (used by the per-prompt preload hook) ───────────────────
+
+interface SignalCache {
+  [cwd: string]: { fingerprint: string; signals: string[] };
+}
+
+export interface DetectCacheOptions {
+  /** On-disk cache path. Default: `~/.ratel/skill-signal-cache.json`. */
+  cacheFile?: string;
+}
+
+export function defaultSignalCacheFile(home: string = homedir()): string {
+  return join(home, ".ratel", "skill-signal-cache.json");
+}
+
+/** The files {@link detectProjectSignals} reads — used to fingerprint a project. */
+function signalFiles(): string[] {
+  return [
+    ...new Set([
+      "package.json",
+      "requirements.txt",
+      "pyproject.toml",
+      "Cargo.toml",
+      "go.mod",
+      "Gemfile",
+      "composer.json",
+      ...FILE_RULES.map((r) => r.file),
+    ]),
+  ];
+}
+
+/** Cheap fingerprint of a project's manifests (size + mtime), without reading them. */
+async function fingerprint(cwd: string): Promise<string> {
+  const parts: string[] = [];
+  for (const f of signalFiles()) {
+    try {
+      const s = await stat(join(cwd, f));
+      parts.push(`${f}:${Math.round(s.mtimeMs)}:${s.size}`);
+    } catch {
+      // absent → contributes nothing
+    }
+  }
+  return parts.join("|");
+}
+
+/**
+ * Cached {@link detectProjectSignals}: re-parses a project's manifests only when
+ * one of them actually changes (a cheap `stat` fingerprint decides), so the
+ * preload hook does NOT read and tokenize every manifest on *every* prompt — it
+ * just stats them and reuses the last result. Fail-soft: any cache read/write
+ * error falls back to a fresh detect.
+ */
+export async function detectProjectSignalsCached(
+  cwd: string,
+  opts: DetectCacheOptions = {},
+): Promise<string[]> {
+  const cacheFile = opts.cacheFile ?? defaultSignalCacheFile();
+  const fp = await fingerprint(cwd);
+
+  let cache: SignalCache = {};
+  try {
+    const parsed = JSON.parse(await readFile(cacheFile, "utf8"));
+    if (parsed && typeof parsed === "object") cache = parsed as SignalCache;
+  } catch {
+    // missing or corrupt cache → recompute
+  }
+
+  const hit = cache[cwd];
+  if (hit && hit.fingerprint === fp && Array.isArray(hit.signals)) {
+    return hit.signals;
+  }
+
+  const signals = await detectProjectSignals(cwd);
+  cache[cwd] = { fingerprint: fp, signals };
+  try {
+    await mkdir(dirname(cacheFile), { recursive: true });
+    const tmp = `${cacheFile}.ratel-tmp-${randomUUID()}`;
+    await writeFile(tmp, `${JSON.stringify(cache)}\n`);
+    await rename(tmp, cacheFile);
+  } catch {
+    // best-effort: the signals are returned regardless of whether the cache persisted
+  }
+  return signals;
 }
 
 // ── Dependency collection (per ecosystem) ───────────────────────────────────
@@ -231,6 +323,7 @@ function stripModuleHost(path: string): string {
 
 async function readText(path: string): Promise<string | null> {
   try {
+    if ((await stat(path)).size > MAX_MANIFEST_BYTES) return null; // skip pathological files
     return await readFile(path, "utf8");
   } catch {
     return null;

@@ -109,11 +109,11 @@ export function parseSkillMd(raw: string, source: string): ParsedSkill {
   if (!fm) {
     throw new SkillLoadError(`${source}: missing YAML frontmatter`);
   }
-  const name = fm.data.name;
+  const name = typeof fm.data.name === "string" ? fm.data.name : undefined;
   if (!name) {
     throw new SkillLoadError(`${source}: frontmatter 'name' is required`);
   }
-  const description = fm.data.description;
+  const description = typeof fm.data.description === "string" ? fm.data.description : undefined;
   if (!description) {
     throw new SkillLoadError(`${source}: frontmatter 'description' is required`);
   }
@@ -128,7 +128,7 @@ export function parseSkillMd(raw: string, source: string): ParsedSkill {
 }
 
 interface Frontmatter {
-  data: Record<string, string>;
+  data: Record<string, string | string[]>;
   body: string;
 }
 
@@ -147,19 +147,39 @@ function extractFrontmatter(raw: string): Frontmatter | undefined {
   }
   if (end === -1) return undefined;
 
-  const data: Record<string, string> = {};
-  for (const line of lines.slice(start, end)) {
+  const data: Record<string, string | string[]> = {};
+  const fmLines = lines.slice(start, end);
+  for (let j = 0; j < fmLines.length; j++) {
+    const line = fmLines[j];
     if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
     const sep = line.indexOf(":");
     if (sep === -1) continue;
     const key = line.slice(0, sep).trim();
-    if (key) data[key] = stripQuotes(line.slice(sep + 1).trim());
+    if (!key) continue;
+    const value = line.slice(sep + 1).trim();
+    if (value !== "") {
+      data[key] = stripQuotes(value);
+      continue;
+    }
+    // An empty inline value may be followed by a YAML *block* list on indented
+    // `- item` lines. Collect them so `triggers:`/`stacks:`/`tags:` written in the
+    // common block style aren't silently dropped (they'd otherwise parse to []).
+    const items: string[] = [];
+    while (j + 1 < fmLines.length && /^\s*-\s+/.test(fmLines[j + 1])) {
+      items.push(stripQuotes(fmLines[j + 1].replace(/^\s*-\s+/, "").trim()));
+      j++;
+    }
+    data[key] = items;
   }
   return { data, body: lines.slice(end + 1).join("\n") };
 }
 
-function parseList(value: string | undefined): string[] {
-  if (!value) return [];
+function parseList(value: string | string[] | undefined): string[] {
+  if (value === undefined) return [];
+  if (Array.isArray(value)) {
+    return value.map((t) => stripQuotes(t.trim())).filter((t) => t.length > 0);
+  }
+  if (value === "") return [];
   const inner = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
   return inner
     .split(",")

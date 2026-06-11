@@ -2,7 +2,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { activateSkills, deactivateSkills, listManaged, type SkillManagePaths } from "./manage.js";
+import {
+  activateSkills,
+  deactivateSkills,
+  listManaged,
+  type SkillManagePaths,
+  SkillManifestError,
+} from "./manage.js";
 
 let home: string;
 let paths: SkillManagePaths;
@@ -178,5 +184,49 @@ describe("activate/deactivate round-trip", () => {
     expect(await exists(join(paths.nativeDir, "a", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.nativeDir, "b", "SKILL.md"))).toBe(true);
     expect(await listManaged(paths)).toEqual([]);
+  });
+});
+
+describe("manifest integrity", () => {
+  async function writeManifestRaw(text: string): Promise<void> {
+    await mkdir(join(home, ".ratel"), { recursive: true });
+    await writeFile(paths.manifestPath, text);
+  }
+
+  it("persists the manifest per move (a moved skill is recorded immediately)", async () => {
+    await writeNativeSkill("a");
+    await activateSkills(paths);
+    // manifest on disk is valid JSON and lists the move (atomic write left no temp)
+    const onDisk = JSON.parse(await readFile(paths.manifestPath, "utf8"));
+    expect(onDisk.managed.map((m: { id: string }) => m.id)).toEqual(["a"]);
+  });
+
+  it("refuses to proceed on a corrupt manifest instead of silently emptying it", async () => {
+    await writeManifestRaw("{ this is not json");
+    await expect(listManaged(paths)).rejects.toBeInstanceOf(SkillManifestError);
+    await expect(activateSkills(paths)).rejects.toBeInstanceOf(SkillManifestError);
+    await expect(deactivateSkills(paths)).rejects.toBeInstanceOf(SkillManifestError);
+  });
+
+  it("preserves a malformed entry and still restores the valid siblings", async () => {
+    // one valid managed skill (present in managedDir) + one malformed entry
+    await mkdir(join(paths.managedDir, "good"), { recursive: true });
+    await writeFile(join(paths.managedDir, "good", "SKILL.md"), "# good");
+    await writeManifestRaw(
+      JSON.stringify({
+        version: 1,
+        managed: [
+          { id: "good", originalPath: join(paths.nativeDir, "good"), movedAt: "t" },
+          { nonsense: true },
+        ],
+      }),
+    );
+
+    const result = await deactivateSkills(paths);
+    expect(result.restored.map((r) => r.id)).toEqual(["good"]);
+    expect(await exists(join(paths.nativeDir, "good", "SKILL.md"))).toBe(true);
+    // the malformed entry is kept (not lost), the valid one cleared
+    const remaining = JSON.parse(await readFile(paths.manifestPath, "utf8")).managed;
+    expect(remaining).toEqual([{ nonsense: true }]);
   });
 });

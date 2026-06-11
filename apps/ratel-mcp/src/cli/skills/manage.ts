@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { access, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -66,34 +67,41 @@ export async function activateSkills(
   const log = options.logger ?? (() => {});
   const now = options.now ?? (() => new Date());
   const manifest = await readManifest(paths.manifestPath);
-  const already = new Set(manifest.managed.map((m) => m.id));
+  const already = new Set(manifest.managed.filter(isValidEntry).map((m) => m.id));
 
   const moved: ManagedEntry[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
 
-  for (const id of await skillDirNames(paths.nativeDir)) {
-    const from = join(paths.nativeDir, id);
-    const to = join(paths.managedDir, id);
-    if (already.has(id) || (await exists(to))) {
-      skipped.push({ id, reason: "already present in managed folder" });
-      log(`[ratel] skill ${id}: already managed — skipping`);
-      continue;
+  // Persist the manifest after *each* move (atomically), so a crash or a failed
+  // move mid-loop leaves a manifest that exactly reflects what's on disk — every
+  // already-moved skill stays restorable by `deactivate`. The finally is a backstop
+  // in case the throw was the manifest write itself.
+  try {
+    for (const id of await skillDirNames(paths.nativeDir)) {
+      const from = join(paths.nativeDir, id);
+      const to = join(paths.managedDir, id);
+      if (already.has(id) || (await exists(to))) {
+        skipped.push({ id, reason: "already present in managed folder" });
+        log(`[ratel] skill ${id}: already managed — skipping`);
+        continue;
+      }
+      if (options.dryRun) {
+        log(`[ratel] would move skill ${id} → ${paths.managedDir}`);
+        moved.push({ id, originalPath: from, movedAt: now().toISOString() });
+        continue;
+      }
+      await mkdir(paths.managedDir, { recursive: true });
+      await moveDir(from, to);
+      const entry: ManagedEntry = { id, originalPath: from, movedAt: now().toISOString() };
+      manifest.managed.push(entry);
+      moved.push(entry);
+      await writeManifest(paths.manifestPath, manifest);
+      log(`[ratel] moved skill ${id} → ${paths.managedDir}`);
     }
-    if (options.dryRun) {
-      log(`[ratel] would move skill ${id} → ${paths.managedDir}`);
-      moved.push({ id, originalPath: from, movedAt: now().toISOString() });
-      continue;
+  } finally {
+    if (!options.dryRun && moved.length > 0) {
+      await writeManifest(paths.manifestPath, manifest).catch(() => {});
     }
-    await mkdir(paths.managedDir, { recursive: true });
-    await moveDir(from, to);
-    const entry: ManagedEntry = { id, originalPath: from, movedAt: now().toISOString() };
-    manifest.managed.push(entry);
-    moved.push(entry);
-    log(`[ratel] moved skill ${id} → ${paths.managedDir}`);
-  }
-
-  if (!options.dryRun && moved.length > 0) {
-    await writeManifest(paths.manifestPath, manifest);
   }
   return { moved, skipped };
 }
@@ -116,6 +124,17 @@ export async function deactivateSkills(
   const remaining: ManagedEntry[] = [];
 
   for (const entry of manifest.managed) {
+    if (!isValidEntry(entry)) {
+      // A malformed entry (hand-edited / partially-written manifest). Preserve it
+      // untouched and move on, rather than crashing the whole restore batch.
+      skipped.push({
+        id: String((entry as { id?: unknown }).id),
+        reason: "malformed manifest entry",
+      });
+      remaining.push(entry);
+      log("[ratel] malformed manifest entry — leaving managed, skipping restore");
+      continue;
+    }
     if (!isSafeSkillId(entry.id)) {
       // The manifest is untrusted on read (stale cross-machine copy, corruption,
       // tampering). Never move based on an id that isn't a single safe segment.
@@ -157,9 +176,9 @@ export async function deactivateSkills(
   return { restored, skipped };
 }
 
-/** Read the manifest of currently-managed skills (empty when none). */
+/** Read the well-formed managed-skill entries (empty when none). */
 export async function listManaged(paths: SkillManagePaths): Promise<ManagedEntry[]> {
-  return (await readManifest(paths.manifestPath)).managed;
+  return (await readManifest(paths.manifestPath)).managed.filter(isValidEntry);
 }
 
 async function skillDirNames(dir: string): Promise<string[]> {
@@ -179,30 +198,86 @@ async function skillDirNames(dir: string): Promise<string[]> {
   return names;
 }
 
-/** Move a directory, falling back to copy+remove across filesystems (EXDEV). */
+/** Move a directory, falling back to a copy across filesystems (EXDEV). */
 async function moveDir(from: string, to: string): Promise<void> {
   try {
     await rename(from, to);
+    return;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
-    await cp(from, to, { recursive: true });
-    await rm(from, { recursive: true, force: true });
   }
+  // Cross-device (EXDEV): copy to a temp sibling, then atomically rename it into
+  // place, then remove the source. A crash or partial copy never leaves a
+  // half-written skill at `to` — the rename only ever exposes a fully-copied dir.
+  const tmp = `${to}.ratel-tmp-${randomUUID()}`;
+  try {
+    await cp(from, tmp, { recursive: true });
+    await rename(tmp, to);
+  } catch (err) {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
+  await rm(from, { recursive: true, force: true });
 }
 
 async function readManifest(path: string): Promise<SkillManifest> {
+  let text: string;
   try {
-    const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<SkillManifest>;
-    return { version: 1, managed: Array.isArray(parsed.managed) ? parsed.managed : [] };
+    text = await readFile(path, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, managed: [] };
     throw err;
   }
+  let parsed: Partial<SkillManifest>;
+  try {
+    parsed = JSON.parse(text) as Partial<SkillManifest>;
+  } catch (err) {
+    // A corrupt manifest (truncated/partial write, hand-edit). Refuse to proceed:
+    // re-throwing the raw SyntaxError is opaque, and defaulting to an empty list
+    // would silently abandon every managed skill. Surface a clear, actionable error.
+    throw new SkillManifestError(
+      `skill manifest at ${path} is not valid JSON (${(err as Error).message}). ` +
+        "Fix or remove it before running skill commands — refusing to proceed so managed skills aren't lost.",
+    );
+  }
+  if (!Array.isArray(parsed.managed)) {
+    throw new SkillManifestError(
+      `skill manifest at ${path} is missing its \`managed\` array. ` +
+        "Fix or remove it before running skill commands — refusing to proceed so managed skills aren't lost.",
+    );
+  }
+  return { version: 1, managed: parsed.managed };
 }
 
+/** Write the manifest atomically (temp file + rename) so a crash mid-write can't
+ *  leave a truncated JSON file behind. */
 async function writeManifest(path: string, manifest: SkillManifest): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  const tmp = `${path}.ratel-tmp-${randomUUID()}`;
+  await writeFile(tmp, `${JSON.stringify(manifest, null, 2)}\n`);
+  try {
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/** Thrown when the on-disk manifest is corrupt; surfaced as a clean CLI error. */
+export class SkillManifestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SkillManifestError";
+  }
+}
+
+/** A well-formed manifest entry: `id`/`originalPath`/`movedAt` all present strings. */
+function isValidEntry(entry: unknown): entry is ManagedEntry {
+  if (typeof entry !== "object" || entry === null) return false;
+  const e = entry as Record<string, unknown>;
+  return (
+    typeof e.id === "string" && typeof e.originalPath === "string" && typeof e.movedAt === "string"
+  );
 }
 
 /** A manifest skill id must be a single safe path segment (no separators, no `..`). */

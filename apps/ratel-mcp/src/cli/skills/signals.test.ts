@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectProjectSignals } from "./signals.js";
+import { detectProjectSignals, detectProjectSignalsCached } from "./signals.js";
 
 let dir: string;
 
@@ -114,5 +114,34 @@ describe("detectProjectSignals — Rust / Go / Ruby / PHP", () => {
     );
     const terms = await detectProjectSignals(dir);
     expect(terms).toEqual(expect.arrayContaining(["php", "laravel", "framework", "web"]));
+  });
+
+  it("skips a pathologically large manifest instead of reading it", async () => {
+    const huge = `{"dependencies":{"react":"1"},"_pad":"${"x".repeat(1_100_000)}"}`;
+    await writeFile(join(dir, "package.json"), huge);
+    // over the 1 MB cap → not read → no terms derived from it
+    expect(await detectProjectSignals(dir)).toEqual([]);
+  });
+});
+
+describe("detectProjectSignalsCached", () => {
+  it("caches by manifest fingerprint and invalidates when a manifest changes", async () => {
+    const cacheFile = join(dir, "cache.json");
+    await writeFile(join(dir, "package.json"), JSON.stringify({ dependencies: { react: "1" } }));
+
+    const first = await detectProjectSignalsCached(dir, { cacheFile });
+    expect(first).toEqual(expect.arrayContaining(["react", "frontend"]));
+
+    // Tamper the cached signals but keep the fingerprint: a cache HIT returns them.
+    const cache = JSON.parse(await readFile(cacheFile, "utf8"));
+    cache[dir].signals = ["SENTINEL"];
+    await writeFile(cacheFile, JSON.stringify(cache));
+    expect(await detectProjectSignalsCached(dir, { cacheFile })).toEqual(["SENTINEL"]);
+
+    // Changing the manifest changes the fingerprint → recompute, not the stale sentinel.
+    await writeFile(join(dir, "package.json"), JSON.stringify({ dependencies: { vue: "1" } }));
+    const after = await detectProjectSignalsCached(dir, { cacheFile });
+    expect(after).not.toContain("SENTINEL");
+    expect(after).toEqual(expect.arrayContaining(["vue"]));
   });
 });

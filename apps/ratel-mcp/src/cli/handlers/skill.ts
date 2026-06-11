@@ -20,6 +20,7 @@ import {
   recordNudged,
   runPreloadHook,
 } from "../skills/preload.js";
+import { defaultSignalCacheFile, detectProjectSignalsCached } from "../skills/signals.js";
 import { resolveSkillDirs, suggestSkills } from "../skills/suggest.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -146,9 +147,18 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
         const stateDir = preloadStateDir(ctx.env.homeDir);
         const limit = numFlag(ctx.argv.flags.limit) ?? 1;
         const minScore = numFlag(ctx.argv.flags["min-score"]) ?? 0;
+        // Cache project-signal detection across prompts: it only re-reads the
+        // project's manifests when one changes, instead of on every keystroke-prompt.
+        const signalCacheFile = defaultSignalCacheFile(ctx.env.homeDir);
         const additionalContext = await runPreloadHook(input, {
           suggest: (prompt, cwd) =>
-            suggestSkills({ prompt, cwd, dirs, limit, minScore, requireClearWinner: true }),
+            suggestSkills(
+              { prompt, cwd, dirs, limit, minScore, requireClearWinner: true },
+              {
+                detectProjectSignals: (c) =>
+                  detectProjectSignalsCached(c, { cacheFile: signalCacheFile }),
+              },
+            ),
           loadNudged: (sessionId) => loadNudged(stateDir, sessionId),
           recordNudged: (sessionId, ids) => recordNudged(stateDir, sessionId, ids),
         });
@@ -211,7 +221,7 @@ function strFlag(v: FlagValue | undefined): string | undefined {
 
 function numFlag(v: FlagValue | undefined): number | undefined {
   const s = strFlag(v);
-  if (s === undefined) return undefined;
+  if (s === undefined || s.trim() === "") return undefined; // empty/blank is not 0
   const n = Number(s);
   return Number.isFinite(n) ? n : undefined;
 }
