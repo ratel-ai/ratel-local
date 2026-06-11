@@ -36,10 +36,10 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             tag_version="${GITHUB_REF_NAME#v}"
           else
-            tag_version=$(node -p "require('./package.json').version")
+            tag_version=$(node -p "require('./apps/ratel-mcp/package.json').version")
           fi
 
-          pkg_version=$(node -p "require('./package.json').version")
+          pkg_version=$(node -p "require('./apps/ratel-mcp/package.json').version")
 
           echo "tag_version=$tag_version"
           echo "package=$pkg_version"
@@ -102,7 +102,7 @@ jobs:
           DIST_TAG: ${{ needs.tag-version-check.outputs.dist_tag }}
         run: |
           set -e
-          pnpm pack --pack-destination "${RUNNER_TEMP}/pack"
+          pnpm --filter @ratel-ai/mcp-server pack --pack-destination "${RUNNER_TEMP}/pack"
           npm publish "${RUNNER_TEMP}/pack"/*.tgz --provenance --access public --tag "$DIST_TAG" $DRY_RUN
 
   github-release:

@@ -1,0 +1,357 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter-tight";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "./components/dotmatrix-loader.css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  color-scheme: light;
+  font-family:
+    "Inter Tight Variable", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  line-height: 1.5;
+  letter-spacing: 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --brand-green: #023a2e;
+  --brand-cream: #eee3ce;
+  --brand-orange: #f6572c;
+  --brand-azure: #7ba0a0;
+  --brand-green-foreground: var(--brand-cream);
+  --brand-cream-foreground: var(--brand-green);
+  --brand-orange-foreground: #fff;
+  --brand-azure-foreground: #10231f;
+  --brand-ink: #10231f;
+  --background: #ffffff;
+  --foreground: var(--brand-ink);
+  --card: #ffffff;
+  --card-foreground: var(--brand-ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--brand-ink);
+  --primary: var(--brand-orange);
+  --primary-foreground: var(--brand-orange-foreground);
+  --secondary: var(--brand-green);
+  --secondary-foreground: var(--brand-green-foreground);
+  --muted: color-mix(in srgb, var(--brand-cream) 52%, white);
+  --muted-foreground: color-mix(in srgb, var(--brand-ink) 76%, var(--brand-azure));
+  --accent: color-mix(in srgb, var(--brand-orange) 14%, white);
+  --accent-foreground: var(--brand-ink);
+  --destructive: #c83a22;
+  --destructive-foreground: white;
+  --border: color-mix(in srgb, var(--brand-azure) 24%, var(--brand-cream));
+  --input: color-mix(in srgb, var(--brand-azure) 28%, white);
+  --ring: var(--brand-orange);
+  --chart-1: var(--brand-orange);
+  --chart-2: var(--brand-green);
+  --chart-3: var(--brand-azure);
+  --chart-4: color-mix(in srgb, var(--brand-cream) 76%, var(--brand-orange));
+  --chart-5: color-mix(in srgb, var(--brand-green) 76%, var(--brand-azure));
+  --radius: 0.5rem;
+  --sidebar: color-mix(in srgb, var(--brand-cream) 34%, white);
+  --sidebar-foreground: var(--brand-green);
+  --sidebar-primary: var(--brand-orange);
+  --sidebar-primary-foreground: var(--brand-orange-foreground);
+  --sidebar-accent: color-mix(in srgb, var(--brand-azure) 22%, var(--brand-cream));
+  --sidebar-accent-foreground: var(--brand-ink);
+  --sidebar-border: color-mix(in srgb, var(--brand-azure) 24%, var(--brand-cream));
+  --sidebar-ring: var(--brand-orange);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: var(--brand-orange);
+  color: var(--brand-orange-foreground);
+}
+
+@property --scroll-mask-t-from {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 100%;
+}
+
+@property --scroll-mask-b-from {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 100%;
+}
+
+@property --scroll-mask-l-from {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 100%;
+}
+
+@property --scroll-mask-r-from {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 100%;
+}
+
+@keyframes scroll-mask-y-scroll {
+  0% {
+    --scroll-mask-t-from: 100%;
+  }
+  10%,
+  100% {
+    --scroll-mask-t-from: var(--scroll-mask-fade-from-t, 100%);
+  }
+  0%,
+  90% {
+    --scroll-mask-b-from: var(--scroll-mask-fade-from-b, 100%);
+  }
+  100% {
+    --scroll-mask-b-from: 100%;
+  }
+}
+
+@keyframes scroll-mask-x-scroll {
+  0% {
+    --scroll-mask-l-from: 100%;
+  }
+  10%,
+  100% {
+    --scroll-mask-l-from: var(--scroll-mask-fade-from-l, 100%);
+  }
+  0%,
+  90% {
+    --scroll-mask-r-from: var(--scroll-mask-fade-from-r, 100%);
+  }
+  100% {
+    --scroll-mask-r-from: 100%;
+  }
+}
+
+@supports (animation-timeline: scroll()) {
+  :where([class^="scroll-mask-"], [class*=" scroll-mask-"]) {
+    --scroll-mask-t: linear-gradient(
+      to top,
+      black,
+      black var(--scroll-mask-t-from),
+      transparent
+    );
+    --scroll-mask-b: linear-gradient(
+      to bottom,
+      black,
+      black var(--scroll-mask-b-from),
+      transparent
+    );
+    --scroll-mask-l: linear-gradient(
+      to left,
+      black,
+      black var(--scroll-mask-l-from),
+      transparent
+    );
+    --scroll-mask-r: linear-gradient(
+      to right,
+      black,
+      black var(--scroll-mask-r-from),
+      transparent
+    );
+    mask-image:
+      var(--scroll-mask-t), var(--scroll-mask-b), var(--scroll-mask-l), var(--scroll-mask-r);
+    mask-composite: intersect;
+    -webkit-mask-composite: source-in;
+    animation:
+      scroll-mask-y-scroll linear,
+      scroll-mask-x-scroll linear;
+    animation-timeline: scroll(self block), scroll(self inline);
+  }
+}
+
+@utility scroll-mask-t {
+  --scroll-mask-fade-from-t: 80%;
+}
+
+@utility scroll-mask-t-from-* {
+  --scroll-mask-fade-from-t: --spacing(--value(integer));
+  --scroll-mask-fade-from-t: --value(percentage);
+  --scroll-mask-fade-from-t: --value([length], [percentage]);
+}
+
+@utility scroll-mask-b {
+  --scroll-mask-fade-from-b: 80%;
+}
+
+@utility scroll-mask-b-from-* {
+  --scroll-mask-fade-from-b: --spacing(--value(integer));
+  --scroll-mask-fade-from-b: --value(percentage);
+  --scroll-mask-fade-from-b: --value([length], [percentage]);
+}
+
+@utility scroll-mask-y {
+  --scroll-mask-fade-from-t: 80%;
+  --scroll-mask-fade-from-b: 80%;
+}
+
+@utility scroll-mask-y-from-* {
+  --scroll-mask-fade-from-t: --spacing(--value(integer));
+  --scroll-mask-fade-from-t: --value(percentage);
+  --scroll-mask-fade-from-t: --value([length], [percentage]);
+  --scroll-mask-fade-from-b: --spacing(--value(integer));
+  --scroll-mask-fade-from-b: --value(percentage);
+  --scroll-mask-fade-from-b: --value([length], [percentage]);
+}
+
+@utility scroll-mask-l {
+  --scroll-mask-fade-from-l: 80%;
+}
+
+@utility scroll-mask-l-from-* {
+  --scroll-mask-fade-from-l: --spacing(--value(integer));
+  --scroll-mask-fade-from-l: --value(percentage);
+  --scroll-mask-fade-from-l: --value([length], [percentage]);
+}
+
+@utility scroll-mask-r {
+  --scroll-mask-fade-from-r: 80%;
+}
+
+@utility scroll-mask-r-from-* {
+  --scroll-mask-fade-from-r: --spacing(--value(integer));
+  --scroll-mask-fade-from-r: --value(percentage);
+  --scroll-mask-fade-from-r: --value([length], [percentage]);
+}
+
+@utility scroll-mask-x {
+  --scroll-mask-fade-from-l: 80%;
+  --scroll-mask-fade-from-r: 80%;
+}
+
+@utility scroll-mask-x-from-* {
+  --scroll-mask-fade-from-l: --spacing(--value(integer));
+  --scroll-mask-fade-from-l: --value(percentage);
+  --scroll-mask-fade-from-l: --value([length], [percentage]);
+  --scroll-mask-fade-from-r: --spacing(--value(integer));
+  --scroll-mask-fade-from-r: --value(percentage);
+  --scroll-mask-fade-from-r: --value([length], [percentage]);
+}
+
+@theme inline {
+  --font-heading: "Inter Tight Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter Tight Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-brand-green: var(--brand-green);
+  --color-brand-green-foreground: var(--brand-green-foreground);
+  --color-brand-cream: var(--brand-cream);
+  --color-brand-cream-foreground: var(--brand-cream-foreground);
+  --color-brand-orange: var(--brand-orange);
+  --color-brand-orange-foreground: var(--brand-orange-foreground);
+  --color-brand-azure: var(--brand-azure);
+  --color-brand-azure-foreground: var(--brand-azure-foreground);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.25);
+  --radius-3xl: calc(var(--radius) * 1.5);
+  --radius-4xl: calc(var(--radius) * 1.75);
+}
+
+.dark {
+  color-scheme: dark;
+  --background: var(--brand-green);
+  --foreground: var(--brand-cream);
+  --card: color-mix(in srgb, var(--brand-green) 86%, black);
+  --card-foreground: var(--brand-cream);
+  --popover: color-mix(in srgb, var(--brand-green) 86%, black);
+  --popover-foreground: var(--brand-cream);
+  --primary: var(--brand-orange);
+  --primary-foreground: var(--brand-orange-foreground);
+  --secondary: var(--brand-azure);
+  --secondary-foreground: var(--brand-azure-foreground);
+  --muted: color-mix(in srgb, var(--brand-green) 72%, var(--brand-azure));
+  --muted-foreground: color-mix(in srgb, var(--brand-cream) 78%, var(--brand-azure));
+  --accent: color-mix(in srgb, var(--brand-orange) 22%, var(--brand-green));
+  --accent-foreground: var(--brand-cream);
+  --destructive: #ff7657;
+  --destructive-foreground: #1b1b1b;
+  --border: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
+  --input: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
+  --ring: var(--brand-orange);
+  --chart-1: var(--brand-orange);
+  --chart-2: var(--brand-azure);
+  --chart-3: var(--brand-cream);
+  --chart-4: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
+  --chart-5: color-mix(in srgb, var(--brand-green) 86%, black);
+  --sidebar: var(--brand-green);
+  --sidebar-foreground: var(--brand-cream);
+  --sidebar-primary: var(--brand-orange);
+  --sidebar-primary-foreground: var(--brand-orange-foreground);
+  --sidebar-accent: color-mix(in srgb, var(--brand-green) 82%, var(--brand-azure));
+  --sidebar-accent-foreground: var(--brand-cream);
+  --sidebar-border: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
+  --sidebar-ring: var(--brand-orange);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html {
+    @apply font-sans;
+  }
+}

@@ -53,10 +53,15 @@ ratel-mcp mcp add --scope user stripe https://mcp.stripe.com --transport http
 # List what's configured
 ratel-mcp mcp list
 
-# Import your existing Claude Code MCP setup into ratel-mcp's scopes, then point Claude at ratel-mcp
+# Import your existing agent MCP setup into ratel-mcp's scopes
 ratel-mcp mcp import
+ratel-mcp mcp import --agent codex
 
-# Start the gateway over stdio (this is what Claude Code spawns after `import`)
+# Point an agent at the Ratel gateway without removing native MCP entries
+ratel-mcp mcp link
+ratel-mcp mcp link --agent claude-code
+
+# Start the gateway over stdio (this is what linked agents spawn)
 ratel-mcp serve --config ~/.ratel/config.json
 ```
 
@@ -65,7 +70,7 @@ Run `ratel-mcp <group>` for the verbs in a group:
 | Group | Verbs |
 |---|---|
 | `mcp` | `add`, `remove`, `list`, `get`, `edit`, `import`, `link`, `auth` |
-| `backup` | `list`, `undo` |
+| `backup` | `list` |
 | (top-level) | `serve`, `ui` |
 
 ### `ratel-mcp mcp add` — Claude-compatible
@@ -98,7 +103,7 @@ By default, `mcp add` connects to the upstream and stores its server-level `inst
 | project | `<root>/.ratel/config.json` | Committed alongside the repo. |
 | local | `<root>/.ratel/config.local.json` | Per-user-per-project; add to your project's `.gitignore`. |
 
-When you run `ratel-mcp serve --config a.json --config b.json --config c.json`, the configs are merged in order — last wins on `mcpServers` key collisions. The `import` wizard wires the right `--config` chain into Claude Code at each scope.
+When you run `ratel-mcp serve --config a.json --config b.json --config c.json`, the configs are merged in order — last wins on `mcpServers` key collisions. The `link` command wires the right `--config` chain into Claude Code at each scope. The `import` wizard migrates selected native MCP entries into Ratel and can clean those imported entries out of the agent config as its second stage.
 
 ### OAuth flow
 
@@ -123,9 +128,9 @@ When the gateway boots, every HTTP/SSE upstream with stored tokens runs through 
 
 For summarizing the resulting JSONL stream, see [`@ratel-ai/cli`'s `ratel inspect`](https://github.com/ratel-ai/ratel/tree/main/src/integrations/cli) — it shares the on-disk format.
 
-### Backups & undo
+### Backups
 
-Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available; `ratel-mcp backup undo` restores the most recent set.
+Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available.
 
 ### Browser UI
 
@@ -135,7 +140,7 @@ ratel-mcp ui --port 5731  # bind a specific port
 ratel-mcp ui --no-open    # print the URL without launching a browser
 ```
 
-The UI mirrors the CLI verbs across all three scopes: view/add/edit/remove servers, drive OAuth, import/link from Claude Code, and undo the latest backup. The server binds to `127.0.0.1` only and gates every request on a single-use session token printed in the launch URL. Stop it with `Ctrl-C`.
+The UI mirrors the CLI verbs across all three scopes: view/add/edit/remove servers, drive OAuth, import/link from Claude Code, and inspect backups. The server binds to `127.0.0.1` only and gates every request on a single-use session token printed in the launch URL. Stop it with `Ctrl-C`.
 
 ## Library quickstart
 

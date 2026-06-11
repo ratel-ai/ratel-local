@@ -7,6 +7,9 @@ tmp/
 # Build output
 dist/
 *.tsbuildinfo
+apps/ratel-mcp/README.md
+apps/ratel-mcp/LICENSE.md
+apps/ratel-mcp/CHANGELOG.md
 
 # Test output
 coverage/
