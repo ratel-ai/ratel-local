@@ -1,12 +1,18 @@
+import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   buildGatewayFromConfig,
   createMcpServer,
+  findProjectRoot,
+  type HierarchyEnv,
   mergeConfigs,
+  ProjectRootNotFoundError,
   parseConfig,
+  ratelConfigPath,
   type TransportFactory,
 } from "@ratel-ai/mcp-core";
 import type { TraceSinkConfig } from "@ratel-ai/sdk";
@@ -19,10 +25,20 @@ export interface ServeOptions {
   serverTransport?: Transport;
   serverName?: string;
   serverVersion?: string;
+  env?: HierarchyEnv;
+  processEnv?: NodeJS.ProcessEnv;
+  cwd?: string;
+  existsSync?: (path: string) => boolean;
 }
 
 export interface ServeResult {
   shutdown: () => Promise<void>;
+}
+
+export interface AutoConfigResolution {
+  configPaths: string[];
+  projectRoot?: string;
+  projectRootSource?: "flag" | "RATEL_PROJECT_ROOT" | "CLAUDE_PROJECT_DIR" | "cwd";
 }
 
 export async function runServe(
@@ -30,13 +46,20 @@ export async function runServe(
   options: ServeOptions,
   log: (m: string) => void,
 ): Promise<ServeResult> {
-  if (parsed.configPaths.length === 0) {
+  const autoConfig = booleanFlag(parsed.flags["auto-config"]);
+  if (autoConfig && parsed.configPaths.length > 0) {
+    throw new Error("ratel-mcp serve: --auto-config cannot be combined with --config paths");
+  }
+  if (!autoConfig && parsed.configPaths.length === 0) {
     throw new Error("usage: ratel-mcp serve <config.json> [--config <path> ...]");
   }
 
   const readConfig = options.readConfig ?? defaultReadConfig;
+  const configPaths = autoConfig
+    ? resolveAutoConfig(parsed, options, log).configPaths
+    : parsed.configPaths;
   const parts = [];
-  for (const p of parsed.configPaths) {
+  for (const p of configPaths) {
     const raw = await readConfig(p);
     parts.push(parseConfig(raw));
   }
@@ -70,6 +93,77 @@ export async function runServe(
       await gateway.close();
     },
   };
+}
+
+export function resolveAutoConfig(
+  parsed: ParsedArgs,
+  options: Pick<ServeOptions, "env" | "processEnv" | "cwd" | "existsSync"> = {},
+  log: (m: string) => void = () => {},
+): AutoConfigResolution {
+  const homeDir = options.env?.homeDir ?? homedir();
+  const processEnv = options.processEnv ?? process.env;
+  const explicitProjectRoot = stringFlag(parsed.flags["project-root"], "--project-root");
+  const projectRoot = resolveProjectRoot({
+    explicitProjectRoot,
+    envProjectRoot: processEnv.RATEL_PROJECT_ROOT,
+    claudeProjectDir: processEnv.CLAUDE_PROJECT_DIR,
+    cwd: options.cwd ?? process.cwd(),
+    exists: options.existsSync ?? existsSync,
+  });
+
+  const configPaths = [ratelConfigPath("user", { homeDir })];
+  if (projectRoot.root) {
+    const env: HierarchyEnv = { homeDir, projectRoot: projectRoot.root };
+    configPaths.push(ratelConfigPath("project", env), ratelConfigPath("local", env));
+  }
+
+  log(
+    projectRoot.root
+      ? `[ratel] auto-config project root: ${projectRoot.root} (${projectRoot.source})`
+      : "[ratel] auto-config project root: not found; loading user config only",
+  );
+  log(`[ratel] auto-config paths: ${configPaths.join(", ")}`);
+
+  return {
+    configPaths,
+    ...(projectRoot.root
+      ? { projectRoot: projectRoot.root, projectRootSource: projectRoot.source }
+      : {}),
+  };
+}
+
+function booleanFlag(value: unknown): boolean {
+  return value === true || value === "true";
+}
+
+function stringFlag(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (typeof value === "string" && value.length > 0) return value;
+  throw new Error(`${name} requires a path value`);
+}
+
+function resolveProjectRoot(input: {
+  explicitProjectRoot?: string;
+  envProjectRoot?: string;
+  claudeProjectDir?: string;
+  cwd: string;
+  exists: (path: string) => boolean;
+}): { root?: string; source?: AutoConfigResolution["projectRootSource"] } {
+  if (input.explicitProjectRoot) {
+    return { root: resolve(input.explicitProjectRoot), source: "flag" };
+  }
+  if (input.envProjectRoot) {
+    return { root: resolve(input.envProjectRoot), source: "RATEL_PROJECT_ROOT" };
+  }
+  if (input.claudeProjectDir) {
+    return { root: resolve(input.claudeProjectDir), source: "CLAUDE_PROJECT_DIR" };
+  }
+  try {
+    return { root: findProjectRoot(input.cwd, { existsSync: input.exists }), source: "cwd" };
+  } catch (err) {
+    if (err instanceof ProjectRootNotFoundError) return {};
+    throw err;
+  }
 }
 
 async function resolveTraceSink(

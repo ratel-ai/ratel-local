@@ -1,0 +1,20 @@
+{
+  "name": "ratel-local",
+  "interface": {
+    "displayName": "Ratel Local"
+  },
+  "plugins": [
+    {
+      "name": "ratel-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

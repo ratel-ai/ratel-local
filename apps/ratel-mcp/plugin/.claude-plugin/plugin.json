@@ -1,0 +1,12 @@
+{
+  "name": "ratel-mcp",
+  "version": "0.3.0-rc.0",
+  "description": "Ratel MCP gateway plugin for exposing curated upstream MCP tools through search_tools and invoke_tool.",
+  "author": {
+    "name": "Agentified",
+    "email": "support@agentified.com"
+  },
+  "homepage": "https://github.com/ratel-ai/ratel-mcp",
+  "repository": "https://github.com/ratel-ai/ratel-mcp",
+  "license": "Elastic-2.0"
+}
