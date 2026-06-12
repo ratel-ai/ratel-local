@@ -1,0 +1,67 @@
+{
+  "description": "Ratel MCP plugin lifecycle hook smoke tests",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-event.mjs\" SessionStart",
+            "statusMessage": "Logging Ratel MCP hook event",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-event.mjs\" UserPromptSubmit",
+            "statusMessage": "Logging Ratel MCP hook event",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-event.mjs\" PreToolUse",
+            "statusMessage": "Logging Ratel MCP tool event",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-event.mjs\" PostToolUse",
+            "statusMessage": "Logging Ratel MCP tool event",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-event.mjs\" Stop",
+            "statusMessage": "Logging Ratel MCP hook event",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

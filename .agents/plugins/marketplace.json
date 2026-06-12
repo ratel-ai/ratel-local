@@ -8,7 +8,7 @@
       "name": "ratel-mcp",
       "source": {
         "source": "local",
-        "path": "./plugin"
+        "path": "./apps/ratel-mcp/plugin"
       },
       "policy": {
         "installation": "AVAILABLE",
