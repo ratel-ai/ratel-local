@@ -720,4 +720,106 @@ describe("UI server — skill detail & edit", () => {
     const res = await fetch(url("/api/skills/demo"), { method: "PATCH" });
     expect(res.status).toBe(401);
   });
+
+  it("preserves unmanaged frontmatter keys and folds triggers into tags on PATCH", async () => {
+    const richDir = join(home, ".ratel", "skills", "rich");
+    const richMd = join(richDir, "SKILL.md");
+    await mkdir(richDir, { recursive: true });
+    await writeFile(
+      richMd,
+      [
+        "---",
+        "name: rich",
+        'description: "Old desc"',
+        "allowed-tools: Read, Edit",
+        "model: opus",
+        'tags: ["t1"]',
+        'triggers: ["trig1"]',
+        'stacks: ["react"]',
+        "license: MIT",
+        "---",
+        "",
+        "# Rich body",
+        "",
+      ].join("\n"),
+    );
+
+    const res = await fetch(url("/api/skills/rich"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({
+        description: "New desc",
+        tags: ["t1", "trig1"],
+        body: "# New rich body\n",
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const onDisk = await readFile(richMd, "utf8");
+    // Keys Ratel does not manage survive untouched.
+    expect(onDisk).toContain("allowed-tools: Read, Edit");
+    expect(onDisk).toContain("model: opus");
+    expect(onDisk).toContain("license: MIT");
+    expect(onDisk).toContain('stacks: ["react"]');
+    // Managed fields are rewritten; triggers collapse into tags.
+    expect(onDisk).toContain('description: "New desc"');
+    expect(onDisk).toContain('tags: ["t1", "trig1"]');
+    expect(onDisk).not.toMatch(/^triggers:/m);
+    expect(onDisk).not.toContain("Old desc");
+    expect(onDisk).toContain("# New rich body");
+  });
+
+  it("refuses to edit an available (native) skill and leaves the file untouched", async () => {
+    const nativeDir = join(home, ".claude", "skills", "native-only");
+    const nativeMd = join(nativeDir, "SKILL.md");
+    await mkdir(nativeDir, { recursive: true });
+    const original = [
+      "---",
+      "name: native-only",
+      'description: "Native"',
+      "---",
+      "",
+      "# Native body",
+      "",
+    ].join("\n");
+    await writeFile(nativeMd, original);
+
+    // It is visible as available...
+    const detail = await fetch(url("/api/skills/native-only"), { headers: headers() });
+    expect(detail.status).toBe(200);
+    expect(((await detail.json()) as { state: string }).state).toBe("available");
+
+    // ...but PATCH is rejected and the file is not modified.
+    const res = await fetch(url("/api/skills/native-only"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: "Hijacked", tags: [], body: "# Hijacked" }),
+    });
+    expect(res.status).toBe(409);
+    expect(await readFile(nativeMd, "utf8")).toBe(original);
+  });
+
+  it("returns 400 when PATCH omits the body field", async () => {
+    const res = await fetch(url("/api/skills/demo"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: "New description", tags: ["gamma"] }),
+    });
+    expect(res.status).toBe(400);
+    // The original body must be intact.
+    expect(await readFile(skillMdPath(), "utf8")).toContain("# Original body");
+  });
+
+  it("does not truncate a body that legitimately contains the bundled-resources heading", async () => {
+    const authored = "# Intro\n\n## Bundled resources (absolute paths)\n\nI wrote this myself.\n";
+    const res = await fetch(url("/api/skills/demo"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: "d", tags: [], body: authored }),
+    });
+    expect(res.status).toBe(200);
+    const onDisk = await readFile(skillMdPath(), "utf8");
+    expect(onDisk).toContain("I wrote this myself.");
+    expect(onDisk).toContain("## Bundled resources (absolute paths)");
+  });
 });

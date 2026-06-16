@@ -45,21 +45,33 @@ export function SkillDetailPage(props: { id: string }) {
     void navigate({ to: backPath } as never);
   };
 
-  const load = useCallback(async () => {
-    setState({ status: "loading" });
-    try {
-      const data = await request<SkillDetail>(`/api/skills/${encodeURIComponent(props.id)}`);
-      setState({ status: "ready", data });
-    } catch (err) {
-      setState({
-        status: "error",
-        message: err instanceof Error ? err.message : "Failed to load skill",
-      });
-    }
-  }, [request, props.id]);
+  const load = useCallback(
+    async (signal?: { cancelled: boolean }) => {
+      setState({ status: "loading" });
+      try {
+        const data = await request<SkillDetail>(`/api/skills/${encodeURIComponent(props.id)}`);
+        if (!signal?.cancelled) setState({ status: "ready", data });
+      } catch (err) {
+        if (!signal?.cancelled) {
+          setState({
+            status: "error",
+            message: err instanceof Error ? err.message : "Failed to load skill",
+          });
+        }
+      }
+    },
+    [request, props.id],
+  );
 
+  // Guard against a superseded load: if `id` changes (or the page unmounts)
+  // before the request resolves, cancel so a stale response can't clobber the
+  // newer skill's state.
   useEffect(() => {
-    void load();
+    const signal = { cancelled: false };
+    void load(signal);
+    return () => {
+      signal.cancelled = true;
+    };
   }, [load]);
 
   const startEdit = () => {
@@ -88,6 +100,9 @@ export function SkillDetailPage(props: { id: string }) {
   };
 
   const detail = state.status === "ready" ? state.data : null;
+  // Available skills live in ~/.claude/skills and are Claude Code's to manage;
+  // they're read-only here until activated (the backend rejects the PATCH too).
+  const canEdit = detail?.state === "active";
   const canSave = description.trim() !== "" && !busy;
 
   return (
@@ -121,6 +136,7 @@ export function SkillDetailPage(props: { id: string }) {
 
         <PageHeaderActions className="hidden sm:flex">
           {detail &&
+            canEdit &&
             (isEditing ? (
               <>
                 <Button
@@ -179,12 +195,19 @@ export function SkillDetailPage(props: { id: string }) {
           <pre className="overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-4 font-mono text-xs">
             {detail.body || "(no instructions)"}
           </pre>
-          <div className="sm:hidden">
-            <Button onClick={startEdit} size="sm" type="button" variant="outline">
-              <Pencil />
-              Edit
-            </Button>
-          </div>
+          {canEdit ? (
+            <div className="sm:hidden">
+              <Button onClick={startEdit} size="sm" type="button" variant="outline">
+                <Pencil />
+                Edit
+              </Button>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-xs">
+              This skill lives in <code className="font-mono">~/.claude/skills</code> and is
+              read-only here. Activate it from the Skills page to edit.
+            </p>
+          )}
         </div>
       )}
 

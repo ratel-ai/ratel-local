@@ -1,6 +1,7 @@
 import { type SpawnOptions, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { type Dirent, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type AuthFlowResult,
@@ -92,19 +93,31 @@ interface FoundSkill {
   filePath: string;
   state: "active" | "available";
   parsed: ReturnType<typeof parseSkillMd>;
+  /** The raw, unmodified `SKILL.md` text — the basis for in-place rewrites. */
+  raw: string;
+}
+
+/** Expand a leading `~` to the home dir, matching how loadSkills resolves dirs. */
+function expandHome(p: string, home: string): string {
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  return p;
 }
 
 /**
  * Locate the `SKILL.md` backing a skill `id` (its frontmatter `name`). Managed
  * (active) skills take precedence over native (available) ones, mirroring how
- * the gateway resolves duplicates. Fail-soft per skill — a malformed `SKILL.md`
- * is skipped rather than aborting the scan. Returns null when nothing matches.
+ * the gateway resolves duplicates. Within a directory the *last* match wins —
+ * the same tie-break loadSkills uses (`byId.set`) — so list and detail views
+ * agree on which file a duplicate name resolves to. Fail-soft per skill: a
+ * malformed `SKILL.md` is skipped rather than aborting the scan. Returns null
+ * when nothing matches.
  */
 async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | null> {
   const { managedDir, nativeDir } = defaultSkillManagePaths(homeDir);
   const sources: Array<{ dir: string; state: "active" | "available" }> = [
-    { dir: managedDir, state: "active" },
-    { dir: nativeDir, state: "available" },
+    { dir: expandHome(managedDir, homeDir), state: "active" },
+    { dir: expandHome(nativeDir, homeDir), state: "available" },
   ];
   for (const { dir, state } of sources) {
     let entries: Dirent[];
@@ -113,6 +126,7 @@ async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | 
     } catch {
       continue;
     }
+    let match: FoundSkill | null = null;
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const filePath = join(dir, entry.name, "SKILL.md");
@@ -124,11 +138,12 @@ async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | 
       }
       try {
         const parsed = parseSkillMd(raw, filePath);
-        if (parsed.name === id) return { filePath, state, parsed };
+        if (parsed.name === id) match = { filePath, state, parsed, raw };
       } catch {
         // Malformed frontmatter — skip, matching loadSkills' fail-soft behaviour.
       }
     }
+    if (match) return match;
   }
   return null;
 }
@@ -210,11 +225,17 @@ export async function createSkillRoute(
 }
 
 /**
- * Overwrite an existing skill's `SKILL.md` in place. The skill's `name` and
- * location are fixed (renaming would move the directory and break the manifest)
- * — only description, tags, and body change. `stacks` are preserved; `triggers`
- * fold into `tags`, since both are indexed phrases. Edits to a native skill
- * under `~/.claude/skills` write back to that same file.
+ * Overwrite an existing *active* skill's `SKILL.md` in place. The skill's `name`
+ * and location are fixed (renaming would move the directory and break the
+ * manifest) — only description, tags, and body change. The rewrite is
+ * surgical: every other frontmatter key (`stacks`, Claude Code's `allowed-tools`
+ * / `model` / `license`, comments, custom keys) is preserved byte-for-byte;
+ * only `description`/`tags` are re-emitted and `triggers` folds into `tags`,
+ * since both are indexed phrases.
+ *
+ * Available (native `~/.claude/skills`) skills are read-only here: editing the
+ * file Claude Code owns before it's activated is surprising and can clash with
+ * Claude Code's own management, so callers must activate first.
  */
 export async function updateSkillRoute(
   ctx: HandlerCtx,
@@ -223,18 +244,108 @@ export async function updateSkillRoute(
 ): Promise<ApiResponse> {
   const found = await findSkillFile(ctx.env.homeDir, id);
   if (!found) return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
+  if (found.state === "available") {
+    return {
+      status: 409,
+      body: { error: "activate the skill before editing it", isError: true },
+    };
+  }
   const description = requiredString(body.description, "description");
   const tags = optionalStringArray(body.tags, "tags") ?? [];
-  const nextBody = typeof body.body === "string" ? stripBundledResources(body.body) : "";
-  const contents = buildSkillMd({
-    name: found.parsed.name,
-    description,
-    tags,
-    stacks: found.parsed.stacks,
-    body: nextBody,
-  });
-  await writeFile(found.filePath, contents, "utf8");
+  // Distinguish "omitted" (a malformed request) from an intentionally empty
+  // body — the former is an error, the latter clears the instructions.
+  if (typeof body.body !== "string") throw new Error("body is required");
+  const nextBody = stripBundledResources(body.body);
+  const contents = rewriteSkillMd(found.raw, { description, tags, body: nextBody });
+  await writeFileAtomic(found.filePath, contents);
   return ok({ updated: id });
+}
+
+/**
+ * Rewrite a `SKILL.md` while preserving its frontmatter: only `description` and
+ * `tags` are replaced (in place, at their original position), `triggers` is
+ * dropped (its phrases arrive merged into `tags`), and every other key/comment
+ * is kept verbatim. Falls back to a fresh serialization if the source somehow
+ * has no frontmatter (unreachable for a skill that was found via parseSkillMd).
+ */
+function rewriteSkillMd(
+  raw: string,
+  next: { description: string; tags: string[]; body: string },
+): string {
+  const lines = raw.split(/\r?\n/);
+  let open = 0;
+  while (open < lines.length && lines[open].trim() === "") open++;
+  let close = -1;
+  for (let j = open + 1; j < lines.length; j++) {
+    if (lines[j].trim() === "---") {
+      close = j;
+      break;
+    }
+  }
+  const descLine = `description: ${JSON.stringify(next.description)}`;
+  const tagsLine =
+    next.tags.length > 0 ? `tags: [${next.tags.map((t) => JSON.stringify(t)).join(", ")}]` : null;
+
+  if (lines[open]?.trim() !== "---" || close === -1) {
+    return ["---", descLine, ...(tagsLine ? [tagsLine] : []), "---", "", next.body.trim(), ""].join(
+      "\n",
+    );
+  }
+
+  const out: string[] = [];
+  let descWritten = false;
+  let tagsWritten = false;
+  for (let j = open + 1; j < close; j++) {
+    const line = lines[j];
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      out.push(line);
+      continue;
+    }
+    const sep = line.indexOf(":");
+    const key = sep === -1 ? "" : line.slice(0, sep).trim();
+    const isBlockKey = sep !== -1 && line.slice(sep + 1).trim() === "";
+    // A managed key written in YAML block style spreads over indented `- item`
+    // lines; consume them too so we replace the whole field, not just its head.
+    const skipBlockList = () => {
+      while (j + 1 < close && /^\s*-\s+/.test(lines[j + 1])) j++;
+    };
+    if (key === "description") {
+      if (!descWritten) {
+        out.push(descLine);
+        descWritten = true;
+      }
+      if (isBlockKey) skipBlockList();
+      continue;
+    }
+    if (key === "tags" || key === "triggers") {
+      // Collapse tags + triggers into a single tags line at the first of them.
+      if (!tagsWritten) {
+        if (tagsLine) out.push(tagsLine);
+        tagsWritten = true;
+      }
+      if (isBlockKey) skipBlockList();
+      continue;
+    }
+    out.push(line);
+  }
+  if (!descWritten) out.push(descLine);
+  if (!tagsWritten && tagsLine) out.push(tagsLine);
+
+  const frontmatter = out.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+  return ["---", frontmatter, "---", "", next.body.trim(), ""].join("\n");
+}
+
+/** Write a file atomically: a crash mid-write never leaves a truncated file. */
+async function writeFileAtomic(filePath: string, contents: string): Promise<void> {
+  const tmp = `${filePath}.ratel-tmp-${randomUUID()}`;
+  try {
+    await writeFile(tmp, contents, "utf8");
+    await rename(tmp, filePath);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 /** Serialize a skill back to `SKILL.md` text: inline-scalar frontmatter + body. */
@@ -264,14 +375,15 @@ function buildSkillMd(input: {
  * Drop the trailing "Bundled resources (absolute paths)" index that loadSkills
  * appends for dispatch, so a client that submits a body still containing it
  * doesn't persist (and then re-append) that machine-generated block.
+ *
+ * Anchored to the exact block loadSkills emits (`\n\n---\n\n## Bundled
+ * resources (absolute paths)\n…` to end-of-string) so an author who legitimately
+ * writes that heading mid-body isn't silently truncated.
  */
+const BUNDLED_RESOURCES_BLOCK = /\n\n---\n\n## Bundled resources \(absolute paths\)\n[\s\S]*$/;
+
 function stripBundledResources(body: string): string {
-  const idx = body.indexOf("## Bundled resources (absolute paths)");
-  if (idx === -1) return body;
-  return body
-    .slice(0, idx)
-    .replace(/\n+-{3,}\s*$/, "")
-    .trimEnd();
+  return body.replace(BUNDLED_RESOURCES_BLOCK, "").trimEnd();
 }
 
 export async function openFile(
