@@ -18,6 +18,7 @@ import {
   applyImportRatel,
   applyLink,
   authServer,
+  createSkillRoute,
   deactivateSkillsRoute,
   doImport,
   doLink,
@@ -136,6 +137,10 @@ async function route(
   }
   if (method === "GET" && path === "/api/skills") {
     return getSkills(ctx);
+  }
+  if (method === "POST" && path === "/api/skills") {
+    const body = await readJsonBody(req);
+    return createSkillRoute(ctx, body);
   }
   if (method === "POST" && path === "/api/skills/activate") {
     const body = await readJsonBody(req);

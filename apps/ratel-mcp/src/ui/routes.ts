@@ -1,4 +1,7 @@
 import { type SpawnOptions, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   type AuthFlowResult,
   addServerEntry,
@@ -101,6 +104,45 @@ export async function deactivateSkillsRoute(
     logger: (m) => log.push(m),
   });
   return ok({ log, restored: result.restored.map((m) => m.id), skipped: result.skipped });
+}
+
+const SAFE_SKILL_NAME = /^[a-z0-9][a-z0-9-]*$/i;
+
+/**
+ * Create a new skill in the Ratel-managed folder by writing a `SKILL.md`. The
+ * name must be a single safe path segment (no traversal); refuses to overwrite
+ * an existing skill.
+ */
+export async function createSkillRoute(
+  ctx: HandlerCtx,
+  body: { name?: unknown; description?: unknown; tags?: unknown; body?: unknown },
+): Promise<ApiResponse> {
+  const name = requiredString(body.name, "name").trim();
+  if (!SAFE_SKILL_NAME.test(name)) {
+    throw new Error("name must be a single segment of letters, digits, and hyphens");
+  }
+  const description = requiredString(body.description, "description");
+  const tags = optionalStringArray(body.tags, "tags") ?? [];
+  const skillBody = typeof body.body === "string" ? body.body : "";
+
+  const { managedDir } = defaultSkillManagePaths(ctx.env.homeDir);
+  const skillDir = join(managedDir, name);
+  if (existsSync(join(skillDir, "SKILL.md"))) {
+    throw new Error(`a skill named "${name}" already exists`);
+  }
+  const contents = [
+    "---",
+    `name: ${name}`,
+    `description: ${JSON.stringify(description)}`,
+    ...(tags.length > 0 ? [`tags: [${tags.map((t) => JSON.stringify(t)).join(", ")}]`] : []),
+    "---",
+    "",
+    skillBody.trim(),
+    "",
+  ].join("\n");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), contents, "utf8");
+  return ok({ created: name });
 }
 
 export async function openFile(

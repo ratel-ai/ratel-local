@@ -12,6 +12,19 @@ import {
 } from "@/components/page-header";
 import { ResponsiveToolbar, ResponsiveToolbarButton } from "@/components/responsive-toolbar";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 interface SkillSummary {
   id: string;
@@ -96,11 +109,13 @@ export function SkillsPage() {
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="hidden sm:flex">
+          <NewSkillDialog onCreated={load} />
           {canActivateAll && (
             <Button
               disabled={busy}
               onClick={() => void mutate("Activated all skills", "/api/skills/activate")}
               size="sm"
+              variant="outline"
             >
               Activate all
             </Button>
@@ -241,5 +256,103 @@ function EmptyState(props: { title: string; description: string; children?: Reac
         {props.children && <div>{props.children}</div>}
       </div>
     </section>
+  );
+}
+
+function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
+  const { request, runAction, busy } = useRatelApp();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [tags, setTags] = useState("");
+  const [body, setBody] = useState("");
+
+  const reset = () => {
+    setName("");
+    setDescription("");
+    setTags("");
+    setBody("");
+  };
+
+  const submit = async () => {
+    const tagList = tags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const created = await runAction(`Created skill ${name.trim()}`, () =>
+      request("/api/skills", {
+        method: "POST",
+        body: { name: name.trim(), description: description.trim(), tags: tagList, body },
+      }),
+    );
+    if (created) {
+      setOpen(false);
+      reset();
+      await props.onCreated();
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button size="sm" />}>New skill</DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New skill</DialogTitle>
+          <DialogDescription>
+            Writes a SKILL.md into Ratel's managed folder; it's served through the gateway
+            immediately.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-name">Name</Label>
+            <Input
+              id="skill-name"
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my-skill"
+              value={name}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-description">Description</Label>
+            <Textarea
+              id="skill-description"
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="When the agent should reach for this skill…"
+              value={description}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-tags">Tags (comma-separated)</Label>
+            <Input
+              id="skill-tags"
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="deploy, ship to production"
+              value={tags}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-body">Instructions</Label>
+            <Textarea
+              className="min-h-32 font-mono text-xs"
+              id="skill-body"
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="# How to…"
+              value={body}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
+          <Button
+            disabled={busy || name.trim() === "" || description.trim() === ""}
+            onClick={() => void submit()}
+            size="sm"
+          >
+            Create
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

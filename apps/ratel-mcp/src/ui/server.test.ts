@@ -174,6 +174,27 @@ describe("UI server — auth", () => {
     expect(Array.isArray(body.restored)).toBe(true);
   });
 
+  it("rejects POST /api/skills (create) without a bearer token", async () => {
+    const res = await fetch(apiUrl("/api/skills"), { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects creating a skill with a missing or unsafe name", async () => {
+    const missing = await fetch(apiUrl("/api/skills"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ description: "d" }),
+    });
+    expect(missing.status).toBe(400);
+
+    const unsafe = await fetch(apiUrl("/api/skills"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ name: "../evil", description: "d" }),
+    });
+    expect(unsafe.status).toBe(400);
+  });
+
   it("returns 401 on GET / without the t query param", async () => {
     const res = await fetch(apiUrl("/"));
     expect(res.status).toBe(401);
