@@ -138,11 +138,13 @@ describe("UI server — auth", () => {
       nativeDir: string;
       managed: unknown[];
       available: unknown[];
+      problems: unknown[];
     };
     expect(body.managedDir.endsWith("/.ratel/skills")).toBe(true);
     expect(body.nativeDir.endsWith("/.claude/skills")).toBe(true);
     expect(Array.isArray(body.managed)).toBe(true);
     expect(Array.isArray(body.available)).toBe(true);
+    expect(Array.isArray(body.problems)).toBe(true);
   });
 
   it("returns 401 on POST /api/skills/activate and /deactivate without a bearer token", async () => {

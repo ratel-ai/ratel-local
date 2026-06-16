@@ -11,6 +11,9 @@ export function defaultSkillDirs(): string[] {
 
 export interface LoadSkillsOptions {
   logger?: (message: string) => void;
+  /** Called once per skill that fails to load (e.g. malformed frontmatter), so
+   *  callers can surface the problem instead of silently dropping the skill. */
+  onProblem?: (problem: { id: string; reason: string }) => void;
 }
 
 /**
@@ -82,7 +85,9 @@ export async function loadSkills(
           body,
         });
       } catch (err) {
-        log(`[ratel] skipping skill ${entry.name}: ${(err as Error).message}`);
+        const reason = (err as Error).message;
+        log(`[ratel] skipping skill ${entry.name}: ${reason}`);
+        options.onProblem?.({ id: entry.name, reason });
       }
     }
   }

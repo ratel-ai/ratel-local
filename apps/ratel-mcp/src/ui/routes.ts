@@ -62,15 +62,23 @@ export async function getAgentHosts(ctx: HandlerCtx): Promise<ApiResponse> {
  */
 export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
   const { managedDir, nativeDir } = defaultSkillManagePaths(ctx.env.homeDir);
-  const managed = await loadSkills([managedDir], { logger: ctx.log });
+  const problems: Array<{ id: string; where: "managed" | "available"; reason: string }> = [];
+  const managed = await loadSkills([managedDir], {
+    logger: ctx.log,
+    onProblem: (p) => problems.push({ ...p, where: "managed" }),
+  });
   const managedIds = new Set(managed.map((s) => s.id));
-  const native = await loadSkills([nativeDir], { logger: ctx.log });
+  const native = await loadSkills([nativeDir], {
+    logger: ctx.log,
+    onProblem: (p) => problems.push({ ...p, where: "available" }),
+  });
   const available = native.filter((s) => !managedIds.has(s.id));
   return ok({
     managedDir,
     nativeDir,
     managed: managed.map(skillSummary),
     available: available.map(skillSummary),
+    problems,
   });
 }
 
@@ -84,12 +92,11 @@ export async function activateSkillsRoute(
   body: { ids?: unknown },
 ): Promise<ApiResponse> {
   const ids = optionalStringArray(body.ids, "ids");
-  const log: string[] = [];
   const result = await activateSkills(defaultSkillManagePaths(ctx.env.homeDir), {
     ids,
-    logger: (m) => log.push(m),
+    logger: ctx.log,
   });
-  return ok({ log, moved: result.moved.map((m) => m.id), skipped: result.skipped });
+  return ok({ moved: result.moved.map((m) => m.id), skipped: result.skipped });
 }
 
 /** Restore managed skills back to `~/.claude/skills`. `ids` omitted = deactivate all. */
@@ -98,12 +105,11 @@ export async function deactivateSkillsRoute(
   body: { ids?: unknown },
 ): Promise<ApiResponse> {
   const ids = optionalStringArray(body.ids, "ids");
-  const log: string[] = [];
   const result = await deactivateSkills(defaultSkillManagePaths(ctx.env.homeDir), {
     ids,
-    logger: (m) => log.push(m),
+    logger: ctx.log,
   });
-  return ok({ log, restored: result.restored.map((m) => m.id), skipped: result.skipped });
+  return ok({ restored: result.restored.map((m) => m.id), skipped: result.skipped });
 }
 
 const SAFE_SKILL_NAME = /^[a-z0-9][a-z0-9-]*$/i;

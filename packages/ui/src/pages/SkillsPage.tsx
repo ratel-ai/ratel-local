@@ -1,4 +1,4 @@
-import { SearchIcon, Sparkles } from "lucide-react";
+import { SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useRatelApp } from "@/App";
 import {
@@ -33,11 +33,18 @@ interface SkillSummary {
   tags: string[];
 }
 
+interface SkillProblem {
+  id: string;
+  where: string;
+  reason: string;
+}
+
 interface SkillsResponse {
   managedDir: string;
   nativeDir: string;
   managed: SkillSummary[];
   available: SkillSummary[];
+  problems: SkillProblem[];
 }
 
 type LoadState =
@@ -67,8 +74,10 @@ export function SkillsPage() {
 
   const mutate = useCallback(
     async (label: string, path: string, ids?: string[]) => {
+      // Discard the response body so runAction's toast shows just `label`, not the
+      // operation's per-skill log lines (which are noise for a human).
       const okResult = await runAction(label, () =>
-        request(path, { method: "POST", body: ids ? { ids } : {} }),
+        request(path, { method: "POST", body: ids ? { ids } : {} }).then(() => undefined),
       );
       if (okResult) await load();
     },
@@ -80,6 +89,7 @@ export function SkillsPage() {
   // (e.g. a stale server mid-deploy), render an empty page instead of crashing.
   const managed = ready?.managed ?? [];
   const available = ready?.available ?? [];
+  const problems = ready?.problems ?? [];
   const canActivateAll = available.length > 0;
   const canDeactivateAll = managed.length > 0;
 
@@ -115,7 +125,12 @@ export function SkillsPage() {
             <Button
               className="h-10"
               disabled={busy}
-              onClick={() => void mutate("Activated all skills", "/api/skills/activate")}
+              onClick={() =>
+                void mutate(
+                  `Activated ${available.length} skill${available.length === 1 ? "" : "s"}`,
+                  "/api/skills/activate",
+                )
+              }
               size="sm"
               variant="outline"
             >
@@ -126,7 +141,12 @@ export function SkillsPage() {
             <Button
               className="h-10"
               disabled={busy}
-              onClick={() => void mutate("Deactivated all skills", "/api/skills/deactivate")}
+              onClick={() =>
+                void mutate(
+                  `Deactivated ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
+                  "/api/skills/deactivate",
+                )
+              }
               size="sm"
               variant="outline"
             >
@@ -155,6 +175,26 @@ export function SkillsPage() {
             Retry
           </Button>
         </EmptyState>
+      )}
+
+      {problems.length > 0 && (
+        <section className="-mx-4 border-amber-500/30 border-y bg-amber-500/10 px-4 py-3 sm:-mx-6 sm:px-6">
+          <div className="flex items-start gap-2">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />
+            <div className="min-w-0">
+              <h3 className="font-medium text-sm">
+                {problems.length} skill{problems.length === 1 ? "" : "s"} couldn't be loaded
+              </h3>
+              <ul className="mt-1 grid gap-1">
+                {problems.map((p) => (
+                  <li className="text-muted-foreground text-xs" key={`${p.where}:${p.id}`}>
+                    <code className="font-mono">{p.id}</code> ({p.where}): {p.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
       )}
 
       {ready && managed.length === 0 && available.length === 0 && (
