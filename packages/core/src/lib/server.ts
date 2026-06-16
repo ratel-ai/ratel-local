@@ -8,6 +8,7 @@ import {
   invokeToolTool,
   type SkillCatalog,
   searchCapabilitiesTool,
+  searchToolsTool,
   type ToolCatalog,
   type UpstreamServerInfo,
 } from "@ratel-ai/sdk";
@@ -63,6 +64,15 @@ export async function createMcpServer(
   ]) {
     gateway[tool.name] = tool;
   }
+  // Backward-compat: keep advertising the pre-0.2.0 `search_tools` (deprecated
+  // alias, tools-only `{ groups }` result) so MCP clients that pinned its name
+  // don't break on upgrade. New clients should use `search_capabilities` — which
+  // also returns skills — so the description steers them there.
+  const legacySearch = searchToolsTool(catalog, { upstreamServers });
+  gateway[legacySearch.name] = {
+    ...legacySearch,
+    description: `[Deprecated: prefer search_capabilities, which also returns skills.] ${legacySearch.description}`,
+  };
   if (skills) {
     const t = getSkillContentTool(skills);
     gateway[t.name] = t;

@@ -11,6 +11,7 @@ import {
   INVOKE_TOOL_ID,
   registerMcpServer,
   SEARCH_CAPABILITIES_ID,
+  SEARCH_TOOLS_ID,
   type Skill,
   SkillCatalog,
   ToolCatalog,
@@ -155,15 +156,54 @@ describe("createMcpServer", () => {
     await handle.close();
   });
 
-  it("exposes exactly search_capabilities and invoke_tool via tools/list", async () => {
+  it("exposes search_capabilities, invoke_tool, and the deprecated search_tools alias via tools/list", async () => {
     const catalog = new ToolCatalog();
     catalog.register(localTool("echo", "Echo a message back to the caller.", (a) => a));
 
     const { client, handle } = await buildClientAgainst(catalog);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID].sort(),
+      [SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID, INVOKE_TOOL_ID].sort(),
     );
+    // The compat alias is advertised but flagged so new clients prefer search_capabilities.
+    const legacy = tools.find((t) => t.name === SEARCH_TOOLS_ID);
+    expect(legacy?.description).toContain("Deprecated");
+
+    await client.close();
+    await handle.close();
+  });
+
+  it("search_tools (deprecated) still returns the pre-0.2.0 tools-only {groups} shape", async () => {
+    const catalog = new ToolCatalog();
+    catalog.register(
+      localTool("wx__weather", "Get the current weather forecast for a city.", () => ({})),
+    );
+
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handle = await createMcpServer(catalog, {
+      name: "ratel-test",
+      version: "0.0.0",
+      transport: serverTransport,
+      upstreamServers: [{ name: "wx", toolCount: 1 }],
+    });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: SEARCH_TOOLS_ID,
+      arguments: { query: "weather forecast" },
+    });
+
+    // Old shape: a top-level `groups` array, NOT the two-bucket { tools, skills }.
+    const structured = result.structuredContent as {
+      groups: Array<{ server: { name: string }; hits: Array<{ toolId: string }> }>;
+      tools?: unknown;
+      skills?: unknown;
+    };
+    expect(structured.groups[0].server.name).toBe("wx");
+    expect(structured.groups[0].hits[0].toolId).toBe("wx__weather");
+    expect(structured.tools).toBeUndefined();
+    expect(structured.skills).toBeUndefined();
 
     await client.close();
     await handle.close();
@@ -565,7 +605,7 @@ describe("createMcpServer skills", () => {
     body: "# API Design\n\nUse nouns for resources.",
   };
 
-  it("registers get_skill_content (3 tools) when the skill catalog is non-empty", async () => {
+  it("registers get_skill_content (4 tools incl. the search_tools alias) when the skill catalog is non-empty", async () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handle = await createMcpServer(new ToolCatalog(), {
       name: "ratel-test",
@@ -578,14 +618,14 @@ describe("createMcpServer skills", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      [GET_SKILL_CONTENT_ID, INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID].sort(),
+      [GET_SKILL_CONTENT_ID, INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID].sort(),
     );
 
     await client.close();
     await handle.close();
   });
 
-  it("omits get_skill_content when the skill catalog is empty (2 tools)", async () => {
+  it("omits get_skill_content when the skill catalog is empty (3 tools incl. the search_tools alias)", async () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handle = await createMcpServer(new ToolCatalog(), {
       name: "ratel-test",
@@ -598,7 +638,7 @@ describe("createMcpServer skills", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID].sort(),
+      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID, SEARCH_TOOLS_ID].sort(),
     );
 
     await client.close();

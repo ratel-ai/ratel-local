@@ -169,7 +169,7 @@ const handle = await createMcpServer(catalog, {
 await handle.close();
 ```
 
-The MCP client connected to the other end will see `search_capabilities` and `invoke_tool` (and `get_skill_content` when skills are present). `search_capabilities` returns a `tools` bucket and a `skills` bucket. The catalog's tools are reachable through `invoke_tool`, never listed directly — that's the whole point (see [ADR 0003 in `ratel-ai/ratel`](https://github.com/ratel-ai/ratel/blob/main/docs/adr/0003-tool-selection-replace-vs-suggest.md)).
+The MCP client connected to the other end will see `search_capabilities` and `invoke_tool` (and `get_skill_content` when skills are present). `search_capabilities` returns a `tools` bucket and a `skills` bucket. For backward compatibility the server also advertises the deprecated `search_tools` (its pre-0.2.0 tools-only result), so clients pinned to that name keep working; new clients should use `search_capabilities`. The catalog's tools are reachable through `invoke_tool`, never listed directly — that's the whole point (see [ADR 0003 in `ratel-ai/ratel`](https://github.com/ratel-ai/ratel/blob/main/docs/adr/0003-tool-selection-replace-vs-suggest.md)).
 
 ### `buildGatewayFromConfig`
 
