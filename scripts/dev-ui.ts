@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
+import { platform } from "node:os";
 
 const DEFAULT_API_PORT = 5731;
 const DEFAULT_VITE_PORT = 5173;
@@ -73,6 +74,62 @@ async function main() {
   console.error(`[ratel] API target: ${apiTarget}`);
   console.error(`[ratel] Vite UI:    ${viteUrl}`);
   console.error("[ratel] Press Ctrl-C to stop both processes.");
+
+  if (shouldOpenBrowser()) {
+    try {
+      await waitForPort(vitePort);
+      openBrowser(viteUrl);
+      console.error(
+        "[ratel] Opened the tokenized UI in your browser (set RATEL_MCP_UI_OPEN=0 to disable).",
+      );
+    } catch (err) {
+      console.error(`[ratel] Auto-open skipped: ${(err as Error).message}`);
+      console.error(`[ratel] Open ${viteUrl} manually.`);
+    }
+  }
+}
+
+function shouldOpenBrowser(): boolean {
+  if (process.env.CI) return false;
+  const flag = process.env.RATEL_MCP_UI_OPEN;
+  return flag !== "0" && flag !== "false";
+}
+
+function waitForPort(port: number, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      const socket = connect(port, HOST);
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve();
+      });
+      socket.once("error", () => {
+        socket.destroy();
+        if (Date.now() > deadline) {
+          reject(new Error(`timed out waiting for Vite to listen on port ${port}`));
+          return;
+        }
+        setTimeout(attempt, 200).unref();
+      });
+    };
+    attempt();
+  });
+}
+
+function openBrowser(url: string): void {
+  const [bin, args] =
+    platform() === "darwin"
+      ? (["open", [url]] as const)
+      : platform() === "win32"
+        ? (["cmd", ["/c", "start", "", url]] as const)
+        : (["xdg-open", [url]] as const);
+
+  const child = spawn(bin, [...args], { stdio: "ignore", detached: true });
+  child.on("error", () => {
+    console.error(`[ratel] Could not auto-open a browser; open ${url} manually.`);
+  });
+  child.unref();
 }
 
 function run(
