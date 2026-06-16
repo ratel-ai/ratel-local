@@ -125,6 +125,19 @@ describe("UI server — auth", () => {
     expect(body.homeDir).toBe(HOME);
   });
 
+  it("returns 401 on /api/skills without a bearer token", async () => {
+    const res = await fetch(apiUrl("/api/skills"));
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 200 + the managed skills (an array) on /api/skills with the correct bearer token", async () => {
+    const res = await fetch(apiUrl("/api/skills"), { headers: authHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { dir: string; skills: unknown[] };
+    expect(body.dir.endsWith("/.ratel/skills")).toBe(true);
+    expect(Array.isArray(body.skills)).toBe(true);
+  });
+
   it("returns 401 on GET / without the t query param", async () => {
     const res = await fetch(apiUrl("/"));
     expect(res.status).toBe(401);

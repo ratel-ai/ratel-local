@@ -22,6 +22,7 @@ import {
   editServer,
   getAgentHosts,
   getConfig,
+  getSkills,
   openFile,
   previewImport,
   previewLink,
@@ -130,6 +131,9 @@ async function route(
   }
   if (method === "GET" && path === "/api/agent-hosts") {
     return getAgentHosts(ctx);
+  }
+  if (method === "GET" && path === "/api/skills") {
+    return getSkills(ctx);
   }
   if (method === "POST" && path === "/api/open-file") {
     const body = await readJsonBody(req);

@@ -13,6 +13,7 @@ import {
   type ImportConflictStrategy,
   importAgentServers,
   linkAgentToRatel,
+  loadSkills,
   previewAgentImport,
   previewAgentLink,
   removeServerEntry,
@@ -20,6 +21,7 @@ import {
   type SupportedAgentHostKind,
 } from "@ratel-ai/mcp-core";
 import type { HandlerCtx } from "../cli/handlers/types.js";
+import { defaultSkillManagePaths } from "../cli/skills/manage.js";
 
 export interface ApiResponse {
   status: number;
@@ -48,6 +50,25 @@ export async function getConfig(ctx: HandlerCtx): Promise<ApiResponse> {
 
 export async function getAgentHosts(ctx: HandlerCtx): Promise<ApiResponse> {
   return ok(await getAgentHostsState(ctx));
+}
+
+/**
+ * The skills Ratel currently serves through the gateway: those under the
+ * Ratel-managed folder (`~/.ratel/skills`), loaded the same way the gateway
+ * loads them. Read-only — moving skills in/out is the `ratel-mcp skill` CLI.
+ */
+export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
+  const { managedDir } = defaultSkillManagePaths(ctx.env.homeDir);
+  const skills = await loadSkills([managedDir], { logger: ctx.log });
+  return ok({
+    dir: managedDir,
+    skills: skills.map((s) => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      tags: s.tags ?? [],
+    })),
+  });
 }
 
 export async function openFile(
