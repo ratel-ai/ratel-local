@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/mcp-core";
@@ -618,5 +618,106 @@ describe("UI server — local scope unused vars", () => {
     });
     expect(res.status).toBe(200);
     expect(session.fs.files.has(PROJECT_PATH)).toBe(true);
+  });
+});
+
+// Skill detail/edit routes read and write real SKILL.md files (unlike config,
+// which uses the in-memory FS), so these exercise a real temp home directory.
+describe("UI server — skill detail & edit", () => {
+  let home: string;
+  let local: ServerSession;
+
+  const skillMdPath = () => join(home, ".ratel", "skills", "demo", "SKILL.md");
+  const url = (path: string) => `http://127.0.0.1:${local.handle.port}${path}`;
+  const headers = () => ({
+    Authorization: `Bearer ${local.token}`,
+    "Content-Type": "application/json",
+  });
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "ratel-skills-home-"));
+    const skillDir = join(home, ".ratel", "skills", "demo");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      skillMdPath(),
+      [
+        "---",
+        "name: demo",
+        'description: "Original description"',
+        'tags: ["alpha", "beta"]',
+        "---",
+        "",
+        "# Original body",
+        "",
+      ].join("\n"),
+    );
+    // A sibling reference file makes loadSkills append an absolute-path
+    // "Bundled resources" index; the detail endpoint must not echo it back.
+    await writeFile(join(skillDir, "reference.md"), "# Reference\n");
+    local = await spin({ homeDir: home });
+  });
+
+  afterEach(async () => {
+    await local.handle.shutdown();
+    await rm(local.assetDir, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("returns the clean author body (no bundled-resources index) on GET /api/skills/:id", async () => {
+    const res = await fetch(url("/api/skills/demo"), { headers: headers() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      name: string;
+      description: string;
+      tags: string[];
+      body: string;
+      state: string;
+    };
+    expect(body.name).toBe("demo");
+    expect(body.description).toBe("Original description");
+    expect(body.tags).toEqual(["alpha", "beta"]);
+    expect(body.body).toContain("# Original body");
+    expect(body.body).not.toContain("Bundled resources");
+    expect(body.state).toBe("active");
+  });
+
+  it("updates description, tags, and body via PATCH /api/skills/:id", async () => {
+    const res = await fetch(url("/api/skills/demo"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({
+        description: "New description",
+        tags: ["gamma"],
+        body: "# New body\n",
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const onDisk = await readFile(skillMdPath(), "utf8");
+    expect(onDisk).toContain('description: "New description"');
+    expect(onDisk).toContain('tags: ["gamma"]');
+    expect(onDisk).toContain("# New body");
+    expect(onDisk).not.toContain("# Original body");
+    // The machine-generated index must never be persisted into the file.
+    expect(onDisk).not.toContain("Bundled resources");
+
+    const after = await fetch(url("/api/skills/demo"), { headers: headers() });
+    const detail = (await after.json()) as { description: string; tags: string[] };
+    expect(detail.description).toBe("New description");
+    expect(detail.tags).toEqual(["gamma"]);
+  });
+
+  it("returns 404 when PATCHing an unknown skill", async () => {
+    const res = await fetch(url("/api/skills/missing"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: "x", tags: [], body: "" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects PATCH /api/skills/:id without a bearer token", async () => {
+    const res = await fetch(url("/api/skills/demo"), { method: "PATCH" });
+    expect(res.status).toBe(401);
   });
 });

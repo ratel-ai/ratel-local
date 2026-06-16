@@ -1,6 +1,7 @@
+import { useNavigate } from "@tanstack/react-router";
 import { SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { useRatelApp } from "@/App";
+import { skillPath, useRatelApp } from "@/App";
 import {
   PageHeader,
   PageHeaderActions,
@@ -47,20 +48,19 @@ interface SkillsResponse {
   problems: SkillProblem[];
 }
 
-interface SkillDetail extends SkillSummary {
-  body: string;
-  state: string;
-}
-
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; data: SkillsResponse };
 
 export function SkillsPage() {
-  const { openCommandMenu, request, runAction, busy } = useRatelApp();
+  const { openCommandMenu, request, runAction, busy, token } = useRatelApp();
+  const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
-  const [detailId, setDetailId] = useState<string | null>(null);
+
+  const openSkill = (id: string) => {
+    void navigate({ to: skillPath(id, token) } as never);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -214,7 +214,7 @@ export function SkillsPage() {
         <SkillSection
           title="Active"
           caption={`Served by the gateway from ${ready.managedDir ?? ""}`}
-          onView={setDetailId}
+          onView={openSkill}
           skills={managed}
           renderAction={(skill) => (
             <Button
@@ -235,7 +235,7 @@ export function SkillsPage() {
         <SkillSection
           title="Available"
           caption={`Claude Code skills in ${ready.nativeDir ?? ""}, not yet served`}
-          onView={setDetailId}
+          onView={openSkill}
           skills={available}
           renderAction={(skill) => (
             <Button
@@ -250,8 +250,6 @@ export function SkillsPage() {
           )}
         />
       )}
-
-      <SkillDetailDialog id={detailId} onClose={() => setDetailId(null)} />
     </main>
   );
 }
@@ -456,69 +454,6 @@ function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
             Create
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function SkillDetailDialog(props: { id: string | null; onClose: () => void }) {
-  const { request } = useRatelApp();
-  const [detail, setDetail] = useState<SkillDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (props.id === null) return;
-    setDetail(null);
-    setError(null);
-    let cancelled = false;
-    request<SkillDetail>(`/api/skills/${encodeURIComponent(props.id)}`)
-      .then((d) => {
-        if (!cancelled) setDetail(d);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load skill");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [props.id, request]);
-
-  return (
-    <Dialog
-      onOpenChange={(open) => {
-        if (!open) props.onClose();
-      }}
-      open={props.id !== null}
-    >
-      <DialogContent className="max-h-[80vh] overflow-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{detail?.name ?? props.id ?? "Skill"}</DialogTitle>
-          {detail && <DialogDescription>{detail.description}</DialogDescription>}
-        </DialogHeader>
-        {error && <p className="text-destructive text-sm">{error}</p>}
-        {!detail && !error && <p className="text-muted-foreground text-sm">Loading…</p>}
-        {detail && (
-          <div className="grid gap-3">
-            <p className="text-muted-foreground text-xs">
-              {detail.state === "active" ? "Served by the gateway" : "Available (not yet served)"}
-            </p>
-            {detail.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {detail.tags.map((t) => (
-                  <span
-                    className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
-                    key={t}
-                  >
-                    {t}
-                  </span>
-                ))}
-              </div>
-            )}
-            <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 font-mono text-xs">
-              {detail.body || "(no instructions)"}
-            </pre>
-          </div>
-        )}
       </DialogContent>
     </Dialog>
   );

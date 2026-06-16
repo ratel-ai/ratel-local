@@ -31,6 +31,7 @@ import {
   previewImport,
   previewLink,
   removeServer,
+  updateSkillRoute,
 } from "./routes.js";
 import {
   constantTimeEqual,
@@ -152,8 +153,15 @@ async function route(
     return deactivateSkillsRoute(ctx, body);
   }
   const skillMatch = /^\/api\/skills\/([^/]+)$/.exec(path);
-  if (method === "GET" && skillMatch) {
-    return getSkill(ctx, decodeURIComponent(skillMatch[1]));
+  if (skillMatch) {
+    const id = decodeURIComponent(skillMatch[1]);
+    if (method === "GET") {
+      return getSkill(ctx, id);
+    }
+    if (method === "PATCH") {
+      const body = await readJsonBody(req);
+      return updateSkillRoute(ctx, id, body);
+    }
   }
   if (method === "POST" && path === "/api/open-file") {
     const body = await readJsonBody(req);

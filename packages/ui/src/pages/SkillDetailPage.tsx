@@ -1,0 +1,235 @@
+import { useNavigate } from "@tanstack/react-router";
+import { ArrowLeft, Pencil, Save, Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useRatelApp } from "@/App";
+import {
+  PageHeader,
+  PageHeaderActions,
+  PageHeaderBackRow,
+  PageHeaderContent,
+  PageHeaderDescription,
+  PageHeaderSidebarTrigger,
+  PageHeaderTitle,
+} from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+
+interface SkillDetail {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  body: string;
+  state: "active" | "available";
+}
+
+type LoadState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; data: SkillDetail };
+
+export function SkillDetailPage(props: { id: string }) {
+  const navigate = useNavigate();
+  const { request, runAction, busy, token } = useRatelApp();
+  const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [isEditing, setIsEditing] = useState(false);
+  const [description, setDescription] = useState("");
+  const [tags, setTags] = useState("");
+  const [body, setBody] = useState("");
+
+  const backPath = token ? `/skills?t=${encodeURIComponent(token)}` : "/skills";
+  const goBack = () => {
+    void navigate({ to: backPath } as never);
+  };
+
+  const load = useCallback(async () => {
+    setState({ status: "loading" });
+    try {
+      const data = await request<SkillDetail>(`/api/skills/${encodeURIComponent(props.id)}`);
+      setState({ status: "ready", data });
+    } catch (err) {
+      setState({
+        status: "error",
+        message: err instanceof Error ? err.message : "Failed to load skill",
+      });
+    }
+  }, [request, props.id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const startEdit = () => {
+    if (state.status !== "ready") return;
+    setDescription(state.data.description);
+    setTags(state.data.tags.join(", "));
+    setBody(state.data.body);
+    setIsEditing(true);
+  };
+
+  const save = async () => {
+    const tagList = tags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const saved = await runAction(`Updated ${props.id}`, () =>
+      request(`/api/skills/${encodeURIComponent(props.id)}`, {
+        method: "PATCH",
+        body: { description: description.trim(), tags: tagList, body },
+      }),
+    );
+    if (saved) {
+      setIsEditing(false);
+      await load();
+    }
+  };
+
+  const detail = state.status === "ready" ? state.data : null;
+  const canSave = description.trim() !== "" && !busy;
+
+  return (
+    <main className="grid w-full gap-5 px-4 py-5 sm:px-6">
+      <PageHeader className="sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+        <PageHeaderContent>
+          <PageHeaderBackRow>
+            <Button onClick={goBack} size="sm" type="button" variant="ghost">
+              <ArrowLeft />
+              Skills
+            </Button>
+            <div className="flex items-center gap-1 sm:hidden">
+              <PageHeaderSidebarTrigger />
+            </div>
+          </PageHeaderBackRow>
+          <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
+            <Sparkles className="size-5 shrink-0 text-brand-green" />
+            <PageHeaderTitle className="truncate text-2xl">
+              {detail?.name ?? props.id}
+            </PageHeaderTitle>
+            {detail && (
+              <Badge variant="outline">{detail.state === "active" ? "Active" : "Available"}</Badge>
+            )}
+          </div>
+          {detail && !isEditing && (
+            <PageHeaderDescription className="mt-2">
+              {detail.description || "No description stored for this skill."}
+            </PageHeaderDescription>
+          )}
+        </PageHeaderContent>
+
+        <PageHeaderActions className="hidden sm:flex">
+          {detail &&
+            (isEditing ? (
+              <>
+                <Button
+                  onClick={() => setIsEditing(false)}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <X />
+                  Cancel
+                </Button>
+                <Button disabled={!canSave} onClick={() => void save()} size="sm" type="button">
+                  <Save />
+                  Save
+                </Button>
+              </>
+            ) : (
+              <Button onClick={startEdit} size="sm" type="button" variant="outline">
+                <Pencil />
+                Edit
+              </Button>
+            ))}
+          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
+        </PageHeaderActions>
+      </PageHeader>
+
+      {state.status === "loading" && (
+        <p className="px-1 text-muted-foreground text-sm">Loading skill…</p>
+      )}
+
+      {state.status === "error" && (
+        <div className="grid gap-3">
+          <p className="text-destructive text-sm">{state.message}</p>
+          <div>
+            <Button onClick={() => void load()} size="sm" variant="outline">
+              Retry
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {detail && !isEditing && (
+        <div className="grid gap-3">
+          {detail.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {detail.tags.map((t) => (
+                <span
+                  className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
+                  key={t}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+          <pre className="overflow-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-4 font-mono text-xs">
+            {detail.body || "(no instructions)"}
+          </pre>
+          <div className="sm:hidden">
+            <Button onClick={startEdit} size="sm" type="button" variant="outline">
+              <Pencil />
+              Edit
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {detail && isEditing && (
+        <div className="grid max-w-3xl gap-4">
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-description">Description</Label>
+            <Textarea
+              id="skill-description"
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="When the agent should reach for this skill…"
+              value={description}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-tags">Tags (comma-separated)</Label>
+            <Input
+              id="skill-tags"
+              onChange={(e) => setTags(e.target.value)}
+              placeholder="deploy, ship to production"
+              value={tags}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-body">Instructions</Label>
+            <Textarea
+              className="min-h-80 font-mono text-xs"
+              id="skill-body"
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="# How to…"
+              value={body}
+            />
+          </div>
+          <div className="flex items-center gap-2 sm:hidden">
+            <Button onClick={() => setIsEditing(false)} size="sm" type="button" variant="outline">
+              <X />
+              Cancel
+            </Button>
+            <Button disabled={!canSave} onClick={() => void save()} size="sm" type="button">
+              <Save />
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}

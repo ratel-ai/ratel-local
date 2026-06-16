@@ -7,6 +7,7 @@ import { Route as AgentSetupRouteImport } from "./routes/agent-setup";
 import { Route as AgentSetupKindRouteImport } from "./routes/agent-setup.$kind";
 import { Route as IndexRouteImport } from "./routes/index";
 import { Route as SkillsRouteImport } from "./routes/skills";
+import { Route as SkillsIdRouteImport } from "./routes/skills.$id";
 import { Route as ToolsScopeNameRouteImport } from "./routes/tools/$scope/$name";
 import { Route as ToolsNewRouteImport } from "./routes/tools/new";
 
@@ -31,6 +32,12 @@ const AgentSetupKindRoute = AgentSetupKindRouteImport.update({
 const SkillsRoute = SkillsRouteImport.update({
   id: "/skills",
   path: "/skills",
+  getParentRoute: () => rootRoute,
+} as any);
+
+const SkillsIdRoute = SkillsIdRouteImport.update({
+  id: "/skills/$id",
+  path: "/skills/$id",
   getParentRoute: () => rootRoute,
 } as any);
 
@@ -76,6 +83,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SkillsRouteImport;
       parentRoute: typeof rootRoute;
     };
+    "/skills/$id": {
+      id: "/skills/$id";
+      path: "/skills/$id";
+      fullPath: "/skills/$id";
+      preLoaderRoute: typeof SkillsIdRouteImport;
+      parentRoute: typeof rootRoute;
+    };
     "/tools/new": {
       id: "/tools/new";
       path: "/tools/new";
@@ -99,6 +113,7 @@ export const routeTree = rootRoute
     AgentSetupKindRoute,
     IndexRoute,
     SkillsRoute,
+    SkillsIdRoute,
     ToolsNewRoute,
     ToolsScopeNameRoute,
   })

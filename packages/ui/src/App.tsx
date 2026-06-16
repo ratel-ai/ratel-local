@@ -750,6 +750,11 @@ export function toolSourcePath(scope: RatelScope, name: string, token?: string) 
   return token ? `${path}?t=${encodeURIComponent(token)}` : path;
 }
 
+export function skillPath(id: string, token?: string) {
+  const path = `/skills/${encodeURIComponent(id)}`;
+  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+}
+
 export function toolSourceCreatePath(scope: RatelScope, token?: string) {
   const search = new URLSearchParams({ scope });
   if (token) search.set("t", token);

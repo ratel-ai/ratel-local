@@ -1,6 +1,6 @@
 import { type SpawnOptions, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { type Dirent, existsSync } from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type AuthFlowResult,
@@ -17,6 +17,7 @@ import {
   importAgentServers,
   linkAgentToRatel,
   loadSkills,
+  parseSkillMd,
   previewAgentImport,
   previewAgentLink,
   removeServerEntry,
@@ -86,28 +87,70 @@ function skillSummary(s: { id: string; name: string; description: string; tags?:
   return { id: s.id, name: s.name, description: s.description, tags: s.tags ?? [] };
 }
 
-/** Full detail (including the body) of a single skill, by id. */
-export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse> {
-  const { managedDir, nativeDir } = defaultSkillManagePaths(ctx.env.homeDir);
-  const active = (await loadSkills([managedDir], { logger: ctx.log })).find((s) => s.id === id);
-  if (active) return ok(skillDetail(active, "active"));
-  const available = (await loadSkills([nativeDir], { logger: ctx.log })).find((s) => s.id === id);
-  if (available) return ok(skillDetail(available, "available"));
-  return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
+interface FoundSkill {
+  /** Absolute path to the skill's `SKILL.md`. */
+  filePath: string;
+  state: "active" | "available";
+  parsed: ReturnType<typeof parseSkillMd>;
 }
 
-function skillDetail(
-  s: { id: string; name: string; description: string; tags?: string[]; body?: string },
-  state: "active" | "available",
-) {
-  return {
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    tags: s.tags ?? [],
-    body: s.body ?? "",
+/**
+ * Locate the `SKILL.md` backing a skill `id` (its frontmatter `name`). Managed
+ * (active) skills take precedence over native (available) ones, mirroring how
+ * the gateway resolves duplicates. Fail-soft per skill — a malformed `SKILL.md`
+ * is skipped rather than aborting the scan. Returns null when nothing matches.
+ */
+async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | null> {
+  const { managedDir, nativeDir } = defaultSkillManagePaths(homeDir);
+  const sources: Array<{ dir: string; state: "active" | "available" }> = [
+    { dir: managedDir, state: "active" },
+    { dir: nativeDir, state: "available" },
+  ];
+  for (const { dir, state } of sources) {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const filePath = join(dir, entry.name, "SKILL.md");
+      let raw: string;
+      try {
+        raw = await readFile(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      try {
+        const parsed = parseSkillMd(raw, filePath);
+        if (parsed.name === id) return { filePath, state, parsed };
+      } catch {
+        // Malformed frontmatter — skip, matching loadSkills' fail-soft behaviour.
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Full detail of a single skill, by id. Returns the *author* body straight from
+ * the `SKILL.md` (without the absolute-path bundled-resources index that
+ * loadSkills appends for dispatch) so the editor round-trips cleanly.
+ */
+export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse> {
+  const found = await findSkillFile(ctx.env.homeDir, id);
+  if (!found) return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
+  const { parsed, state } = found;
+  return ok({
+    id: parsed.name,
+    name: parsed.name,
+    description: parsed.description,
+    // Mirror the list view: triggers and tags are both indexed phrases.
+    tags: [...parsed.tags, ...parsed.triggers],
+    body: parsed.body,
     state,
-  };
+  });
 }
 
 /** Move skills into the Ratel-managed folder. `ids` omitted = activate all. */
@@ -160,19 +203,75 @@ export async function createSkillRoute(
   if (existsSync(join(skillDir, "SKILL.md"))) {
     throw new Error(`a skill named "${name}" already exists`);
   }
-  const contents = [
-    "---",
-    `name: ${name}`,
-    `description: ${JSON.stringify(description)}`,
-    ...(tags.length > 0 ? [`tags: [${tags.map((t) => JSON.stringify(t)).join(", ")}]`] : []),
-    "---",
-    "",
-    skillBody.trim(),
-    "",
-  ].join("\n");
+  const contents = buildSkillMd({ name, description, tags, body: skillBody });
   await mkdir(skillDir, { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), contents, "utf8");
   return ok({ created: name });
+}
+
+/**
+ * Overwrite an existing skill's `SKILL.md` in place. The skill's `name` and
+ * location are fixed (renaming would move the directory and break the manifest)
+ * — only description, tags, and body change. `stacks` are preserved; `triggers`
+ * fold into `tags`, since both are indexed phrases. Edits to a native skill
+ * under `~/.claude/skills` write back to that same file.
+ */
+export async function updateSkillRoute(
+  ctx: HandlerCtx,
+  id: string,
+  body: { description?: unknown; tags?: unknown; body?: unknown },
+): Promise<ApiResponse> {
+  const found = await findSkillFile(ctx.env.homeDir, id);
+  if (!found) return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
+  const description = requiredString(body.description, "description");
+  const tags = optionalStringArray(body.tags, "tags") ?? [];
+  const nextBody = typeof body.body === "string" ? stripBundledResources(body.body) : "";
+  const contents = buildSkillMd({
+    name: found.parsed.name,
+    description,
+    tags,
+    stacks: found.parsed.stacks,
+    body: nextBody,
+  });
+  await writeFile(found.filePath, contents, "utf8");
+  return ok({ updated: id });
+}
+
+/** Serialize a skill back to `SKILL.md` text: inline-scalar frontmatter + body. */
+function buildSkillMd(input: {
+  name: string;
+  description: string;
+  tags: string[];
+  stacks?: string[];
+  body: string;
+}): string {
+  const yamlList = (items: string[]) => `[${items.map((t) => JSON.stringify(t)).join(", ")}]`;
+  const stacks = input.stacks ?? [];
+  return [
+    "---",
+    `name: ${input.name}`,
+    `description: ${JSON.stringify(input.description)}`,
+    ...(input.tags.length > 0 ? [`tags: ${yamlList(input.tags)}`] : []),
+    ...(stacks.length > 0 ? [`stacks: ${yamlList(stacks)}`] : []),
+    "---",
+    "",
+    input.body.trim(),
+    "",
+  ].join("\n");
+}
+
+/**
+ * Drop the trailing "Bundled resources (absolute paths)" index that loadSkills
+ * appends for dispatch, so a client that submits a body still containing it
+ * doesn't persist (and then re-append) that machine-generated block.
+ */
+function stripBundledResources(body: string): string {
+  const idx = body.indexOf("## Bundled resources (absolute paths)");
+  if (idx === -1) return body;
+  return body
+    .slice(0, idx)
+    .replace(/\n+-{3,}\s*$/, "")
+    .trimEnd();
 }
 
 export async function openFile(
