@@ -104,6 +104,18 @@ describe("parseArgs — flags and config paths", () => {
     expect(r.configPaths).toEqual(["base.json", "extra.json"]);
   });
 
+  it("parses serve --auto-config as a boolean flag", () => {
+    const r = parseArgs(["serve", "--auto-config"]);
+    expect(r.flags["auto-config"]).toBe(true);
+    expect(r.configPaths).toEqual([]);
+  });
+
+  it("parses serve --project-root as a value flag", () => {
+    const r = parseArgs(["serve", "--auto-config", "--project-root", "/repo"]);
+    expect(r.flags["auto-config"]).toBe(true);
+    expect(r.flags["project-root"]).toBe("/repo");
+  });
+
   it("does not treat positionals as config paths under non-serve commands", () => {
     const r = parseArgs(["mcp", "add", "stripe", "https://example.com"]);
     expect(r.configPaths).toEqual([]);

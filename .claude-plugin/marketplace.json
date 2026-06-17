@@ -1,0 +1,30 @@
+{
+  "name": "ratel",
+  "owner": {
+    "name": "Agentified",
+    "email": "support@agentified.com"
+  },
+  "description": "Ratel plugins for MCP gateway setup, usage, and debugging.",
+  "plugins": [
+    {
+      "name": "ratel-mcp",
+      "displayName": "Ratel MCP",
+      "source": "./apps/ratel-mcp/plugin",
+      "description": "Expose upstream MCP servers through a searchable Ratel gateway.",
+      "author": {
+        "name": "Agentified",
+        "email": "support@agentified.com"
+      },
+      "homepage": "https://github.com/ratel-ai/ratel-mcp",
+      "repository": "https://github.com/ratel-ai/ratel-mcp",
+      "license": "Elastic-2.0",
+      "category": "Developer Tools",
+      "tags": [
+        "mcp",
+        "gateway",
+        "tool-calling",
+        "context-engineering"
+      ]
+    }
+  ]
+}

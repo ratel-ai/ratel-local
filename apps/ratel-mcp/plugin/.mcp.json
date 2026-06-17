@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ratel-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@ratel-ai/mcp-server@latest",
+        "serve",
+        "--auto-config"
+      ]
+    }
+  }
+}

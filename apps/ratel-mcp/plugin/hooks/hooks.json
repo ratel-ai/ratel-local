@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-tool-usage.mjs\" PreToolUse",
+            "statusMessage": "Logging Ratel tool usage",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-tool-usage.mjs\" PostToolUse",
+            "statusMessage": "Logging Ratel tool usage",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

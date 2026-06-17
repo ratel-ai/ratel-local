@@ -1,0 +1,48 @@
+{
+  "name": "ratel-mcp",
+  "version": "0.3.0-rc.0",
+  "description": "Ratel MCP gateway plugin for exposing curated upstream MCP tools through search_tools and invoke_tool.",
+  "author": {
+    "name": "Agentified",
+    "email": "support@agentified.com",
+    "url": "https://github.com/ratel-ai"
+  },
+  "homepage": "https://github.com/ratel-ai/ratel-mcp",
+  "repository": "https://github.com/ratel-ai/ratel-mcp",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gateway",
+    "tool-calling",
+    "ratel",
+    "context-engineering"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Ratel MCP",
+    "shortDescription": "Expose upstream MCP servers through a searchable Ratel gateway",
+    "longDescription": "Ratel MCP lets Codex use one gateway server that searches and invokes tools from configured upstream MCP servers. Use it to keep agent tool surfaces small while preserving access to specialized tools.",
+    "developerName": "Agentified",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write",
+      "MCP"
+    ],
+    "websiteURL": "https://github.com/ratel-ai/ratel-mcp",
+    "defaultPrompt": [
+      "Use Ratel MCP to find the right tool for this task",
+      "Import my Codex MCP servers into Ratel",
+      "Review my Ratel tool usage and suggest improvements",
+      "Open the Ratel UI"
+    ],
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "brandColor": "#2F8F6B",
+    "screenshots": []
+  }
+}
