@@ -39,6 +39,46 @@ Or skip the install and run the CLI on-the-fly:
 npx -y @ratel-ai/mcp-server --help
 ```
 
+### Agent plugin marketplaces
+
+The repo also ships a shared Ratel MCP plugin for Codex and Claude Code. It
+starts the gateway over stdio with `npx -y @ratel-ai/mcp-server@latest serve
+--auto-config` and bundles skills for setup, debugging, and tool-usage review.
+
+#### Codex
+
+Add the remote marketplace, then install **Ratel MCP** from the **Ratel**
+marketplace in Codex:
+
+```bash
+codex plugin marketplace add ratel-ai/ratel-mcp
+```
+
+For Codex local development from a checkout, run this from the repo root:
+
+```bash
+codex plugin marketplace add .
+```
+
+#### Claude Code
+
+Add the remote marketplace and install the plugin:
+
+```bash
+claude plugin marketplace add ratel-ai/ratel-mcp
+claude plugin install ratel-mcp@ratel
+```
+
+If Claude Code is already running, restart it or run `/reload-plugins` inside
+the session.
+
+For Claude Code local development from a checkout, use `.` as the marketplace:
+
+```bash
+claude plugin marketplace add .
+claude plugin install ratel-mcp@ratel
+```
+
 ## CLI quickstart
 
 `ratel-mcp` mirrors `claude mcp add`'s flag layout — any invocation that works against Claude Code's CLI works here unchanged.

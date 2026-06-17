@@ -1,5 +1,4 @@
 {
-  "description": "Ratel MCP tool usage logger",
   "hooks": {
     "PreToolUse": [
       {

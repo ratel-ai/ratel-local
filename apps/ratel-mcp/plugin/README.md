@@ -62,21 +62,22 @@ claude plugin validate ./apps/ratel-mcp/plugin
 claude plugin validate .
 ```
 
-Add the local repo marketplace from inside Claude Code:
+Add the local repo marketplace:
 
 ```bash
-/plugin marketplace add .
-/plugin install ratel-mcp@ratel
-/reload-plugins
+claude plugin marketplace add .
+claude plugin install ratel-mcp@ratel
 ```
 
 For GitHub distribution, publish the repo and add the root marketplace:
 
 ```bash
-/plugin marketplace add ratel-ai/ratel-mcp
-/plugin install ratel-mcp@ratel
-/reload-plugins
+claude plugin marketplace add ratel-ai/ratel-mcp
+claude plugin install ratel-mcp@ratel
 ```
+
+If Claude Code is already running, restart it or run `/reload-plugins` inside
+the session.
 
 ## Configure Upstreams
 
