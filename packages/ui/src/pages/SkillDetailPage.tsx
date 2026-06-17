@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Pencil, Save, Sparkles, X } from "lucide-react";
+import { ArrowLeft, Pencil, Save, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useRatelApp } from "@/App";
 import { Markdown } from "@/components/markdown";
@@ -12,6 +12,7 @@ import {
   PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
+import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +26,7 @@ interface SkillDetail {
   tags: string[];
   body: string;
   state: "active" | "available";
+  source: SkillSource;
 }
 
 type LoadState =
@@ -101,8 +103,8 @@ export function SkillDetailPage(props: { id: string }) {
   };
 
   const detail = state.status === "ready" ? state.data : null;
-  // Available skills live in ~/.claude/skills and are Claude Code's to manage;
-  // they're read-only here until activated (the backend rejects the PATCH too).
+  // Unmanaged skills live in an agent's own folder (Claude / Codex); they're
+  // read-only here until brought into Ratel (the backend rejects the PATCH too).
   const canEdit = detail?.state === "active";
   const canSave = description.trim() !== "" && !busy;
 
@@ -120,12 +122,16 @@ export function SkillDetailPage(props: { id: string }) {
             </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
-            <Sparkles className="size-5 shrink-0 text-brand-green" />
+            {detail && <SourceIcon source={detail.source} />}
             <PageHeaderTitle className="truncate text-2xl">
               {detail?.name ?? props.id}
             </PageHeaderTitle>
             {detail && (
-              <Badge variant="outline">{detail.state === "active" ? "Active" : "Available"}</Badge>
+              <Badge variant="outline">
+                {detail.state === "active"
+                  ? "Managed by Ratel"
+                  : `From ${sourceLabel(detail.source)}`}
+              </Badge>
             )}
           </div>
           {detail && !isEditing && (
@@ -208,10 +214,12 @@ export function SkillDetailPage(props: { id: string }) {
               </Button>
             </div>
           ) : (
-            <p className="text-muted-foreground text-xs">
-              This skill lives in <code className="font-mono">~/.claude/skills</code> and is
-              read-only here. Activate it from the Skills page to edit.
-            </p>
+            detail && (
+              <p className="text-muted-foreground text-xs">
+                This skill is managed by {sourceLabel(detail.source)} and is read-only here. Bring
+                it into Ratel from the Skills page to edit it.
+              </p>
+            )
           )}
         </div>
       )}

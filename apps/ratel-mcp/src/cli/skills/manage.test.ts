@@ -17,6 +17,7 @@ beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "ratel-manage-"));
   paths = {
     nativeDir: join(home, ".claude", "skills"),
+    codexDir: join(home, ".codex", "skills"),
     managedDir: join(home, ".ratel", "skills"),
     manifestPath: join(home, ".ratel", "skill-manifest.json"),
   };
@@ -28,6 +29,12 @@ afterEach(async () => {
 
 async function writeNativeSkill(name: string, body = "# body"): Promise<void> {
   const dir = join(paths.nativeDir, name);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\n${body}`);
+}
+
+async function writeCodexSkill(name: string, body = "# body"): Promise<void> {
+  const dir = join(paths.codexDir, name);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\n${body}`);
 }
@@ -102,6 +109,26 @@ describe("activateSkills", () => {
     expect(await exists(join(paths.managedDir, "beta"))).toBe(false);
     expect(await exists(join(paths.nativeDir, "beta", "SKILL.md"))).toBe(true);
   });
+
+  it("moves Codex skills into the managed folder and records source=codex", async () => {
+    await writeCodexSkill("from-codex");
+    const result = await activateSkills(paths);
+    expect(result.moved.map((m) => m.id)).toEqual(["from-codex"]);
+    expect(await exists(join(paths.codexDir, "from-codex", "SKILL.md"))).toBe(false);
+    expect(await exists(join(paths.managedDir, "from-codex", "SKILL.md"))).toBe(true);
+    expect((await listManaged(paths)).find((m) => m.id === "from-codex")?.source).toBe("codex");
+  });
+
+  it("takes a name present in both agents from Claude and skips the Codex copy", async () => {
+    await writeNativeSkill("shared");
+    await writeCodexSkill("shared");
+    const result = await activateSkills(paths);
+    expect(result.moved.map((m) => m.id)).toEqual(["shared"]);
+    expect((await listManaged(paths)).find((m) => m.id === "shared")?.source).toBe("claude");
+    expect(result.skipped.map((s) => s.id)).toContain("shared");
+    // the Codex copy is left untouched
+    expect(await exists(join(paths.codexDir, "shared", "SKILL.md"))).toBe(true);
+  });
 });
 
 describe("deactivateSkills", () => {
@@ -140,6 +167,31 @@ describe("deactivateSkills", () => {
     expect(await exists(join(paths.nativeDir, "moved", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.nativeDir, "hand-authored"))).toBe(false);
     expect(await exists(join(paths.managedDir, "hand-authored", "SKILL.md"))).toBe(true);
+  });
+
+  it("restores a Codex-sourced skill to the Codex folder, not Claude's", async () => {
+    await writeCodexSkill("from-codex");
+    await activateSkills(paths);
+    const result = await deactivateSkills(paths);
+    expect(result.restored.map((m) => m.id)).toEqual(["from-codex"]);
+    expect(await exists(join(paths.codexDir, "from-codex", "SKILL.md"))).toBe(true);
+    expect(await exists(join(paths.nativeDir, "from-codex"))).toBe(false);
+    expect(await exists(join(paths.managedDir, "from-codex"))).toBe(false);
+  });
+
+  it("restores a sourceless (legacy) manifest entry to Claude", async () => {
+    await writeNativeSkill("legacy");
+    await activateSkills(paths);
+    // Simulate a manifest written before multi-source support (no `source`).
+    const manifest = JSON.parse(await readFile(paths.manifestPath, "utf8")) as {
+      managed: Array<Record<string, unknown>>;
+    };
+    for (const entry of manifest.managed) delete entry.source;
+    await writeFile(paths.manifestPath, JSON.stringify(manifest));
+
+    const result = await deactivateSkills(paths);
+    expect(result.restored.map((m) => m.id)).toEqual(["legacy"]);
+    expect(await exists(join(paths.nativeDir, "legacy", "SKILL.md"))).toBe(true);
   });
 
   it("does nothing when there is no manifest", async () => {

@@ -12,6 +12,7 @@ import {
   PageHeaderTitle,
 } from "@/components/page-header";
 import { ResponsiveToolbar, ResponsiveToolbarButton } from "@/components/responsive-toolbar";
+import { type SkillSource, SourceIcon } from "@/components/source-icon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -32,6 +33,9 @@ interface SkillSummary {
   name: string;
   description: string;
   tags: string[];
+  /** Managed skills report their origin agent (or "ratel" when created here);
+   *  available skills report the agent whose folder they live in. */
+  source: SkillSource;
 }
 
 interface SkillProblem {
@@ -43,6 +47,7 @@ interface SkillProblem {
 interface SkillsResponse {
   managedDir: string;
   nativeDir: string;
+  codexDir: string;
   managed: SkillSummary[];
   available: SkillSummary[];
   problems: SkillProblem[];
@@ -120,9 +125,10 @@ export function SkillsPage() {
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
-            Reusable playbooks Ratel serves through the gateway. Activate a skill to move it from{" "}
-            <code className="font-mono text-xs">~/.claude/skills</code> into Ratel's managed folder;
-            deactivate to move it back.
+            Reusable playbooks Ratel serves through the gateway. Skills from Claude Code (
+            <code className="font-mono text-xs">~/.claude/skills</code>) and Codex (
+            <code className="font-mono text-xs">~/.codex/skills</code>) can be brought into Ratel's
+            managed folder to serve them; stop managing one to return it to where it came from.
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="hidden items-center sm:flex">
@@ -133,14 +139,14 @@ export function SkillsPage() {
               disabled={busy}
               onClick={() =>
                 void mutate(
-                  `Activated ${available.length} skill${available.length === 1 ? "" : "s"}`,
+                  `Now managing ${available.length} skill${available.length === 1 ? "" : "s"}`,
                   "/api/skills/activate",
                 )
               }
               size="sm"
               variant="outline"
             >
-              Activate all
+              Manage all
             </Button>
           )}
           {canDeactivateAll && (
@@ -149,14 +155,14 @@ export function SkillsPage() {
               disabled={busy}
               onClick={() =>
                 void mutate(
-                  `Deactivated ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
+                  `Stopped managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
                   "/api/skills/deactivate",
                 )
               }
               size="sm"
               variant="outline"
             >
-              Deactivate all
+              Unmanage all
             </Button>
           )}
           <ResponsiveToolbar>
@@ -206,46 +212,52 @@ export function SkillsPage() {
       {ready && managed.length === 0 && available.length === 0 && (
         <EmptyState
           title="No skills found"
-          description="Add Claude Code skills under ~/.claude/skills (or the Ratel-managed ~/.ratel/skills) and they'll show up here."
+          description="Add skills under ~/.claude/skills (Claude Code) or ~/.codex/skills (Codex), or create one in Ratel, and they'll show up here."
         />
       )}
 
       {ready && managed.length > 0 && (
         <SkillSection
-          title="Active"
-          caption={`Served by the gateway from ${ready.managedDir ?? ""}`}
+          title="Managed by Ratel"
+          caption="Served through the gateway. Stop managing one to return it to its agent."
           onView={openSkill}
           skills={managed}
-          renderAction={(skill) => (
-            <Button
-              disabled={busy}
-              onClick={() =>
-                void mutate(`Deactivated ${skill.name}`, "/api/skills/deactivate", [skill.id])
-              }
-              size="sm"
-              variant="outline"
-            >
-              Deactivate
-            </Button>
-          )}
+          renderAction={(skill) =>
+            skill.source === "ratel" ? (
+              <span className="px-1 text-muted-foreground text-xs">Created in Ratel</span>
+            ) : (
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void mutate(`Stopped managing ${skill.name}`, "/api/skills/deactivate", [
+                    skill.id,
+                  ])
+                }
+                size="sm"
+                variant="outline"
+              >
+                Stop managing
+              </Button>
+            )
+          }
         />
       )}
 
       {ready && available.length > 0 && (
         <SkillSection
-          title="Available"
-          caption={`Claude Code skills in ${ready.nativeDir ?? ""}, not yet served`}
+          title="Not managed"
+          caption="Available in Claude Code / Codex. Bring one into Ratel to serve it through the gateway."
           onView={openSkill}
           skills={available}
           renderAction={(skill) => (
             <Button
               disabled={busy}
               onClick={() =>
-                void mutate(`Activated ${skill.name}`, "/api/skills/activate", [skill.id])
+                void mutate(`Now managing ${skill.name}`, "/api/skills/activate", [skill.id])
               }
               size="sm"
             >
-              Activate
+              Manage with Ratel
             </Button>
           )}
         />
@@ -281,17 +293,15 @@ function SkillSection(props: {
         {visible.map((skill) => (
           <li
             key={skill.id}
-            className="flex items-center justify-between gap-3 rounded-md border border-border bg-card p-3"
+            className="flex items-center gap-3 rounded-md border border-border bg-card p-3"
           >
+            <SourceIcon source={skill.source} />
             <button
-              className="min-w-0 text-left"
+              className="min-w-0 flex-1 text-left"
               onClick={() => props.onView(skill.id)}
               type="button"
             >
-              <div className="flex items-center gap-2">
-                <Sparkles className="size-4 shrink-0 text-brand-green" />
-                <strong className="truncate font-medium hover:underline">{skill.name}</strong>
-              </div>
+              <strong className="block truncate font-medium hover:underline">{skill.name}</strong>
               {skill.description && (
                 <p className="mt-1 text-muted-foreground text-sm">{skill.description}</p>
               )}

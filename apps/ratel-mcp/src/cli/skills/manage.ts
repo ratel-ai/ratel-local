@@ -4,14 +4,19 @@ import { access, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "nod
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+/** The agent whose folder a skill is moved in from (and restored back to). */
+export type SkillSource = "claude" | "codex";
+
 /**
- * Locations the skill manager moves between. `nativeDir` is where Claude Code
- * auto-loads skills (always-on metadata); `managedDir` is the Ratel-managed
- * folder the gateway scans (loaded on demand). The manifest records exactly
- * which skills Ratel moved, so `deactivate` restores them — and only them.
+ * Locations the skill manager moves between. `nativeDir` (Claude Code) and
+ * `codexDir` (Codex) are where each agent auto-loads skills (always-on
+ * metadata); `managedDir` is the Ratel-managed folder the gateway scans (loaded
+ * on demand). The manifest records exactly which skills Ratel moved and from
+ * where, so `deactivate` restores each — and only those — to its own agent.
  */
 export interface SkillManagePaths {
   nativeDir: string;
+  codexDir: string;
   managedDir: string;
   manifestPath: string;
 }
@@ -19,6 +24,7 @@ export interface SkillManagePaths {
 export function defaultSkillManagePaths(home: string = homedir()): SkillManagePaths {
   return {
     nativeDir: join(home, ".claude", "skills"),
+    codexDir: join(home, ".codex", "skills"),
     managedDir: join(home, ".ratel", "skills"),
     manifestPath: join(home, ".ratel", "skill-manifest.json"),
   };
@@ -28,6 +34,10 @@ export interface ManagedEntry {
   id: string;
   /** Absolute path the skill was moved *from* (where deactivate restores it). */
   originalPath: string;
+  /** Which agent's folder it came from; restore targets this agent's dir.
+   *  Optional for manifests written before multi-source support (treated as
+   *  "claude", the only source that existed then). */
+  source?: SkillSource;
   movedAt: string;
 }
 
@@ -74,32 +84,48 @@ export async function activateSkills(
   const moved: ManagedEntry[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
 
+  // Claude first, then Codex: a skill id present in both is taken from Claude and
+  // skipped for Codex (one id can only occupy one managed folder slot).
+  const sources: Array<{ dir: string; source: SkillSource }> = [
+    { dir: paths.nativeDir, source: "claude" },
+    { dir: paths.codexDir, source: "codex" },
+  ];
+
   // Persist the manifest after *each* move (atomically), so a crash or a failed
   // move mid-loop leaves a manifest that exactly reflects what's on disk — every
   // already-moved skill stays restorable by `deactivate`. The finally is a backstop
   // in case the throw was the manifest write itself.
   try {
-    for (const id of await skillDirNames(paths.nativeDir)) {
-      if (options.ids && !options.ids.includes(id)) continue;
-      const from = join(paths.nativeDir, id);
-      const to = join(paths.managedDir, id);
-      if (already.has(id) || (await exists(to))) {
-        skipped.push({ id, reason: "already present in managed folder" });
-        log(`[ratel] skill ${id}: already managed — skipping`);
-        continue;
+    for (const { dir, source } of sources) {
+      for (const id of await skillDirNames(dir)) {
+        if (options.ids && !options.ids.includes(id)) continue;
+        const from = join(dir, id);
+        const to = join(paths.managedDir, id);
+        if (already.has(id) || (await exists(to))) {
+          skipped.push({ id, reason: "already present in managed folder" });
+          log(`[ratel] skill ${id}: already managed — skipping`);
+          continue;
+        }
+        if (options.dryRun) {
+          log(`[ratel] would move skill ${id} (${source}) → ${paths.managedDir}`);
+          moved.push({ id, originalPath: from, source, movedAt: now().toISOString() });
+          already.add(id);
+          continue;
+        }
+        await mkdir(paths.managedDir, { recursive: true });
+        await moveDir(from, to);
+        const entry: ManagedEntry = {
+          id,
+          originalPath: from,
+          source,
+          movedAt: now().toISOString(),
+        };
+        manifest.managed.push(entry);
+        moved.push(entry);
+        already.add(id);
+        await writeManifest(paths.manifestPath, manifest);
+        log(`[ratel] moved skill ${id} (${source}) → ${paths.managedDir}`);
       }
-      if (options.dryRun) {
-        log(`[ratel] would move skill ${id} → ${paths.managedDir}`);
-        moved.push({ id, originalPath: from, movedAt: now().toISOString() });
-        continue;
-      }
-      await mkdir(paths.managedDir, { recursive: true });
-      await moveDir(from, to);
-      const entry: ManagedEntry = { id, originalPath: from, movedAt: now().toISOString() };
-      manifest.managed.push(entry);
-      moved.push(entry);
-      await writeManifest(paths.manifestPath, manifest);
-      log(`[ratel] moved skill ${id} → ${paths.managedDir}`);
     }
   } finally {
     if (!options.dryRun && moved.length > 0) {
@@ -151,10 +177,14 @@ export async function deactivateSkills(
       continue;
     }
     const from = join(paths.managedDir, entry.id);
-    // Restore to the canonical native path derived from the id — do NOT trust the
-    // manifest's `originalPath`, which can be stale (synced from another machine
-    // with a different $HOME) or crafted to escape ~/.claude/skills.
-    const dest = join(paths.nativeDir, entry.id);
+    // Restore to the canonical path derived from the id plus the recorded source
+    // agent — do NOT trust the manifest's `originalPath`, which can be stale
+    // (synced from another machine with a different $HOME) or crafted to escape
+    // the skill dirs. `source` is a closed enum, so the destination dir is always
+    // one of our own; an absent/unknown source falls back to Claude (the only
+    // source that pre-dated multi-agent support).
+    const sourceDir = entry.source === "codex" ? paths.codexDir : paths.nativeDir;
+    const dest = join(sourceDir, entry.id);
     if (!(await exists(from))) {
       skipped.push({ id: entry.id, reason: "no longer in managed folder" });
       log(`[ratel] skill ${entry.id}: gone from managed folder — dropping from manifest`);

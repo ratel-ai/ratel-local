@@ -26,7 +26,13 @@ import {
   type SupportedAgentHostKind,
 } from "@ratel-ai/mcp-core";
 import type { HandlerCtx } from "../cli/handlers/types.js";
-import { activateSkills, deactivateSkills, defaultSkillManagePaths } from "../cli/skills/manage.js";
+import {
+  activateSkills,
+  deactivateSkills,
+  defaultSkillManagePaths,
+  listManaged,
+  type SkillSource,
+} from "../cli/skills/manage.js";
 
 export interface ApiResponse {
   status: number;
@@ -57,29 +63,63 @@ export async function getAgentHosts(ctx: HandlerCtx): Promise<ApiResponse> {
   return ok(await getAgentHostsState(ctx));
 }
 
+/** Where a skill sits: an unmanaged skill's agent, or "ratel" for managed ones. */
+type SkillOrigin = SkillSource | "ratel";
+
 /**
  * The skills Ratel serves (under the managed folder `~/.ratel/skills`) plus the
- * Claude Code skills available to activate (under `~/.claude/skills`, not yet
- * managed). Loaded the same way the gateway loads them.
+ * unmanaged skills available to bring in, from Claude Code (`~/.claude/skills`)
+ * and Codex (`~/.codex/skills`). Each carries a `source`: managed skills report
+ * the agent they came from (or "ratel" when created here); available skills
+ * report the agent whose folder they live in. Loaded as the gateway loads them.
  */
 export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
-  const { managedDir, nativeDir } = defaultSkillManagePaths(ctx.env.homeDir);
+  const paths = defaultSkillManagePaths(ctx.env.homeDir);
+  const { managedDir, nativeDir, codexDir } = paths;
   const problems: Array<{ id: string; where: "managed" | "available"; reason: string }> = [];
+
   const managed = await loadSkills([managedDir], {
     logger: ctx.log,
     onProblem: (p) => problems.push({ ...p, where: "managed" }),
   });
   const managedIds = new Set(managed.map((s) => s.id));
-  const native = await loadSkills([nativeDir], {
+
+  const claude = await loadSkills([nativeDir], {
     logger: ctx.log,
     onProblem: (p) => problems.push({ ...p, where: "available" }),
   });
-  const available = native.filter((s) => !managedIds.has(s.id));
+  const codex = await loadSkills([codexDir], {
+    logger: ctx.log,
+    onProblem: (p) => problems.push({ ...p, where: "available" }),
+  });
+
+  // Managed skills carry their origin agent; one created directly in Ratel has
+  // no manifest entry → "ratel".
+  const originById = new Map(
+    (await listManaged(paths)).map((m) => [m.id, (m.source ?? "claude") as SkillOrigin]),
+  );
+
+  // Available = unmanaged Claude + Codex skills, deduped (managed wins; a name in
+  // both agents is listed once, Claude first).
+  const available: Array<ReturnType<typeof skillSummary> & { source: SkillSource }> = [];
+  const seen = new Set(managedIds);
+  for (const [skills, source] of [
+    [claude, "claude"],
+    [codex, "codex"],
+  ] as const) {
+    for (const s of skills) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      available.push({ ...skillSummary(s), source });
+    }
+  }
+
   return ok({
     managedDir,
     nativeDir,
-    managed: managed.map(skillSummary),
-    available: available.map(skillSummary),
+    codexDir,
+    managed: managed.map((s) => ({ ...skillSummary(s), source: originById.get(s.id) ?? "ratel" })),
+    available,
     problems,
   });
 }
@@ -91,7 +131,8 @@ function skillSummary(s: { id: string; name: string; description: string; tags?:
 interface FoundSkill {
   /** Absolute path to the skill's `SKILL.md`. */
   filePath: string;
-  state: "active" | "available";
+  /** Which folder it was found in: the Ratel-managed one, or an agent's. */
+  kind: "managed" | "claude" | "codex";
   parsed: ReturnType<typeof parseSkillMd>;
   /** The raw, unmodified `SKILL.md` text — the basis for in-place rewrites. */
   raw: string;
@@ -114,12 +155,13 @@ function expandHome(p: string, home: string): string {
  * when nothing matches.
  */
 async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | null> {
-  const { managedDir, nativeDir } = defaultSkillManagePaths(homeDir);
-  const sources: Array<{ dir: string; state: "active" | "available" }> = [
-    { dir: expandHome(managedDir, homeDir), state: "active" },
-    { dir: expandHome(nativeDir, homeDir), state: "available" },
+  const { managedDir, nativeDir, codexDir } = defaultSkillManagePaths(homeDir);
+  const sources: Array<{ dir: string; kind: FoundSkill["kind"] }> = [
+    { dir: expandHome(managedDir, homeDir), kind: "managed" },
+    { dir: expandHome(nativeDir, homeDir), kind: "claude" },
+    { dir: expandHome(codexDir, homeDir), kind: "codex" },
   ];
-  for (const { dir, state } of sources) {
+  for (const { dir, kind } of sources) {
     let entries: Dirent[];
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -138,7 +180,7 @@ async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | 
       }
       try {
         const parsed = parseSkillMd(raw, filePath);
-        if (parsed.name === id) match = { filePath, state, parsed, raw };
+        if (parsed.name === id) match = { filePath, kind, parsed, raw };
       } catch {
         // Malformed frontmatter — skip, matching loadSkills' fail-soft behaviour.
       }
@@ -156,7 +198,18 @@ async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | 
 export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse> {
   const found = await findSkillFile(ctx.env.homeDir, id);
   if (!found) return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
-  const { parsed, state } = found;
+  const { parsed, kind } = found;
+  // Managed skills report their origin agent (from the manifest), or "ratel"
+  // when created here; unmanaged ones report the agent folder they live in.
+  let source: SkillOrigin;
+  if (kind === "managed") {
+    const entry = (await listManaged(defaultSkillManagePaths(ctx.env.homeDir))).find(
+      (m) => m.id === id,
+    );
+    source = entry?.source ?? "ratel";
+  } else {
+    source = kind;
+  }
   return ok({
     id: parsed.name,
     name: parsed.name,
@@ -164,7 +217,8 @@ export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse
     // Mirror the list view: triggers and tags are both indexed phrases.
     tags: [...parsed.tags, ...parsed.triggers],
     body: parsed.body,
-    state,
+    state: kind === "managed" ? "active" : "available",
+    source,
   });
 }
 
@@ -181,7 +235,7 @@ export async function activateSkillsRoute(
   return ok({ moved: result.moved.map((m) => m.id), skipped: result.skipped });
 }
 
-/** Restore managed skills back to `~/.claude/skills`. `ids` omitted = deactivate all. */
+/** Restore managed skills to the agent they came from. `ids` omitted = all. */
 export async function deactivateSkillsRoute(
   ctx: HandlerCtx,
   body: { ids?: unknown },
@@ -233,9 +287,10 @@ export async function createSkillRoute(
  * only `description`/`tags` are re-emitted and `triggers` folds into `tags`,
  * since both are indexed phrases.
  *
- * Available (native `~/.claude/skills`) skills are read-only here: editing the
- * file Claude Code owns before it's activated is surprising and can clash with
- * Claude Code's own management, so callers must activate first.
+ * Unmanaged skills (in an agent's own folder, Claude or Codex) are read-only
+ * here: editing the file an agent owns before it's brought into Ratel is
+ * surprising and can clash with that agent's own management, so callers must
+ * manage it with Ratel first.
  */
 export async function updateSkillRoute(
   ctx: HandlerCtx,
@@ -244,10 +299,10 @@ export async function updateSkillRoute(
 ): Promise<ApiResponse> {
   const found = await findSkillFile(ctx.env.homeDir, id);
   if (!found) return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
-  if (found.state === "available") {
+  if (found.kind !== "managed") {
     return {
       status: 409,
-      body: { error: "activate the skill before editing it", isError: true },
+      body: { error: "manage the skill with Ratel before editing it", isError: true },
     };
   }
   const description = requiredString(body.description, "description");

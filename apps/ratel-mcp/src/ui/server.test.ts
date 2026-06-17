@@ -847,3 +847,69 @@ describe("UI server — skill detail & edit", () => {
     expect(onDisk).toContain("## Bundled resources (absolute paths)");
   });
 });
+
+// Skills can be sourced from Claude (~/.claude/skills), Codex (~/.codex/skills),
+// or created directly in Ratel (~/.ratel/skills). These exercise the source
+// reporting and the Codex read-only path against a real temp home.
+describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
+  let home: string;
+  let local: ServerSession;
+
+  const url = (path: string) => `http://127.0.0.1:${local.handle.port}${path}`;
+  const headers = () => ({
+    Authorization: `Bearer ${local.token}`,
+    "Content-Type": "application/json",
+  });
+  const writeSkill = async (dir: string, name: string) => {
+    const skillDir = join(home, dir, name);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, "SKILL.md"),
+      ["---", `name: ${name}`, `description: "${name} desc"`, "---", "", `# ${name}`, ""].join(
+        "\n",
+      ),
+    );
+  };
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "ratel-skill-sources-"));
+    await writeSkill(".claude/skills", "from-claude");
+    await writeSkill(".codex/skills", "from-codex");
+    await writeSkill(".ratel/skills", "made-in-ratel"); // managed, no manifest entry → "ratel"
+    local = await spin({ homeDir: home });
+  });
+
+  afterEach(async () => {
+    await local.handle.shutdown();
+    await rm(local.assetDir, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("tags managed and available skills with their source on GET /api/skills", async () => {
+    const res = await fetch(url("/api/skills"), { headers: headers() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      managed: Array<{ id: string; source: string }>;
+      available: Array<{ id: string; source: string }>;
+    };
+    expect(body.managed.find((s) => s.id === "made-in-ratel")?.source).toBe("ratel");
+    const sourceOf = (id: string) => body.available.find((s) => s.id === id)?.source;
+    expect(sourceOf("from-claude")).toBe("claude");
+    expect(sourceOf("from-codex")).toBe("codex");
+  });
+
+  it("reports source=codex on GET and rejects editing a Codex skill with 409", async () => {
+    const detail = await fetch(url("/api/skills/from-codex"), { headers: headers() });
+    expect(detail.status).toBe(200);
+    const body = (await detail.json()) as { state: string; source: string };
+    expect(body.state).toBe("available");
+    expect(body.source).toBe("codex");
+
+    const patch = await fetch(url("/api/skills/from-codex"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: "x", tags: [], body: "y" }),
+    });
+    expect(patch.status).toBe(409);
+  });
+});
