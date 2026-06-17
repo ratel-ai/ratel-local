@@ -220,6 +220,7 @@ export function SkillsPage() {
         <SkillSection
           title="Managed by Ratel"
           caption="Served through the gateway. Stop managing one to return it to its agent."
+          iconSource="ratel"
           onView={openSkill}
           skills={managed}
           renderAction={(skill) =>
@@ -272,6 +273,9 @@ function SkillSection(props: {
   title: string;
   caption: string;
   skills: SkillSummary[];
+  /** Override the per-row source badge (e.g. force the Ratel mark for managed
+   *  skills, which are hosted by Ratel regardless of where they came from). */
+  iconSource?: SkillSource;
   onView: (id: string) => void;
   renderAction: (skill: SkillSummary) => ReactNode;
 }) {
@@ -295,7 +299,7 @@ function SkillSection(props: {
             key={skill.id}
             className="flex items-center gap-3 rounded-md border border-border bg-card p-3"
           >
-            <SourceIcon source={skill.source} />
+            <SourceIcon source={props.iconSource ?? skill.source} />
             <button
               className="min-w-0 flex-1 text-left"
               onClick={() => props.onView(skill.id)}

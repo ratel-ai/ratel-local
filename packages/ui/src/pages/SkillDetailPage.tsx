@@ -122,7 +122,7 @@ export function SkillDetailPage(props: { id: string }) {
             </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
-            {detail && <SourceIcon source={detail.source} />}
+            {detail && <SourceIcon source={detail.state === "active" ? "ratel" : detail.source} />}
             <PageHeaderTitle className="truncate text-2xl">
               {detail?.name ?? props.id}
             </PageHeaderTitle>
