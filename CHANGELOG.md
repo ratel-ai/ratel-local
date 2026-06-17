@@ -2,23 +2,14 @@
 
 All notable changes to this package are documented here. The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-06-17
 
 ### Added
 - **Skills, served through the gateway.** When a skill catalog is configured, `createMcpServer` / `buildGatewayFromConfig` expose `get_skill_content` alongside `search_capabilities` + `invoke_tool`, and `search_capabilities` returns a `skills` bucket beside `tools`.
-- `ratel-mcp skill` CLI: `activate` / `deactivate` move skills between `~/.claude/skills` and the Ratel-managed `~/.ratel/skills` so the gateway serves them; `list` shows managed skills; `suggest` ranks skills for a prompt.
+- `ratel-mcp skill` CLI: `activate` / `deactivate` move skills between an agent's folder and the Ratel-managed `~/.ratel/skills` so the gateway serves them; `list` shows managed skills; `suggest` ranks skills for a prompt.
 - Prompt-aware preload hook: `skill preload-hook` is a Claude Code `UserPromptSubmit` entrypoint that ranks skills against the prompt (lexical match, project-stack tie-break, clear-winner gate) and nudges the agent toward the best skill; `skill install-hook` / `uninstall-hook` register it in `settings.json` (`--scope user|project`).
-- Skills in the browser UI (`ratel-mcp ui`): the Skills page lists both the served (managed) skills and the available Claude Code skills (`~/.claude/skills`), with per-skill Activate/Deactivate, an Activate-all action, and a "New skill" form that creates a skill from scratch. Replaces the "coming soon" placeholder. Backed by `GET /api/skills` and `POST /api/skills` (create) / `/api/skills/{activate,deactivate}`.
-
-### Changed
-- Consume `@ratel-ai/sdk@^0.2.0`: the new discovery tool is `search_capabilities` (returns a `tools` and a `skills` bucket), and the skill model folds author `triggers` into the indexed `tags` and `stacks` into non-indexed `metadata` (ratel ADR-0012).
-
-### Backward compatibility
-- The gateway still advertises the deprecated `search_tools` (its pre-0.2.0 tools-only `{ groups }` result) alongside `search_capabilities`, so MCP clients that reference `search_tools` by name keep working unchanged. Its description flags it as deprecated; prefer `search_capabilities`.
-
-## [0.3.0-rc.0] - 2026-06-10
-
-### Added
+- **Skills from Claude Code and Codex.** Skills are sourced from both `~/.claude/skills` and `~/.codex/skills`. The manifest records which agent each managed skill came from, so unmanaging one returns it to that agent's folder (Claude → Claude, Codex → Codex). A name present in both agents is listed once per agent and is independently manageable.
+- **Skills in the browser UI (`ratel-mcp ui`).** The Skills page groups skills into "Managed by Ratel" (served through the gateway) and "Not managed" (available in Claude Code / Codex), each row badged with its source (Claude / Codex / Ratel). Per-skill "Manage with Ratel" / "Stop managing" plus bulk actions and a "New skill" form. Each skill has a full detail page that renders its instructions as Markdown in read mode and edits the raw `description` / `tags` / instructions in place (managed skills only); the page shows the skill's origin agent. Backed by `GET /api/skills`, `GET` / `PATCH /api/skills/{id}`, `POST /api/skills` (create) and `POST /api/skills/{activate,deactivate}`.
 - `ratel-mcp ui` subcommand — a loopback-only browser UI mirroring the CLI, protected by a per-session bearer token. It can view, add, edit, remove, and OAuth-authorize MCP servers across all three scopes; inspect backups; and run agent setup flows. Flags: `--port N`, `--no-open`.
 - Agent setup support for both Claude Code and Codex, including host detection, per-agent status, import/link previews, and apply endpoints for the UI.
 - Codex MCP config support via `~/.codex/config.toml` and project `.codex/config.toml`.
@@ -26,6 +17,7 @@ All notable changes to this package are documented here. The format is based on 
 - UI assets and navigation for agent links, including Claude Code and Codex branding.
 
 ### Changed
+- Consume `@ratel-ai/sdk@^0.2.0`: the new discovery tool is `search_capabilities` (returns a `tools` and a `skills` bucket), and the skill model folds author `triggers` into the indexed `tags` and `stacks` into non-indexed `metadata` (ratel ADR-0012).
 - Reworked agent import/link internals around supported agent host adapters instead of Claude-only handling.
 - Made CLI and README import/link language agent-neutral where the flow now supports multiple agents.
 - Backup handling now uses the newer manifest/listing model across CLI and UI routes.
@@ -35,7 +27,11 @@ All notable changes to this package are documented here. The format is based on 
 - Removed the old backup undo command.
 
 ### Fixed
+- A skill's `SKILL.md` is rewritten in place on edit: frontmatter keys Ratel doesn't manage (`allowed-tools`, `model`, custom keys, comments) are preserved, the write is atomic, and `description` / `tags` containing quotes or backslashes round-trip without accumulating escape characters (the loader now decodes escaped scalars).
 - Agent rewrites consistently install the `ratel-mcp` gateway command.
+
+### Backward compatibility
+- The gateway still advertises the deprecated `search_tools` (its pre-0.2.0 tools-only `{ groups }` result) alongside `search_capabilities`, so MCP clients that reference `search_tools` by name keep working unchanged. Its description flags it as deprecated; prefer `search_capabilities`.
 
 ## [0.2.0] - 2026-05-12
 
