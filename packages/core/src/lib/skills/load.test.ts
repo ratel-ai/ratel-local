@@ -41,6 +41,19 @@ describe("parseSkillMd", () => {
     expect(parsed.description).toBe("Quoted: with colon");
   });
 
+  it("decodes escapes in a double-quoted scalar (inverse of JSON.stringify)", () => {
+    const parsed = parseSkillMd(
+      `---\nname: x\ndescription: ${JSON.stringify('Say "hi" with a \\ backslash')}\n---\nbody`,
+      "x/SKILL.md",
+    );
+    expect(parsed.description).toBe('Say "hi" with a \\ backslash');
+  });
+
+  it("collapses doubled quotes in a single-quoted scalar", () => {
+    const parsed = parseSkillMd(`---\nname: x\ndescription: 'it''s fine'\n---\nbody`, "x/SKILL.md");
+    expect(parsed.description).toBe("it's fine");
+  });
+
   it("throws when name or description is missing", () => {
     expect(() => parseSkillMd(`---\ndescription: d\n---\nbody`, "x")).toThrow(/name/);
     expect(() => parseSkillMd(`---\nname: n\n---\nbody`, "x")).toThrow(/description/);

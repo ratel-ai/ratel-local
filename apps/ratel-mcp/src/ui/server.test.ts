@@ -810,6 +810,30 @@ describe("UI server — skill detail & edit", () => {
     expect(await readFile(skillMdPath(), "utf8")).toContain("# Original body");
   });
 
+  it("round-trips a description containing quotes and backslashes through PATCH", async () => {
+    const tricky = 'Use when the user says "review #123" or has a C:\\path';
+    const res = await fetch(url("/api/skills/demo"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: tricky, tags: ['a "quoted" tag'], body: "# body" }),
+    });
+    expect(res.status).toBe(200);
+
+    // On disk it is stored as a valid escaped (JSON-style) YAML scalar...
+    const onDisk = await readFile(skillMdPath(), "utf8");
+    expect(onDisk).toContain(`description: ${JSON.stringify(tricky)}`);
+
+    // ...and reads back identically, with no accumulated backslashes.
+    const detail = (await (
+      await fetch(url("/api/skills/demo"), { headers: headers() })
+    ).json()) as {
+      description: string;
+      tags: string[];
+    };
+    expect(detail.description).toBe(tricky);
+    expect(detail.tags).toEqual(['a "quoted" tag']);
+  });
+
   it("does not truncate a body that legitimately contains the bundled-resources heading", async () => {
     const authored = "# Intro\n\n## Bundled resources (absolute paths)\n\nI wrote this myself.\n";
     const res = await fetch(url("/api/skills/demo"), {

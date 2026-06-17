@@ -195,11 +195,26 @@ function parseList(value: string | string[] | undefined): string[] {
 }
 
 function stripQuotes(s: string): string {
-  if (
-    s.length >= 2 &&
-    ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")))
-  ) {
-    return s.slice(1, -1);
+  if (s.length >= 2) {
+    if (s.startsWith('"') && s.endsWith('"')) {
+      // A double-quoted scalar is valid JSON, so JSON.parse decodes its escapes
+      // (\" \\ \n \uXXXX) — the exact inverse of the JSON.stringify the UI server
+      // writes with, so a description/tag containing quotes or backslashes
+      // round-trips cleanly instead of accumulating escape characters. Fall back
+      // to a bare strip when the body isn't valid JSON (e.g. an author wrote an
+      // unescaped backslash), preserving the previous lenient behaviour.
+      try {
+        const parsed: unknown = JSON.parse(s);
+        if (typeof parsed === "string") return parsed;
+      } catch {
+        // not valid JSON — fall through to the bare strip
+      }
+      return s.slice(1, -1);
+    }
+    if (s.startsWith("'") && s.endsWith("'")) {
+      // Single-quoted YAML scalar: a doubled '' is an escaped literal quote.
+      return s.slice(1, -1).replace(/''/g, "'");
+    }
   }
   return s;
 }
