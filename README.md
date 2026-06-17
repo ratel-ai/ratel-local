@@ -133,6 +133,7 @@ For summarizing the resulting JSONL stream, see [`@ratel-ai/cli`'s `ratel inspec
 Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available.
 
 ### Browser UI
+**Note:** The `ui` command is only available on the RC build. To use it, install with `pnpm add -g @ratel-ai/mcp-server@rc`, the stable version does not include this command yet.
 
 ```bash
 ratel-mcp ui              # starts a local UI on an ephemeral 127.0.0.1 port, opens your browser
