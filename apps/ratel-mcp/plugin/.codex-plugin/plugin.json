@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/ratel-ai/ratel-mcp",
   "repository": "https://github.com/ratel-ai/ratel-mcp",
-  "license": "Elastic-2.0",
+  "license": "MIT",
   "keywords": [
     "mcp",
     "model-context-protocol",

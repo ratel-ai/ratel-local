@@ -40,4 +40,4 @@ RC-first is the convention: ship `X.Y.Z-rc.0` first (`--tag rc`), smoke it on a 
 
 ## License
 
-Contributions are licensed under the project's [Elastic License 2.0](LICENSE.md). By submitting a PR you agree your contribution is licensed accordingly.
+Contributions are licensed under the project's [MIT License](LICENSE.md). By submitting a PR you agree your contribution is licensed accordingly.

@@ -12,7 +12,7 @@
     <a href="https://www.npmjs.com/package/@ratel-ai/mcp-server"><img src="https://img.shields.io/npm/v/@ratel-ai/mcp-server?label=npm&color=cb3837" alt="npm" /></a>
     <a href="https://github.com/ratel-ai/ratel-mcp/stargazers"><img src="https://img.shields.io/github/stars/ratel-ai/ratel-mcp?style=social" alt="GitHub stars" /></a>
     <a href="https://discord.gg/hdKpx69NR"><img src="https://img.shields.io/discord/1478702964003705015?logo=discord&logoColor=white&color=7289da&label=discord" alt="Discord" /></a>
-    <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-ELv2-blue" alt="license" /></a>
+    <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license" /></a>
   </p>
 </div>
 
@@ -289,7 +289,7 @@ CI runs all of the above on every PR.
 
 ## License
 
-**Elastic License 2.0**, with a grant making it free for OSI-approved open-source projects. Non-OSS / commercial production use requires a commercial license. See [LICENSE.md](LICENSE.md).
+**MIT**. Free to use, modify, and redistribute. See [LICENSE.md](LICENSE.md).
 
 ## Related
 
