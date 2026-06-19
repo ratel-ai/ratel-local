@@ -1,4 +1,16 @@
-export type { RatelConfig, ServerEntry, SkillsConfig } from "./config.js";
+export type {
+  AnalysisConfig,
+  CadenceConfig,
+  ChatSourceKind,
+  CoverageConfig,
+  ExtractorConfig,
+  ExtractorProvider,
+  RatelConfig,
+  ServerEntry,
+  SkillGenConfig,
+  SkillGenProvider,
+  SkillsConfig,
+} from "./config.js";
 export { ConfigError, mergeConfigs, parseConfig } from "./config.js";
 export type {
   BuildGatewayOptions,
@@ -9,6 +21,7 @@ export {
   buildGatewayFromConfig,
   defaultTransportFactory,
 } from "./gateway.js";
+export * from "./intents/index.js";
 export type {
   AuthFlowOptions,
   AuthFlowResult,

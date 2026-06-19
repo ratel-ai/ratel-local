@@ -305,3 +305,123 @@ describe("mergeConfigs skills", () => {
     expect(merged.skills?.dirs).toEqual(["/one"]);
   });
 });
+
+describe("parseConfig analysis", () => {
+  it("parses a full analysis block", () => {
+    const config = parseConfig({
+      mcpServers: {},
+      analysis: {
+        enabled: true,
+        chatSource: "hooks",
+        extractor: {
+          provider: "http",
+          endpoint: "http://127.0.0.1:8723",
+          apiKey: "sk-secret",
+          model: "claim-extractor-4B",
+        },
+        cadence: { everyNMessages: 10, onIdle: true },
+        skillGen: { provider: "auto", apiKey: "sk-anthropic" },
+      },
+    });
+    expect(config.analysis).toEqual({
+      enabled: true,
+      chatSource: "hooks",
+      extractor: {
+        provider: "http",
+        endpoint: "http://127.0.0.1:8723",
+        apiKey: "sk-secret",
+        model: "claim-extractor-4B",
+      },
+      cadence: { everyNMessages: 10, onIdle: true },
+      skillGen: { provider: "auto", apiKey: "sk-anthropic" },
+    });
+  });
+
+  it("leaves analysis undefined when the block is absent", () => {
+    const config = parseConfig({ mcpServers: {} });
+    expect(config.analysis).toBeUndefined();
+  });
+
+  it("accepts a partial analysis block", () => {
+    const config = parseConfig({
+      mcpServers: {},
+      analysis: { cadence: { everyNMessages: 5 } },
+    });
+    expect(config.analysis).toEqual({ cadence: { everyNMessages: 5 } });
+  });
+
+  it("rejects a non-object analysis block", () => {
+    expect(() => parseConfig({ mcpServers: {}, analysis: "nope" })).toThrow(/analysis.*object/i);
+  });
+
+  it("rejects an unknown chatSource", () => {
+    expect(() => parseConfig({ mcpServers: {}, analysis: { chatSource: "telepathy" } })).toThrow(
+      /analysis\.chatSource/,
+    );
+  });
+
+  it("rejects an unknown extractor provider", () => {
+    expect(() =>
+      parseConfig({ mcpServers: {}, analysis: { extractor: { provider: "magic" } } }),
+    ).toThrow(/analysis\.extractor\.provider/);
+  });
+
+  it("rejects a non-integer everyNMessages", () => {
+    expect(() =>
+      parseConfig({ mcpServers: {}, analysis: { cadence: { everyNMessages: 2.5 } } }),
+    ).toThrow(/everyNMessages/);
+    expect(() =>
+      parseConfig({ mcpServers: {}, analysis: { cadence: { everyNMessages: 0 } } }),
+    ).toThrow(/everyNMessages/);
+  });
+
+  it("rejects a non-boolean enabled", () => {
+    expect(() => parseConfig({ mcpServers: {}, analysis: { enabled: "yes" } })).toThrow(
+      /analysis\.enabled/,
+    );
+  });
+
+  it("rejects an unknown skillGen provider", () => {
+    expect(() =>
+      parseConfig({ mcpServers: {}, analysis: { skillGen: { provider: "wizard" } } }),
+    ).toThrow(/analysis\.skillGen\.provider/);
+  });
+
+  it("parses a coverage block", () => {
+    const config = parseConfig({
+      mcpServers: {},
+      analysis: { coverage: { minScore: 1.5, relativeRatio: 0.7, maxSkills: 3 } },
+    });
+    expect(config.analysis?.coverage).toEqual({ minScore: 1.5, relativeRatio: 0.7, maxSkills: 3 });
+  });
+
+  it("rejects an out-of-range relativeRatio and a negative minScore", () => {
+    expect(() =>
+      parseConfig({ mcpServers: {}, analysis: { coverage: { relativeRatio: 1.5 } } }),
+    ).toThrow(/relativeRatio/);
+    expect(() => parseConfig({ mcpServers: {}, analysis: { coverage: { minScore: -1 } } })).toThrow(
+      /minScore/,
+    );
+    expect(() => parseConfig({ mcpServers: {}, analysis: { coverage: { maxSkills: 0 } } })).toThrow(
+      /maxSkills/,
+    );
+  });
+});
+
+describe("mergeConfigs analysis", () => {
+  it("carries analysis through and lets the right-most config win", () => {
+    const merged = mergeConfigs([
+      { mcpServers: {}, analysis: { cadence: { everyNMessages: 5 } } },
+      { mcpServers: {}, analysis: { cadence: { everyNMessages: 20 } } },
+    ]);
+    expect(merged.analysis?.cadence?.everyNMessages).toBe(20);
+  });
+
+  it("preserves an earlier analysis block when later configs omit one", () => {
+    const merged = mergeConfigs([
+      { mcpServers: {}, analysis: { enabled: true } },
+      { mcpServers: {} },
+    ]);
+    expect(merged.analysis?.enabled).toBe(true);
+  });
+});
