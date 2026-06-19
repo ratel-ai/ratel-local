@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   activateSkills,
   deactivateSkills,
+  deleteManagedSkill,
   listManaged,
   type SkillManagePaths,
   SkillManifestError,
@@ -47,6 +48,34 @@ async function exists(path: string): Promise<boolean> {
     return false;
   }
 }
+
+describe("deleteManagedSkill", () => {
+  async function writeManagedSkill(name: string): Promise<void> {
+    const dir = join(paths.managedDir, name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: d\n---\n# x`);
+  }
+
+  it("removes a Ratel-created skill folder (no manifest entry)", async () => {
+    await writeManagedSkill("my-skill");
+    const removed = await deleteManagedSkill(paths, "my-skill");
+    expect(removed).toBe(true);
+    expect(await exists(join(paths.managedDir, "my-skill", "SKILL.md"))).toBe(false);
+  });
+
+  it("drops the manifest entry for an activated skill it deletes", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths, {});
+    expect((await listManaged(paths)).map((m) => m.id)).toContain("api-design");
+    await deleteManagedSkill(paths, "api-design");
+    expect((await listManaged(paths)).map((m) => m.id)).not.toContain("api-design");
+  });
+
+  it("returns false for an unknown skill and rejects unsafe ids", async () => {
+    expect(await deleteManagedSkill(paths, "ghost")).toBe(false);
+    await expect(deleteManagedSkill(paths, "../escape")).rejects.toThrow(/unsafe/);
+  });
+});
 
 describe("activateSkills", () => {
   it("moves native skills into the managed folder and records a manifest", async () => {

@@ -11,6 +11,7 @@ import {
 } from "@ratel-ai/mcp-core";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
+import { INTENTS_USAGE, runIntents } from "./handlers/intents.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { runServe } from "./handlers/serve.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
@@ -44,6 +45,7 @@ Commands:
   mcp      manage MCP servers (add, remove, list, get, edit, import, link, auth)
   backup   manage backup snapshots (list)
   skill    move skills between Claude Code and Ratel (activate, deactivate, list)
+  intents  analyze captured chat into intents and match them to skills (run)
   ui       launch a local browser UI mirroring the CLI [--port N] [--no-open]
 
 Run \`ratel-mcp <group>\` for the verbs available in a group.`;
@@ -85,6 +87,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     return {};
   }
 
+  if (parsed.group === "intents" && parsed.verb === undefined) {
+    log(INTENTS_USAGE);
+    return {};
+  }
+
   if (parsed.group === "serve") {
     return runServe(parsed, options, log);
   }
@@ -113,6 +120,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "skill") {
     await runSkill(ctx);
+    return {};
+  }
+
+  if (parsed.group === "intents") {
+    await runIntents(ctx);
     return {};
   }
 

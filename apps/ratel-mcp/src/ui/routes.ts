@@ -30,9 +30,11 @@ import {
   activateSkills,
   deactivateSkills,
   defaultSkillManagePaths,
+  deleteManagedSkill,
   listManaged,
   type SkillSource,
 } from "../cli/skills/manage.js";
+import { recomputeIntentCoverage } from "../intents/coverage.js";
 
 export interface ApiResponse {
   status: number;
@@ -234,6 +236,8 @@ export async function activateSkillsRoute(
     source,
     logger: ctx.log,
   });
+  // Newly managed skills may now cover previously-gap intents.
+  await recomputeIntentCoverage(ctx.env, ctx.fs).catch(() => undefined);
   return ok({ moved: result.moved.map((m) => m.id), skipped: result.skipped });
 }
 
@@ -247,6 +251,8 @@ export async function deactivateSkillsRoute(
     ids,
     logger: ctx.log,
   });
+  // A skill that covered some intents is gone — those intents may be gaps again.
+  await recomputeIntentCoverage(ctx.env, ctx.fs).catch(() => undefined);
   return ok({ restored: result.restored.map((m) => m.id), skipped: result.skipped });
 }
 
@@ -277,6 +283,8 @@ export async function createSkillRoute(
   const contents = buildSkillMd({ name, description, tags, body: skillBody });
   await mkdir(skillDir, { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), contents, "utf8");
+  // A new skill may cover previously-uncovered intents.
+  await recomputeIntentCoverage(ctx.env, ctx.fs).catch(() => undefined);
   return ok({ created: name });
 }
 
@@ -315,7 +323,23 @@ export async function updateSkillRoute(
   const nextBody = stripBundledResources(body.body);
   const contents = rewriteSkillMd(found.raw, { description, tags, body: nextBody });
   await writeFileAtomic(found.filePath, contents);
+  // Editing a skill's description/tags changes what it matches.
+  await recomputeIntentCoverage(ctx.env, ctx.fs).catch(() => undefined);
   return ok({ updated: id });
+}
+
+/**
+ * Permanently delete a Ratel-managed skill (its `~/.ratel/skills/<id>` folder).
+ * Used for skills created in Ratel, which have no agent to restore to. Coverage
+ * is recomputed since a deleted skill may have covered some intents.
+ */
+export async function deleteSkillRoute(ctx: HandlerCtx, id: string): Promise<ApiResponse> {
+  const removed = await deleteManagedSkill(defaultSkillManagePaths(ctx.env.homeDir), id);
+  if (!removed) {
+    return { status: 404, body: { error: `unknown managed skill: ${id}`, isError: true } };
+  }
+  await recomputeIntentCoverage(ctx.env, ctx.fs).catch(() => undefined);
+  return ok({ deleted: id });
 }
 
 /**

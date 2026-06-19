@@ -225,6 +225,26 @@ export async function listManaged(paths: SkillManagePaths): Promise<ManagedEntry
   return (await readManifest(paths.manifestPath)).managed.filter(isValidEntry);
 }
 
+/**
+ * Permanently delete a Ratel-managed skill: remove its folder under the managed
+ * dir and drop any manifest entry. Unlike {@link deactivateSkills} (which moves
+ * it back to its agent), this is irreversible. Returns true if a folder existed.
+ */
+export async function deleteManagedSkill(paths: SkillManagePaths, id: string): Promise<boolean> {
+  if (!isSafeSkillId(id)) {
+    throw new Error(`unsafe skill id: ${String(id)}`);
+  }
+  const dir = join(paths.managedDir, id);
+  const existed = await exists(dir);
+  await rm(dir, { recursive: true, force: true });
+  const manifest = await readManifest(paths.manifestPath);
+  const managed = manifest.managed.filter((m) => !(isValidEntry(m) && m.id === id));
+  if (managed.length !== manifest.managed.length) {
+    await writeManifest(paths.manifestPath, { ...manifest, managed });
+  }
+  return existed;
+}
+
 async function skillDirNames(dir: string): Promise<string[]> {
   let entries: Dirent[];
   try {

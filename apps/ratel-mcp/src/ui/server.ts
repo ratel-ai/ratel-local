@@ -11,6 +11,16 @@ import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import {
+  clearIntentsRoute,
+  deleteIntentRoute,
+  getAnalysisSettings,
+  getIntents,
+  getSessionIntents,
+  offerSkillRoute,
+  putAnalysisSettings,
+  runIntentsRoute,
+} from "./intents-routes.js";
+import {
   type ApiResponse,
   activateSkillsRoute,
   addServer,
@@ -20,6 +30,7 @@ import {
   authServer,
   createSkillRoute,
   deactivateSkillsRoute,
+  deleteSkillRoute,
   doImport,
   doLink,
   editServer,
@@ -162,6 +173,9 @@ async function route(
       const body = await readJsonBody(req);
       return updateSkillRoute(ctx, id, body);
     }
+    if (method === "DELETE") {
+      return deleteSkillRoute(ctx, id);
+    }
   }
   if (method === "POST" && path === "/api/open-file") {
     const body = await readJsonBody(req);
@@ -189,6 +203,36 @@ async function route(
   if (method === "POST" && authMatch) {
     const name = decodeURIComponent(authMatch[1]);
     return authServer(ctx, name);
+  }
+
+  if (method === "GET" && path === "/api/intents") {
+    return getIntents(ctx);
+  }
+  if (method === "POST" && path === "/api/intents/run") {
+    const body = await readJsonBody(req);
+    return runIntentsRoute(ctx, body);
+  }
+  if (method === "POST" && path === "/api/intents/delete") {
+    const body = await readJsonBody(req);
+    return deleteIntentRoute(ctx, body);
+  }
+  if (method === "POST" && path === "/api/intents/clear") {
+    return clearIntentsRoute(ctx);
+  }
+  const sessionIntentsMatch = /^\/api\/intents\/([^/]+)$/.exec(path);
+  if (method === "GET" && sessionIntentsMatch) {
+    return getSessionIntents(ctx, decodeURIComponent(sessionIntentsMatch[1]));
+  }
+  if (method === "GET" && path === "/api/analysis/settings") {
+    return getAnalysisSettings(ctx);
+  }
+  if (method === "PUT" && path === "/api/analysis/settings") {
+    const body = await readJsonBody(req);
+    return putAnalysisSettings(ctx, body);
+  }
+  if (method === "POST" && path === "/api/skills/offer") {
+    const body = await readJsonBody(req);
+    return offerSkillRoute(ctx, body);
   }
 
   if (method === "POST" && path === "/api/import") {

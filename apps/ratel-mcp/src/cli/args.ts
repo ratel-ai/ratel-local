@@ -1,4 +1,4 @@
-export type Group = "mcp" | "backup" | "skill" | "serve" | "ui" | "help" | "version";
+export type Group = "mcp" | "backup" | "skill" | "intents" | "serve" | "ui" | "help" | "version";
 
 export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "import" | "link" | "auth";
 
@@ -25,6 +25,10 @@ const MCP_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
+
+export type IntentsVerb = "run";
+
+const INTENTS_VERBS: ReadonlySet<string> = new Set(["run"]);
 
 const SKILL_VERBS: ReadonlySet<string> = new Set([
   "activate",
@@ -126,6 +130,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const candidate = argv[1];
       if (!SKILL_VERBS.has(candidate)) {
         throw new ArgError(`unknown skill verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "intents") {
+    group = "intents";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!INTENTS_VERBS.has(candidate)) {
+        throw new ArgError(`unknown intents verb: ${candidate}`);
       }
       verb = candidate;
       i = 2;
