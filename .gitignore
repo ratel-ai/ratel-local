@@ -4,6 +4,12 @@ node_modules/
 .ratel/
 tmp/
 
+# Python (claim-extractor sidecar venv + caches)
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
 # Build output
 dist/
 *.tsbuildinfo
