@@ -25,6 +25,32 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-chat.mjs\" UserPromptSubmit",
+            "statusMessage": "Capturing chat for Ratel intents",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-chat.mjs\" Stop",
+            "statusMessage": "Capturing chat for Ratel intents",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }

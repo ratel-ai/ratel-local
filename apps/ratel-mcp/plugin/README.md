@@ -41,6 +41,18 @@ The logger bounds large values, redacts common secret-bearing fields, and does n
 
 Use the bundled `ratel-improve-tools` skill to summarize those logs and propose MCP catalog improvements.
 
+### Chat capture (intents)
+
+The plugin also wires `UserPromptSubmit` and `Stop` hooks to `hooks/capture-chat.mjs`, which records chat turns (and, on `Stop`, backfills assistant turns from the transcript) to:
+
+```text
+${RATEL_HOME:-$HOME/.ratel}/chat/<host>/<sessionId>.jsonl
+```
+
+Like the tool-usage logger, it is passive, fail-soft, and redacts obvious secrets. The Ratel **intent pipeline** reads this capture to extract what you keep trying to do, matches each intent against the skills Ratel manages, and surfaces the results — with an "Offer New Skills" action for gaps — in the **Intents** tab of `ratel-mcp ui`.
+
+Run an analysis manually with `ratel-mcp intents run` (or the UI's **Run now**), or let it fire on a cadence (every N messages / on idle), all configurable from **Intents → Settings**. Intent extraction runs through a swappable HTTP extractor — a local model sidecar, a Docker+GPU box, or a remote/cloud endpoint — see [`infra/claim-extractor`](../../../infra/claim-extractor/README.md).
+
 ## Codex Local Validation
 
 Add the repo root as a local Codex marketplace root:
