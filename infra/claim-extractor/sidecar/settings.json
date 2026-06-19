@@ -1,0 +1,10 @@
+{
+  "port": 8723,
+  "backend": "transformers",
+  "model": "principled-intelligence/claim-extractor-2B-q-2605",
+  "mock": false,
+  "device": null,
+  "intentsOnly": true,
+  "maxTokens": 2048,
+  "maxMessages": 40
+}

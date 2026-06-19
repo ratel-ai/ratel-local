@@ -1,0 +1,34 @@
+# ClaimExtractor sidecar (Linux + NVIDIA GPU).
+#
+#   docker compose -f infra/claim-extractor/docker-compose.yml up --build
+#
+# Then point Ratel at it (Intents → Settings, or ~/.ratel/config.json):
+#   "analysis": { "extractor": { "provider": "http", "endpoint": "http://127.0.0.1:8723" } }
+#
+# Requires the NVIDIA Container Toolkit. On macOS there is no GPU passthrough —
+# use sidecar/run-apple-silicon.sh instead.
+services:
+  claim-extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8723:8723"
+    environment:
+      CLAIM_EXTRACTOR_BACKEND: vllm
+      CLAIM_EXTRACTOR_MODEL: principled-intelligence/claim-extractor-4B-q-2605
+      # Set to "1" to run without the model (wiring check only).
+      CLAIM_EXTRACTOR_MOCK: "0"
+    volumes:
+      # Cache model weights across restarts.
+      - claim-extractor-models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  claim-extractor-models:

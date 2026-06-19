@@ -1,0 +1,18 @@
+# HTTP layer (always required)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+
+# Model backend — install ONE set depending on where you run:
+#
+#   Apple Silicon / CPU (the local sidecar path):
+#     pip install "orbitals[claim-extractor-hf]"
+#     # transformers + accelerate (→ torch) for the hf backend, runs on MPS
+#
+#   Linux + NVIDIA GPU (the Docker image installs this):
+#     pip install "orbitals[claim-extractor-vllm]"
+#
+# Left commented so `pip install -r requirements.txt` works in MOCK mode with no
+# heavy ML deps. Uncomment the line that matches your machine:
+# orbitals[claim-extractor-hf]
+# orbitals[claim-extractor-vllm]
