@@ -27,10 +27,12 @@ import {
   getConfig,
   getSkill,
   getSkills,
+  installClaudeStatuslineRoute,
   openFile,
   previewImport,
   previewLink,
   removeServer,
+  uninstallClaudeStatuslineRoute,
   updateSkillRoute,
 } from "./routes.js";
 import {
@@ -216,6 +218,13 @@ async function route(
   if (method === "POST" && path === "/api/agent-apply/link") {
     const body = await readJsonBody(req);
     return applyLink(ctx, body);
+  }
+  if (method === "POST" && path === "/api/claude-statusline/install") {
+    const body = await readJsonBody(req);
+    return installClaudeStatuslineRoute(ctx, body);
+  }
+  if (method === "POST" && path === "/api/claude-statusline/uninstall") {
+    return uninstallClaudeStatuslineRoute(ctx);
   }
   return null;
 }

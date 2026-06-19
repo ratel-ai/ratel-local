@@ -14,6 +14,7 @@ const USER_PATH = "/home/u/.ratel/config.json";
 const PROJECT_PATH = "/r/.ratel/config.json";
 const LOCAL_PATH = "/r/.ratel/config.local.json";
 const CLAUDE_PATH = "/home/u/.claude.json";
+const CLAUDE_SETTINGS_PATH = "/home/u/.claude/settings.json";
 
 class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
@@ -273,12 +274,37 @@ describe("UI server — agent previews", () => {
     const res = await fetch(apiUrl("/api/agent-hosts"), { headers: authHeaders() });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
-      hosts: Array<{ kind: string; posture: string; nativeEntryCount: number }>;
+      hosts: Array<{
+        kind: string;
+        posture: string;
+        nativeEntryCount: number;
+        statusline?: { status: string; ratelEnabled: boolean };
+      }>;
     };
 
     expect(body.hosts.map((host) => host.kind)).toEqual(["claude-code", "codex"]);
-    expect(body.hosts.find((host) => host.kind === "claude-code")?.posture).toBe("not-linked");
+    const claude = body.hosts.find((host) => host.kind === "claude-code");
+    expect(claude?.posture).toBe("not-linked");
+    expect(claude?.statusline?.status).toBe("not-installed");
+    expect(claude?.statusline?.ratelEnabled).toBe(false);
     expect(session.fs.files).toEqual(before);
+  });
+
+  it("reports Claude statusline Ratel-enabled state when the gateway is linked", async () => {
+    session.fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        mcpServers: { "ratel-mcp": { type: "stdio", command: "ratel-mcp" } },
+      }),
+    );
+
+    const res = await fetch(apiUrl("/api/agent-hosts"), { headers: authHeaders() });
+    const body = (await res.json()) as {
+      hosts: Array<{ kind: string; statusline?: { ratelEnabled: boolean } }>;
+    };
+    expect(body.hosts.find((host) => host.kind === "claude-code")?.statusline?.ratelEnabled).toBe(
+      true,
+    );
   });
 
   it("previews import without writing files", async () => {
@@ -412,6 +438,60 @@ describe("UI server — agent previews", () => {
     const claude = JSON.parse(session.fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers["ratel-mcp"].args).toContain(USER_PATH);
+  });
+});
+
+describe("UI server — Claude statusline", () => {
+  it("installs and uninstalls the Ratel statusline", async () => {
+    const install = await fetch(apiUrl("/api/claude-statusline/install"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({}),
+    });
+    expect(install.status).toBe(200);
+    const stored = JSON.parse(session.fs.files.get(CLAUDE_SETTINGS_PATH) as string);
+    expect(stored.statusLine).toMatchObject({
+      type: "command",
+      padding: 0,
+      refreshInterval: 30,
+    });
+    expect(stored.statusLine.command).toContain("statusline");
+
+    const uninstall = await fetch(apiUrl("/api/claude-statusline/uninstall"), {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    expect(uninstall.status).toBe(200);
+    expect(
+      JSON.parse(session.fs.files.get(CLAUDE_SETTINGS_PATH) as string).statusLine,
+    ).toBeUndefined();
+  });
+
+  it("requires force before replacing a non-Ratel statusline", async () => {
+    session.fs.files.set(
+      CLAUDE_SETTINGS_PATH,
+      JSON.stringify({ statusLine: { type: "command", command: "other-statusline" } }),
+    );
+
+    const blocked = await fetch(apiUrl("/api/claude-statusline/install"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({}),
+    });
+    expect(blocked.status).toBe(400);
+    expect(
+      JSON.parse(session.fs.files.get(CLAUDE_SETTINGS_PATH) as string).statusLine.command,
+    ).toBe("other-statusline");
+
+    const forced = await fetch(apiUrl("/api/claude-statusline/install"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ force: true }),
+    });
+    expect(forced.status).toBe(200);
+    expect(
+      JSON.parse(session.fs.files.get(CLAUDE_SETTINGS_PATH) as string).statusLine.command,
+    ).toContain("statusline");
   });
 });
 

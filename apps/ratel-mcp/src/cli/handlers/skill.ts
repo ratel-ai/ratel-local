@@ -1,5 +1,5 @@
-import { locateRatelBin, type ResolvedBin } from "@ratel-ai/mcp-core";
 import type { FlagValue } from "../args.js";
+import { resolveCliRatelBin } from "../ratel-bin.js";
 import {
   type HookScope,
   installHook,
@@ -22,6 +22,7 @@ import {
 } from "../skills/preload.js";
 import { defaultSignalCacheFile, detectProjectSignalsCached } from "../skills/signals.js";
 import { resolveSkillDirs, suggestSkills } from "../skills/suggest.js";
+import { readStdin } from "../stdin.js";
 import type { HandlerCtx } from "./types.js";
 
 export const SKILL_USAGE = `usage: ratel-mcp skill <verb>
@@ -191,7 +192,7 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
         );
         return;
       }
-      const bin = await resolveHookBin(ctx);
+      const bin = await resolveCliRatelBin(ctx);
       const command = preloadHookCommand(bin);
       if (!assumeYes) {
         const answer = await ctx.prompts.confirm({
@@ -234,33 +235,4 @@ function dirsFlag(v: FlagValue | undefined): string[] | undefined {
 
 function hookScope(v: FlagValue | undefined): HookScope {
   return v === "project" ? "project" : "user";
-}
-
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-async function resolveHookBin(ctx: HandlerCtx): Promise<ResolvedBin> {
-  return locateRatelBin({
-    envVar: process.env.RATEL_MCP_BIN,
-    whichResult: await whichRatelBin(),
-    promptForPath: async () => {
-      const v = await ctx.prompts.text({ message: "Path to ratel-mcp binary?" });
-      return ctx.prompts.isCancel(v) ? "" : (v as string);
-    },
-  });
-}
-
-async function whichRatelBin(): Promise<string | undefined> {
-  try {
-    const { execSync } = await import("node:child_process");
-    const out = execSync("which ratel-mcp", { stdio: ["ignore", "pipe", "ignore"] })
-      .toString()
-      .trim();
-    return out || undefined;
-  } catch {
-    return undefined;
-  }
 }

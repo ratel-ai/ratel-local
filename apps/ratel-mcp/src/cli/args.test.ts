@@ -35,6 +35,13 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it("recognizes the statusline group and install verbs", () => {
+    expect(parseArgs(["statusline"]).group).toBe("statusline");
+    expect(parseArgs(["statusline"]).verb).toBeUndefined();
+    expect(parseArgs(["statusline", "install", "--yes"]).verb).toBe("install");
+    expect(parseArgs(["statusline", "uninstall"]).verb).toBe("uninstall");
+  });
+
   it.each([
     "add",
     "remove",
@@ -73,6 +80,11 @@ describe("parseArgs — group/verb routing", () => {
   it("rejects an unknown verb in a known group", () => {
     expect(() => parseArgs(["mcp", "fly"])).toThrow(ArgError);
     expect(() => parseArgs(["mcp", "fly"])).toThrow(/fly/);
+  });
+
+  it("rejects an unknown statusline verb", () => {
+    expect(() => parseArgs(["statusline", "replace"])).toThrow(ArgError);
+    expect(() => parseArgs(["statusline", "replace"])).toThrow(/replace/);
   });
 
   it("does not treat a path-shaped first arg as an unknown group", () => {

@@ -125,6 +125,17 @@ interface AgentScopePosture {
   ratelEntryNames?: string[];
 }
 
+interface ClaudeStatuslineState {
+  settingsPath: string;
+  status: "not-installed" | "installed" | "other";
+  installed: boolean;
+  ownedByRatel: boolean;
+  command: string | null;
+  ratelEnabled: boolean;
+  ratelEnabledSources: string[];
+  warnings: string[];
+}
+
 interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
@@ -137,6 +148,7 @@ interface DetectedAgentHostSummary {
   ratelEntryNames?: string[];
   missingRatelEntryNames?: string[];
   scopes: AgentScopePosture[];
+  statusline?: ClaudeStatuslineState;
 }
 
 interface AgentHostsResponse {

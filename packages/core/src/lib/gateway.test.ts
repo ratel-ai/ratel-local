@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
@@ -175,6 +175,46 @@ describe("buildGatewayFromConfig", () => {
     await remote.server.close();
   });
 
+  it("records estimated upstream tool payload tokens after registration", async () => {
+    const fs = await startUpstream([
+      { name: "read_file", description: "Read a file from disk." },
+      { name: "write_file", description: "Write a file to disk." },
+    ]);
+    const dir = await mkdtemp(join(tmpdir(), "ratel-gateway-trace-"));
+    const telemetryFile = join(dir, "trace.jsonl");
+
+    try {
+      const handle = await buildGatewayFromConfig(
+        { mcpServers: { fs: { type: "stdio", command: "noop" } } },
+        {
+          transportFactory: () => fs.clientTransport,
+          trace: { kind: "jsonl", sessionId: "t", path: telemetryFile },
+        },
+      );
+
+      const events = (await readFile(telemetryFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "ratel_tool_payload",
+          server: "fs",
+          tool_count: 2,
+          strategy: "payload",
+        }),
+      );
+      const estimate = events.find((event) => event.type === "ratel_tool_payload");
+      expect(estimate?.estimated_tokens).toEqual(expect.any(Number));
+      expect(estimate?.estimated_tokens as number).toBeGreaterThan(0);
+
+      await handle.close();
+      await fs.server.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("omits failed upstreams from upstreamServers", async () => {
     const ok = await startUpstream([{ name: "ping", description: "Ping." }]);
     const handle = await buildGatewayFromConfig(
@@ -318,13 +358,10 @@ describe("buildGatewayFromConfig", () => {
         },
       },
       {
-        transportFactory: () => ({
-          async start() {
-            throw authError;
-          },
-          async send() {},
-          async close() {},
-        }),
+        oauthStorePath: (name) => join(tmpdir(), `ratel-gateway-test-${name}.json`),
+        transportFactory: () => {
+          throw authError;
+        },
         logger: (m) => logs.push(m),
       },
     );

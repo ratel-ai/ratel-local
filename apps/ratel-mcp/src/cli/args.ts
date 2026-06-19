@@ -1,8 +1,10 @@
-export type Group = "mcp" | "backup" | "skill" | "serve" | "ui" | "help" | "version";
+export type Group = "mcp" | "backup" | "skill" | "statusline" | "serve" | "ui" | "help" | "version";
 
 export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "import" | "link" | "auth";
 
 export type BackupVerb = "list";
+
+export type StatuslineVerb = "install" | "uninstall";
 
 export type SkillVerb =
   | "activate"
@@ -25,6 +27,8 @@ const MCP_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
+
+const STATUSLINE_VERBS: ReadonlySet<string> = new Set(["install", "uninstall"]);
 
 const SKILL_VERBS: ReadonlySet<string> = new Set([
   "activate",
@@ -126,6 +130,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const candidate = argv[1];
       if (!SKILL_VERBS.has(candidate)) {
         throw new ArgError(`unknown skill verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "statusline") {
+    group = "statusline";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!STATUSLINE_VERBS.has(candidate)) {
+        throw new ArgError(`unknown statusline verb: ${candidate}`);
       }
       verb = candidate;
       i = 2;

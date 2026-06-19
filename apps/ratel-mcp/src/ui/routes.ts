@@ -16,14 +16,17 @@ import {
   getConfigState,
   type ImportConflictStrategy,
   importAgentServers,
+  installClaudeCodeStatusline,
   linkAgentToRatel,
   loadSkills,
   parseSkillMd,
   previewAgentImport,
   previewAgentLink,
+  type ResolvedBin,
   removeServerEntry,
   type ServerEntry,
   type SupportedAgentHostKind,
+  uninstallClaudeCodeStatusline,
 } from "@ratel-ai/mcp-core";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import {
@@ -514,6 +517,12 @@ function resolveRatelBin(): string | undefined {
   return undefined;
 }
 
+function resolveUiRatelBin(): ResolvedBin {
+  const command = resolveRatelBin();
+  if (!command) throw new Error("Could not locate the ratel-mcp binary for statusline install");
+  return { command, args: [], source: "env" };
+}
+
 export async function doImport(ctx: HandlerCtx): Promise<ApiResponse> {
   const { log } = await withCapture(ctx, (c) =>
     importAgentServers(c, { envVar: resolveRatelBin() }).then(() => undefined),
@@ -575,6 +584,34 @@ export async function applyLink(
   );
   if (!result) log.push("nothing to apply");
   return ok({ log });
+}
+
+export async function installClaudeStatuslineRoute(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  const { result, log } = await withCapture(ctx, (c) =>
+    installClaudeCodeStatusline(c, {
+      bin: resolveUiRatelBin(),
+      force: body.force === true,
+    }),
+  );
+  log.push(
+    result.changed
+      ? `installed Ratel statusline into ${result.path}`
+      : "Ratel statusline already installed",
+  );
+  return ok({ log, state: result.state });
+}
+
+export async function uninstallClaudeStatuslineRoute(ctx: HandlerCtx): Promise<ApiResponse> {
+  const { result, log } = await withCapture(ctx, (c) => uninstallClaudeCodeStatusline(c));
+  log.push(
+    result.changed
+      ? `removed Ratel statusline from ${result.path}`
+      : "no Ratel statusline to remove",
+  );
+  return ok({ log, state: result.state });
 }
 
 function formatAuthResults(results: AuthFlowResult[]): string[] {

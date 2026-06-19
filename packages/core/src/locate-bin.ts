@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
 export interface LocateBinEnv {
@@ -39,4 +40,17 @@ export async function locateRatelBin(env: LocateBinEnv): Promise<ResolvedBin> {
   throw new Error(
     "Could not locate the ratel-mcp binary. Set $RATEL_MCP_BIN or run from inside the ratel-mcp workspace.",
   );
+}
+
+export function whichRatelBin(): string | undefined {
+  try {
+    const out = execSync("which ratel-mcp", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    return out || undefined;
+  } catch {
+    return undefined;
+  }
 }

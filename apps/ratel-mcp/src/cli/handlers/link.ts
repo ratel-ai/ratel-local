@@ -4,13 +4,13 @@ import {
   buildAgentLinkPlan,
   type buildImportPlan,
   executePlan,
-  locateRatelBin,
   NamedAgentHostAdapter,
   type ResolvedBin,
   ratelConfigPath,
   readJson,
   type SupportedAgentHostKind,
 } from "@ratel-ai/mcp-core";
+import { resolveCliRatelBin } from "../ratel-bin.js";
 import type { HandlerCtx } from "./types.js";
 
 export interface LinkOptions {
@@ -108,30 +108,12 @@ export async function runLink(
 }
 
 async function resolveBin(ctx: HandlerCtx, opts: LinkOptions): Promise<ResolvedBin> {
-  return locateRatelBin({
+  return resolveCliRatelBin(ctx, {
     envVar: opts.envVar ?? process.env.RATEL_MCP_BIN,
-    whichResult: opts.whichResult ?? (await whichRatelBin()),
+    whichResult: opts.whichResult,
     workspaceRoot: opts.workspaceRoot,
     exists: opts.exists,
-    promptForPath: async () => {
-      const v = await ctx.prompts.text({ message: "Path to ratel-mcp binary?" });
-      return ctx.prompts.isCancel(v) ? "" : (v as string);
-    },
   });
-}
-
-async function whichRatelBin(): Promise<string | undefined> {
-  try {
-    const { execSync } = await import("node:child_process");
-    const out = execSync("which ratel-mcp", {
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-    return out || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function renderAgentStage(plan: ReturnType<typeof buildImportPlan>): string {

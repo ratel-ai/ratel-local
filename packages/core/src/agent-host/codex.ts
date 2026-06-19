@@ -9,6 +9,7 @@ import type { HierarchyEnv } from "../hierarchy.js";
 import { ProjectRootNotFoundError } from "../hierarchy.js";
 import type { FileChange } from "../import-plan.js";
 import type { JsonFs } from "../io.js";
+import { isPlainObject } from "../json.js";
 import type { ServerEntry } from "../lib/index.js";
 import type {
   AgentHostAdapter,
@@ -334,10 +335,6 @@ function configChainForScope(scope: AgentScope, paths: RatelConfigPaths): string
     return [paths.user, paths.project, paths.local];
   }
   return [];
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function asStringArray(v: unknown): string[] | null {

@@ -14,6 +14,7 @@ import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { runServe } from "./handlers/serve.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
+import { runStatusline } from "./handlers/statusline.js";
 import type { HandlerCtx } from "./handlers/types.js";
 import { runUi } from "./handlers/ui.js";
 import { type PromptAdapter, silentPromptAdapter } from "./prompts.js";
@@ -30,6 +31,8 @@ export interface RunCliOptions {
   env?: HierarchyEnv;
   now?: () => Date;
   cliVersion?: string;
+  stdin?: () => Promise<string>;
+  stdout?: (message: string) => void;
 }
 
 export interface RunCliResult {
@@ -44,6 +47,7 @@ Commands:
   mcp      manage MCP servers (add, remove, list, get, edit, import, link, auth)
   backup   manage backup snapshots (list)
   skill    move skills between Claude Code and Ratel (activate, deactivate, list)
+  statusline render or install the Claude Code Ratel statusline
   ui       launch a local browser UI mirroring the CLI [--port N] [--no-open]
 
 Run \`ratel-mcp <group>\` for the verbs available in a group.`;
@@ -95,6 +99,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     fs: options.fs ?? nodeFs,
     log,
     prompts: options.prompts ?? silentPromptAdapter(),
+    stdin: options.stdin,
+    stdout: options.stdout,
   };
 
   if (parsed.group === "ui") {
@@ -113,6 +119,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "skill") {
     await runSkill(ctx);
+    return {};
+  }
+
+  if (parsed.group === "statusline") {
+    await runStatusline(ctx);
     return {};
   }
 

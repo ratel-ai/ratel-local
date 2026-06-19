@@ -7,6 +7,7 @@ import {
 import type { HierarchyEnv } from "../hierarchy.js";
 import { ProjectRootNotFoundError } from "../hierarchy.js";
 import type { FileChange } from "../import-plan.js";
+import { isPlainObject } from "../json.js";
 import type { ServerEntry } from "../lib/index.js";
 import type {
   AgentHostAdapter,
@@ -289,10 +290,6 @@ function scopesByName(state: AgentHostState): Partial<Record<AgentScope, AgentSc
 
 function serializeJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function isServerEntry(v: unknown): v is ServerEntry {

@@ -77,6 +77,17 @@ interface AgentScopePosture {
   ratelEntryNames?: string[];
 }
 
+interface ClaudeStatuslineState {
+  settingsPath: string;
+  status: "not-installed" | "installed" | "other";
+  installed: boolean;
+  ownedByRatel: boolean;
+  command: string | null;
+  ratelEnabled: boolean;
+  ratelEnabledSources: string[];
+  warnings: string[];
+}
+
 interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
@@ -89,6 +100,7 @@ interface DetectedAgentHostSummary {
   ratelEntryNames?: string[];
   missingRatelEntryNames?: string[];
   scopes: AgentScopePosture[];
+  statusline?: ClaudeStatuslineState;
 }
 
 interface AgentHostsResponse {
@@ -460,6 +472,16 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
             </div>
             <DetailLabel>Status</DetailLabel>
             <LinkStatusBadge host={host} />
+            {host.kind === "claude-code" && host.statusline ? (
+              <>
+                <DetailLabel>Statusline</DetailLabel>
+                <ClaudeStatuslineBadge state={host.statusline} />
+                <DetailLabel>Ratel MCP</DetailLabel>
+                <StatusBadge tone={host.statusline.ratelEnabled ? "success" : "warning"}>
+                  {host.statusline.ratelEnabled ? "Enabled" : "Not enabled"}
+                </StatusBadge>
+              </>
+            ) : null}
             {missingRatelEntryNames(host).length > 0 || agentAvailable.length > 0 ? (
               <>
                 <DetailLabel>Coverage</DetailLabel>
@@ -594,8 +616,16 @@ function AgentOperationPanel(props: {
   const canImport = missingRatelEntryNames(props.host).length > 0;
   const canLink = props.host.posture !== "unavailable" && props.host.ratelEntryCount === 0;
   const canImportSkills = props.availableSkills.length > 0;
+  const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
     <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+      {props.hostKind === "claude-code" && props.host.statusline ? (
+        <ClaudeStatuslineSection
+          onScanHosts={props.onScanHosts}
+          request={props.request}
+          state={props.host.statusline}
+        />
+      ) : null}
       {canImportSkills ? (
         <SkillImportSection
           available={props.availableSkills}
@@ -635,7 +665,7 @@ function AgentOperationPanel(props: {
           />
         </SetupActionSection>
       ) : null}
-      {!canImport && !canLink && !canImportSkills ? (
+      {!canImport && !canLink && !canImportSkills && !canManageStatusline ? (
         <div>
           <h3 className="text-lg font-semibold tracking-tight">Nothing to do</h3>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -645,6 +675,71 @@ function AgentOperationPanel(props: {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function ClaudeStatuslineSection(props: {
+  onScanHosts: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+  state: ClaudeStatuslineState;
+}) {
+  const { runAction } = useRatelApp();
+  const installed = props.state.status === "installed";
+  const otherConfigured = props.state.status === "other";
+  const actionLabel = installed
+    ? "Uninstall statusline"
+    : otherConfigured
+      ? "Replace statusline"
+      : "Install statusline";
+  const title = installed
+    ? "Remove Ratel statusline"
+    : otherConfigured
+      ? "Replace configured statusline"
+      : "Install Ratel statusline";
+  const description = installed
+    ? "Remove the Ratel-owned command from Claude Code user settings."
+    : otherConfigured
+      ? "Replace the existing Claude Code statusLine command with Ratel."
+      : "Write the Ratel statusline command into Claude Code user settings.";
+
+  const commit = async () => {
+    const ok = await runAction(actionLabel, () =>
+      installed
+        ? props.request("/api/claude-statusline/uninstall", { method: "POST" })
+        : props.request("/api/claude-statusline/install", {
+            method: "POST",
+            body: { force: otherConfigured },
+          }),
+    );
+    if (ok) await props.onScanHosts();
+  };
+
+  return (
+    <SetupActionSection
+      description="Manage the Claude Code user-level statusLine setting."
+      icon={<FileText />}
+      title="Claude statusline"
+    >
+      <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div>
+          <h4 className="font-medium">{title}</h4>
+          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+          {!props.state.ratelEnabled ? (
+            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+              Ratel MCP is not enabled in Claude Code.
+            </p>
+          ) : null}
+        </div>
+        <Button
+          className="min-h-12 px-6 text-base md:min-w-44"
+          onClick={() => void commit()}
+          variant={installed ? "outline" : "default"}
+        >
+          {installed ? <X /> : <FileText />}
+          {actionLabel}
+        </Button>
+      </div>
+    </SetupActionSection>
   );
 }
 
@@ -1636,23 +1731,32 @@ function LinkStatusBadge(props: { host: DetectedAgentHostSummary }) {
   return <StatusBadge tone="muted">Not linked</StatusBadge>;
 }
 
-function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "success" }) {
+function ClaudeStatuslineBadge(props: { state: ClaudeStatuslineState }) {
+  if (props.state.status === "installed") {
+    return <StatusBadge tone="success">Installed</StatusBadge>;
+  }
+  if (props.state.status === "other") {
+    return <StatusBadge tone="warning">Other configured</StatusBadge>;
+  }
+  return <StatusBadge tone="muted">Not installed</StatusBadge>;
+}
+
+function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "success" | "warning" }) {
+  const toneClass =
+    props.tone === "success"
+      ? "border-emerald-300/70 bg-emerald-50 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200"
+      : props.tone === "warning"
+        ? "border-amber-300/70 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200"
+        : "border-border bg-muted text-muted-foreground";
+  const dotClass =
+    props.tone === "success"
+      ? "bg-emerald-500"
+      : props.tone === "warning"
+        ? "bg-amber-500"
+        : "bg-muted-foreground/50";
   return (
-    <Badge
-      className={cn(
-        "gap-1.5 rounded-full px-2 font-medium",
-        props.tone === "success"
-          ? "border-emerald-300/70 bg-emerald-50 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200"
-          : "border-border bg-muted text-muted-foreground",
-      )}
-      variant="outline"
-    >
-      <span
-        className={cn(
-          "size-1.5 rounded-full",
-          props.tone === "success" ? "bg-emerald-500" : "bg-muted-foreground/50",
-        )}
-      />
+    <Badge className={cn("gap-1.5 rounded-full px-2 font-medium", toneClass)} variant="outline">
+      <span className={cn("size-1.5 rounded-full", dotClass)} />
       {props.children}
     </Badge>
   );

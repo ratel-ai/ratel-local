@@ -1,0 +1,558 @@
+import { join } from "node:path";
+import { ClaudeCodeAgentHostAdapter } from "./agent-host/claude-code.js";
+import type { AgentScope } from "./agent-host/index.js";
+import { type BackupFs, type BackupManifest, startBackup } from "./backup.js";
+import { isRatelGatewayEntry } from "./gateway-entry.js";
+import type { HierarchyEnv } from "./hierarchy.js";
+import type { JsonFs } from "./io.js";
+import { writeJson } from "./io.js";
+import { isPlainObject, stableJsonStringify } from "./json.js";
+import { estimateToolCountTokens } from "./lib/usage.js";
+import type { ResolvedBin } from "./locate-bin.js";
+import { defaultTelemetryDir, projectBucketDir } from "./telemetry-paths.js";
+
+export type ClaudeStatuslineInstallStatus = "not-installed" | "installed" | "other";
+
+export interface ClaudeCodeStatuslineState {
+  settingsPath: string;
+  status: ClaudeStatuslineInstallStatus;
+  installed: boolean;
+  ownedByRatel: boolean;
+  command: string | null;
+  ratelEnabled: boolean;
+  ratelEnabledSources: string[];
+  warnings: string[];
+}
+
+export interface ClaudeStatuslineInstallResult {
+  changed: boolean;
+  path: string;
+  command: string;
+  manifest: BackupManifest | null;
+  state: ClaudeCodeStatuslineState;
+}
+
+export interface ClaudeStatuslineUninstallResult {
+  changed: boolean;
+  path: string;
+  manifest: BackupManifest | null;
+  state: ClaudeCodeStatuslineState;
+}
+
+export interface RenderRatelStatuslineOptions {
+  telemetryDir?: string;
+  gitBranch?: string | null;
+}
+
+export interface StatuslineContext {
+  env: HierarchyEnv;
+  fs: JsonFs & BackupFs;
+  log?: (message: string) => void;
+}
+
+export class ClaudeStatuslineConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ClaudeStatuslineConflictError";
+  }
+}
+
+const ANSI = {
+  amber: "\u001b[38;5;178m",
+  cyan: "\u001b[38;5;80m",
+  dim: "\u001b[2m",
+  green: "\u001b[38;5;72m",
+  gray: "\u001b[38;5;245m",
+  reset: "\u001b[0m",
+};
+
+export function claudeCodeUserSettingsPath(env: Pick<HierarchyEnv, "homeDir">): string {
+  return join(env.homeDir, ".claude", "settings.json");
+}
+
+export function claudeCodeStatuslineCommand(bin: ResolvedBin): string {
+  return [bin.command, ...bin.args, "statusline"].map(shellQuote).join(" ");
+}
+
+export function isRatelOwnedStatusline(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  if (value.type !== "command") return false;
+  const command = value.command;
+  const ratelShape = value.padding === 0 && value.refreshInterval === 30;
+  return typeof command === "string" && isRatelStatuslineCommand(command, ratelShape);
+}
+
+export async function getClaudeCodeStatuslineState(
+  ctx: StatuslineContext,
+): Promise<ClaudeCodeStatuslineState> {
+  const settingsPath = claudeCodeUserSettingsPath(ctx.env);
+  const warnings: string[] = [];
+  const settings = await readSettingsLenient(ctx, settingsPath, warnings);
+  const current = settings?.statusLine;
+  const ownedByRatel = isRatelOwnedStatusline(current);
+  const command =
+    isPlainObject(current) && typeof current.command === "string" ? current.command : null;
+  const status: ClaudeStatuslineInstallStatus =
+    current === undefined || current === null
+      ? "not-installed"
+      : ownedByRatel
+        ? "installed"
+        : "other";
+  const ratel = await detectClaudeRatelEnabled(ctx, warnings);
+  return {
+    settingsPath,
+    status,
+    installed: status === "installed",
+    ownedByRatel,
+    command,
+    ratelEnabled: ratel.enabled,
+    ratelEnabledSources: ratel.sources,
+    warnings,
+  };
+}
+
+export async function installClaudeCodeStatusline(
+  ctx: StatuslineContext,
+  input: { bin: ResolvedBin; force?: boolean; now?: () => Date },
+): Promise<ClaudeStatuslineInstallResult> {
+  const path = claudeCodeUserSettingsPath(ctx.env);
+  const current = (await readSettingsStrict(ctx, path)) ?? {};
+  const existing = current.statusLine;
+  if (
+    existing !== undefined &&
+    existing !== null &&
+    !isRatelOwnedStatusline(existing) &&
+    !input.force
+  ) {
+    throw new ClaudeStatuslineConflictError(
+      `Claude Code already has a non-Ratel statusLine configured at ${path}; rerun with --force to replace it.`,
+    );
+  }
+
+  const command = claudeCodeStatuslineCommand(input.bin);
+  const target = {
+    type: "command",
+    command,
+    padding: 0,
+    refreshInterval: 30,
+  };
+  if (sameJson(existing, target)) {
+    return {
+      changed: false,
+      path,
+      command,
+      manifest: null,
+      state: await getClaudeCodeStatuslineState(ctx),
+    };
+  }
+
+  const next = { ...current, statusLine: target };
+  const session = startBackup(ctx.env, ctx.fs, input.now);
+  await session.capture(path);
+  const manifest = await session.finalize("edit");
+  await writeJson(ctx.fs, path, next);
+  return {
+    changed: true,
+    path,
+    command,
+    manifest,
+    state: await getClaudeCodeStatuslineState(ctx),
+  };
+}
+
+export async function uninstallClaudeCodeStatusline(
+  ctx: StatuslineContext,
+  input: { now?: () => Date } = {},
+): Promise<ClaudeStatuslineUninstallResult> {
+  const path = claudeCodeUserSettingsPath(ctx.env);
+  const current = await readSettingsStrict(ctx, path);
+  if (!current || !isRatelOwnedStatusline(current.statusLine)) {
+    return {
+      changed: false,
+      path,
+      manifest: null,
+      state: await getClaudeCodeStatuslineState(ctx),
+    };
+  }
+
+  const next = { ...current };
+  delete next.statusLine;
+  const session = startBackup(ctx.env, ctx.fs, input.now);
+  await session.capture(path);
+  const manifest = await session.finalize("edit");
+  await writeJson(ctx.fs, path, next);
+  return {
+    changed: true,
+    path,
+    manifest,
+    state: await getClaudeCodeStatuslineState(ctx),
+  };
+}
+
+export async function renderRatelStatusline(
+  ctx: StatuslineContext,
+  stdinJson: string,
+  opts: RenderRatelStatuslineOptions = {},
+): Promise<string> {
+  try {
+    const payload = parseClaudeStatuslineInput(stdinJson);
+    const state = await getClaudeCodeStatuslineState(ctx);
+    const telemetry = await readLatestTelemetrySummary(ctx, payload.projectDir, opts);
+    return renderStatusline(payload, state, telemetry, opts);
+  } catch (err) {
+    ctx.log?.(`[ratel] statusline failed open: ${(err as Error).message}`);
+    return `${ANSI.gray}○ Claude statusline loading${ANSI.reset}\n${ANSI.gray}Ratel telemetry unavailable${ANSI.reset}\n`;
+  }
+}
+
+interface ParsedClaudeStatuslineInput {
+  model: string;
+  projectDir: string | null;
+  contextSize: number | null;
+  usedTokens: number | null;
+  usedPercent: number | null;
+  durationMs: number | null;
+  branch: string | null;
+}
+
+interface TelemetrySummary {
+  source: "ratel_tool_payload" | "upstream_register" | "none";
+  toolCount: number;
+  estimatedTokens: number;
+}
+
+function parseClaudeStatuslineInput(stdinJson: string): ParsedClaudeStatuslineInput {
+  const raw = stdinJson.trim().length > 0 ? JSON.parse(stdinJson) : {};
+  if (!isPlainObject(raw)) throw new Error("statusline stdin must be a JSON object");
+  const modelObj = objectAt(raw, "model");
+  const workspace = objectAt(raw, "workspace");
+  const contextWindow = objectAt(raw, "context_window");
+  const cost = objectAt(raw, "cost");
+  const worktree = objectAt(raw, "worktree");
+
+  const contextSize = numberAt(contextWindow, "context_window_size");
+  const usedPercent = numberAt(contextWindow, "used_percentage");
+  const currentUsage = contextWindow.current_usage;
+  const usedTokens =
+    numericUsage(currentUsage) ??
+    (contextSize !== null && usedPercent !== null
+      ? Math.round((contextSize * Math.max(0, usedPercent)) / 100)
+      : null);
+
+  return {
+    model: stringAt(modelObj, "display_name") ?? stringAt(modelObj, "id") ?? "Claude",
+    projectDir: stringAt(workspace, "project_dir") ?? stringAt(workspace, "current_dir"),
+    contextSize,
+    usedTokens,
+    usedPercent:
+      usedPercent ??
+      (usedTokens !== null && contextSize && contextSize > 0
+        ? (usedTokens / contextSize) * 100
+        : null),
+    durationMs: numberAt(cost, "total_duration_ms"),
+    branch: stringAt(worktree, "branch"),
+  };
+}
+
+function renderStatusline(
+  input: ParsedClaudeStatuslineInput,
+  state: ClaudeCodeStatuslineState,
+  telemetry: TelemetrySummary,
+  opts: RenderRatelStatuslineOptions,
+): string {
+  const dot = state.ratelEnabled ? `${ANSI.green}●${ANSI.reset}` : `${ANSI.amber}○${ANSI.reset}`;
+  const context = formatContext(input);
+  const duration = input.durationMs === null ? "now" : formatDuration(input.durationMs);
+  const branch = opts.gitBranch ?? input.branch;
+  const branchText = branch ? `  ⎇ ${branch}` : "";
+  const line1 = `${dot} ${ANSI.cyan}${input.model}${ANSI.reset}  ${context}  ${duration}${branchText}`;
+  const line2 = `${contextBar(input.usedPercent)} ${formatRatelMode(state)}  ${formatTelemetryNote(
+    state,
+    telemetry,
+  )}`;
+  return `${line1}\n${line2}\n`;
+}
+
+function formatContext(input: ParsedClaudeStatuslineInput): string {
+  if (input.usedTokens === null || input.contextSize === null)
+    return `${ANSI.gray}context loading${ANSI.reset}`;
+  const pct = input.usedPercent === null ? "?" : `${Math.round(input.usedPercent)}%`;
+  return `${formatTokenCount(input.usedTokens)} / ${formatTokenCount(input.contextSize)} · ${pct}`;
+}
+
+function formatRatelMode(state: ClaudeCodeStatuslineState): string {
+  if (state.ratelEnabled) return `${ANSI.green}Ratel on${ANSI.reset}`;
+  return `${ANSI.amber}Ratel not enabled${ANSI.reset}`;
+}
+
+function formatTelemetryNote(
+  state: ClaudeCodeStatuslineState,
+  telemetry: TelemetrySummary,
+): string {
+  if (telemetry.source === "none") {
+    return `${ANSI.gray}waiting for Ratel telemetry${ANSI.reset}`;
+  }
+  const verb = state.ratelEnabled ? "saves" : "could trim";
+  const source = telemetry.source === "ratel_tool_payload" ? "payload" : "tool-count";
+  return `${verb} ~${formatTokenCount(telemetry.estimatedTokens)} (${telemetry.toolCount} tools, ${source})`;
+}
+
+function contextBar(percent: number | null): string {
+  const width = 18;
+  const ratio = percent === null ? 0 : Math.max(0, Math.min(1, percent / 100));
+  const filled = Math.round(width * ratio);
+  const color = ratio >= 0.75 ? ANSI.amber : ANSI.green;
+  return `${color}${"█".repeat(filled)}${ANSI.gray}${"░".repeat(width - filled)}${ANSI.reset}`;
+}
+
+async function readLatestTelemetrySummary(
+  ctx: StatuslineContext,
+  projectDir: string | null,
+  opts: RenderRatelStatuslineOptions,
+): Promise<TelemetrySummary> {
+  if (!projectDir) return emptyTelemetry();
+  const root = defaultTelemetryDir({ homeDir: ctx.env.homeDir, telemetryDir: opts.telemetryDir });
+  const bucket = projectBucketDir(root, projectDir);
+  const files = (await ctx.fs.list(bucket).catch(() => [])).filter((name) =>
+    name.endsWith(".jsonl"),
+  );
+  files.sort();
+  const latest = files.at(-1);
+  if (!latest) return emptyTelemetry();
+  const text = await ctx.fs.read(join(bucket, latest)).catch(() => null);
+  if (!text) return emptyTelemetry();
+
+  const payloadByServer = new Map<string, { estimatedTokens: number; toolCount: number }>();
+  const countByServer = new Map<string, number>();
+  let anonymous = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event: Record<string, unknown> | null = null;
+    try {
+      event = unwrapTraceEvent(JSON.parse(line));
+    } catch {
+      continue;
+    }
+    if (!event) continue;
+    const type = typeof event.type === "string" ? event.type : "";
+    const server = typeof event.server === "string" ? event.server : `unknown:${anonymous++}`;
+    const toolCount = numberValue(event.tool_count) ?? numberValue(event.toolCount) ?? 0;
+    if (type === "ratel_tool_payload") {
+      const estimatedTokens =
+        numberValue(event.estimated_tokens) ?? numberValue(event.estimatedTokens);
+      if (estimatedTokens !== null) {
+        payloadByServer.set(server, { estimatedTokens, toolCount });
+      }
+    } else if (type === "upstream_register") {
+      countByServer.set(server, toolCount);
+    }
+  }
+
+  if (payloadByServer.size > 0) {
+    let estimatedTokens = 0;
+    let toolCount = 0;
+    for (const value of payloadByServer.values()) {
+      estimatedTokens += value.estimatedTokens;
+      toolCount += value.toolCount;
+    }
+    for (const [server, count] of countByServer) {
+      if (payloadByServer.has(server)) continue;
+      const fallback = estimateToolCountTokens(count);
+      estimatedTokens += fallback.estimatedTokens;
+      toolCount += fallback.toolCount;
+    }
+    return { source: "ratel_tool_payload", estimatedTokens, toolCount };
+  }
+  if (countByServer.size > 0) {
+    const toolCount = Array.from(countByServer.values()).reduce((sum, count) => sum + count, 0);
+    const fallback = estimateToolCountTokens(toolCount);
+    return {
+      source: "upstream_register",
+      toolCount: fallback.toolCount,
+      estimatedTokens: fallback.estimatedTokens,
+    };
+  }
+  return emptyTelemetry();
+}
+
+async function detectClaudeRatelEnabled(
+  ctx: StatuslineContext,
+  warnings: string[],
+): Promise<{ enabled: boolean; sources: string[] }> {
+  const sources: string[] = [];
+  try {
+    const state = await new ClaudeCodeAgentHostAdapter().read({ env: ctx.env, fs: ctx.fs });
+    if (
+      state.scopes.some((scope) =>
+        Object.entries(scope.mcpServers).some(([name, entry]) => isRatelGatewayEntry(name, entry)),
+      )
+    ) {
+      sources.push("mcp-config");
+    }
+  } catch (err) {
+    warnings.push(`Failed to read Claude MCP config: ${(err as Error).message}`);
+  }
+
+  let pluginEnabled = false;
+  for (const { scope, path } of claudeSettingsPaths(ctx.env)) {
+    const settings = await readSettingsLenient(ctx, path, warnings, scope);
+    const decision = settings ? ratelPluginDecision(settings) : undefined;
+    if (decision === "disabled") {
+      pluginEnabled = false;
+    } else if (decision === "enabled") {
+      pluginEnabled = true;
+    }
+  }
+  if (pluginEnabled) sources.push("plugin");
+  return { enabled: sources.length > 0, sources };
+}
+
+function ratelPluginDecision(
+  settings: Record<string, unknown>,
+): "enabled" | "disabled" | undefined {
+  if (pluginListHasRatel(settings.disabledPlugins)) return "disabled";
+  const enabled = settings.enabledPlugins;
+  if (Array.isArray(enabled)) return pluginListHasRatel(enabled) ? "enabled" : undefined;
+  if (isPlainObject(enabled)) {
+    let decision: "enabled" | "disabled" | undefined;
+    for (const [name, value] of Object.entries(enabled)) {
+      if (!isRatelPluginName(name)) continue;
+      decision = value === false ? "disabled" : "enabled";
+    }
+    return decision;
+  }
+  return undefined;
+}
+
+function pluginListHasRatel(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((item) => typeof item === "string" && isRatelPluginName(item))
+  );
+}
+
+function isRatelPluginName(value: string): boolean {
+  return value === "ratel-mcp" || value.startsWith("ratel-mcp@");
+}
+
+function claudeSettingsPaths(env: HierarchyEnv): Array<{ scope: AgentScope; path: string }> {
+  const paths: Array<{ scope: AgentScope; path: string }> = [
+    { scope: "user", path: claudeCodeUserSettingsPath(env) },
+  ];
+  if (env.projectRoot) {
+    paths.push(
+      { scope: "project", path: join(env.projectRoot, ".claude", "settings.json") },
+      { scope: "local", path: join(env.projectRoot, ".claude", "settings.local.json") },
+    );
+  }
+  return paths;
+}
+
+async function readSettingsStrict(
+  ctx: StatuslineContext,
+  path: string,
+): Promise<Record<string, unknown> | null> {
+  const text = await ctx.fs.read(path);
+  if (text === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Failed to parse ${path}: ${(err as Error).message}`);
+  }
+  if (!isPlainObject(parsed)) throw new Error(`${path}: root must be a JSON object`);
+  return parsed;
+}
+
+async function readSettingsLenient(
+  ctx: StatuslineContext,
+  path: string,
+  warnings: string[],
+  scope?: AgentScope,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await readSettingsStrict(ctx, path);
+  } catch (err) {
+    const prefix = scope ? `${scope} settings` : path;
+    warnings.push(`Failed to read ${prefix}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+function emptyTelemetry(): TelemetrySummary {
+  return { source: "none", toolCount: 0, estimatedTokens: 0 };
+}
+
+function unwrapTraceEvent(value: unknown): Record<string, unknown> | null {
+  if (!isPlainObject(value)) return null;
+  if (typeof value.type === "string") return value;
+  if (isPlainObject(value.event)) return value.event;
+  if (isPlainObject(value.data)) return value.data;
+  return null;
+}
+
+function numericUsage(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (!isPlainObject(value)) return null;
+  let total = 0;
+  let found = false;
+  for (const item of Object.values(value)) {
+    if (typeof item === "number" && Number.isFinite(item)) {
+      total += item;
+      found = true;
+    }
+  }
+  return found ? total : null;
+}
+
+function numberAt(value: Record<string, unknown>, key: string): number | null {
+  return numberValue(value[key]);
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function stringAt(value: Record<string, unknown>, key: string): string | null {
+  const v = value[key];
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+function objectAt(value: Record<string, unknown>, key: string): Record<string, unknown> {
+  const v = value[key];
+  return isPlainObject(v) ? v : {};
+}
+
+function formatDuration(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours}h ${String(rest).padStart(2, "0")}m`;
+}
+
+function formatTokenCount(tokens: number): string {
+  const value = Math.max(0, Math.round(tokens));
+  if (value >= 1_000_000) return `${trimNumber(value / 1_000_000)}M`;
+  if (value >= 1_000) return `${trimNumber(value / 1_000)}k`;
+  return String(value);
+}
+
+function trimNumber(value: number): string {
+  return value >= 10 ? value.toFixed(0) : value.toFixed(1).replace(/\.0$/, "");
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_/:=@%+.,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function isRatelStatuslineCommand(command: string, ratelShape: boolean): boolean {
+  const lower = command.toLowerCase();
+  return lower.includes("statusline") && (lower.includes("ratel") || ratelShape);
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return stableJsonStringify(a) === stableJsonStringify(b);
+}

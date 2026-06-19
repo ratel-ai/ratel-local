@@ -5,6 +5,7 @@ import type {
   AgentScope,
 } from "./agent-host/index.js";
 import { isRatelGatewayEntry } from "./gateway-entry.js";
+import { stableJsonStringify } from "./json.js";
 import type { RatelConfig, ServerEntry } from "./lib/index.js";
 import type { ResolvedBin } from "./locate-bin.js";
 
@@ -383,31 +384,13 @@ export function conflictKey(scope: AgentScope, name: string): string {
 }
 
 function entriesEquivalent(a: ServerEntry, b: ServerEntry): boolean {
-  return canonicalJson(normalizeEntry(a)) === canonicalJson(normalizeEntry(b));
+  return stableJsonStringify(normalizeEntry(a)) === stableJsonStringify(normalizeEntry(b));
 }
 
 function normalizeEntry(entry: ServerEntry): Record<string, unknown> {
   const out: Record<string, unknown> = { ...entry };
   if (out.type === undefined) out.type = "stdio";
   return out;
-}
-
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortJsonValue(value));
-}
-
-function sortJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortJsonValue);
-  if (!isPlainObject(value)) return value;
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(value).sort()) {
-    out[key] = sortJsonValue(value[key]);
-  }
-  return out;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function pushRatelWrite(

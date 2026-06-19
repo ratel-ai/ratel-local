@@ -8,4 +8,6 @@ export interface HandlerCtx {
   fs: JsonFs & BackupFs;
   log: (message: string) => void;
   prompts: PromptAdapter;
+  stdin?: () => Promise<string>;
+  stdout?: (message: string) => void;
 }

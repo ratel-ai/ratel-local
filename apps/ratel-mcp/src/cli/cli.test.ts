@@ -2,10 +2,65 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { BackupFs, JsonFs } from "@ratel-ai/mcp-core";
 import { AUTH_TOOL_ID } from "@ratel-ai/mcp-core";
 import { INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID } from "@ratel-ai/sdk";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
+
+const HOME = "/home/u";
+const ROOT = "/repo";
+const SETTINGS = "/home/u/.claude/settings.json";
+
+class MemFs implements BackupFs, JsonFs {
+  files = new Map<string, string>();
+
+  async read(path: string) {
+    return this.files.get(path) ?? null;
+  }
+
+  async write(path: string, contents: string) {
+    this.files.set(path, contents);
+  }
+
+  async writeAtomic(path: string, contents: string) {
+    this.files.set(path, contents);
+  }
+
+  async remove(path: string) {
+    this.files.delete(path);
+  }
+
+  async mkdirp() {}
+
+  async exists(path: string) {
+    return this.files.has(path);
+  }
+
+  async list(path: string) {
+    const prefix = path.endsWith("/") ? path : `${path}/`;
+    const names = new Set<string>();
+    for (const file of this.files.keys()) {
+      if (!file.startsWith(prefix)) continue;
+      const rest = file.slice(prefix.length);
+      const slash = rest.indexOf("/");
+      names.add(slash >= 0 ? rest.slice(0, slash) : rest);
+    }
+    return Array.from(names);
+  }
+}
+
+let previousTelemetry: string | undefined;
+
+beforeEach(() => {
+  previousTelemetry = process.env.RATEL_TELEMETRY;
+  process.env.RATEL_TELEMETRY = "off";
+});
+
+afterEach(() => {
+  if (previousTelemetry === undefined) delete process.env.RATEL_TELEMETRY;
+  else process.env.RATEL_TELEMETRY = previousTelemetry;
+});
 
 async function fakeUpstream() {
   const server = new Server({ name: "fake", version: "0.0.0" }, { capabilities: { tools: {} } });
@@ -202,5 +257,49 @@ describe("runCli — help and routing", () => {
 
   it("rejects an unknown backup verb", async () => {
     await expect(runCli(["backup", "purge"], { logger: () => {} })).rejects.toThrow(/purge/);
+  });
+});
+
+describe("runCli — statusline", () => {
+  it("renders statusline output to stdout from stdin", async () => {
+    const fs = new MemFs();
+    const stdout: string[] = [];
+    await runCli(["statusline"], {
+      env: { homeDir: HOME, projectRoot: ROOT },
+      fs,
+      logger: () => {},
+      stdin: async () =>
+        JSON.stringify({
+          model: { display_name: "Claude Sonnet" },
+          workspace: { project_dir: ROOT },
+          context_window: { context_window_size: 100_000, used_percentage: 10 },
+          cost: { total_duration_ms: 60_000 },
+        }),
+      stdout: (message) => stdout.push(message),
+    });
+
+    expect(stdout.join("")).toContain("Claude Sonnet");
+    expect(stdout.join("")).toContain("10k / 100k");
+  });
+
+  it("installs and uninstalls the Claude statusline with --yes", async () => {
+    const fs = new MemFs();
+    fs.files.set("/repo/dist/bin.js", "");
+    const logs: string[] = [];
+    await runCli(["statusline", "install", "--yes"], {
+      env: { homeDir: HOME, projectRoot: ROOT },
+      fs,
+      logger: (message) => logs.push(message),
+    });
+
+    expect(JSON.parse(fs.files.get(SETTINGS) as string).statusLine.command).toContain("statusline");
+    expect(logs.join("\n")).toContain("installed Ratel statusline");
+
+    await runCli(["statusline", "uninstall", "--yes"], {
+      env: { homeDir: HOME, projectRoot: ROOT },
+      fs,
+      logger: (message) => logs.push(message),
+    });
+    expect(JSON.parse(fs.files.get(SETTINGS) as string).statusLine).toBeUndefined();
   });
 });

@@ -1,3 +1,5 @@
+import { isPlainObject } from "../json.js";
+
 export interface ServerEntry {
   type: string;
   command?: string;
@@ -184,10 +186,6 @@ function parseHttpLike(
     entry.scope = obj.scope;
   }
   return entry;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 export function mergeConfigs(configs: readonly RatelConfig[]): RatelConfig {

@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type {
@@ -35,8 +34,9 @@ import {
   type RatelConfig,
   type ServerEntry,
 } from "./lib/index.js";
-import { locateRatelBin, type ResolvedBin } from "./locate-bin.js";
+import { locateRatelBin, type ResolvedBin, whichRatelBin } from "./locate-bin.js";
 import { executePlan } from "./plan-exec.js";
+import { type ClaudeCodeStatuslineState, getClaudeCodeStatuslineState } from "./statusline.js";
 
 export type CoreFs = JsonFs & BackupFs;
 
@@ -271,6 +271,7 @@ export interface DetectedAgentHostSummary {
   ratelEntryNames: string[];
   missingRatelEntryNames: string[];
   scopes: AgentScopePosture[];
+  statusline?: ClaudeCodeStatuslineState;
 }
 
 export interface AgentHostsState {
@@ -329,9 +330,23 @@ export async function getAgentHostsState(ctx: CoreContext): Promise<AgentHostsSt
     } catch (err) {
       detection.warnings.push(`Failed to read ${host.displayName}: ${(err as Error).message}`);
     }
-    hosts.push(
-      summarizeDetectedAgentHost(host.kind, host.displayName, detection, state, ratelKnownNames),
+    const summary = summarizeDetectedAgentHost(
+      host.kind,
+      host.displayName,
+      detection,
+      state,
+      ratelKnownNames,
     );
+    if (host.kind === "claude-code") {
+      try {
+        summary.statusline = await getClaudeCodeStatuslineState(ctx);
+      } catch (err) {
+        detection.warnings.push(
+          `Failed to read Claude Code statusline state: ${(err as Error).message}`,
+        );
+      }
+    }
+    hosts.push(summary);
   }
   return { hosts };
 }
@@ -796,19 +811,6 @@ async function resolveBin(opts: AgentInteropOptions): Promise<ResolvedBin> {
     workspaceRoot: opts.workspaceRoot,
     exists: opts.exists,
   });
-}
-
-function whichRatelBin(): string | undefined {
-  try {
-    const out = execSync("which ratel-mcp", {
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-    return out || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function logPlanSummary(ctx: CoreContext, plan: ImportPlan, agentHostName: string): void {

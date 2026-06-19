@@ -48,6 +48,7 @@ Top-level commands:
 - `ratel-mcp mcp` manages upstream MCP server entries.
 - `ratel-mcp backup` manages backup snapshots.
 - `ratel-mcp ui` launches the local browser UI.
+- `ratel-mcp statusline` renders or manages the Claude Code Ratel statusline.
 - `ratel-mcp --version` or `ratel-mcp version` prints the CLI version.
 - `ratel-mcp help` prints top-level usage.
 
@@ -61,6 +62,13 @@ Top-level commands:
 - `import` migrates agent MCP configs into Ratel and can rewrite the agent to use the Ratel gateway.
 - `link` rewrites an agent's config to point at Ratel for entries already in Ratel scopes.
 - `auth` runs OAuth for HTTP/SSE upstreams or checks stored auth state.
+
+`ratel-mcp statusline` verbs:
+
+- no verb renders the Claude Code statusline from stdin.
+- `install` writes the user-scope Claude Code `~/.claude/settings.json` statusLine.
+- `uninstall` removes only a Ratel-owned statusLine.
+- `install --force` replaces another configured statusLine.
 
 ## Common Workflows
 
@@ -128,6 +136,19 @@ Link a host to Ratel after entries already exist in Ratel config:
 ratel-mcp mcp link --agent codex
 ratel-mcp mcp link --agent claude-code
 ```
+
+Install the Claude Code statusline:
+
+```bash
+ratel-mcp statusline install
+ratel-mcp statusline install --force
+ratel-mcp statusline uninstall
+```
+
+Claude Code plugins cannot currently set top-level `statusLine` defaults
+directly; use the CLI or the Claude Code agent page in `ratel-mcp ui`. The
+statusline reports Ratel as on when Claude Code starts Ratel via a linked MCP
+entry or an enabled `ratel-mcp@...` plugin.
 
 Authorize HTTP/SSE upstreams:
 

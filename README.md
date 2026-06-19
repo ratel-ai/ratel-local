@@ -79,6 +79,12 @@ claude plugin marketplace add .
 claude plugin install ratel-mcp@ratel
 ```
 
+Claude Code plugins cannot currently set a top-level `statusLine` default.
+Install the Ratel statusline separately with `ratel-mcp statusline install`
+or from the Claude Code agent page in `ratel-mcp ui`. See Claude's
+[statusline docs](https://code.claude.com/docs/en/statusline) and
+[plugin reference](https://code.claude.com/docs/en/plugins-reference).
+
 ## CLI quickstart
 
 `ratel-mcp` mirrors `claude mcp add`'s flag layout — any invocation that works against Claude Code's CLI works here unchanged.
@@ -101,6 +107,9 @@ ratel-mcp mcp import --agent codex
 ratel-mcp mcp link
 ratel-mcp mcp link --agent claude-code
 
+# Install the Claude Code statusline
+ratel-mcp statusline install
+
 # Start the gateway over stdio (this is what linked agents spawn)
 ratel-mcp serve --config ~/.ratel/config.json
 ```
@@ -111,6 +120,7 @@ Run `ratel-mcp <group>` for the verbs in a group:
 |---|---|
 | `mcp` | `add`, `remove`, `list`, `get`, `edit`, `import`, `link`, `auth` |
 | `backup` | `list` |
+| `statusline` | render from stdin, `install`, `uninstall` |
 | (top-level) | `serve`, `ui` |
 
 ### `ratel-mcp mcp add` — Claude-compatible
@@ -145,6 +155,36 @@ By default, `mcp add` connects to the upstream and stores its server-level `inst
 
 When you run `ratel-mcp serve --config a.json --config b.json --config c.json`, the configs are merged in order — last wins on `mcpServers` key collisions. The `link` command wires the right `--config` chain into Claude Code at each scope. The `import` wizard migrates selected native MCP entries into Ratel and can clean those imported entries out of the agent config as its second stage.
 
+### Claude Code statusline
+
+`ratel-mcp statusline` is a Claude Code statusline command. Claude passes a
+JSON payload on stdin; the command writes two statusline rows to stdout and
+fails open with a loading/no-telemetry line if the payload or telemetry is
+missing.
+
+```bash
+ratel-mcp statusline install          # write ~/.claude/settings.json
+ratel-mcp statusline install --force  # replace another configured statusLine
+ratel-mcp statusline uninstall        # remove only a Ratel-owned statusLine
+```
+
+Install writes a user-scoped Claude Code setting:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "ratel-mcp statusline",
+    "padding": 0,
+    "refreshInterval": 30
+  }
+}
+```
+
+The statusline reports Ratel as enabled when Claude Code is configured to start
+Ratel through a linked MCP entry or an enabled `ratel-mcp@...` plugin. It does
+not install or enable the plugin itself.
+
 ### OAuth flow
 
 HTTP and SSE upstreams that require OAuth authorization run through `ratel-mcp`'s loopback PKCE flow. From the CLI:
@@ -158,7 +198,7 @@ When the gateway boots, every HTTP/SSE upstream with stored tokens runs through 
 
 ### Telemetry
 
-`ratel-mcp serve` writes one JSON line per event to `~/.ratel/telemetry/<project-slug>/<ISO-ts>-<short>.jsonl` by default — every search, invoke, gateway call, upstream MCP call, and OAuth event flows through the same JSONL ([ADR 0009](https://github.com/ratel-ai/ratel/blob/main/docs/adr/0009-trace-events-core-owned-schema.md)). Best-effort, sampleable, lossy on backpressure — query-log shaped, not oplog.
+`ratel-mcp serve` writes one JSON line per event to `~/.ratel/telemetry/<project-slug>/<ISO-ts>-<short>.jsonl` by default — every search, invoke, gateway call, upstream MCP call, OAuth event, and Ratel's upstream tool-payload token estimate flows through the same JSONL ([ADR 0009](https://github.com/ratel-ai/ratel/blob/main/docs/adr/0009-trace-events-core-owned-schema.md)). Best-effort, sampleable, lossy on backpressure — query-log shaped, not oplog.
 
 | Flag | Env | Purpose |
 |---|---|---|

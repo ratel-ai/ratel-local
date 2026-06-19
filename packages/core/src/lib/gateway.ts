@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,6 +26,7 @@ import { refreshIfNeeded } from "./oauth/refresh.js";
 import { RatelOAuthStore } from "./oauth/store.js";
 import { wrapTransportWithSendMutex } from "./oauth/transport-mutex.js";
 import { defaultSkillDirs, loadSkills } from "./skills/load.js";
+import { estimateToolPayloadTokens } from "./usage.js";
 
 export type TransportFactory = (name: string, entry: ServerEntry) => Transport | undefined;
 
@@ -144,6 +145,15 @@ export async function buildGatewayFromConfig(
       }
       const handle = await registerMcpServer(catalog, { name, transport });
       handles.set(name, handle);
+      const toolPayloads = handle.toolIds.map((id) => catalog.get(id)).filter(Boolean);
+      const tokenEstimate = estimateToolPayloadTokens(toolPayloads);
+      recordToolPayloadTelemetry(options.trace, {
+        type: "ratel_tool_payload",
+        server: name,
+        tool_count: tokenEstimate.toolCount,
+        estimated_tokens: tokenEstimate.estimatedTokens,
+        strategy: tokenEstimate.strategy,
+      });
       const info: UpstreamServerInfo = { name, toolCount: handle.toolIds.length };
       const description = entry.description ?? handle.serverInstructions;
       if (description) info.description = description;
@@ -189,6 +199,26 @@ export async function buildGatewayFromConfig(
       listChangedNotifier = fn;
     },
   };
+}
+
+function recordToolPayloadTelemetry(
+  trace: TraceSinkConfig | undefined,
+  event: Record<string, unknown>,
+): void {
+  if (!trace || trace.kind !== "jsonl") return;
+  try {
+    appendFileSync(
+      trace.path,
+      `${JSON.stringify({
+        v: 1,
+        ts: Date.now(),
+        session_id: trace.sessionId,
+        ...event,
+      })}\n`,
+    );
+  } catch {
+    // Telemetry is best-effort; registration must not fail because tracing did.
+  }
 }
 
 /**
