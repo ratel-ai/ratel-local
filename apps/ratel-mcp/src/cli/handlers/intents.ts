@@ -33,6 +33,7 @@ export async function runIntents(ctx: HandlerCtx): Promise<void> {
   const sessionId = stringFlag(ctx.argv.flags.session);
   const all = ctx.argv.flags.all === true;
 
+  const trigger = sessionId ? "session" : all ? "all" : onIdle ? "idle" : "manual";
   const result = await runAnalysis(
     {
       fs: ctx.fs,
@@ -40,10 +41,11 @@ export async function runIntents(ctx: HandlerCtx): Promise<void> {
       chatSource: runtime.chatSource,
       extractor: runtime.extractor,
       matchSkill: runtime.matchSkill,
+      extractorModel: runtime.analysis?.extractor?.model,
       now: () => new Date().toISOString(),
       log: ctx.log,
     },
-    { sessionId, all, everyNMessages, onIdle },
+    { sessionId, all, everyNMessages, onIdle, trigger },
   );
 
   if (result.analyzed.length === 0) {

@@ -5,6 +5,7 @@
   "mock": false,
   "device": null,
   "intentsOnly": true,
-  "maxTokens": 2048,
-  "maxMessages": 40
+  "skipEvidences": true,
+  "maxTokens": 4096,
+  "maxMessages": 120
 }

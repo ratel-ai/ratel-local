@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnalysisConfig } from "../config.js";
 import {
   AnthropicApiSkillGenerator,
+  buildSkillPrompt,
   ClaudeCliSkillGenerator,
   createSkillGenerator,
   parseSkillDraft,
@@ -15,6 +16,62 @@ const DRAFT_JSON = JSON.stringify({
   description: "Add OAuth login to a Next.js app",
   tags: ["nextjs", "auth", "oauth"],
   body: "# OAuth in Next.js\n\nUse the App Router...",
+});
+
+describe("buildSkillPrompt", () => {
+  it("always asks for a single JSON object", () => {
+    const prompt = buildSkillPrompt(INTENT);
+    expect(prompt).toMatch(/Respond with ONLY a single JSON object/);
+    expect(prompt).toContain('"name"');
+    expect(prompt).toContain('"body"');
+  });
+
+  it("omits the evidence and related sections when absent", () => {
+    const prompt = buildSkillPrompt(INTENT);
+    expect(prompt).not.toMatch(/What the user actually did/i);
+    expect(prompt).not.toMatch(/Related things the user repeatedly asks/i);
+  });
+
+  it("includes the evidence section with bullets when evidences provided", () => {
+    const prompt = buildSkillPrompt(INTENT, {
+      evidences: ["ran `npm run build`", "asked how to wire OAuth callback"],
+    });
+    expect(prompt).toMatch(/What the user actually did/i);
+    expect(prompt).toContain("- ran `npm run build`");
+    expect(prompt).toContain("- asked how to wire OAuth callback");
+  });
+
+  it("includes the related section with bullets when relatedIntents provided", () => {
+    const prompt = buildSkillPrompt(INTENT, {
+      relatedIntents: ["add logout flow", "refresh tokens"],
+    });
+    expect(prompt).toMatch(/Related things the user repeatedly asks/i);
+    expect(prompt).toContain("- add logout flow");
+    expect(prompt).toContain("- refresh tokens");
+  });
+
+  it("keeps the existing existingSkillIds dedup line", () => {
+    const prompt = buildSkillPrompt(INTENT, { existingSkillIds: ["api-design"] });
+    expect(prompt).toMatch(/do not duplicate these/i);
+    expect(prompt).toContain("api-design");
+  });
+
+  it("caps the number of evidence bullets", () => {
+    const evidences = Array.from({ length: 50 }, (_, i) => `evidence number ${i}`);
+    const prompt = buildSkillPrompt(INTENT, { evidences });
+    const bulletCount = prompt.split("\n").filter((l) => l.startsWith("- evidence number")).length;
+    expect(bulletCount).toBeLessThanOrEqual(12);
+    expect(bulletCount).toBeGreaterThan(0);
+  });
+
+  it("caps the length of each evidence bullet", () => {
+    const long = "x".repeat(5000);
+    const prompt = buildSkillPrompt(INTENT, { evidences: [long] });
+    const bullet = prompt.split("\n").find((l) => l.startsWith("- xxx"));
+    expect(bullet).toBeDefined();
+    // bullet = "- " + capped content (+ optional ellipsis); stay well under the raw length.
+    expect((bullet as string).length).toBeLessThanOrEqual(2 + 300 + 1);
+  });
 });
 
 describe("parseSkillDraft", () => {
@@ -114,5 +171,34 @@ describe("createSkillGenerator", () => {
   it("honors an explicit claude-cli provider even with an apiKey", () => {
     const cfg: AnalysisConfig = { skillGen: { provider: "claude-cli", apiKey: "sk" } };
     expect(createSkillGenerator(cfg)).toBeInstanceOf(ClaudeCliSkillGenerator);
+  });
+
+  it("passes the configured model through the API path", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ content: [{ type: "text", text: DRAFT_JSON }] }), {
+        status: 200,
+      }),
+    );
+    const cfg: AnalysisConfig = {
+      skillGen: { provider: "auto", apiKey: "sk-ant", model: "claude-opus-4-6" },
+    };
+    const gen = createSkillGenerator(cfg, { anthropic: { fetch: fetchMock } });
+    expect(gen).toBeInstanceOf(AnthropicApiSkillGenerator);
+    await gen.generate(INTENT);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body as string).model).toBe("claude-opus-4-6");
+  });
+
+  it("passes the configured model through the claude-cli path", async () => {
+    const spawnMock = vi.fn().mockResolvedValue({ stdout: DRAFT_JSON, stderr: "", code: 0 });
+    const cfg: AnalysisConfig = {
+      skillGen: { provider: "claude-cli", model: "sonnet" },
+    };
+    const gen = createSkillGenerator(cfg, { cli: { spawn: spawnMock } });
+    expect(gen).toBeInstanceOf(ClaudeCliSkillGenerator);
+    await gen.generate(INTENT);
+    const [, args] = spawnMock.mock.calls[0];
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("sonnet");
   });
 });

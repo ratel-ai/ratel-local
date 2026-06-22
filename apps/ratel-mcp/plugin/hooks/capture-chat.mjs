@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readFile, rename, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -15,11 +15,47 @@ import { randomUUID } from "node:crypto";
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const MAX_CONTENT = 16000;
+
+// Lock tuning for the state.json filesystem mutex (mkdir is atomic on POSIX).
+const LOCK_RETRY_MS = 20; // base backoff between acquire attempts
+const LOCK_JITTER_MS = 15; // random jitter added to each backoff (avoids thundering herd)
+const LOCK_MAX_TRIES = 250; // generous acquisition budget (~5s worst case) before fallback
+const LOCK_STALE_MS = 10000; // steal locks older than this (crashed holder)
+
+// Secret redaction. Each entry redacts the value while preserving a labelled
+// prefix where one exists, so captured chat stays readable but never leaks
+// credentials. Order matters: structured/labelled patterns run before the
+// broad token patterns. Applied to every captured turn (user + assistant).
 const REDACTIONS = [
-  /\b(sk-[A-Za-z0-9_-]{16,})\b/g,
-  /\b(Bearer)\s+[A-Za-z0-9._-]{12,}/gi,
-  /\b(xox[baprs]-[A-Za-z0-9-]{8,})\b/g,
-  /\b(gh[pousr]_[A-Za-z0-9]{20,})\b/g,
+  // PEM private key blocks (any key type) — collapse the whole block.
+  {
+    re: /-----BEGIN (?:[A-Z0-9 ]*)PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]*)PRIVATE KEY-----/g,
+    to: "[REDACTED_PRIVATE_KEY]",
+  },
+  // JWTs (three base64url segments).
+  { re: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, to: "[REDACTED_JWT]" },
+  // OpenAI-style keys.
+  { re: /\b(sk-[A-Za-z0-9_-]{16,})\b/g, to: "[REDACTED]" },
+  // Bearer tokens.
+  { re: /\b(Bearer)\s+[A-Za-z0-9._-]{12,}/gi, to: "$1 [REDACTED]" },
+  // Slack tokens.
+  { re: /\b(xox[baprs]-[A-Za-z0-9-]{8,})\b/g, to: "[REDACTED]" },
+  // GitHub tokens.
+  { re: /\b(gh[pousr]_[A-Za-z0-9]{20,})\b/g, to: "[REDACTED]" },
+  // AWS access key ids.
+  { re: /\bAKIA[0-9A-Z]{16}\b/g, to: "[REDACTED_AWS_KEY]" },
+  // Google API keys.
+  { re: /\bAIza[0-9A-Za-z\-_]{35}\b/g, to: "[REDACTED_GOOGLE_KEY]" },
+  // aws_secret_access_key assignments (=, :, or =>), quoted or bare.
+  {
+    re: /\b(aws_secret_access_key)(\s*[:=]>?\s*)(['"]?)[^\s'"]+\3/gi,
+    to: "$1$2$3[REDACTED]$3",
+  },
+  // Generic credential assignments (password/passwd/secret/token/api_key).
+  {
+    re: /\b(password|passwd|secret|token|api[_-]?key)(\s*[:=]>?\s*)(['"]?)[^\s'"]+\3/gi,
+    to: "$1$2$3[REDACTED]$3",
+  },
 ];
 
 await main().catch(() => {
@@ -51,7 +87,10 @@ async function main() {
 async function onUserPrompt({ payload, chatDir, host, sessionId, cwd }) {
   const prompt = stringValue(firstPresent(payload, [["prompt"], ["user_prompt"], ["message"]]));
   if (!prompt || prompt.trim().length === 0) return;
-  await appendTurn(chatDir, host, sessionId, { role: "user", content: clean(prompt) });
+  // Only bump the new-turn counter if the turn was actually persisted, so a
+  // failed write can't desync the count from the JSONL the core later reads.
+  const wrote = await appendTurn(chatDir, host, sessionId, { role: "user", content: clean(prompt) });
+  if (!wrote) return;
   await updateState(chatDir, sessionId, (meta) => ({
     ...meta,
     sessionId,
@@ -110,8 +149,8 @@ async function backfillAssistant(chatDir, host, sessionId, transcriptPath, start
     if (role !== "assistant") continue;
     const text = extractText(obj?.message?.content ?? obj?.content);
     if (!text || text.trim().length === 0) continue;
-    await appendTurn(chatDir, host, sessionId, { role: "assistant", content: clean(text) });
-    appended++;
+    const wrote = await appendTurn(chatDir, host, sessionId, { role: "assistant", content: clean(text) });
+    if (wrote) appended++;
   }
   return { appended, cursor: lines.length };
 }
@@ -125,15 +164,26 @@ function extractText(content) {
     .join("\n");
 }
 
+// Append a single turn to the session's JSONL log. Append-only writes to a
+// per-session file are inherently safe under concurrency (no read-modify-write),
+// so no lock is needed here. Fully fail-soft: a write failure must never throw
+// out of the hook. Returns true on success so callers can keep counts honest.
 async function appendTurn(chatDir, host, sessionId, turn) {
-  const dir = join(chatDir, host);
-  await mkdir(dir, { recursive: true, mode: DIR_MODE });
-  const file = join(dir, `${sessionId}.jsonl`);
-  const record = { ...turn, ts: new Date().toISOString() };
-  await appendFile(file, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: FILE_MODE });
-  await chmod(file, FILE_MODE).catch(() => undefined);
+  try {
+    const dir = join(chatDir, host);
+    await mkdir(dir, { recursive: true, mode: DIR_MODE });
+    const file = join(dir, `${sessionId}.jsonl`);
+    const record = { ...turn, ts: new Date().toISOString() };
+    await appendFile(file, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: FILE_MODE });
+    await chmod(file, FILE_MODE).catch(() => undefined);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
+// Recover gracefully from a missing/corrupt state.json: treat anything we can't
+// parse into the expected shape as an empty state rather than crashing.
 async function readState(chatDir) {
   try {
     const raw = await readFile(join(chatDir, "state.json"), "utf8");
@@ -145,23 +195,91 @@ async function readState(chatDir) {
   return { version: 1, sessions: {} };
 }
 
+// Serialize the whole read-modify-write of state.json across concurrent hook
+// subprocesses so parallel UserPromptSubmit/Stop events can't clobber each
+// other's counters. `update` runs INSIDE the lock against a fresh read, so
+// increments are always applied on top of other writers' results.
 async function updateState(chatDir, sessionId, update) {
-  const state = await readState(chatDir);
-  const next = {
-    version: 1,
-    sessions: { ...state.sessions, [sessionId]: update(state.sessions[sessionId] ?? {}) },
-  };
-  await mkdir(chatDir, { recursive: true, mode: DIR_MODE });
+  await mkdir(chatDir, { recursive: true, mode: DIR_MODE }).catch(() => undefined);
   const path = join(chatDir, "state.json");
+  const lockDir = `${path}.lock`;
+
+  const locked = await acquireLock(lockDir);
+  try {
+    const state = await readState(chatDir);
+    const next = {
+      version: 1,
+      sessions: { ...state.sessions, [sessionId]: update(state.sessions[sessionId] ?? {}) },
+    };
+    await atomicWriteState(path, next);
+  } finally {
+    // Only release a lock we actually own; if we fell back without one, leave
+    // any foreign lock alone for its owner / the stale-steal path.
+    if (locked) await rmdir(lockDir).catch(() => undefined);
+  }
+}
+
+// Atomic temp-file + rename write of state.json. Cleans up the temp file on any
+// failure so a crash can never leave `.ratel-tmp-*` litter behind.
+async function atomicWriteState(path, next) {
   const tmp = `${path}.ratel-tmp-${randomUUID()}`;
-  await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: FILE_MODE });
-  await rename(tmp, path);
-  await chmod(path, FILE_MODE).catch(() => undefined);
+  try {
+    await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: FILE_MODE });
+    await rename(tmp, path);
+    await chmod(path, FILE_MODE).catch(() => undefined);
+  } catch {
+    await unlink(tmp).catch(() => undefined);
+  }
+}
+
+// Acquire a filesystem mutex by creating a lock directory (mkdir is atomic on
+// POSIX). Retries with a short backoff, steals stale locks left by crashed
+// holders, and ultimately falls back to a best-effort write so the hook never
+// blocks or breaks the host agent.
+// Returns true if we own the lock, false if we proceeded without it.
+async function acquireLock(lockDir) {
+  for (let i = 0; i < LOCK_MAX_TRIES; i++) {
+    try {
+      await mkdir(lockDir, { mode: DIR_MODE });
+      return true;
+    } catch (err) {
+      if (err?.code !== "EEXIST") {
+        // Unexpected error (e.g. permissions) — give up on locking, write anyway.
+        return false;
+      }
+      if (await isLockStale(lockDir)) {
+        // Holder appears dead (lock dir is genuinely old): steal it, then retry.
+        await rmdir(lockDir).catch(() => undefined);
+        continue;
+      }
+      await sleep(LOCK_RETRY_MS + Math.floor(Math.random() * LOCK_JITTER_MS));
+    }
+  }
+  // Budget exhausted: proceed best-effort without the lock rather than block.
+  return false;
+}
+
+// A lock is "stale" only when its directory genuinely exists AND is older than
+// the threshold (its holder almost certainly crashed). If stat throws (e.g. the
+// lock vanished because its holder just released it), we must NOT treat it as
+// stale: doing so could rmdir a brand-new lock another writer just acquired,
+// letting two writers enter the critical section. Return false → plain retry.
+async function isLockStale(lockDir) {
+  try {
+    const info = await stat(lockDir);
+    return Date.now() - info.mtimeMs > LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function clean(text) {
   let out = text.length > MAX_CONTENT ? `${text.slice(0, MAX_CONTENT)}[TRUNCATED]` : text;
-  for (const re of REDACTIONS) out = out.replace(re, "$1[REDACTED]");
+  for (const { re, to } of REDACTIONS) out = out.replace(re, to);
   return out;
 }
 

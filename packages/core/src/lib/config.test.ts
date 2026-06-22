@@ -375,6 +375,31 @@ describe("parseConfig analysis", () => {
     ).toThrow(/everyNMessages/);
   });
 
+  it("parses and round-trips cadence.auto", () => {
+    const config = parseConfig({
+      mcpServers: {},
+      analysis: { cadence: { auto: true, everyNMessages: 5 } },
+    });
+    expect(config.analysis?.cadence).toEqual({ auto: true, everyNMessages: 5 });
+  });
+
+  it("rejects a non-boolean cadence.auto", () => {
+    expect(() => parseConfig({ mcpServers: {}, analysis: { cadence: { auto: "yes" } } })).toThrow(
+      /analysis\.cadence\.auto/,
+    );
+  });
+
+  it("parses cadence.recentHours and rejects non-positive values", () => {
+    const config = parseConfig({ mcpServers: {}, analysis: { cadence: { recentHours: 5 } } });
+    expect(config.analysis?.cadence?.recentHours).toBe(5);
+    expect(() =>
+      parseConfig({ mcpServers: {}, analysis: { cadence: { recentHours: 0 } } }),
+    ).toThrow(/analysis\.cadence\.recentHours/);
+    expect(() =>
+      parseConfig({ mcpServers: {}, analysis: { cadence: { recentHours: -1 } } }),
+    ).toThrow(/analysis\.cadence\.recentHours/);
+  });
+
   it("rejects a non-boolean enabled", () => {
     expect(() => parseConfig({ mcpServers: {}, analysis: { enabled: "yes" } })).toThrow(
       /analysis\.enabled/,
@@ -385,6 +410,24 @@ describe("parseConfig analysis", () => {
     expect(() =>
       parseConfig({ mcpServers: {}, analysis: { skillGen: { provider: "wizard" } } }),
     ).toThrow(/analysis\.skillGen\.provider/);
+  });
+
+  it("parses and round-trips a skillGen model", () => {
+    const config = parseConfig({
+      mcpServers: {},
+      analysis: { skillGen: { provider: "auto", apiKey: "sk-anthropic", model: "haiku" } },
+    });
+    expect(config.analysis?.skillGen).toEqual({
+      provider: "auto",
+      apiKey: "sk-anthropic",
+      model: "haiku",
+    });
+  });
+
+  it("rejects a non-string skillGen model", () => {
+    expect(() => parseConfig({ mcpServers: {}, analysis: { skillGen: { model: 42 } } })).toThrow(
+      /analysis\.skillGen\.model/,
+    );
   });
 
   it("parses a coverage block", () => {

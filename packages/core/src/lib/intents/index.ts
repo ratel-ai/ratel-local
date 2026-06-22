@@ -8,6 +8,7 @@ export {
 } from "./chat-source.js";
 export type { HttpExtractorDeps } from "./extractor.js";
 export { createExtractor, HttpIntentExtractor, NaiveIntentExtractor } from "./extractor.js";
+export { appendRunLog, readRunLog, runsLogPath } from "./observability.js";
 export type { IntentsPaths } from "./paths.js";
 export { intentsPaths, resolveRatelDir } from "./paths.js";
 export type {
@@ -36,9 +37,13 @@ export {
   INTENTS_INDEX_VERSION,
   mergeIntoIndex,
   normalizeIntentKey,
+  rankIntentRecords,
+  readAllSessionIntents,
   readIntentsIndex,
   readSessionIntents,
+  rebuildIndex,
   removeIntent,
+  removeIntentFromSessions,
   writeIntentsIndex,
   writeSessionIntents,
 } from "./store.js";
@@ -55,6 +60,8 @@ export type {
   IntentCoverage,
   IntentExtractor,
   IntentRecord,
+  RunLogEntry,
+  RunLogSessionEntry,
   SkillDraft,
   SkillGenContext,
   SkillGenerator,

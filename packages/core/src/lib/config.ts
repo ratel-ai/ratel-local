@@ -47,10 +47,22 @@ export interface ExtractorConfig {
 
 /** When the analysis runner fires. Manual is always available; these are the automatic triggers. */
 export interface CadenceConfig {
+  /**
+   * Master switch for the background scheduler: when true, the gateway runs
+   * analysis automatically on a timer (subject to the triggers below). Defaults
+   * to false — automatic runs are opt-in; manual "Run now" always works.
+   */
+  auto?: boolean;
   /** Trigger after this many new captured turns. Must be a positive integer (default 10). */
   everyNMessages?: number;
   /** Also trigger when a session goes idle (driven by the Stop hook). */
   onIdle?: boolean;
+  /**
+   * Limit automatic/bulk runs to chats active within this many hours (a positive
+   * number; fractional allowed). Omitted = no limit (analyze every due chat).
+   * Per-chat manual analysis ignores this.
+   */
+  recentHours?: number;
 }
 
 /** Skill-draft generation backend. */
@@ -58,6 +70,8 @@ export interface SkillGenConfig {
   provider?: SkillGenProvider;
   /** Anthropic API key. Secret-bearing — masked when read back over the UI. */
   apiKey?: string;
+  /** Model id/alias the skill generator should use (e.g. an Anthropic model id, or a `claude -p` alias like 'haiku'/'sonnet'). Optional; the generator falls back to its default. */
+  model?: string;
 }
 
 /** Thresholds for deciding which skills "cover" an intent (BM25 search results). */
@@ -205,6 +219,12 @@ function parseCadence(raw: unknown): CadenceConfig {
     throw new ConfigError("`analysis.cadence` must be a JSON object");
   }
   const cadence: CadenceConfig = {};
+  if (raw.auto !== undefined) {
+    if (typeof raw.auto !== "boolean") {
+      throw new ConfigError("`analysis.cadence.auto` must be a boolean");
+    }
+    cadence.auto = raw.auto;
+  }
   if (raw.everyNMessages !== undefined) {
     const n = raw.everyNMessages;
     if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
@@ -217,6 +237,13 @@ function parseCadence(raw: unknown): CadenceConfig {
       throw new ConfigError("`analysis.cadence.onIdle` must be a boolean");
     }
     cadence.onIdle = raw.onIdle;
+  }
+  if (raw.recentHours !== undefined) {
+    const h = raw.recentHours;
+    if (typeof h !== "number" || Number.isNaN(h) || h <= 0) {
+      throw new ConfigError("`analysis.cadence.recentHours` must be a positive number");
+    }
+    cadence.recentHours = h;
   }
   return cadence;
 }
@@ -239,6 +266,12 @@ function parseSkillGen(raw: unknown): SkillGenConfig {
       throw new ConfigError("`analysis.skillGen.apiKey` must be a string");
     }
     skillGen.apiKey = raw.apiKey;
+  }
+  if (raw.model !== undefined) {
+    if (typeof raw.model !== "string") {
+      throw new ConfigError("`analysis.skillGen.model` must be a string");
+    }
+    skillGen.model = raw.model;
   }
   return skillGen;
 }

@@ -23,8 +23,10 @@ official inference library). The exact orbitals call may differ by version — t
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -56,6 +58,9 @@ class ExtractRequest(BaseModel):
 
 
 app = FastAPI(title="Ratel ClaimExtractor sidecar")
+# Log through uvicorn's logger so our progress lines show up next to the access
+# log (the "POST /v1/extract 200 OK" lines), not swallowed by the root logger.
+logger = logging.getLogger("uvicorn.error")
 _extractor: Any = None
 # Serializes inference: MPS (Apple GPU) aborts the process with a Metal
 # command-buffer assertion if two model calls touch the GPU concurrently.
@@ -69,6 +74,7 @@ def health() -> dict[str, Any]:
         "model": MODEL_ID,
         "backend": "mock" if MOCK else BACKEND,
         "intentsOnly": bool(SETTINGS["intentsOnly"]),
+        "skipEvidences": bool(SETTINGS["skipEvidences"]),
         "maxTokens": int(SETTINGS["maxTokens"]),
         "maxMessages": MAX_MESSAGES,
         "device": SETTINGS["device"],
@@ -81,19 +87,63 @@ def extract(req: ExtractRequest) -> dict[str, Any]:
     # transcripts are the main driver of MPS latency/timeouts, and recent turns
     # carry the live intent; 0 disables the cap.
     messages = limit_messages(req.messages, MAX_MESSAGES)
+    capped = "" if len(messages) == len(req.messages) else f" (capped from {len(req.messages)})"
+    logger.info(
+        "extract: %d messages%s | model=%s evidence=%s intentsOnly=%s maxTokens=%s",
+        len(messages),
+        capped,
+        MODEL_ID,
+        "on" if not SETTINGS["skipEvidences"] else "off",
+        bool(SETTINGS["intentsOnly"]),
+        int(SETTINGS["maxTokens"]) or "∞",
+    )
     if MOCK:
         return _extract_mock(messages)
+    started = time.monotonic()
     try:
         # One inference at a time — see _extract_lock (MPS is not concurrency-safe).
         with _extract_lock:
-            return _normalize(_extract_with_orbitals(messages, req.service_description))
+            result = _extract_with_orbitals(messages, req.service_description)
+        normalized = _normalize(result)
+        usage = _attr(result, "usage")
+        logger.info(
+            "extract done in %.1fs: %d intents, %d claims (completion_tokens=%s)",
+            time.monotonic() - started,
+            len(normalized["intents"]),
+            len(normalized["claims"]),
+            _attr(usage, "completion_tokens"),
+        )
+        _warn_if_suspect(result, normalized)
+        return normalized
     except Exception as e:  # surface the cause; this is a local dev sidecar
-        import logging
-
-        logging.exception("extraction failed")
+        logger.exception("extract failed after %.1fs", time.monotonic() - started)
         from fastapi import HTTPException
 
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}") from e
+
+
+def _warn_if_suspect(result: Any, normalized: dict[str, Any]) -> None:
+    """Surface the silent failure mode: the model's JSON truncates at the token
+    cap, orbitals returns nothing, and the run shows 0 intents with no error. Log
+    a clear hint when the output hit the cap, or when a run came back empty."""
+    usage = _attr(result, "usage")
+    completion = _attr(usage, "completion_tokens")
+    max_new = int(SETTINGS["maxTokens"])
+    empty = not normalized["intents"] and not normalized["claims"]
+    if max_new > 0 and isinstance(completion, int) and completion >= max_new:
+        logger.warning(
+            "extraction hit maxTokens=%d (completion_tokens=%d): the model's JSON was likely "
+            "truncated, so intents/claims may be empty or partial. Raise maxTokens (0 = no cap) "
+            "or set skipEvidences=true.",
+            max_new,
+            completion,
+        )
+    elif empty:
+        logger.info(
+            "extraction returned 0 intents and 0 claims (completion_tokens=%s). The window may "
+            "genuinely contain no intents, or the output truncated — check maxTokens.",
+            completion,
+        )
 
 
 # orbitals backends: "hf" (transformers, incl. Apple Silicon MPS) or "vllm" (CUDA GPU).
@@ -129,9 +179,11 @@ def _get_extractor() -> Any:
             extra["do_sample"] = False
             # Cap generation: extraction output is small (a short JSON), and the
             # orbitals default of 20k new tokens is the main cause of slow MPS/CPU
-            # inference + timeouts. Raise settings.maxTokens only if outputs get
-            # truncated.
-            extra["max_new_tokens"] = int(SETTINGS["maxTokens"])
+            # inference + timeouts. settings.maxTokens caps generation; 0 = no cap
+            # (let orbitals use its full default — needed for evidence-heavy output,
+            # but slow and may exceed the client's request timeout).
+            if int(SETTINGS["maxTokens"]) > 0:
+                extra["max_new_tokens"] = int(SETTINGS["maxTokens"])
             # Optional device pin: settings.device="cpu" avoids MPS instability
             # (slower but crash-free); "mps" forces the Apple GPU. None lets
             # transformers pick (MPS when available).
@@ -141,6 +193,10 @@ def _get_extractor() -> Any:
         # the UI keys off). Toggle with settings.intentsOnly.
         if SETTINGS["intentsOnly"]:
             extra["intents_only"] = True
+        # orbitals defaults skip_evidences=True (faster). We default it False so the
+        # model emits verbatim evidence quotes (the UI's "proof" view); flip via
+        # settings.skipEvidences for the fastest runs.
+        extra["skip_evidences"] = bool(SETTINGS["skipEvidences"])
         _extractor = ClaimExtractor(backend=backend, model=MODEL_ID, **extra)
     return _extractor
 
@@ -162,20 +218,60 @@ _SUBTYPE_MAP = {
 
 def _normalize(result: Any) -> dict[str, Any]:
     """Coerce an orbitals ClaimExtractorOutput into the wire contract."""
-    extractions = getattr(result, "extractions", result)
+    # The result may be an object with `.extractions` (the orbitals output) or a
+    # plain dict; `_attr` reads both. Fall back to `result` itself when there's no
+    # wrapper (i.e. it already holds claims/intents).
+    extractions = _attr(result, "extractions")
+    if extractions is None:
+        extractions = result
     claims = []
     for c in _attr(extractions, "claims") or []:
         raw = _attr(c, "subtype")
         subtype = _SUBTYPE_MAP.get(str(getattr(raw, "value", raw)).strip().lower())
         content = _attr(c, "content")
         if subtype and content:
-            claims.append({"subtype": subtype, "content": str(content)})
+            claim: dict[str, Any] = {"subtype": subtype, "content": str(content)}
+            ev = _evidences(c)
+            if ev:
+                claim["evidences"] = ev
+            claims.append(claim)
     intents = []
     for i in _attr(extractions, "intents") or []:
         content = _attr(i, "content")
         if content:
-            intents.append({"content": str(content)})
+            intent: dict[str, Any] = {"content": str(content)}
+            ev = _evidences(i)
+            if ev:
+                intent["evidences"] = ev
+            intents.append(intent)
     return {"claims": claims, "intents": intents}
+
+
+def _evidences(obj: Any) -> list[str]:
+    """Pull supporting evidence spans off a claim/intent as a list of strings.
+
+    The orbitals output may attach evidence under ``evidences`` (or ``evidence``),
+    and each item may be a plain string or an object carrying the span text under
+    one of several field names. Anything that can't be read as text is skipped.
+    """
+    raw = _attr(obj, "evidences")
+    if raw is None:
+        raw = _attr(obj, "evidence")
+    out: list[str] = []
+    for e in raw or []:
+        if isinstance(e, str):
+            text: Any = e
+        else:
+            text = (
+                _attr(e, "text")
+                or _attr(e, "content")
+                or _attr(e, "quote")
+                or _attr(e, "span")
+                or _attr(e, "evidence")
+            )
+        if text:
+            out.append(str(text).strip())
+    return out
 
 
 def _attr(obj: Any, name: str) -> Any:

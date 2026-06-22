@@ -30,7 +30,18 @@ DEFAULTS: dict[str, Any] = {
     "mock": False,
     "device": None,  # None → let transformers pick (MPS when available); "cpu"/"mps" to pin
     "intentsOnly": True,  # skip the claim pass (~2x faster); the UI only uses intents
-    "maxTokens": 2048,  # max NEW tokens generated per extraction
+    # True (default) → compact output, reliable intent extraction. Setting it False
+    # makes the model emit verbatim evidence quotes for the UI's "proof" view, but
+    # that output is much larger: if it exceeds maxTokens it truncates, the model's
+    # JSON fails to parse, and orbitals SILENTLY returns zero intents. So only turn
+    # evidence on together with a much larger maxTokens (e.g. 8192).
+    "skipEvidences": True,
+    # max NEW tokens generated per extraction. Too low truncates the output → the
+    # JSON won't parse → zero intents (silently; the server logs a warning when it
+    # detects this). 4096 is a safe ceiling for intents-only; evidence needs much
+    # more (8192+). 0 = no cap (orbitals' full default ~20k — slowest, but never
+    # truncates; may exceed the client's request timeout on long inputs).
+    "maxTokens": 4096,
     "maxMessages": 40,  # send only the last N messages to the model (0 = no limit)
 }
 
@@ -42,6 +53,7 @@ ENV_MAP: dict[str, tuple[str, str]] = {
     "mock": ("CLAIM_EXTRACTOR_MOCK", "bool"),
     "device": ("CLAIM_EXTRACTOR_DEVICE", "str"),
     "intentsOnly": ("CLAIM_EXTRACTOR_INTENTS_ONLY", "bool"),
+    "skipEvidences": ("CLAIM_EXTRACTOR_SKIP_EVIDENCES", "bool"),
     "maxTokens": ("CLAIM_EXTRACTOR_MAX_TOKENS", "int"),
     "maxMessages": ("CLAIM_EXTRACTOR_MAX_MESSAGES", "int"),
 }

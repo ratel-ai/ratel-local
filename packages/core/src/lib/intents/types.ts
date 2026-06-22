@@ -97,6 +97,13 @@ export interface SkillDraft {
 export interface SkillGenContext {
   existingSkillIds?: string[];
   cwd?: string;
+  /**
+   * Representative evidence snippets/turns for the intent, so a generator can
+   * ground the skill in what the user actually did.
+   */
+  evidences?: string[];
+  /** Other intents seen in the same session(s), for additional context. */
+  relatedIntents?: string[];
 }
 
 /** Drafts a new skill for an uncovered intent. Implementations: anthropic-api, claude-cli. */
@@ -126,4 +133,35 @@ export interface IntentRecord {
   sessions: string[];
   firstSeen: string;
   lastSeen: string;
+  /** Ranking score (currently session frequency), for ranking transparency. */
+  score?: number;
+  /** Evidence spans/turns that support this intent (from the newest session), as proof. */
+  evidences?: string[];
+}
+
+/** One session's outcome within a single analysis run, for run telemetry. */
+export interface RunLogSessionEntry {
+  sessionId: string;
+  host?: string;
+  ok: boolean;
+  error?: string;
+  intents: number;
+  gaps: number;
+  turns: number;
+  latencyMs: number;
+  cacheHit: boolean;
+}
+
+/** A single analysis run, appended to the runs telemetry log. */
+export interface RunLogEntry {
+  runId: string;
+  /** ISO timestamp. */
+  at: string;
+  /** "manual" | "idle" | "cadence" | "all" | "session" */
+  trigger: string;
+  model?: string;
+  durationMs: number;
+  totalIntents: number;
+  totalGaps: number;
+  sessions: RunLogSessionEntry[];
 }

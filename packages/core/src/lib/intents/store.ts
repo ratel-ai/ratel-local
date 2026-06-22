@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { type JsonFs, readJson, writeJson } from "../../io.js";
 import type { Claim, IntentCoverage, IntentRecord } from "./types.js";
@@ -182,4 +183,127 @@ export function mergeIntoIndex(
   const sessions = [...index.sessions.filter((s) => s.sessionId !== session.sessionId), summary];
 
   return { version: INTENTS_INDEX_VERSION, intents: [...byKey.values()], sessions };
+}
+
+/**
+ * Read every per-session file under `<intentsDir>/sessions/*.json`. Missing or
+ * malformed files are skipped (a missing directory yields `[]`). The result is
+ * sorted by `analyzedAt` ascending for deterministic downstream rebuilds.
+ */
+export async function readAllSessionIntents(
+  fs: JsonFs,
+  intentsDir: string,
+): Promise<SessionIntents[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(join(intentsDir, "sessions"));
+  } catch {
+    return [];
+  }
+  const sessionIds = entries
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => name.slice(0, -".json".length));
+  const sessions: SessionIntents[] = [];
+  for (const sessionId of sessionIds) {
+    const session = await readSessionIntents(fs, intentsDir, sessionId);
+    if (session && Array.isArray(session.intents)) sessions.push(session);
+  }
+  return [...sessions].sort((a, b) => a.analyzedAt.localeCompare(b.analyzedAt));
+}
+
+/**
+ * Rank intent records (pure): primary by session frequency DESC ("showed up in
+ * 8 sessions" first), then `lastSeen` DESC, then `content` ASC for stability.
+ * Returns a new array with `score` set to each record's session count.
+ */
+export function rankIntentRecords(records: IntentRecord[]): IntentRecord[] {
+  return [...records]
+    .map((r) => ({ ...r, score: r.sessions.length }))
+    .sort((a, b) => {
+      if (b.sessions.length !== a.sessions.length) return b.sessions.length - a.sessions.length;
+      if (b.lastSeen !== a.lastSeen) return b.lastSeen.localeCompare(a.lastSeen);
+      return a.content.localeCompare(b.content);
+    });
+}
+
+/**
+ * Rebuild the entire cumulative index from per-session files (pure). Deriving
+ * the index from the durable per-session artifacts means it can always be
+ * regenerated and never silently loses sessions or intents.
+ *
+ * Intents are de-duped by {@link normalizeIntentKey}. For each distinct key the
+ * `sessions` list is every containing session (ordered by first appearance);
+ * `firstSeen`/`lastSeen` span their `analyzedAt`; `content` and `coverage` come
+ * from the most-recently-analyzed containing session (newest wins, since skills
+ * change over time). Empty-key intents are skipped. `intents` is returned ranked
+ * (see {@link rankIntentRecords}).
+ */
+export function rebuildIndex(sessions: SessionIntents[]): IntentsIndex {
+  // Sessions sorted oldest → newest so "first appearance" ordering and
+  // "newest wins" for content/coverage both fall out naturally.
+  const ordered = [...sessions].sort((a, b) => a.analyzedAt.localeCompare(b.analyzedAt));
+  const byKey = new Map<string, IntentRecord>();
+
+  for (const session of ordered) {
+    for (const intent of session.intents) {
+      const key = normalizeIntentKey(intent.content);
+      if (key.length === 0) continue;
+      const existing = byKey.get(key);
+      if (existing) {
+        byKey.set(key, {
+          ...existing,
+          // newest containing session wins for content + coverage + evidence
+          content: intent.content,
+          coverage: intent.coverage,
+          evidences: intent.evidences ?? existing.evidences,
+          sessions: existing.sessions.includes(session.sessionId)
+            ? existing.sessions
+            : [...existing.sessions, session.sessionId],
+          firstSeen:
+            session.analyzedAt < existing.firstSeen ? session.analyzedAt : existing.firstSeen,
+          lastSeen: session.analyzedAt > existing.lastSeen ? session.analyzedAt : existing.lastSeen,
+        });
+      } else {
+        byKey.set(key, {
+          content: intent.content,
+          coverage: intent.coverage,
+          evidences: intent.evidences,
+          sessions: [session.sessionId],
+          firstSeen: session.analyzedAt,
+          lastSeen: session.analyzedAt,
+        });
+      }
+    }
+  }
+
+  const summaries: SessionSummary[] = ordered.map((session) => ({
+    sessionId: session.sessionId,
+    host: session.host,
+    cwd: session.cwd,
+    analyzedAt: session.analyzedAt,
+    intentCount: session.intents.length,
+    gapCount: session.intents.filter((i) => i.coverage.status === "gap").length,
+  }));
+
+  return {
+    version: INTENTS_INDEX_VERSION,
+    intents: rankIntentRecords([...byKey.values()]),
+    sessions: summaries,
+  };
+}
+
+/**
+ * Strip an intent (matched by {@link normalizeIntentKey}) from every session's
+ * `intents` array (pure), so a later {@link rebuildIndex} won't resurrect a
+ * deleted intent. Inputs are never mutated.
+ */
+export function removeIntentFromSessions(
+  sessions: SessionIntents[],
+  content: string,
+): SessionIntents[] {
+  const key = normalizeIntentKey(content);
+  return sessions.map((session) => ({
+    ...session,
+    intents: session.intents.filter((i) => normalizeIntentKey(i.content) !== key),
+  }));
 }

@@ -6,6 +6,7 @@ import {
   FolderOpen,
   House,
   LinkIcon,
+  MessagesSquare,
   Plus,
   Server,
   Settings2,
@@ -265,7 +266,7 @@ export function AppShell() {
   );
 
   const goTo = useCallback(
-    (to: "/" | "/agent-setup" | "/skills" | "/intents") => {
+    (to: "/" | "/agent-setup" | "/skills" | "/intents" | "/chats") => {
       const tokenizedPath = token ? `${to}?t=${encodeURIComponent(token)}` : to;
       void navigate({ to: tokenizedPath } as never);
     },
@@ -372,7 +373,7 @@ export function AppShell() {
 
 function ProductSidebar(props: {
   config: ConfigResponse | null;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/intents") => void;
+  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/intents" | "/chats") => void;
   pathname: string;
 }) {
   return (
@@ -413,6 +414,12 @@ function ProductSidebar(props: {
                 icon={<Target />}
                 label="Intents"
                 onClick={() => props.onNavigate("/intents")}
+              />
+              <ProductSidebarItem
+                active={props.pathname === "/chats"}
+                icon={<MessagesSquare />}
+                label="Chats"
+                onClick={() => props.onNavigate("/chats")}
               />
             </SidebarMenu>
           </SidebarGroupContent>
@@ -543,7 +550,7 @@ function CommandMenu(props: {
   onAddToolSource: () => void;
   onImport: () => void;
   onLink: () => void;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/intents") => void;
+  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/intents" | "/chats") => void;
   onSelectAgent: (kind: AgentHostKind) => void;
   onSelectToolSource: (scope: RatelScope, name: string) => void;
   open: boolean;
@@ -581,6 +588,10 @@ function CommandMenu(props: {
               <CommandItem onSelect={() => props.onNavigate("/intents")}>
                 <Target />
                 Intents
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/chats")}>
+                <MessagesSquare />
+                Chats
               </CommandItem>
             </CommandGroup>
             {agentItems.length > 0 && (
@@ -765,6 +776,11 @@ export function toolSourcePath(scope: RatelScope, name: string, token?: string) 
 
 export function skillPath(id: string, token?: string) {
   const path = `/skills/${encodeURIComponent(id)}`;
+  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+}
+
+export function chatPath(sessionId: string, token?: string) {
+  const path = `/chats/${encodeURIComponent(sessionId)}`;
   return token ? `${path}?t=${encodeURIComponent(token)}` : path;
 }
 

@@ -1,7 +1,19 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Cog, Play, SearchIcon, Sparkles, Target, Trash2 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { skillPath, useRatelApp } from "@/App";
+import {
+  Activity,
+  ChevronDown,
+  ChevronRight,
+  Cog,
+  MessagesSquare,
+  Play,
+  RefreshCw,
+  SearchIcon,
+  Sparkles,
+  Target,
+  Trash2,
+} from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { chatPath, skillPath, useRatelApp } from "@/App";
 import { Markdown } from "@/components/markdown";
 import {
   PageHeader,
@@ -44,30 +56,46 @@ import {
   type AnalysisSettings,
   type Cadence,
   clearIntents,
+  clearOfferJob,
   deleteIntent,
+  estimateGenMs,
   fetchAnalysisSettings,
+  fetchChats,
   fetchIntents,
   type IntentRecord,
   type IntentsIndex,
+  listOfferJobs,
+  type OfferJobSummary,
   offerSkill,
+  offerSkillStatus,
+  runAllIntents,
   runIntents,
   type SessionSummary,
   type SkillDraft,
   saveAnalysisSettings,
+  skillGenModelOptions,
 } from "@/lib/intents";
+import { ObservabilityPanel } from "@/pages/ObservabilityPage";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; data: IntentsIndex };
 
-type View = "cumulative" | "by-session";
+type View = "cumulative" | "by-session" | "observability";
+
+/** sessionId → its chat title/host, for the "seen in N sessions" links. */
+type SessionTitles = Record<string, { title: string; host?: string }>;
+/** intent content → its live authoring job, so a result survives navigation. */
+type OfferJobs = Record<string, OfferJobSummary>;
 
 export function IntentsPage() {
   const { request, runAction, busy, openCommandMenu } = useRatelApp();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [view, setView] = useState<View>("cumulative");
   const [running, setRunning] = useState(false);
+  const [sessionTitles, setSessionTitles] = useState<SessionTitles>({});
+  const [offerJobs, setOfferJobs] = useState<OfferJobs>({});
 
   const load = useCallback(async () => {
     try {
@@ -83,48 +111,81 @@ export function IntentsPage() {
     }
   }, [request]);
 
+  // Side data: chat titles (for the "seen in N sessions" links) and any in-flight
+  // or finished authoring jobs (so a result stays reachable after navigating away).
+  const loadAux = useCallback(async () => {
+    try {
+      const [{ chats }, { jobs }] = await Promise.all([
+        fetchChats(request),
+        listOfferJobs(request),
+      ]);
+      const titles: SessionTitles = {};
+      for (const c of chats) titles[c.sessionId] = { title: c.title, host: c.host };
+      setSessionTitles(titles);
+      const byIntent: OfferJobs = {};
+      for (const j of jobs) byIntent[j.intent] = j;
+      setOfferJobs(byIntent);
+    } catch {
+      // Non-fatal: the page still works without titles/job hydration.
+    }
+  }, [request]);
+
   // void-returning wrapper for child `onReload`/`onCleared` props.
   const reload = useCallback(async () => {
-    await load();
-  }, [load]);
+    await Promise.all([load(), loadAux()]);
+  }, [load, loadAux]);
 
   useEffect(() => {
     void load();
-  }, [load]);
-
-  // The run is fire-and-forget on the server; poll while it reports `running` so
-  // results stream in and the banner clears itself when the run finishes.
-  useEffect(() => {
-    if (!running) return;
-    let cancelled = false;
-    const tick = async () => {
-      const data = await load();
-      if (!cancelled && data && !data.running) setRunning(false);
-    };
-    const id = window.setInterval(() => void tick(), 2000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [running, load]);
-
-  const runNow = useCallback(async () => {
-    // Show the banner immediately so there's feedback even if the backend runs
-    // synchronously (e.g. a stale dev server that hasn't picked up fire-and-forget).
-    setRunning(true);
-    const ok = await runAction("Analysis started", () => runIntents(request));
-    const data = await load();
-    // Keep the banner only while the server reports an in-flight run; the polling
-    // effect clears it when that finishes. Otherwise (error, or a synchronous
-    // backend with no `running` flag) clear it now — the results are already in.
-    if (!ok || !data?.running) setRunning(false);
-  }, [runAction, request, load]);
+    void loadAux();
+  }, [load, loadAux]);
 
   const ready = state.status === "ready" ? state.data : null;
   const intents = ready?.intents ?? [];
   const sessions = ready?.sessions ?? [];
   const cadence = ready?.cadence;
   const analysisOff = ready?.enabled === false;
+  // A run may be in flight even if this client didn't start it (per-chat analyze,
+  // the cadence scheduler, another tab). Reflect the server's flag too.
+  const serverRunning = ready?.running === true;
+  const showRunning = running || serverRunning;
+
+  // The run is fire-and-forget on the server; poll while it (or any other trigger)
+  // reports `running` so results stream in and the banner clears itself.
+  useEffect(() => {
+    if (!running && !serverRunning) return;
+    let cancelled = false;
+    const tick = async () => {
+      const data = await load();
+      if (cancelled) return;
+      // A failed poll returns null (e.g. an expired token after the server
+      // restarted). Stop the spinner so the error state surfaces with a Retry,
+      // rather than hanging on "Analyzing…" forever with no feedback.
+      if (!data?.running) setRunning(false);
+    };
+    const id = window.setInterval(() => void tick(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [running, serverRunning, load]);
+
+  const runNow = useCallback(
+    async (all = false) => {
+      // Show the banner immediately so there's feedback even if the backend runs
+      // synchronously (e.g. a stale dev server that hasn't picked up fire-and-forget).
+      setRunning(true);
+      const ok = await runAction(all ? "Re-analyzing all chats" : "Analysis started", () =>
+        all ? runAllIntents(request) : runIntents(request),
+      );
+      const data = await load();
+      // Keep the banner only while the server reports an in-flight run; the polling
+      // effect clears it when that finishes. Otherwise (error, or a synchronous
+      // backend with no `running` flag) clear it now — the results are already in.
+      if (!ok || !data?.running) setRunning(false);
+    },
+    [runAction, request, load],
+  );
 
   return (
     <main className="flex w-full flex-1 flex-col gap-4 px-4 py-5 sm:px-6">
@@ -156,12 +217,24 @@ export function IntentsPage() {
           <AnalysisSettingsDialog />
           <Button
             className="h-10"
-            disabled={busy || running || analysisOff}
+            disabled={busy || showRunning || analysisOff}
+            onClick={() => void runNow(true)}
+            size="sm"
+            title="Re-analyze every chat from scratch (ignores cache and the new-activity filter)"
+            variant="outline"
+          >
+            <RefreshCw />
+            Re-analyze all
+          </Button>
+          <Button
+            className="h-10"
+            disabled={busy || showRunning || analysisOff}
             onClick={() => void runNow()}
             size="sm"
+            title="Analyze chats with new activity since their last analysis"
           >
-            {running ? <Spinner /> : <Play />}
-            {running ? "Analyzing…" : "Run now"}
+            {showRunning ? <Spinner /> : <Play />}
+            {showRunning ? "Analyzing…" : "Run now"}
           </Button>
           <ResponsiveToolbar>
             <ResponsiveToolbarButton
@@ -194,58 +267,93 @@ export function IntentsPage() {
         </div>
       )}
 
-      {running && (
+      {/* While analyzing with results already on screen, a slim top banner keeps
+          context; the empty state gets the full-bleed version (below) instead. */}
+      {showRunning && intents.length > 0 && (
         <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/30 px-3 py-2 text-muted-foreground text-sm">
           <PrismSweep size={22} dotSize={3} speed={1.3} />
           Analyzing chat through the extractor… results appear as each session finishes.
         </div>
       )}
 
-      {!running && ready?.lastError && (
+      {!showRunning && ready?.lastError && (
         <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-amber-900 text-sm dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200">
           Last analysis didn't finish: {ready.lastError}
         </div>
       )}
 
-      {ready && intents.length === 0 && (
-        <EmptyState
-          title="No intents yet"
-          description="Once the plugin captures some chat, run an analysis to extract what you've been trying to do. Make sure the Ratel plugin hooks are trusted in your agent."
-        >
-          <Button disabled={busy} onClick={() => void runNow()} size="sm">
-            <Play />
-            Run analysis
-          </Button>
-        </EmptyState>
-      )}
-
-      {ready && intents.length > 0 && (
+      {ready && (
         <>
-          <div className="flex items-center justify-between">
-            <Tabs onValueChange={(v) => setView(v as View)} value={view}>
-              <TabsList>
-                <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
-                <TabsTrigger value="by-session">By session</TabsTrigger>
-              </TabsList>
-            </Tabs>
+          <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="px-1 text-muted-foreground text-xs">
-                {intents.length} intent{intents.length === 1 ? "" : "s"} ·{" "}
-                {intents.filter((i) => i.coverage.status === "gap").length} gaps
-                {cadence ? ` · due for analysis every ${cadence.everyNMessages} messages` : ""}
-              </span>
-              <ClearAllButton onCleared={reload} />
+              {/* The two intent views are a segmented control; "Run history" is a
+                  separate, visually distinct thing (analysis telemetry), set apart
+                  by a divider so it doesn't read as a third view of the same data. */}
+              <Tabs
+                onValueChange={(v) => setView(v as View)}
+                value={view === "observability" ? "" : view}
+              >
+                <TabsList>
+                  <TabsTrigger value="cumulative">Cumulative</TabsTrigger>
+                  <TabsTrigger value="by-session">By session</TabsTrigger>
+                </TabsList>
+              </Tabs>
+              <span aria-hidden className="mx-1 hidden h-5 w-px bg-border sm:block" />
+              <Button
+                className={
+                  view === "observability" ? "bg-accent text-foreground" : "text-muted-foreground"
+                }
+                onClick={() => setView(view === "observability" ? "cumulative" : "observability")}
+                size="sm"
+                variant="ghost"
+              >
+                <Activity />
+                Run history
+              </Button>
             </div>
+            {view !== "observability" && intents.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="px-1 text-muted-foreground text-xs">
+                  {intents.length} intent{intents.length === 1 ? "" : "s"} ·{" "}
+                  {intents.filter((i) => i.coverage.status === "gap").length} gaps
+                  {cadence ? ` · due for analysis every ${cadence.everyNMessages} messages` : ""}
+                </span>
+                <ClearAllButton onCleared={reload} />
+              </div>
+            )}
           </div>
 
-          {view === "cumulative" ? (
-            <IntentList intents={intents} onReload={reload} />
+          {view === "observability" ? (
+            <ObservabilityPanel />
+          ) : intents.length === 0 ? (
+            showRunning ? (
+              <AnalyzingState />
+            ) : (
+              <EmptyState
+                title="No intents yet"
+                description="Once the plugin captures some chat, run an analysis to extract what you've been trying to do. Make sure the Ratel plugin hooks are trusted in your agent."
+              >
+                <Button disabled={busy} onClick={() => void runNow()} size="sm">
+                  <Play />
+                  Run analysis
+                </Button>
+              </EmptyState>
+            )
+          ) : view === "cumulative" ? (
+            <IntentList
+              intents={intents}
+              jobs={offerJobs}
+              onReload={reload}
+              sessionTitles={sessionTitles}
+            />
           ) : (
             <BySessionView
               cadence={cadence}
               intents={intents}
+              jobs={offerJobs}
               onReload={reload}
               sessions={sessions}
+              sessionTitles={sessionTitles}
             />
           )}
         </>
@@ -254,20 +362,31 @@ export function IntentsPage() {
   );
 }
 
+const SESSIONS_PAGE = 8;
+
 function BySessionView(props: {
   intents: IntentRecord[];
   sessions: SessionSummary[];
   cadence?: Cadence;
+  sessionTitles: SessionTitles;
+  jobs: OfferJobs;
   onReload: () => Promise<void>;
 }) {
-  if (props.sessions.length === 0) {
-    return <p className="px-1 text-muted-foreground text-sm">No analyzed sessions yet.</p>;
+  const [shown, setShown] = useState(SESSIONS_PAGE);
+  // Hide sessions that produced no intents (nothing to show) and sort newest first.
+  const sessions = [...props.sessions]
+    .filter((s) => s.intentCount > 0)
+    .sort((a, b) => b.analyzedAt.localeCompare(a.analyzedAt));
+  if (sessions.length === 0) {
+    return (
+      <p className="px-1 text-muted-foreground text-sm">No analyzed sessions with intents yet.</p>
+    );
   }
-  // Newest first by analysis time.
-  const sessions = [...props.sessions].sort((a, b) => b.analyzedAt.localeCompare(a.analyzedAt));
+  const visible = sessions.slice(0, shown);
+  const remaining = sessions.length - visible.length;
   return (
     <div className="grid gap-5">
-      {sessions.map((session) => {
+      {visible.map((session) => {
         const intents = props.intents.filter((i) => i.sessions.includes(session.sessionId));
         return (
           <section className="grid gap-2" key={session.sessionId}>
@@ -284,10 +403,22 @@ function BySessionView(props: {
                 {cadenceProgress(session, props.cadence)}
               </p>
             </div>
-            <IntentList intents={intents} onReload={props.onReload} />
+            <IntentList
+              intents={intents}
+              jobs={props.jobs}
+              onReload={props.onReload}
+              sessionTitles={props.sessionTitles}
+            />
           </section>
         );
       })}
+      {remaining > 0 && (
+        <div className="flex justify-center">
+          <Button onClick={() => setShown((n) => n + SESSIONS_PAGE)} size="sm" variant="outline">
+            Show more sessions ({remaining} more)
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -301,37 +432,182 @@ function cadenceProgress(session: SessionSummary, cadence?: Cadence): string {
   return ` · ${newTurns}/${cadence.everyNMessages} new since last analysis (${tail})`;
 }
 
-function IntentList(props: { intents: IntentRecord[]; onReload: () => Promise<void> }) {
+const INTENTS_PAGE = 25;
+
+function IntentList(props: {
+  intents: IntentRecord[];
+  sessionTitles: SessionTitles;
+  jobs: OfferJobs;
+  onReload: () => Promise<void>;
+}) {
+  const [shown, setShown] = useState(INTENTS_PAGE);
+  const visible = props.intents.slice(0, shown);
+  const remaining = props.intents.length - visible.length;
   return (
-    <ul className="grid gap-2">
-      {props.intents.map((intent) => (
-        <IntentRow intent={intent} key={intent.content} onReload={props.onReload} />
-      ))}
-    </ul>
+    <div className="grid gap-2">
+      <ul className="grid gap-2">
+        {visible.map((intent) => (
+          <IntentRow
+            initialJob={props.jobs[intent.content]}
+            intent={intent}
+            key={intent.content}
+            onReload={props.onReload}
+            sessionTitles={props.sessionTitles}
+          />
+        ))}
+      </ul>
+      {remaining > 0 && (
+        <div className="flex justify-center pt-1">
+          <Button onClick={() => setShown((n) => n + INTENTS_PAGE)} size="sm" variant="outline">
+            Show more ({remaining} more)
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
-function IntentRow(props: { intent: IntentRecord; onReload: () => Promise<void> }) {
+function IntentRow(props: {
+  intent: IntentRecord;
+  sessionTitles: SessionTitles;
+  initialJob?: OfferJobSummary;
+  onReload: () => Promise<void>;
+}) {
   const { intent } = props;
+  const seen = intent.sessions.length;
   const isGap = intent.coverage.status === "gap";
+  // The server already ranks the list; a gap that recurs across several sessions
+  // is what we want users to act on first, so flag it as a top gap.
+  const topGap = isGap && seen >= 3;
+  // Emphasize frequency when an intent shows up across many sessions.
+  const frequent = seen >= 3;
   return (
     <li className="flex items-start gap-3 rounded-md border border-border bg-card p-3">
       <Target className="mt-0.5 size-4 shrink-0 text-muted-foreground/50" />
       <div className="min-w-0 flex-1">
-        <strong className="block font-medium">{intent.content}</strong>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <strong className="font-medium">{intent.content}</strong>
+          {topGap && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 font-medium text-[10px] text-amber-700 uppercase tracking-wide dark:text-amber-300">
+              Top gap
+            </span>
+          )}
+        </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs">
           <CoverageBadge intent={intent} />
           <span aria-hidden>·</span>
-          <span>
-            seen in {intent.sessions.length} session{intent.sessions.length === 1 ? "" : "s"}
-          </span>
+          <SessionsPopover
+            frequent={frequent}
+            sessionIds={intent.sessions}
+            sessionTitles={props.sessionTitles}
+          />
+          {intent.evidences && intent.evidences.length > 0 && (
+            <>
+              <span aria-hidden>·</span>
+              <EvidenceDisclosure evidences={intent.evidences} />
+            </>
+          )}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        {isGap && <OfferSkillDialog intent={intent.content} onCreated={props.onReload} />}
+        {/* Offer a skill for any intent — covered ones can still want a better/new skill;
+            the generator already gets existing skill IDs so it won't duplicate. */}
+        <OfferSkillCell
+          initialJob={props.initialJob}
+          intent={intent.content}
+          onCreated={props.onReload}
+        />
         <DeleteIntentButton content={intent.content} onDeleted={props.onReload} />
       </div>
     </li>
+  );
+}
+
+/** "seen in N sessions" — opens the list of those chats (capped), each a link to its page. */
+function SessionsPopover(props: {
+  sessionIds: string[];
+  sessionTitles: SessionTitles;
+  frequent: boolean;
+}) {
+  const { token } = useRatelApp();
+  const navigate = useNavigate();
+  const seen = props.sessionIds.length;
+  const CAP = 10;
+  const shown = props.sessionIds.slice(0, CAP);
+  const more = seen - shown.length;
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <button
+            className={
+              props.frequent
+                ? "inline-flex items-center gap-1 font-semibold text-foreground hover:underline"
+                : "inline-flex items-center gap-1 hover:text-foreground hover:underline"
+            }
+            type="button"
+          />
+        }
+      >
+        <MessagesSquare className="size-3" />
+        seen in {seen} session{seen === 1 ? "" : "s"}
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 gap-1 p-1">
+        <p className="px-2 pt-1 text-muted-foreground text-xs">Open a chat</p>
+        <div className="grid">
+          {shown.map((sid) => {
+            const meta = props.sessionTitles[sid];
+            return (
+              <button
+                className="grid gap-0.5 rounded px-2 py-1.5 text-left hover:bg-accent"
+                key={sid}
+                onClick={() => void navigate({ to: chatPath(sid, token) } as never)}
+                type="button"
+              >
+                <span className="truncate text-xs">{meta?.title ?? sid}</span>
+                <span className="truncate font-mono text-[10px] text-muted-foreground">{sid}</span>
+              </button>
+            );
+          })}
+        </div>
+        {more > 0 && (
+          <p className="px-2 py-1 text-[10px] text-muted-foreground">
+            +{more} more session{more === 1 ? "" : "s"}
+          </p>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Expandable "proof" for an intent: the evidence spans/turns that produced it. */
+function EvidenceDisclosure(props: { evidences: string[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
+        onClick={() => setOpen((o) => !o)}
+        type="button"
+      >
+        {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+        {open ? "Hide" : "Show"} evidence ({props.evidences.length})
+      </button>
+      {open && (
+        <ul className="mt-1 grid basis-full gap-1.5 border-muted-foreground/20 border-l-2 pl-3">
+          {props.evidences.map((ev, i) => (
+            <li
+              className="whitespace-pre-wrap text-muted-foreground italic"
+              // Evidence is a static, read-only list that never reorders, so the index is a safe key.
+              // biome-ignore lint/suspicious/noArrayIndexKey: static, ordered evidence list
+              key={i}
+            >
+              “{ev}”
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 
@@ -440,64 +716,274 @@ function CoverageBadge(props: { intent: IntentRecord }) {
   );
 }
 
-function OfferSkillDialog(props: { intent: string; onCreated: () => Promise<void> }) {
-  const { request, runAction, busy } = useRatelApp();
-  const [open, setOpen] = useState(false);
-  const [phase, setPhase] = useState<"idle" | "generating" | "error">("idle");
-  const [editing, setEditing] = useState(false);
+type OfferPhase = "idle" | "running" | "ready" | "error";
+
+const OFFER_POLL_MS = 1500;
+const PROGRESS_CAP = 92;
+
+/**
+ * In-row "Offer New Skills" cell. Default state shows the button; on click it
+ * starts a BACKGROUND authoring job and replaces the button in place with a
+ * compact progress bar paced by the chosen model. When the job finishes it opens
+ * the review dialog pre-filled with the draft.
+ *
+ * The job lives on the server, so it survives navigation: `initialJob` hydrates
+ * this cell from the server's job registry — a still-running job resumes its
+ * progress bar, and a finished one shows a "Review skill" button that reopens the
+ * draft. That's what keeps a result reachable after you leave and come back.
+ */
+function OfferSkillCell(props: {
+  intent: string;
+  initialJob?: OfferJobSummary;
+  onCreated: () => Promise<void>;
+}) {
+  const { request, runAction } = useRatelApp();
+  const [phase, setPhase] = useState<OfferPhase>("idle");
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<SkillDraft | null>(null);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [tags, setTags] = useState("");
-  const [body, setBody] = useState("");
-  const [progress, setProgress] = useState(0);
-  const [filling, setFilling] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [loadingDraft, setLoadingDraft] = useState(false);
+  // Expected authoring time (ms) for the chosen model, set from the start response.
+  const [tau, setTau] = useState(() => estimateGenMs(props.initialJob?.model));
+  // Set once a skill is created from this cell, so we don't re-hydrate it back to
+  // "Review" from the (still-present) server job after the user is done with it.
+  const consumed = useRef(false);
 
-  // Fake progress while authoring: fast start, easing toward a cap over ~40s
-  // (it never reaches 100 on its own). On completion `filling` pins it to 100.
+  // Adopt a pre-existing server job (started earlier / in another tab). Only from
+  // the idle state, so it never clobbers an interaction already in progress.
   useEffect(() => {
-    if (phase !== "generating" || filling) return;
+    const job = props.initialJob;
+    if (!job || consumed.current) return;
+    setPhase((cur) => {
+      if (cur !== "idle") return cur;
+      if (job.status === "running") {
+        setTau(estimateGenMs(job.model));
+        return "running";
+      }
+      if (job.status === "done") return "ready";
+      if (job.status === "error") {
+        setError(job.error ?? "Failed to author a skill draft");
+        return "error";
+      }
+      return cur;
+    });
+  }, [props.initialJob]);
+
+  // Easing animation while the job runs: fast start, slowing exponentially and
+  // hovering at the cap (~90–92%) until the result arrives. Paced by the model.
+  useEffect(() => {
+    if (phase !== "running") return;
     const start = performance.now();
-    const CAP = 95;
-    const TAU = 12000;
     const id = window.setInterval(() => {
       const elapsed = performance.now() - start;
-      setProgress(Math.min(CAP, CAP * (1 - Math.exp(-elapsed / TAU))));
+      setProgress(PROGRESS_CAP * (1 - Math.exp(-elapsed / tau)));
     }, 150);
     return () => window.clearInterval(id);
-  }, [phase, filling]);
+  }, [phase, tau]);
 
-  const generate = useCallback(async () => {
-    setFilling(false);
-    setProgress(0);
-    setPhase("generating");
+  // Poll the background job's status while it runs.
+  useEffect(() => {
+    if (phase !== "running") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await offerSkillStatus(request, props.intent);
+        if (cancelled) return;
+        if (status.model) setTau(estimateGenMs(status.model));
+        if (status.status === "done" && status.draft) {
+          setDraft(status.draft);
+          // Snap to 100% briefly, then open the review dialog.
+          setProgress(100);
+          window.setTimeout(() => {
+            if (cancelled) return;
+            setPhase("ready");
+            setReviewOpen(true);
+          }, 400);
+        } else if (status.status === "error") {
+          setError(status.error ?? "Failed to author a skill draft");
+          setPhase("error");
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to check authoring status");
+        setPhase("error");
+      }
+    };
+    const id = window.setInterval(() => void tick(), OFFER_POLL_MS);
+    // Kick once immediately so a fast/cached job surfaces without a full interval.
+    void tick();
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [phase, request, props.intent]);
+
+  const start = useCallback(async () => {
     setError("");
+    setDraft(null);
+    setProgress(0);
+    consumed.current = false;
     try {
-      const { draft } = await offerSkill(request, props.intent);
-      setDraft(draft);
-      setName(draft.name);
-      setDescription(draft.description);
-      setTags((draft.tags ?? []).join(", "));
-      setBody(draft.body);
-      setEditing(false);
-      // Ramp to 100% fast, hold a beat so it's visible, then show the preview.
-      setFilling(true);
-      setProgress(100);
-      window.setTimeout(() => {
-        setPhase("idle");
-        setFilling(false);
-      }, 450);
+      const res = await offerSkill(request, props.intent);
+      setTau(estimateGenMs(res.model));
+      // Whether we started it or it was already running (another tab), begin polling.
+      setPhase("running");
     } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start skill authoring");
       setPhase("error");
-      setError(err instanceof Error ? err.message : "Failed to generate a skill draft");
     }
   }, [request, props.intent]);
 
-  const onOpenChange = (next: boolean) => {
-    setOpen(next);
-    if (next && !draft) void generate();
-  };
+  // Reopen a finished job's draft, fetching it first if this cell was hydrated
+  // from the server (so it has the job but not yet the draft).
+  const review = useCallback(async () => {
+    if (draft) {
+      setReviewOpen(true);
+      return;
+    }
+    setLoadingDraft(true);
+    try {
+      const status = await offerSkillStatus(request, props.intent);
+      if (status.draft) {
+        setDraft(status.draft);
+        setReviewOpen(true);
+      } else if (status.status === "error") {
+        setError(status.error ?? "Failed to author a skill draft");
+        setPhase("error");
+      } else {
+        await start();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load the draft");
+      setPhase("error");
+    } finally {
+      setLoadingDraft(false);
+    }
+  }, [draft, request, props.intent, start]);
+
+  const create = useCallback(
+    async (edited: SkillDraft) => {
+      const name = edited.name.trim();
+      const ok = await runAction(`Created skill ${name}`, () =>
+        request("/api/skills", {
+          method: "POST",
+          body: {
+            name,
+            description: edited.description.trim(),
+            tags: edited.tags ?? [],
+            body: edited.body,
+          },
+        }),
+      );
+      if (ok) {
+        consumed.current = true;
+        // Drop the server-side job too, so a later refresh doesn't re-surface this
+        // (now-created) skill as "ready" and then fail with "already exists".
+        await clearOfferJob(request, props.intent).catch(() => undefined);
+        setReviewOpen(false);
+        setPhase("idle");
+        setDraft(null);
+        await props.onCreated();
+      }
+      return ok;
+    },
+    [request, runAction, props.intent, props.onCreated],
+  );
+
+  // Discard the draft entirely: clear the server job so the notification goes away.
+  const decline = useCallback(async () => {
+    consumed.current = true;
+    await clearOfferJob(request, props.intent).catch(() => undefined);
+    setReviewOpen(false);
+    setPhase("idle");
+    setDraft(null);
+    await props.onCreated();
+  }, [request, props.intent, props.onCreated]);
+
+  if (phase === "running") {
+    return (
+      <div className="flex w-44 items-center gap-2">
+        <PixelProgress className="flex-1" progress={progress} />
+        <span className="shrink-0 text-muted-foreground text-xs">Authoring…</span>
+      </div>
+    );
+  }
+
+  if (phase === "error") {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="max-w-32 truncate text-destructive text-xs" title={error}>
+          {error}
+        </span>
+        <Button onClick={() => void start()} size="sm" variant="outline">
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {phase === "ready" ? (
+        <Button
+          className="bg-brand-green text-white shadow-brand-green/20 shadow-sm hover:bg-brand-green/90"
+          disabled={loadingDraft}
+          onClick={() => void review()}
+          size="sm"
+        >
+          {loadingDraft ? (
+            <Spinner />
+          ) : (
+            <span className="size-1.5 rounded-full bg-white/90 motion-safe:animate-pulse" />
+          )}
+          Skill ready — review
+        </Button>
+      ) : (
+        <Button onClick={() => void start()} size="sm" variant="outline">
+          <Sparkles />
+          Offer New Skills
+        </Button>
+      )}
+      {draft && (
+        <OfferSkillReviewDialog
+          draft={draft}
+          intent={props.intent}
+          onCreate={create}
+          onDecline={decline}
+          onOpenChange={setReviewOpen}
+          open={reviewOpen}
+        />
+      )}
+    </>
+  );
+}
+
+/** Controlled review/edit dialog for a finished skill draft. */
+function OfferSkillReviewDialog(props: {
+  intent: string;
+  draft: SkillDraft;
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  onCreate: (edited: SkillDraft) => Promise<boolean>;
+  onDecline: () => Promise<void>;
+}) {
+  const { busy } = useRatelApp();
+  const { draft } = props;
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(draft.name);
+  const [description, setDescription] = useState(draft.description);
+  const [tags, setTags] = useState((draft.tags ?? []).join(", "));
+  const [body, setBody] = useState(draft.body);
+
+  // Re-seed the fields whenever a fresh draft is handed in.
+  useEffect(() => {
+    setName(draft.name);
+    setDescription(draft.description);
+    setTags((draft.tags ?? []).join(", "));
+    setBody(draft.body);
+    setEditing(false);
+  }, [draft]);
 
   const tagList = tags
     .split(",")
@@ -505,26 +991,16 @@ function OfferSkillDialog(props: { intent: string; onCreated: () => Promise<void
     .filter(Boolean);
 
   const create = async () => {
-    const ok = await runAction(`Created skill ${name.trim()}`, () =>
-      request("/api/skills", {
-        method: "POST",
-        body: { name: name.trim(), description: description.trim(), tags: tagList, body },
-      }),
-    );
-    if (ok) {
-      setOpen(false);
-      await props.onCreated();
-    }
+    await props.onCreate({
+      name: name.trim(),
+      description: description.trim(),
+      tags: tagList,
+      body,
+    });
   };
 
-  const ready = phase === "idle" && draft;
-
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogTrigger render={<Button size="sm" variant="outline" />}>
-        <Sparkles />
-        Offer New Skills
-      </DialogTrigger>
+    <Dialog onOpenChange={props.onOpenChange} open={props.open}>
       <DialogContent className="flex max-h-[85vh] flex-col gap-4 sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Offer a new skill</DialogTitle>
@@ -536,30 +1012,7 @@ function OfferSkillDialog(props: { intent: string; onCreated: () => Promise<void
 
         {/* Only this middle region scrolls; header + footer stay put. */}
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-          {phase === "generating" && (
-            <div className="grid gap-4 py-8">
-              <div className="flex items-center gap-3">
-                <PrismSweep dotSize={4} pattern="full" size={30} speed={1.4} />
-                <PixelProgress className="flex-1" progress={progress} />
-              </div>
-              <p className="text-center font-medium text-sm">Authoring the skill…</p>
-            </div>
-          )}
-
-          {phase === "error" && (
-            <div className="grid gap-3 py-2">
-              <p className="text-destructive text-sm">{error}</p>
-              <p className="text-muted-foreground text-xs">
-                Configure a skill generator in Settings (an Anthropic API key, or the local{" "}
-                <code className="font-mono">claude</code> CLI on PATH), then try again.
-              </p>
-              <Button onClick={() => void generate()} size="sm" variant="outline">
-                Retry
-              </Button>
-            </div>
-          )}
-
-          {ready && !editing && (
+          {!editing && (
             <div className="grid gap-3">
               <div>
                 <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{name}</code>
@@ -583,7 +1036,7 @@ function OfferSkillDialog(props: { intent: string; onCreated: () => Promise<void
             </div>
           )}
 
-          {ready && editing && (
+          {editing && (
             <div className="grid gap-3">
               <div className="grid gap-1.5">
                 <Label htmlFor="offer-name">Name</Label>
@@ -614,25 +1067,35 @@ function OfferSkillDialog(props: { intent: string; onCreated: () => Promise<void
           )}
         </div>
 
-        <DialogFooter>
-          <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
-          {ready && (
+        <DialogFooter className="sm:justify-between">
+          <Button
+            className="text-destructive hover:text-destructive"
+            disabled={busy}
+            onClick={() => void props.onDecline()}
+            size="sm"
+            variant="ghost"
+          >
+            <Trash2 />
+            Decline
+          </Button>
+          <div className="flex items-center gap-2">
+            <DialogClose render={<Button size="sm" variant="outline" />}>Later</DialogClose>
             <Button onClick={() => setEditing((e) => !e)} size="sm" variant="outline">
               {editing ? "Preview" : "Edit"}
             </Button>
-          )}
-          <Button
-            disabled={busy || !ready || name.trim() === ""}
-            onClick={() => void create()}
-            size="sm"
-          >
-            Create skill
-          </Button>
+            <Button disabled={busy || name.trim() === ""} onClick={() => void create()} size="sm">
+              Create skill
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
+
+// base-ui Select can't hold an empty-string value, so the "Default" choice uses
+// this sentinel and maps back to "" (which the generator treats as its default).
+const SKILLGEN_DEFAULT = "__default__";
 
 function AnalysisSettingsDialog() {
   const { request, runAction, busy } = useRatelApp();
@@ -655,6 +1118,7 @@ function AnalysisSettingsDialog() {
         setSecretMask(res.secretMask);
         setNums({
           everyNMessages: numToStr(a.cadence?.everyNMessages),
+          recentHours: numToStr(a.cadence?.recentHours),
           minScore: numToStr(a.coverage?.minScore),
           relativeRatio: numToStr(a.coverage?.relativeRatio),
           maxSkills: numToStr(a.coverage?.maxSkills),
@@ -668,7 +1132,12 @@ function AnalysisSettingsDialog() {
   const save = async () => {
     const next: AnalysisSettings = {
       ...form,
-      cadence: { ...form.cadence, everyNMessages: numberOrUndefined(nums.everyNMessages) },
+      cadence: {
+        ...form.cadence,
+        everyNMessages: numberOrUndefined(nums.everyNMessages),
+        // 0/empty → undefined (no limit); the config rejects non-positive values.
+        recentHours: floatOrUndefined(nums.recentHours) || undefined,
+      },
       coverage: {
         minScore: floatOrUndefined(nums.minScore),
         relativeRatio: floatOrUndefined(nums.relativeRatio),
@@ -718,6 +1187,16 @@ function AnalysisSettingsDialog() {
             title="Cadence"
             hint="When analysis is due (manual Run now always works)."
           >
+            <SettingRow
+              control={
+                <Switch
+                  checked={cadence.auto ?? false}
+                  onCheckedChange={(v) => update({ cadence: { ...cadence, auto: v } })}
+                />
+              }
+              hint="Let the gateway run analysis automatically in the background on a timer. Off by default — manual Run now always works."
+              label="Automatic runs"
+            />
             <div className="grid items-end gap-3 sm:grid-cols-2">
               <Field htmlFor="cadence-n" label="Every N messages">
                 <Input
@@ -739,6 +1218,20 @@ function AnalysisSettingsDialog() {
                 label="On idle"
               />
             </div>
+            <Field htmlFor="cadence-recent" label="Only chats active in the last (hours)">
+              <Input
+                id="cadence-recent"
+                inputMode="decimal"
+                onChange={(e) => setNum("recentHours", e.target.value)}
+                placeholder="e.g. 5 — leave blank for no limit"
+                value={nums.recentHours ?? ""}
+              />
+            </Field>
+            <p className="px-1 text-muted-foreground text-xs">
+              Bulk and automatic runs only analyze chats updated within this window — keeps a run
+              from churning through every old chat. Per-chat “Analyze intents” (on the Chats page)
+              ignores it.
+            </p>
           </SettingsSection>
 
           <SettingsSection
@@ -887,7 +1380,35 @@ function AnalysisSettingsDialog() {
                   />
                 </Field>
               )}
+              <Field label="Model">
+                <Select
+                  onValueChange={(v) =>
+                    update({
+                      skillGen: { ...skillGen, model: v && v !== SKILLGEN_DEFAULT ? v : "" },
+                    })
+                  }
+                  value={skillGen.model ? skillGen.model : SKILLGEN_DEFAULT}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {skillGenModelOptions(skillGenProvider).map((opt) => (
+                      <SelectItem
+                        key={opt.value || SKILLGEN_DEFAULT}
+                        value={opt.value || SKILLGEN_DEFAULT}
+                      >
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
             </div>
+            <p className="px-1 text-muted-foreground text-xs">
+              The model used to author skills. This also sets the expected authoring time shown in
+              the “Offer New Skills” progress bar.
+            </p>
             {skillGenProvider === "claude-cli" && (
               <p className="px-1 text-muted-foreground text-xs">
                 Uses your local <code className="font-mono">claude</code> CLI — no API key needed.
@@ -946,6 +1467,23 @@ function SettingRow(props: { label: string; hint?: string; control: ReactNode })
       </div>
       {props.control}
     </div>
+  );
+}
+
+/** Full-bleed "analyzing" panel shown in place of the empty state while a run is in flight. */
+function AnalyzingState() {
+  return (
+    <section className="-mx-4 grid min-h-72 flex-1 place-items-center border-border border-y bg-muted/15 px-4 py-8 text-center sm:-mx-6 sm:px-6">
+      <div className="grid max-w-md justify-items-center gap-4">
+        <PrismSweep dotSize={4} pattern="full" size={40} speed={1.4} />
+        <div>
+          <h3 className="font-medium">Analyzing chat through the extractor…</h3>
+          <p className="mt-1 text-muted-foreground text-sm">
+            Results appear as each session finishes.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 

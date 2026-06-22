@@ -8,13 +8,18 @@ import {
   type IntentsIndex,
   mergeIntoIndex,
   normalizeIntentKey,
+  rankIntentRecords,
+  readAllSessionIntents,
   readIntentsIndex,
   readSessionIntents,
+  rebuildIndex,
   removeIntent,
+  removeIntentFromSessions,
   type SessionIntents,
   writeIntentsIndex,
   writeSessionIntents,
 } from "./store.js";
+import type { IntentRecord } from "./types.js";
 
 let dir: string;
 
@@ -178,6 +183,213 @@ describe("removeIntent", () => {
   it("is a no-op for an unknown intent", () => {
     const index = mergeIntoIndex(emptyIndex(), session(), "2026-06-19T10:00:00.000Z");
     expect(removeIntent(index, "never said this").intents).toHaveLength(2);
+  });
+});
+
+describe("rebuildIndex", () => {
+  it("dedupes intents across sessions by normalized key", () => {
+    const sessions: SessionIntents[] = [
+      session({
+        sessionId: "s1",
+        analyzedAt: "2026-06-19T10:00:00.000Z",
+        intents: [{ content: "Add OAuth login", coverage: { status: "gap" } }],
+      }),
+      session({
+        sessionId: "s2",
+        analyzedAt: "2026-06-19T11:00:00.000Z",
+        intents: [{ content: "add oauth login.", coverage: { status: "gap" } }],
+      }),
+    ];
+    const index = rebuildIndex(sessions);
+    expect(index.intents).toHaveLength(1);
+    expect(index.intents[0].sessions).toEqual(["s1", "s2"]);
+    expect(index.version).toBe(1);
+  });
+
+  it("computes firstSeen/lastSeen across the sessions containing an intent", () => {
+    const sessions: SessionIntents[] = [
+      session({
+        sessionId: "s1",
+        analyzedAt: "2026-06-19T10:00:00.000Z",
+        intents: [{ content: "Add OAuth login", coverage: { status: "gap" } }],
+      }),
+      session({
+        sessionId: "s2",
+        analyzedAt: "2026-06-19T12:00:00.000Z",
+        intents: [{ content: "Add OAuth login", coverage: { status: "gap" } }],
+      }),
+    ];
+    const index = rebuildIndex(sessions);
+    const oauth = index.intents[0];
+    expect(oauth.firstSeen).toBe("2026-06-19T10:00:00.000Z");
+    expect(oauth.lastSeen).toBe("2026-06-19T12:00:00.000Z");
+  });
+
+  it("takes content and coverage from the most-recently-analyzed session", () => {
+    const sessions: SessionIntents[] = [
+      session({
+        sessionId: "s1",
+        analyzedAt: "2026-06-19T10:00:00.000Z",
+        intents: [{ content: "Add OAuth login", coverage: { status: "gap" } }],
+      }),
+      session({
+        sessionId: "s2",
+        analyzedAt: "2026-06-19T12:00:00.000Z",
+        intents: [
+          {
+            content: "Add OAuth login NOW",
+            coverage: { status: "covered", skills: [{ skillId: "oauth", score: 5 }] },
+          },
+        ],
+      }),
+    ];
+    const index = rebuildIndex(sessions);
+    const oauth = index.intents[0];
+    expect(oauth.content).toBe("Add OAuth login NOW");
+    expect(oauth.coverage).toEqual({ status: "covered", skills: [{ skillId: "oauth", score: 5 }] });
+  });
+
+  it("emits one session summary per input session with correct counts", () => {
+    const sessions: SessionIntents[] = [
+      session({
+        sessionId: "s1",
+        analyzedAt: "2026-06-19T10:00:00.000Z",
+        intents: [
+          { content: "Add OAuth login", coverage: { status: "gap" } },
+          {
+            content: "Write tests",
+            coverage: { status: "covered", skills: [{ skillId: "tdd", score: 4.2 }] },
+          },
+        ],
+      }),
+    ];
+    const index = rebuildIndex(sessions);
+    expect(index.sessions).toEqual([
+      {
+        sessionId: "s1",
+        host: "claude-code",
+        cwd: undefined,
+        analyzedAt: "2026-06-19T10:00:00.000Z",
+        intentCount: 2,
+        gapCount: 1,
+      },
+    ]);
+  });
+
+  it("skips empty-key intents", () => {
+    const sessions: SessionIntents[] = [
+      session({
+        sessionId: "s1",
+        intents: [
+          { content: "  ", coverage: { status: "gap" } },
+          { content: "Add OAuth login", coverage: { status: "gap" } },
+        ],
+      }),
+    ];
+    const index = rebuildIndex(sessions);
+    expect(index.intents).toHaveLength(1);
+    expect(index.intents[0].content).toBe("Add OAuth login");
+  });
+
+  it("returns intents already ranked by frequency", () => {
+    const sessions: SessionIntents[] = [
+      session({
+        sessionId: "s1",
+        analyzedAt: "2026-06-19T10:00:00.000Z",
+        intents: [
+          { content: "rare intent", coverage: { status: "gap" } },
+          { content: "frequent intent", coverage: { status: "gap" } },
+        ],
+      }),
+      session({
+        sessionId: "s2",
+        analyzedAt: "2026-06-19T11:00:00.000Z",
+        intents: [{ content: "frequent intent", coverage: { status: "gap" } }],
+      }),
+    ];
+    const index = rebuildIndex(sessions);
+    expect(index.intents[0].content).toBe("frequent intent");
+    expect(index.intents[0].score).toBe(2);
+  });
+});
+
+describe("rankIntentRecords", () => {
+  function record(overrides: Partial<IntentRecord> = {}): IntentRecord {
+    return {
+      content: "x",
+      coverage: { status: "gap" },
+      sessions: ["s1"],
+      firstSeen: "2026-06-19T10:00:00.000Z",
+      lastSeen: "2026-06-19T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("ranks by frequency desc, then recency desc, then content asc", () => {
+    const ranked = rankIntentRecords([
+      record({ content: "one session", sessions: ["a"], lastSeen: "2026-06-19T10:00:00.000Z" }),
+      record({ content: "many sessions", sessions: ["a", "b", "c"] }),
+      record({ content: "b recent", sessions: ["a", "b"], lastSeen: "2026-06-19T12:00:00.000Z" }),
+      record({ content: "a older", sessions: ["a", "b"], lastSeen: "2026-06-19T09:00:00.000Z" }),
+    ]);
+    expect(ranked.map((r) => r.content)).toEqual([
+      "many sessions",
+      "b recent",
+      "a older",
+      "one session",
+    ]);
+  });
+
+  it("sets score to the session count and does not mutate inputs", () => {
+    const input = [record({ sessions: ["a", "b"] })];
+    const ranked = rankIntentRecords(input);
+    expect(ranked[0].score).toBe(2);
+    expect(input[0].score).toBeUndefined();
+  });
+});
+
+describe("removeIntentFromSessions", () => {
+  it("strips a matching intent (normalized) from each session without mutating inputs", () => {
+    const input: SessionIntents[] = [
+      session({
+        sessionId: "s1",
+        intents: [
+          { content: "Add OAuth login", coverage: { status: "gap" } },
+          { content: "Write tests", coverage: { status: "gap" } },
+        ],
+      }),
+      session({
+        sessionId: "s2",
+        intents: [{ content: "add oauth login!", coverage: { status: "gap" } }],
+      }),
+    ];
+    const after = removeIntentFromSessions(input, "  ADD oauth login. ");
+    expect(after[0].intents.map((i) => i.content)).toEqual(["Write tests"]);
+    expect(after[1].intents).toHaveLength(0);
+    // inputs untouched
+    expect(input[0].intents).toHaveLength(2);
+    expect(input[1].intents).toHaveLength(1);
+  });
+});
+
+describe("readAllSessionIntents", () => {
+  it("reads and sorts session files by analyzedAt ascending", async () => {
+    await writeSessionIntents(
+      nodeJsonFs,
+      dir,
+      session({ sessionId: "s2", analyzedAt: "2026-06-19T12:00:00.000Z" }),
+    );
+    await writeSessionIntents(
+      nodeJsonFs,
+      dir,
+      session({ sessionId: "s1", analyzedAt: "2026-06-19T10:00:00.000Z" }),
+    );
+    const all = await readAllSessionIntents(nodeJsonFs, dir);
+    expect(all.map((s) => s.sessionId)).toEqual(["s1", "s2"]);
+  });
+
+  it("returns [] when the sessions directory does not exist", async () => {
+    expect(await readAllSessionIntents(nodeJsonFs, dir)).toEqual([]);
   });
 });
 

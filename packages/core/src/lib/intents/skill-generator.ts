@@ -5,7 +5,10 @@ import type { Intent, SkillDraft, SkillGenContext, SkillGenerator } from "./type
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
-const MAX_TOKENS = 2048;
+const MAX_TOKENS = 4096;
+/** Keep prompts bounded: cap how much real-context evidence we inline. */
+const MAX_EVIDENCE_BULLETS = 12;
+const MAX_EVIDENCE_LINE_LEN = 300;
 /** Bound both generators so a hung CLI/API call can't freeze the Offer dialog. */
 const DEFAULT_SKILLGEN_TIMEOUT_MS = 120_000;
 
@@ -17,6 +20,14 @@ export function buildSkillPrompt(intent: Intent, context?: SkillGenContext): str
   const existing = context?.existingSkillIds?.length
     ? `\nExisting skills (do not duplicate these): ${context.existingSkillIds.join(", ")}.`
     : "";
+  const evidenceSection = buildBulletSection(
+    "What the user actually did/asked (ground the skill in THIS, not a generic guess):",
+    context?.evidences,
+  );
+  const relatedSection = buildBulletSection(
+    "Related things the user repeatedly asks for (the skill may cover these too):",
+    context?.relatedIntents,
+  );
   return [
     "You are authoring a reusable Agent Skill for the Ratel MCP gateway.",
     `The user repeatedly tries to do this, but no skill covers it: "${intent.content}".${existing}`,
@@ -25,6 +36,10 @@ export function buildSkillPrompt(intent: Intent, context?: SkillGenContext): str
     "(BM25) against future requests, so use precise, distinctive wording — concrete",
     "nouns/verbs from this task — and AVOID generic filler ('the user', 'assistant',",
     "'help', 'task', 'do this') that would make it match unrelated intents.",
+    ...evidenceSection,
+    ...relatedSection,
+    "",
+    "The skill MUST reflect the real workflow shown above, not a generic best-practice guess.",
     "",
     "Respond with ONLY a single JSON object, no prose, no markdown fences:",
     "{",
@@ -34,6 +49,25 @@ export function buildSkillPrompt(intent: Intent, context?: SkillGenContext): str
     '  "body": "<Markdown instructions for SKILL.md, excluding frontmatter>"',
     "}",
   ].join("\n");
+}
+
+/**
+ * Render a labelled, bullet-listed prompt section from real context, or nothing
+ * when there is no content. Bounds both the count and per-line length so the
+ * prompt stays well-sized regardless of how noisy the captured evidence is.
+ */
+function buildBulletSection(label: string, items?: string[]): string[] {
+  const bullets = (items ?? [])
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, MAX_EVIDENCE_BULLETS)
+    .map((item) =>
+      item.length > MAX_EVIDENCE_LINE_LEN
+        ? `- ${item.slice(0, MAX_EVIDENCE_LINE_LEN)}…`
+        : `- ${item}`,
+    );
+  if (bullets.length === 0) return [];
+  return ["", label, ...bullets];
 }
 
 /** Parse a model response into a validated {@link SkillDraft}, tolerating fences/prose. */
@@ -187,10 +221,13 @@ export function createSkillGenerator(
   const skillGen = analysis?.skillGen ?? {};
   const provider = skillGen.provider ?? "auto";
   const useApi = provider === "anthropic-api" || (provider === "auto" && Boolean(skillGen.apiKey));
+  // Treat an empty/whitespace model as "use the generator's default" — the UI's
+  // "Default" choice persists "", which must not become a literal model id.
+  const model = skillGen.model?.trim() ? skillGen.model.trim() : undefined;
   if (useApi) {
-    return new AnthropicApiSkillGenerator({ apiKey: skillGen.apiKey }, deps.anthropic);
+    return new AnthropicApiSkillGenerator({ apiKey: skillGen.apiKey, model }, deps.anthropic);
   }
-  return new ClaudeCliSkillGenerator({}, deps.cli);
+  return new ClaudeCliSkillGenerator({ model }, deps.cli);
 }
 
 function defaultSpawn(

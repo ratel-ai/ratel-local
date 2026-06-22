@@ -45,5 +45,35 @@ class TestExtractEndpointMessageCap(unittest.TestCase):
         self.assertEqual(intents, ["u0", "u1", "u2", "u3", "u4"])
 
 
+class TestNormalizeEvidence(unittest.TestCase):
+    """`_normalize` must carry the model's evidence spans into the wire contract."""
+
+    def _server(self):
+        os.environ["CLAIM_EXTRACTOR_MOCK"] = "1"
+        import server
+
+        importlib.reload(server)
+        return server
+
+    def tearDown(self) -> None:
+        os.environ.pop("CLAIM_EXTRACTOR_MOCK", None)
+
+    def test_carries_evidence_from_strings_and_objects(self) -> None:
+        server = self._server()
+        result = {
+            "extractions": {
+                "claims": [{"subtype": "factoid", "content": "c1", "evidences": ["span a"]}],
+                "intents": [
+                    {"content": "i1", "evidences": [{"text": "span b"}]},  # object-shaped
+                    {"content": "i2"},  # none → field omitted
+                ],
+            }
+        }
+        out = server._normalize(result)
+        self.assertEqual(out["claims"][0]["evidences"], ["span a"])
+        self.assertEqual(out["intents"][0]["evidences"], ["span b"])
+        self.assertNotIn("evidences", out["intents"][1])
+
+
 if __name__ == "__main__":
     unittest.main()

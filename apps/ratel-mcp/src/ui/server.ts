@@ -10,15 +10,25 @@ import type { AddressInfo } from "node:net";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HandlerCtx } from "../cli/handlers/types.js";
+import { loadUserAnalysis } from "../intents/context.js";
+import { type CadenceScheduler, startCadenceScheduler } from "../intents/scheduler.js";
 import {
   clearIntentsRoute,
+  clearOfferJobRoute,
+  deleteChatRoute,
   deleteIntentRoute,
   getAnalysisSettings,
+  getChatRoute,
+  getChatsRoute,
   getIntents,
+  getObservabilityRoute,
   getSessionIntents,
+  listOfferJobsRoute,
   offerSkillRoute,
+  offerStatusRoute,
   putAnalysisSettings,
   runIntentsRoute,
+  startAnalysisRun,
 } from "./intents-routes.js";
 import {
   type ApiResponse,
@@ -80,10 +90,29 @@ export async function startUiServer(opts: StartUiServerOptions): Promise<UiServe
   const port = (server.address() as AddressInfo).port;
   const url = `http://${UI_HOST}:${port}/?t=${opts.token}`;
 
+  const scheduler = startCadenceScheduler({
+    tick: async () => {
+      const analysis = await loadUserAnalysis(opts.ctx.env, opts.ctx.fs);
+      if (analysis?.enabled === false) return;
+      const cadence = analysis?.cadence;
+      // Automatic runs are opt-in: the scheduler stays idle unless the user has
+      // enabled them in Settings. Manual "Run now" is unaffected by this flag.
+      if (cadence?.auto !== true) return;
+      await startAnalysisRun(
+        opts.ctx,
+        { everyNMessages: cadence.everyNMessages, onIdle: cadence.onIdle ?? false },
+        "cadence",
+      );
+    },
+    onError: (err) => {
+      opts.ctx.log(`cadence tick failed: ${(err as Error).message}`);
+    },
+  });
+
   return {
     url,
     port,
-    shutdown: () => closeServer(server),
+    shutdown: () => closeServer(server, scheduler),
   };
 }
 
@@ -208,6 +237,9 @@ async function route(
   if (method === "GET" && path === "/api/intents") {
     return getIntents(ctx);
   }
+  if (method === "GET" && path === "/api/intents/observability") {
+    return getObservabilityRoute(ctx);
+  }
   if (method === "POST" && path === "/api/intents/run") {
     const body = await readJsonBody(req);
     return runIntentsRoute(ctx, body);
@@ -230,9 +262,36 @@ async function route(
     const body = await readJsonBody(req);
     return putAnalysisSettings(ctx, body);
   }
+  if (method === "GET" && path === "/api/skills/offer/jobs") {
+    return listOfferJobsRoute(ctx);
+  }
+  if (method === "GET" && path === "/api/skills/offer/status") {
+    const intent = new URLSearchParams(req.url?.split("?")[1] ?? "").get("intent") ?? "";
+    return offerStatusRoute(ctx, intent);
+  }
   if (method === "POST" && path === "/api/skills/offer") {
     const body = await readJsonBody(req);
     return offerSkillRoute(ctx, body);
+  }
+  if (method === "DELETE" && path === "/api/skills/offer") {
+    const intent = new URLSearchParams(req.url?.split("?")[1] ?? "").get("intent") ?? "";
+    return clearOfferJobRoute(ctx, intent);
+  }
+
+  if (method === "GET" && path === "/api/chats") {
+    return getChatsRoute(ctx);
+  }
+  const chatMatch = /^\/api\/chats\/([^/]+)$/.exec(path);
+  if (chatMatch) {
+    const sessionId = decodeURIComponent(chatMatch[1]);
+    if (method === "GET") {
+      const limitParam = new URLSearchParams(req.url?.split("?")[1] ?? "").get("limit");
+      const limit = limitParam !== null ? Number(limitParam) : undefined;
+      return getChatRoute(ctx, sessionId, limit);
+    }
+    if (method === "DELETE") {
+      return deleteChatRoute(ctx, sessionId);
+    }
   }
 
   if (method === "POST" && path === "/api/import") {
@@ -295,7 +354,8 @@ function writePlain(res: ServerResponse, status: number, body: string): void {
   res.end(body);
 }
 
-function closeServer(server: Server): Promise<void> {
+function closeServer(server: Server, scheduler?: CadenceScheduler): Promise<void> {
+  scheduler?.stop();
   return new Promise((resolve) => {
     server.close(() => resolve());
   });
