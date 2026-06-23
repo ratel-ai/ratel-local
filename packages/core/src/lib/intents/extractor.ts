@@ -22,6 +22,8 @@ export interface HttpExtractorDeps {
   /** Abort a single extract after this many ms so a hung/crashed sidecar can't
    *  stall the whole run forever (default 5 min). */
   timeoutMs?: number;
+  /** Backoff sleep between retries; injected so tests don't wait on real time. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_EXTRACT_TIMEOUT_MS = 300_000;
@@ -30,6 +32,26 @@ const DEFAULT_HEALTH_TIMEOUT_MS = 10_000;
 
 /** Path of the extract endpoint, shared by every deployment (sidecar and hosted). */
 const EXTRACT_PATH = "/orbitals/claim-extractor/extract";
+
+/**
+ * Default cap on the JSON size (chars) of the `conversation` sent in one request.
+ * The hosted model has a fixed context window and returns a fast 500 when the
+ * conversation overflows it (≈75KB in practice), so we keep each request well under
+ * that and merge per-chunk results. Conservative on purpose; override per-deployment
+ * via `extractor.maxRequestChars` for a sidecar with a larger window.
+ */
+const DEFAULT_MAX_REQUEST_CHARS = 48_000;
+
+/**
+ * Retry a chunk this many times on a transient failure (5xx or a network error —
+ * the host flakes under load). A 4xx is never retried: a client error won't fix
+ * itself. A timeout isn't retried either, to bound total run time.
+ */
+const MAX_ATTEMPTS = 3;
+/** Linear backoff base between retries (attempt N waits N × this). */
+const RETRY_BASE_DELAY_MS = 500;
+
+const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Talks to an extractor HTTP service over the orbitals claim-extractor contract:
@@ -45,6 +67,12 @@ const EXTRACT_PATH = "/orbitals/claim-extractor/extract";
  * sidecar needs none. Responses are normalized defensively: the wrapper may be
  * absent (older sidecar), `evidences` may be omitted, subtypes may be Title Case,
  * and rows can be partially shaped.
+ *
+ * A long conversation is split into size-bounded chunks (see {@link DEFAULT_MAX_REQUEST_CHARS})
+ * so it can't overflow the model's context window, and each chunk is retried on a
+ * transient 5xx/network failure. The per-chunk results are merged and de-duplicated,
+ * so chunking is invisible to callers (and to the runner's extraction cache, which
+ * keys on the full turn list).
  */
 export class HttpIntentExtractor implements IntentExtractor {
   private readonly endpoint: string;
@@ -52,6 +80,8 @@ export class HttpIntentExtractor implements IntentExtractor {
   private readonly model?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly maxRequestChars: number;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(config: ExtractorConfig, deps: HttpExtractorDeps = {}) {
     if (!config.endpoint) {
@@ -62,46 +92,147 @@ export class HttpIntentExtractor implements IntentExtractor {
     this.model = config.model;
     this.fetchImpl = deps.fetch ?? globalThis.fetch;
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_EXTRACT_TIMEOUT_MS;
+    this.maxRequestChars =
+      config.maxRequestChars && config.maxRequestChars > 0
+        ? config.maxRequestChars
+        : DEFAULT_MAX_REQUEST_CHARS;
+    this.sleep = deps.sleep ?? realSleep;
   }
 
   async extract(
     turns: ChatTurn[],
     serviceDescription?: AIServiceDescription,
   ): Promise<ExtractionResult> {
-    const headers = new Headers({ "Content-Type": "application/json" });
-    if (this.authHeader) headers.set("Authorization", this.authHeader);
+    const chunks = chunkTurns(turns, this.maxRequestChars);
+    if (chunks.length <= 1) {
+      return this.extractChunk(turns, serviceDescription);
+    }
+    // Sequentially extract each chunk (gentle on the endpoint) and merge. One chunk's
+    // failure still aborts the session — consistent with the single-request path.
+    const results: ExtractionResult[] = [];
+    for (const chunk of chunks) {
+      results.push(await this.extractChunk(chunk, serviceDescription));
+    }
+    return mergeResults(results);
+  }
 
+  /** Extract a single, already-size-bounded slice of turns (with retry). */
+  private async extractChunk(
+    turns: ChatTurn[],
+    serviceDescription?: AIServiceDescription,
+  ): Promise<ExtractionResult> {
     const body: Record<string, unknown> = {
       conversation: turns.map((t) => ({ role: t.role, content: t.content })),
     };
     if (this.model) body.model = this.model;
     if (serviceDescription) body.ai_service_description = serviceDescription;
-
-    let res: Response;
-    try {
-      res = await this.fetchImpl(`${this.endpoint}${EXTRACT_PATH}`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (err) {
-      if (err instanceof Error && err.name === "TimeoutError") {
-        throw new Error(`intent extractor timed out after ${this.timeoutMs}ms`);
-      }
-      throw err;
-    }
-    if (!res.ok) {
-      // Surface the server's body (e.g. a 422 validation message, or the cause of
-      // a 500) so failures are diagnosable instead of a bare status line.
-      const detail = (await res.text().catch(() => "")).trim().slice(0, 300);
-      throw new Error(
-        `intent extractor returned ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
-      );
-    }
-    const payload = (await res.json()) as unknown;
+    const payload = await this.fetchWithRetry(JSON.stringify(body));
     return normalizeResult(payload);
   }
+
+  /**
+   * POST the request body, retrying a transient failure (5xx or network error) with
+   * linear backoff. A 4xx throws immediately (won't fix itself); a timeout throws
+   * immediately (to bound total run time). The thrown error surfaces the server's
+   * response body so a failure is diagnosable, not a bare status line.
+   */
+  private async fetchWithRetry(body: string): Promise<unknown> {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (this.authHeader) headers.set("Authorization", this.authHeader);
+
+    let lastError: Error | undefined;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      let res: Response;
+      try {
+        res = await this.fetchImpl(`${this.endpoint}${EXTRACT_PATH}`, {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name === "TimeoutError") {
+          throw new Error(`intent extractor timed out after ${this.timeoutMs}ms`);
+        }
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt === MAX_ATTEMPTS) throw lastError;
+        await this.sleep(RETRY_BASE_DELAY_MS * attempt);
+        continue;
+      }
+      if (res.ok) return res.json();
+
+      const detail = (await res.text().catch(() => "")).trim().slice(0, 300);
+      const error = new Error(
+        `intent extractor returned ${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`,
+      );
+      // Only a 5xx is transient; retry it. A 4xx won't change on retry.
+      if (res.status >= 500 && attempt < MAX_ATTEMPTS) {
+        lastError = error;
+        await this.sleep(RETRY_BASE_DELAY_MS * attempt);
+        continue;
+      }
+      throw error;
+    }
+    throw lastError ?? new Error("intent extractor request failed");
+  }
+}
+
+/**
+ * Split turns into chunks whose serialized `conversation` stays under `maxChars`, so
+ * a long chat can't overflow the model's context window. A turn is never split, so a
+ * single turn larger than the budget still gets its own chunk (the capture layer caps
+ * each turn well below any sane budget, so this is a safety net). A non-empty input
+ * always yields at least one chunk.
+ */
+export function chunkTurns(turns: ChatTurn[], maxChars: number): ChatTurn[][] {
+  const chunks: ChatTurn[][] = [];
+  let current: ChatTurn[] = [];
+  let size = 0;
+  for (const turn of turns) {
+    const turnSize = turnJsonSize(turn);
+    if (current.length > 0 && size + turnSize > maxChars) {
+      chunks.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(turn);
+    size += turnSize;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/** Approximate the serialized size a turn contributes to the `conversation` array. */
+function turnJsonSize(turn: ChatTurn): number {
+  // +1 approximates the array comma separator between turns.
+  return JSON.stringify({ role: turn.role, content: turn.content }).length + 1;
+}
+
+/**
+ * Merge per-chunk extractions into one result, de-duplicating across chunk
+ * boundaries: claims by (subtype, content), intents by content — both normalized
+ * (trimmed, lower-cased). First occurrence wins, preserving original order.
+ */
+function mergeResults(results: ExtractionResult[]): ExtractionResult {
+  const claims: Claim[] = [];
+  const intents: Intent[] = [];
+  const seenClaims = new Set<string>();
+  const seenIntents = new Set<string>();
+  for (const result of results) {
+    for (const claim of result.claims) {
+      const key = `${claim.subtype} ${claim.content.trim().toLowerCase()}`;
+      if (seenClaims.has(key)) continue;
+      seenClaims.add(key);
+      claims.push(claim);
+    }
+    for (const intent of result.intents) {
+      const key = intent.content.trim().toLowerCase();
+      if (seenIntents.has(key)) continue;
+      seenIntents.add(key);
+      intents.push(intent);
+    }
+  }
+  return { claims, intents };
 }
 
 /** Outcome of an extractor `/health` probe, surfaced by the Settings "Test" button. */

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnalysisConfig } from "../config.js";
 import {
   checkExtractorHealth,
+  chunkTurns,
   createExtractor,
   HttpIntentExtractor,
   NaiveIntentExtractor,
@@ -156,14 +157,115 @@ describe("HttpIntentExtractor", () => {
     expect(result.intents).toEqual([{ content: "valid" }]);
   });
 
-  it("throws a helpful error on a non-2xx response", async () => {
+  it("throws immediately on a 4xx without retrying", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("bad input", { status: 422 }));
+    const extractor = new HttpIntentExtractor(
+      { endpoint: "http://x" },
+      { fetch: fetchMock, sleep: () => Promise.resolve() },
+    );
+    await expect(extractor.extract(TURNS)).rejects.toThrow(/422.*bad input/);
+    // A client error won't fix itself, so we don't burn retries on it.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a transient 5xx and succeeds on a later attempt", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("flaky", { status: 500 }))
+      .mockResolvedValueOnce(extractResponse({ intents: [{ content: "recovered" }] }));
+    const extractor = new HttpIntentExtractor(
+      { endpoint: "http://x" },
+      { fetch: fetchMock, sleep: () => Promise.resolve() },
+    );
+    const result = await extractor.extract(TURNS);
+    expect(result.intents).toEqual([{ content: "recovered" }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after the retry budget on a persistent 5xx", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("boom", { status: 503 }));
-    const extractor = new HttpIntentExtractor({ endpoint: "http://x" }, { fetch: fetchMock });
+    const extractor = new HttpIntentExtractor(
+      { endpoint: "http://x" },
+      { fetch: fetchMock, sleep: () => Promise.resolve() },
+    );
     await expect(extractor.extract(TURNS)).rejects.toThrow(/503/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry a timeout (bounds total run time)", async () => {
+    const timeout = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    const fetchMock = vi.fn().mockRejectedValue(timeout);
+    const extractor = new HttpIntentExtractor(
+      { endpoint: "http://x" },
+      { fetch: fetchMock, sleep: () => Promise.resolve() },
+    );
+    await expect(extractor.extract(TURNS)).rejects.toThrow(/timed out/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("splits a conversation over the budget into chunks and merges the results", async () => {
+    // Two requests' worth of turns: a tiny budget forces one turn per chunk.
+    const turns: ChatTurn[] = [
+      { role: "user", content: "first request about caching" },
+      { role: "user", content: "second request about auth" },
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        extractResponse({
+          claims: [{ subtype: "factoid", content: "shared" }],
+          intents: [{ content: "cache things" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        extractResponse({
+          // "shared" claim repeats across chunks and must be de-duplicated.
+          claims: [{ subtype: "factoid", content: "shared" }],
+          intents: [{ content: "auth things" }],
+        }),
+      );
+    const extractor = new HttpIntentExtractor(
+      { endpoint: "http://x", maxRequestChars: 1 },
+      { fetch: fetchMock, sleep: () => Promise.resolve() },
+    );
+    const result = await extractor.extract(turns);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.intents).toEqual([{ content: "cache things" }, { content: "auth things" }]);
+    expect(result.claims).toEqual([{ subtype: "factoid", content: "shared" }]);
   });
 
   it("requires an endpoint", () => {
     expect(() => new HttpIntentExtractor({})).toThrow(/endpoint/i);
+  });
+});
+
+describe("chunkTurns", () => {
+  const t = (content: string): ChatTurn => ({ role: "user", content });
+
+  it("keeps a small conversation as a single chunk", () => {
+    const turns = [t("a"), t("b"), t("c")];
+    expect(chunkTurns(turns, 10_000)).toEqual([turns]);
+  });
+
+  it("splits when the running size would exceed the budget", () => {
+    // Each turn serializes to ~30+ chars; a 60-char budget fits about two per chunk.
+    const turns = [t("one"), t("two"), t("three"), t("four")];
+    const chunks = chunkTurns(turns, 70);
+    expect(chunks.length).toBeGreaterThan(1);
+    // No turn is dropped and order is preserved.
+    expect(chunks.flat()).toEqual(turns);
+  });
+
+  it("never splits a single oversized turn — it gets its own chunk", () => {
+    const turns = [t("x".repeat(5000)), t("small")];
+    const chunks = chunkTurns(turns, 100);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toEqual([turns[0]]);
+    expect(chunks[1]).toEqual([turns[1]]);
+  });
+
+  it("returns no chunks for an empty conversation", () => {
+    expect(chunkTurns([], 100)).toEqual([]);
   });
 });
 

@@ -63,6 +63,14 @@ export interface ExtractorConfig {
   apiKey?: string;
   /** Model identifier the endpoint should serve, e.g. "claim-extractor-4B". */
   model?: string;
+  /**
+   * Cap on the JSON size (in characters) of the `conversation` sent in one request.
+   * Long chats are split into chunks under this budget and the per-chunk results are
+   * merged — the hosted model has a fixed context window and returns 500 when the
+   * conversation overflows it. Omitted = a safe built-in default; raise it for a local
+   * sidecar with a larger window. Must be a positive integer.
+   */
+  maxRequestChars?: number;
 }
 
 /** When the analysis runner fires. Manual is always available; these are the automatic triggers. */
@@ -239,6 +247,13 @@ function parseExtractor(raw: unknown): ExtractorConfig {
       }
       extractor[field] = raw[field] as string;
     }
+  }
+  if (raw.maxRequestChars !== undefined) {
+    const n = raw.maxRequestChars;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
+      throw new ConfigError("`analysis.extractor.maxRequestChars` must be a positive integer");
+    }
+    extractor.maxRequestChars = n;
   }
   return extractor;
 }

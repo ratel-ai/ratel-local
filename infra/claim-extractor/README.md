@@ -109,6 +109,14 @@ when a `username` is set, else `bearer`. (An older `"provider": "cloud"` is stil
 accepted and behaves identically.) With no endpoint configured, Ratel falls back to
 the model-free `naive` extractor.
 
+A long chat is split into size-bounded chunks before being sent, so it can't overflow
+the model's context window (which otherwise returns a fast 500); the per-chunk claims
+and intents are merged and de-duplicated. The chunk budget is the JSON size of one
+request's `conversation` and defaults to a conservative value tuned for the hosted
+model. Raise it for a sidecar with a larger window via the optional
+`"maxRequestChars": <positive integer>` under `extractor`. Transient `5xx`/network
+failures are retried with backoff; a `4xx` (and timeouts) are not.
+
 ## Mock mode
 
 Every deployment honors `CLAIM_EXTRACTOR_MOCK=1` (or `CLAIM_EXTRACTOR_BACKEND=mock`),
