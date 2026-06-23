@@ -85,11 +85,42 @@ export class HookChatSource implements ChatSource {
       ...state,
       sessions: {
         ...state.sessions,
-        [sessionId]: { ...meta, newTurnCount: 0, lastAnalyzedAt: at, idle: false },
+        [sessionId]: {
+          ...meta,
+          newTurnCount: 0,
+          lastAnalyzedAt: at,
+          idle: false,
+          needsReanalysis: false,
+        },
       },
     };
     await writeChatState(this.fs, this.chatDir, next);
   }
+}
+
+/**
+ * Flag sessions as needing (re)analysis after their analysis output was deleted, so
+ * the next manual/idle run treats them as due even though they have no new turns.
+ * `lastAnalyzedAt` is cleared to match (the prior analysis no longer exists).
+ * `sessionIds` omitted = every known session. A no-op when nothing matches.
+ */
+export async function markSessionsForReanalysis(
+  fs: JsonFs,
+  chatDir: string,
+  sessionIds?: string[],
+): Promise<void> {
+  const state = await readChatState(fs, chatDir);
+  const targets = sessionIds ?? Object.keys(state.sessions);
+  const sessions = { ...state.sessions };
+  let changed = false;
+  for (const id of targets) {
+    const meta = sessions[id];
+    if (!meta) continue;
+    sessions[id] = { ...meta, needsReanalysis: true, lastAnalyzedAt: undefined };
+    changed = true;
+  }
+  if (!changed) return;
+  await writeChatState(fs, chatDir, { ...state, sessions });
 }
 
 function parseTurns(raw: string): ChatTurn[] {

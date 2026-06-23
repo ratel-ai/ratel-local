@@ -9,6 +9,7 @@ import {
   HookChatSource,
   intentsPaths,
   loadSkills,
+  markSessionsForReanalysis,
   normalizeIntentKey,
   type RunLogEntry,
   readAllSessionIntents,
@@ -269,10 +270,12 @@ export async function deleteIntentRoute(
 /**
  * POST /api/intents/clear — wipe all analysis output durably: delete every
  * per-session file, drop the extraction cache (so the next run re-runs the model
- * instead of replaying cached results), and reset the index to empty.
+ * instead of replaying cached results), reset the index to empty, and flag every
+ * captured session for re-analysis so a plain "Run now" regenerates intents (without
+ * the flag the bookkeeping still reads "already analyzed" and the run skips them).
  */
 export async function clearIntentsRoute(ctx: HandlerCtx): Promise<ApiResponse> {
-  const dir = intentsDirFor(ctx);
+  const { intentsDir: dir, chatDir } = intentsPaths(resolveRatelDir(process.env, ctx.env.homeDir));
   const sessions = await readAllSessionIntents(ctx.fs, dir);
   for (const session of sessions) {
     await rm(join(dir, "sessions", `${session.sessionId}.json`), { force: true });
@@ -281,6 +284,8 @@ export async function clearIntentsRoute(ctx: HandlerCtx): Promise<ApiResponse> {
   // extractions and the cleared intents look like they "came back from cache".
   await rm(join(dir, "cache"), { recursive: true, force: true });
   await writeIntentsIndex(ctx.fs, dir, emptyIndex());
+  // Re-arm every captured session so the next run treats it as due.
+  await markSessionsForReanalysis(ctx.fs, chatDir);
   return ok({ cleared: true });
 }
 

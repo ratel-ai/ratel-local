@@ -282,7 +282,10 @@ export function selectDueSessions(
     return sessions;
   }
   return sessions.filter(
-    (s) => s.newTurnCount >= everyN || (Boolean(opts.onIdle) && s.idle === true),
+    (s) =>
+      s.newTurnCount >= everyN ||
+      s.needsReanalysis === true ||
+      (Boolean(opts.onIdle) && s.idle === true),
   );
 }
 

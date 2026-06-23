@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { nodeJsonFs, writeJson } from "../../io.js";
 import type { ChatState } from "./chat-source.js";
-import { HookChatSource, readChatState, sessionTurnsPath, writeChatState } from "./chat-source.js";
+import {
+  HookChatSource,
+  markSessionsForReanalysis,
+  readChatState,
+  sessionTurnsPath,
+  writeChatState,
+} from "./chat-source.js";
 
 let dir: string;
 let chatDir: string;
@@ -89,5 +95,57 @@ describe("HookChatSource", () => {
     const source = new HookChatSource({ chatDir, fs: nodeJsonFs });
     const turns = await source.readSession("orphan");
     expect(turns).toEqual([{ role: "user", content: "hi" }]);
+  });
+
+  it("markAnalyzed clears the re-analysis flag", async () => {
+    await writeJson(nodeJsonFs, join(chatDir, "state.json"), {
+      version: 1,
+      sessions: {
+        s1: { sessionId: "s1", host: "claude-code", newTurnCount: 5, needsReanalysis: true },
+      },
+    });
+    const source = new HookChatSource({ chatDir, fs: nodeJsonFs });
+    await source.markAnalyzed("s1", "2026-06-23T00:00:00.000Z");
+    const state = await readChatState(nodeJsonFs, chatDir);
+    expect(state.sessions.s1.needsReanalysis).toBe(false);
+    expect(state.sessions.s1.newTurnCount).toBe(0);
+    expect(state.sessions.s1.lastAnalyzedAt).toBe("2026-06-23T00:00:00.000Z");
+  });
+});
+
+describe("markSessionsForReanalysis", () => {
+  it("flags all known sessions and clears their lastAnalyzedAt", async () => {
+    await writeJson(nodeJsonFs, join(chatDir, "state.json"), {
+      version: 1,
+      sessions: {
+        s1: { sessionId: "s1", host: "claude-code", newTurnCount: 0, lastAnalyzedAt: "x" },
+        s2: { sessionId: "s2", host: "codex", newTurnCount: 0, lastAnalyzedAt: "y" },
+      },
+    });
+    await markSessionsForReanalysis(nodeJsonFs, chatDir);
+    const state = await readChatState(nodeJsonFs, chatDir);
+    expect(state.sessions.s1.needsReanalysis).toBe(true);
+    expect(state.sessions.s2.needsReanalysis).toBe(true);
+    expect(state.sessions.s1.lastAnalyzedAt).toBeUndefined();
+  });
+
+  it("flags only the listed sessions when ids are given", async () => {
+    await writeJson(nodeJsonFs, join(chatDir, "state.json"), {
+      version: 1,
+      sessions: {
+        s1: { sessionId: "s1", host: "claude-code", newTurnCount: 0 },
+        s2: { sessionId: "s2", host: "codex", newTurnCount: 0 },
+      },
+    });
+    await markSessionsForReanalysis(nodeJsonFs, chatDir, ["s1"]);
+    const state = await readChatState(nodeJsonFs, chatDir);
+    expect(state.sessions.s1.needsReanalysis).toBe(true);
+    expect(state.sessions.s2.needsReanalysis).toBeUndefined();
+  });
+
+  it("is a no-op when nothing matches", async () => {
+    await markSessionsForReanalysis(nodeJsonFs, chatDir, ["ghost"]);
+    const state = await readChatState(nodeJsonFs, chatDir);
+    expect(state.sessions).toEqual({});
   });
 });

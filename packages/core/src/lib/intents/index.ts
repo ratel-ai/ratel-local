@@ -2,6 +2,7 @@ export type { ChatState, HookChatSourceOptions } from "./chat-source.js";
 export {
   CHAT_STATE_VERSION,
   HookChatSource,
+  markSessionsForReanalysis,
   readChatState,
   sessionTurnsPath,
   writeChatState,

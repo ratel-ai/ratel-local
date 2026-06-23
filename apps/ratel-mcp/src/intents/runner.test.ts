@@ -90,6 +90,16 @@ describe("selectDueSessions", () => {
       "b",
     ]);
   });
+
+  it("includes a flagged session even with no new turns and onIdle off", () => {
+    // After "clear all" re-arms a session, a plain run must pick it up so intents
+    // regenerate (otherwise the bookkeeping reads "analyzed" and the run skips it).
+    const flagged = [
+      { sessionId: "c", host: "codex", newTurnCount: 0 },
+      { sessionId: "d", host: "codex", newTurnCount: 0, needsReanalysis: true },
+    ];
+    expect(selectDueSessions(flagged, {}, 10).map((s) => s.sessionId)).toEqual(["d"]);
+  });
 });
 
 describe("applyRecencyWindow", () => {

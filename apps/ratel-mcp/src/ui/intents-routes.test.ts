@@ -217,6 +217,27 @@ describe("deleteIntentRoute + clearIntentsRoute", () => {
     const rebuilt = rebuildIndex(await readAllSessionIntents(nodeFs, intentsDir));
     expect(rebuilt.intents).toEqual([]);
   });
+
+  it("re-arms sessions so a plain re-run regenerates intents after a clear", async () => {
+    await seedAndRun();
+    await clearIntentsRoute(ctx);
+
+    // Clearing flags every captured session for re-analysis (its analyzed bookkeeping
+    // is otherwise still "done", which would make a plain run skip it).
+    const { readChatState, intentsPaths, resolveRatelDir } = await import("@ratel-ai/mcp-core");
+    const chatDir = intentsPaths(resolveRatelDir(process.env, home)).chatDir;
+    const state = await readChatState(nodeFs, chatDir);
+    expect(state.sessions["sess-1"].needsReanalysis).toBe(true);
+
+    // A plain "Run now" (no all/sessionId) now picks the session up and rebuilds intents.
+    await runIntentsRoute(ctx, {});
+    await waitForIdle();
+    const index = (await getIntents(ctx)).body as { intents: Array<{ content: string }> };
+    expect(index.intents.map((i) => i.content).sort()).toEqual([
+      "set up a grafana dashboard",
+      "write tests for the parser",
+    ]);
+  });
 });
 
 describe("analysis settings routes", () => {

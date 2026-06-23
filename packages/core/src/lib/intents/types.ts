@@ -33,6 +33,13 @@ export interface ChatSessionMeta {
   updatedAt?: string;
   /** True once the session has gone idle (set by the Stop hook); drives the idle trigger. */
   idle?: boolean;
+  /**
+   * Set when this session's analysis output was deleted (e.g. "clear all"), so a run
+   * treats it as due again even without new turns — otherwise the bookkeeping claims
+   * "already analyzed" while the store is empty and a re-run would skip it. Cleared
+   * once the session is analyzed.
+   */
+  needsReanalysis?: boolean;
 }
 
 /** Claim subtypes emitted by the ClaimExtractor model. */
