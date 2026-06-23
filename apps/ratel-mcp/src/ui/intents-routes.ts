@@ -231,11 +231,7 @@ export async function runIntentsRoute(
 ): Promise<ApiResponse> {
   const sessionId = typeof body.sessionId === "string" ? body.sessionId : undefined;
   const all = body.all === true;
-  const opts = sessionId
-    ? { sessionId }
-    : all
-      ? { all: true, bypassCache: true }
-      : { all: true };
+  const opts = sessionId ? { sessionId } : all ? { all: true, bypassCache: true } : { all: true };
   const trigger = sessionId ? "session" : all ? "all" : "manual";
   const result = await startAnalysisRun(ctx, opts, trigger);
   return ok(result);
