@@ -9,20 +9,20 @@ const ENTER_MS = 520;
 export const PLACEHOLDER_EXIT_MS = 320;
 
 /**
- * Pure core of {@link useStreamingOrder}'s ordering: survivors keep their prior slot
- * (so nothing reshuffles under the user mid-run), and brand-new contents are appended
- * at the end. A content that has gone away is dropped. Returns the next order and the
- * contents that were appended (the ones to animate in).
+ * Pure core of {@link useStreamingOrder}'s ordering: survivors keep their prior
+ * relative slot (so nothing reshuffles under the user mid-run), and brand-new contents
+ * are prepended at the TOP so results stream in from the top. A content that has gone
+ * away is dropped. Returns the next order and the new contents (the ones to animate in).
  */
 export function reconcileStreamOrder(
   prevOrder: readonly string[],
   incoming: readonly string[],
-): { order: string[]; appended: string[] } {
+): { order: string[]; added: string[] } {
   const incomingSet = new Set(incoming);
   const kept = prevOrder.filter((content) => incomingSet.has(content));
   const keptSet = new Set(kept);
-  const appended = incoming.filter((content) => !keptSet.has(content));
-  return { order: [...kept, ...appended], appended };
+  const added = incoming.filter((content) => !keptSet.has(content));
+  return { order: [...added, ...kept], added };
 }
 
 /**
@@ -46,14 +46,14 @@ export function useStreamingOrder(
 
   useEffect(() => {
     const incoming = intents.map((i) => i.content);
-    const { order: nextOrder, appended } = reconcileStreamOrder(orderRef.current, incoming);
+    const { order: nextOrder, added: newcomers } = reconcileStreamOrder(orderRef.current, incoming);
     orderRef.current = nextOrder;
     setOrder(nextOrder);
 
     const firstSnapshot = !seeded.current;
     seeded.current = true;
     // On a plain (non-streaming) first load, don't animate the existing list in.
-    const added = firstSnapshot && !streaming ? [] : appended;
+    const added = firstSnapshot && !streaming ? [] : newcomers;
     if (added.length === 0) return;
 
     setEntering((prev) => {

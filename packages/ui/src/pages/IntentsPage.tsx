@@ -280,14 +280,8 @@ export function IntentsPage() {
         </div>
       )}
 
-      {/* While analyzing with results already on screen, a slim top banner keeps
-          context; the empty state gets the full-bleed version (below) instead. */}
-      {showRunning && intents.length > 0 && (
-        <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/30 px-3 py-2 text-muted-foreground text-sm">
-          <PrismSweep size={22} dotSize={3} speed={1.3} />
-          Analyzing chat through the extractor… results appear as each session finishes.
-        </div>
-      )}
+      {/* No "analyzing" banner while results are on screen — the searching slot at the
+          top of the list (and the Run-now button's spinner) already signal the run. */}
 
       {!showRunning && ready?.lastError && (
         <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-amber-900 text-sm dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200">
@@ -462,21 +456,20 @@ function IntentList(props: {
   // Keep the searching slot mounted through its collapse animation after a run ends.
   const placeholder = usePresence(streaming, PLACEHOLDER_EXIT_MS);
 
-  // While a run streams in, reveal everything so each new intent (and the slot) is
-  // visible as it lands; we never collapse back, so the list doesn't jump when it ends.
-  useEffect(() => {
-    if (streaming) setShown((n) => Math.max(n, items.length));
-  }, [streaming, items.length]);
-
+  // New intents arrive at the TOP, so they're always within the first page — no need
+  // to reveal the whole list; older intents stay paginated.
   const visible = items.slice(0, shown);
   const remaining = items.length - visible.length;
   return (
     <div className="grid gap-2">
       <ul className="grid gap-2">
+        {/* The searching slot sits at the top; each new intent grows in just below it,
+            pushing the rest down — results stream in from the top. */}
+        {placeholder.mounted && <IntentSearchingRow exiting={placeholder.exiting} />}
         {visible.map((intent) => (
           <li
             // The wrapper li grows the row into place on arrival; the inner overflow
-            // clip is what makes the height animation read as a slide into the slot.
+            // clip is what makes the height animation read as a slide down from the top.
             className={cn("grid", entering.has(intent.content) && "animate-intent-enter")}
             key={intent.content}
           >
@@ -490,7 +483,6 @@ function IntentList(props: {
             </div>
           </li>
         ))}
-        {placeholder.mounted && <IntentSearchingRow exiting={placeholder.exiting} />}
       </ul>
       {remaining > 0 && (
         <div className="flex justify-center pt-1">
