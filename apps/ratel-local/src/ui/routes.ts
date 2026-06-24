@@ -43,6 +43,24 @@ export interface ApiResponse {
   body: unknown;
 }
 
+export interface ActiveMcpClientSummary {
+  sessionId: string;
+  name: string;
+  version: string;
+  protocolVersion: string;
+  connectedAt: string;
+  lastSeenAt: string;
+  requestCount: number;
+  title?: string;
+  userAgent?: string;
+  remoteAddress?: string;
+  capabilities: string[];
+}
+
+export interface ActiveMcpClientReader {
+  listActiveClients(): ActiveMcpClientSummary[];
+}
+
 function ok(body: unknown): ApiResponse {
   return { status: 200, body };
 }
@@ -65,6 +83,10 @@ export async function getConfig(ctx: HandlerCtx): Promise<ApiResponse> {
 
 export async function getAgentHosts(ctx: HandlerCtx): Promise<ApiResponse> {
   return ok(await getAgentHostsState(ctx));
+}
+
+export function getMcpClients(registry?: ActiveMcpClientReader): ApiResponse {
+  return ok({ clients: registry?.listActiveClients() ?? [] });
 }
 
 /** Where a skill sits: an unmanaged skill's agent, or "ratel" for managed ones. */

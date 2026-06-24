@@ -7,6 +7,7 @@ import {
   House,
   LinkIcon,
   Plus,
+  RadioTower,
   Server,
   Settings2,
   Sparkles,
@@ -284,7 +285,7 @@ export function AppShell() {
   );
 
   const goTo = useCallback(
-    (to: "/" | "/agent-setup" | "/skills") => {
+    (to: "/" | "/agent-setup" | "/skills" | "/clients") => {
       const tokenizedPath = token ? `${to}?t=${encodeURIComponent(token)}` : to;
       void navigate({ to: tokenizedPath } as never);
     },
@@ -391,7 +392,7 @@ export function AppShell() {
 
 function ProductSidebar(props: {
   config: ConfigResponse | null;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
+  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/clients") => void;
   pathname: string;
 }) {
   return (
@@ -420,6 +421,12 @@ function ProductSidebar(props: {
                 icon={<Settings2 />}
                 label="Agent Setup"
                 onClick={() => props.onNavigate("/agent-setup")}
+              />
+              <ProductSidebarItem
+                active={props.pathname === "/clients"}
+                icon={<RadioTower />}
+                label="Clients"
+                onClick={() => props.onNavigate("/clients")}
               />
               <ProductSidebarItem
                 active={props.pathname === "/skills"}
@@ -556,7 +563,7 @@ function CommandMenu(props: {
   onAddToolSource: () => void;
   onImport: () => void;
   onLink: () => void;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
+  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/clients") => void;
   onSelectAgent: (kind: AgentHostKind) => void;
   onSelectToolSource: (scope: RatelScope, name: string) => void;
   open: boolean;
@@ -586,6 +593,10 @@ function CommandMenu(props: {
                 <Settings2 />
                 Agent Setup
                 <CommandShortcut>G A</CommandShortcut>
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/clients")}>
+                <RadioTower />
+                Clients
               </CommandItem>
               <CommandItem onSelect={() => props.onNavigate("/skills")}>
                 <Sparkles />
