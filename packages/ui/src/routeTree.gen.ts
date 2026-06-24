@@ -5,6 +5,7 @@
 import { Route as rootRoute } from "./routes/__root";
 import { Route as AgentSetupRouteImport } from "./routes/agent-setup";
 import { Route as AgentSetupKindRouteImport } from "./routes/agent-setup.$kind";
+import { Route as ClientsRouteImport } from "./routes/clients";
 import { Route as IndexRouteImport } from "./routes/index";
 import { Route as SkillsRouteImport } from "./routes/skills";
 import { Route as SkillsIdRouteImport } from "./routes/skills.$id";
@@ -26,6 +27,12 @@ const AgentSetupRoute = AgentSetupRouteImport.update({
 const AgentSetupKindRoute = AgentSetupKindRouteImport.update({
   id: "/agent-setup/$kind",
   path: "/agent-setup/$kind",
+  getParentRoute: () => rootRoute,
+} as any);
+
+const ClientsRoute = ClientsRouteImport.update({
+  id: "/clients",
+  path: "/clients",
   getParentRoute: () => rootRoute,
 } as any);
 
@@ -76,6 +83,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AgentSetupKindRouteImport;
       parentRoute: typeof rootRoute;
     };
+    "/clients": {
+      id: "/clients";
+      path: "/clients";
+      fullPath: "/clients";
+      preLoaderRoute: typeof ClientsRouteImport;
+      parentRoute: typeof rootRoute;
+    };
     "/skills": {
       id: "/skills";
       path: "/skills";
@@ -111,6 +125,7 @@ export const routeTree = rootRoute
   ._addFileChildren({
     AgentSetupRoute,
     AgentSetupKindRoute,
+    ClientsRoute,
     IndexRoute,
     SkillsRoute,
     SkillsIdRoute,
