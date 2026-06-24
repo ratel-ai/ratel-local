@@ -81,7 +81,7 @@ describe("runCli — serve", () => {
     const [downstreamServerTransport, downstreamClientTransport] =
       InMemoryTransport.createLinkedPair();
 
-    const { shutdown } = await runCli(["serve", "/fake/config.json"], {
+    const { shutdown } = await runCli(["serve", "/fake/config.json", "--telemetry", "off"], {
       readConfig: async () => ({
         mcpServers: { up: { type: "stdio", command: "noop" } },
         // Isolate from the machine's real ~/.ratel/skills so get_skill_content
@@ -121,7 +121,7 @@ describe("runCli — serve", () => {
     const [downstreamServerTransport, downstreamClientTransport] =
       InMemoryTransport.createLinkedPair();
 
-    const { shutdown } = await runCli(["serve", "/fake/config.json"], {
+    const { shutdown } = await runCli(["serve", "/fake/config.json", "--telemetry", "off"], {
       readConfig: async () => ({
         mcpServers: {
           up: { type: "stdio", command: "noop", description: "ping server" },
@@ -173,7 +173,7 @@ describe("runCli — serve", () => {
     const [serverTransport] = InMemoryTransport.createLinkedPair();
     const logs: string[] = [];
 
-    const { shutdown } = await runCli(["serve", "/x"], {
+    const { shutdown } = await runCli(["serve", "/x", "--telemetry", "off"], {
       readConfig: async () => ({
         mcpServers: { up: { type: "stdio", command: "noop" } },
         // Isolate from the machine's real ~/.ratel/skills so get_skill_content
@@ -196,18 +196,21 @@ describe("runCli — serve", () => {
     const [serverTransport] = InMemoryTransport.createLinkedPair();
     const reads: string[] = [];
 
-    const { shutdown } = await runCli(["serve", "--config", "/a.json", "--config", "/b.json"], {
-      readConfig: async (path) => {
-        reads.push(path);
-        if (path === "/a.json") {
-          return { mcpServers: { up: { type: "stdio", command: "from-a" } } };
-        }
-        return { mcpServers: { up: { type: "stdio", command: "from-b" } } };
+    const { shutdown } = await runCli(
+      ["serve", "--config", "/a.json", "--config", "/b.json", "--telemetry", "off"],
+      {
+        readConfig: async (path) => {
+          reads.push(path);
+          if (path === "/a.json") {
+            return { mcpServers: { up: { type: "stdio", command: "from-a" } } };
+          }
+          return { mcpServers: { up: { type: "stdio", command: "from-b" } } };
+        },
+        transportFactory: () => upstream.clientTransport,
+        serverTransport,
+        logger: () => {},
       },
-      transportFactory: () => upstream.clientTransport,
-      serverTransport,
-      logger: () => {},
-    });
+    );
 
     expect(reads).toEqual(["/a.json", "/b.json"]);
 

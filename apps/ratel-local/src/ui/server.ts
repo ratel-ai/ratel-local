@@ -11,6 +11,7 @@ import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import {
+  type ActiveMcpClientReader,
   type ApiResponse,
   activateSkillsRoute,
   addServer,
@@ -25,6 +26,7 @@ import {
   editServer,
   getAgentHosts,
   getConfig,
+  getMcpClients,
   getSkill,
   getSkills,
   installClaudeStatuslineRoute,
@@ -49,6 +51,8 @@ export interface StartUiServerOptions {
   token: string;
   port?: number;
   assetDir?: string;
+  activeMcpClients?: ActiveMcpClientReader;
+  publicRoute?: (req: IncomingMessage, res: ServerResponse, path: string) => Promise<boolean>;
 }
 
 export interface UiServerHandle {
@@ -94,6 +98,10 @@ async function handleRequest(
   const url = req.url ?? "/";
   const path = url.split("?")[0];
 
+  if (opts.publicRoute && (await opts.publicRoute(req, res, path))) {
+    return;
+  }
+
   if (req.method === "GET" && !path.startsWith("/api/")) {
     if (hasFileExtension(path)) {
       await writeStaticAsset(res, opts.assetDir ?? defaultUiAssetDir(), path);
@@ -116,7 +124,7 @@ async function handleRequest(
   }
 
   try {
-    const response = await route(req, path, opts.ctx);
+    const response = await route(req, path, opts.ctx, opts.activeMcpClients);
     if (!response) {
       writeJson(res, 404, { error: "not found" });
       return;
@@ -131,11 +139,15 @@ async function route(
   req: IncomingMessage,
   path: string,
   ctx: HandlerCtx,
+  activeMcpClients?: ActiveMcpClientReader,
 ): Promise<ApiResponse | null> {
   const method = req.method ?? "GET";
 
   if (method === "GET" && path === "/api/config") {
     return getConfig(ctx);
+  }
+  if (method === "GET" && path === "/api/mcp-clients") {
+    return getMcpClients(activeMcpClients);
   }
   if (method === "GET" && path === "/api/agent-hosts") {
     return getAgentHosts(ctx);

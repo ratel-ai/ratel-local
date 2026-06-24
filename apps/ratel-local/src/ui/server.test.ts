@@ -160,6 +160,13 @@ describe("UI server — auth", () => {
     expect(Array.isArray(body.problems)).toBe(true);
   });
 
+  it("returns an empty MCP client list when the UI is not attached to a daemon registry", async () => {
+    const res = await fetch(apiUrl("/api/mcp-clients"), { headers: authHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { clients: unknown[] };
+    expect(body.clients).toEqual([]);
+  });
+
   it("returns 401 on POST /api/skills/activate and /deactivate without a bearer token", async () => {
     const a = await fetch(apiUrl("/api/skills/activate"), { method: "POST" });
     const d = await fetch(apiUrl("/api/skills/deactivate"), { method: "POST" });
