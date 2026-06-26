@@ -217,7 +217,7 @@ export function SkillsPage() {
 
 const PAGE_SIZE = 8;
 const SKILL_ROW_GRID = "lg:grid-cols-[minmax(14rem,1.25fr)_10rem_minmax(12rem,0.9fr)_11rem_9rem]";
-const CODEX_SOURCE_COLOR = "#3941FF";
+const CODEX_SOURCE_COLOR = "#7A9DFF";
 const CLAUDE_CODE_SOURCE_COLOR = "#D97757";
 
 function SkillSection(props: {
@@ -323,17 +323,21 @@ function SkillRow(props: {
         type="button"
       />
       <div className="relative z-20 grid min-w-0 gap-3 lg:hidden">
-        <div className="pointer-events-none flex min-w-0 items-start gap-2">
-          <DataSwatch color={color} />
-          <div className="min-w-0 flex-1 text-left">
+        <div className="pointer-events-none flex min-w-0 items-start justify-between gap-3">
+          <div className="pointer-events-none min-w-0 flex-1 text-left">
             <strong className="block truncate font-medium hover:underline">
               {props.skill.name}
             </strong>
-            {props.skill.description && (
-              <p className="mt-1 line-clamp-2 text-muted-foreground">{props.skill.description}</p>
-            )}
+          </div>
+          <div className="pointer-events-auto relative z-30 shrink-0">
+            {props.renderAction(props.skill)}
           </div>
         </div>
+        {props.skill.description && (
+          <p className="pointer-events-none line-clamp-2 text-muted-foreground">
+            {props.skill.description}
+          </p>
+        )}
         <div className="pointer-events-none grid min-w-0 grid-cols-[5.75rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
           <span className="font-mono text-xs text-muted-foreground uppercase">Source</span>
           <SkillSourceLabel source={props.skill.source} />
@@ -349,15 +353,11 @@ function SkillRow(props: {
               totalCount={props.totalCount}
             />
           </div>
-          <div className="pointer-events-auto relative z-30 col-start-2 flex justify-end">
-            {props.renderAction(props.skill)}
-          </div>
         </div>
       </div>
 
       <div className="pointer-events-none relative z-20 hidden min-w-0 lg:block">
         <div className="flex min-w-0 items-center gap-2">
-          <DataSwatch color={color} />
           <div className="min-w-0 text-left">
             <strong className="block truncate font-medium hover:underline">
               {props.skill.name}
@@ -433,16 +433,6 @@ function SkillShareLabel(props: { color: string; sourceCount: number; totalCount
         {sharePercent(props.sourceCount, props.totalCount)}%
       </span>
     </div>
-  );
-}
-
-function DataSwatch(props: { color: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block size-2.5 shrink-0 rounded-[3px]"
-      style={{ backgroundColor: props.color }}
-    />
   );
 }
 
