@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Download, SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
+import { Download, Sparkles, TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { skillPath, useRatelApp } from "@/App";
 import { ImportSkillsDialog } from "@/components/import-skills-dialog";
@@ -9,10 +9,8 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
-import { ResponsiveToolbar, ResponsiveToolbarButton } from "@/components/responsive-toolbar";
 import { type SkillSource, SourceIcon } from "@/components/source-icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +34,7 @@ type LoadState =
   | { status: "ready"; data: SkillsResponse };
 
 export function SkillsPage() {
-  const { openCommandMenu, request, runAction, busy, token } = useRatelApp();
+  const { request, runAction, busy, token } = useRatelApp();
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [importOpen, setImportOpen] = useState(false);
@@ -88,19 +86,6 @@ export function SkillsPage() {
         <PageHeaderContent>
           <PageHeaderBackRow>
             <PageHeaderTitle>Skills</PageHeaderTitle>
-            <div className="flex items-center gap-1 sm:hidden">
-              <Button
-                aria-label="Search"
-                onClick={openCommandMenu}
-                size="icon-lg"
-                type="button"
-                variant="outline"
-              >
-                <SearchIcon />
-                <span className="sr-only">Search</span>
-              </Button>
-              <PageHeaderSidebarTrigger />
-            </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
             Reusable playbooks Ratel manages and serves through the gateway. Import skills from
@@ -137,15 +122,6 @@ export function SkillsPage() {
               Unmanage all
             </Button>
           )}
-          <ResponsiveToolbar>
-            <ResponsiveToolbarButton
-              icon={<SearchIcon />}
-              kbd="⌘K"
-              label="Search"
-              onClick={openCommandMenu}
-            />
-          </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -333,7 +309,7 @@ function EmptyState(props: { title: string; description: string; children?: Reac
   return (
     <section className="-mx-4 grid min-h-72 flex-1 place-items-center border-border border-y bg-muted/15 px-4 py-8 text-center sm:-mx-6 sm:px-6">
       <div className="grid max-w-md gap-3">
-        <div className="mx-auto rounded-md bg-muted p-2 text-brand-green">
+        <div className="mx-auto rounded-md bg-muted p-2 text-muted-foreground">
           <Sparkles className="size-5" />
         </div>
         <div>
