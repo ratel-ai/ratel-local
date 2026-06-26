@@ -1,7 +1,4 @@
-import { MenuIcon } from "lucide-react";
 import type { ComponentProps } from "react";
-import { Button } from "@/components/ui/button";
-import { useSidebar } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 
 function PageHeader({ className, ...props }: ComponentProps<"section">) {
@@ -35,26 +32,14 @@ function PageHeaderActions({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
-function PageHeaderSidebarTrigger({ className, ...props }: ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar();
-
-  return (
-    <Button
-      aria-label="Toggle menu"
-      className={cn(
-        "h-10 min-h-10 w-10 min-w-10 rounded-[min(var(--radius-md),12px)] border border-border bg-card hover:bg-muted/60 md:hidden",
-        className,
-      )}
-      onClick={toggleSidebar}
-      size="icon-sm"
-      type="button"
-      variant="ghost"
-      {...props}
-    >
-      <MenuIcon />
-      <span className="sr-only">Toggle menu</span>
-    </Button>
-  );
+/**
+ * Legacy slot for the old shadcn sidebar's mobile hamburger. The shell now uses
+ * a header + always-visible nav rail (a horizontal strip on mobile), so there's
+ * nothing to toggle — this renders nothing and is kept only so existing page
+ * headers keep compiling. Safe to delete once the pages drop the reference.
+ */
+function PageHeaderSidebarTrigger(_props: ComponentProps<"button">) {
+  return null;
 }
 
 export {
