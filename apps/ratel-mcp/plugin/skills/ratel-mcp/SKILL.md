@@ -40,6 +40,19 @@ Prefer `project` for team-shared tools, `local` for machine-specific tools or se
 
 `serve --auto-config` loads the user config and, when a project root is discoverable, project and local configs too. If project tools are missing inside a host, check whether the host exposed the expected working directory; set `RATEL_PROJECT_ROOT` when needed.
 
+## Config Editing Rule
+
+When adding, removing, or changing upstream MCP server entries, use the
+`ratel-mcp mcp` CLI by default. Do not edit Ratel config JSON files directly
+unless one of these is true:
+
+- the user explicitly asks for a direct file edit;
+- the CLI is unavailable or fails;
+- the requested change cannot be expressed through the CLI.
+
+If falling back to direct JSON edits, state why the CLI was not used, preserve
+the existing config shape, and validate the JSON afterwards.
+
 ## CLI Map
 
 Top-level commands:
@@ -91,26 +104,26 @@ ratel-mcp ui
 ratel-mcp ui --port 7331 --no-open
 ```
 
-Add a stdio upstream:
+Required workflow for adding a stdio upstream:
 
 ```bash
 ratel-mcp mcp add --scope project github -- npx -y @modelcontextprotocol/server-github
 ```
 
-Add a stdio upstream with local secrets:
+Required workflow for adding a stdio upstream with local secrets:
 
 ```bash
 ratel-mcp mcp add --scope local github --env GITHUB_TOKEN=... -- npx -y @modelcontextprotocol/server-github
 ```
 
-Add an HTTP or SSE upstream:
+Required workflow for adding an HTTP or SSE upstream:
 
 ```bash
 ratel-mcp mcp add --scope project docs https://example.com/mcp --transport http
 ratel-mcp mcp add --scope project docs https://example.com/sse --transport sse
 ```
 
-Add headers to an HTTP/SSE upstream:
+Required workflow for adding headers to an HTTP/SSE upstream:
 
 ```bash
 ratel-mcp mcp add --scope local docs https://example.com/mcp --header "Authorization: Bearer ..."
