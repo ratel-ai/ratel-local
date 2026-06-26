@@ -1,17 +1,20 @@
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import {
-  ChevronsUpDown,
   Download,
   FolderOpen,
   House,
   LinkIcon,
+  Moon,
   Plus,
+  Search,
   Server,
   Settings2,
   Sparkles,
+  Sun,
   UserCircle,
 } from "lucide-react";
+import { useTheme } from "next-themes";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand-logo";
@@ -39,21 +42,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarHeader,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarRail,
-  useSidebar,
-} from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import "./App.css";
@@ -336,21 +324,24 @@ export function AppShell() {
 
   return (
     <RatelAppContext.Provider value={context}>
-      <SidebarProvider>
-        <ProductSidebar config={config} onNavigate={goTo} pathname={location.pathname} />
-        <SidebarInset>
-          {!token ? (
-            <main className="w-full px-4 py-6 sm:px-6">
-              <Alert>
-                <AlertTitle>Missing session token</AlertTitle>
-                <AlertDescription>Open the URL printed by ratel-mcp ui.</AlertDescription>
-              </Alert>
-            </main>
-          ) : (
-            <Outlet />
-          )}
-        </SidebarInset>
-      </SidebarProvider>
+      <div className="min-h-dvh">
+        <AppHeader config={config} onNavigate={goTo} onSearch={() => setCommandOpen(true)} />
+        <div className="mx-auto flex max-w-7xl flex-col md:flex-row">
+          <NavRail onNavigate={goTo} pathname={location.pathname} />
+          <div className="min-w-0 flex-1">
+            {!token ? (
+              <main className="w-full px-4 py-6 sm:px-6">
+                <Alert>
+                  <AlertTitle>Missing session token</AlertTitle>
+                  <AlertDescription>Open the URL printed by ratel-mcp ui.</AlertDescription>
+                </Alert>
+              </main>
+            ) : (
+              <Outlet />
+            )}
+          </div>
+        </div>
+      </div>
 
       <CommandMenu
         agentHosts={agentHosts}
@@ -389,126 +380,150 @@ export function AppShell() {
   );
 }
 
-function ProductSidebar(props: {
-  config: ConfigResponse | null;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
-  pathname: string;
-}) {
-  return (
-    <Sidebar collapsible="icon" variant="inset">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton className="cursor-default hover:bg-transparent" size="lg">
-              <BrandLogo className="h-5 w-fit max-w-[92px] transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-1.5">
-              <ProductSidebarItem
-                active={props.pathname === "/" || props.pathname.startsWith("/tools/")}
-                icon={<Server />}
-                label="Tools"
-                onClick={() => props.onNavigate("/")}
-              />
-              <ProductSidebarItem
-                active={props.pathname === "/agent-setup"}
-                icon={<Settings2 />}
-                label="Agent Setup"
-                onClick={() => props.onNavigate("/agent-setup")}
-              />
-              <ProductSidebarItem
-                active={props.pathname === "/skills"}
-                icon={<Sparkles />}
-                label="Skills"
-                onClick={() => props.onNavigate("/skills")}
-              />
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <SessionMenu config={props.config} />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
-  );
-}
+type NavTarget = "/" | "/agent-setup" | "/skills";
 
-function ProductSidebarItem(props: {
-  active: boolean;
-  icon: ReactNode;
+const NAV_ITEMS: Array<{
+  to: NavTarget;
   label: string;
-  onClick: () => void;
-  suffix?: ReactNode;
+  icon: ReactNode;
+  isActive: (pathname: string) => boolean;
+}> = [
+  {
+    to: "/",
+    label: "Tools",
+    icon: <Server />,
+    isActive: (pathname) => pathname === "/" || pathname.startsWith("/tools/"),
+  },
+  {
+    to: "/agent-setup",
+    label: "Agent Setup",
+    icon: <Settings2 />,
+    isActive: (pathname) => pathname === "/agent-setup" || pathname.startsWith("/agent-setup/"),
+  },
+  {
+    to: "/skills",
+    label: "Skills",
+    icon: <Sparkles />,
+    isActive: (pathname) => pathname === "/skills" || pathname.startsWith("/skills/"),
+  },
+];
+
+/**
+ * Sticky top bar: brand mark + wordmark on the left, a ⌘K search affordance and
+ * the session account menu on the right. Mirrors the Ratel Cloud header.
+ */
+function AppHeader(props: {
+  config: ConfigResponse | null;
+  onNavigate: (to: NavTarget) => void;
+  onSearch: () => void;
 }) {
-  const { isMobile, setOpenMobile } = useSidebar();
-  const handleClick = () => {
-    props.onClick();
-    if (isMobile) setOpenMobile(false);
-  };
+  const { resolvedTheme } = useTheme();
+  const logoVariant = resolvedTheme === "light" ? "green" : "cream";
 
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton isActive={props.active} onClick={handleClick} tooltip={props.label}>
-        {props.icon}
-        <span className="transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
-          {props.label}
-        </span>
-        {props.suffix}
-      </SidebarMenuButton>
-    </SidebarMenuItem>
+    <header className="sticky top-0 z-20 border-border border-b bg-background/80 backdrop-blur">
+      <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:px-6">
+        <button
+          aria-label="Ratel MCP home"
+          className="flex shrink-0 items-center gap-2"
+          onClick={() => props.onNavigate("/")}
+          type="button"
+        >
+          <BrandLogo className="h-5 w-auto" variant={logoVariant} />
+          <span className="rounded-md border border-border bg-accent/60 px-1.5 py-0.5 font-mono font-semibold text-[11px] text-foreground uppercase leading-none tracking-[0.08em]">
+            MCP
+          </span>
+        </button>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            className="hidden h-9 gap-2 px-3 text-muted-foreground sm:inline-flex"
+            onClick={props.onSearch}
+            type="button"
+            variant="outline"
+          >
+            <Search className="size-4" />
+            <span className="text-sm">Search</span>
+            <span className="ml-1 rounded border border-border px-1.5 font-mono text-[11px] leading-none">
+              ⌘K
+            </span>
+          </Button>
+          <Button
+            aria-label="Search"
+            className="sm:hidden"
+            onClick={props.onSearch}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <Search />
+          </Button>
+          <SessionMenu config={props.config} />
+        </div>
+      </div>
+    </header>
   );
 }
 
-function SessionMenu(props: { compact?: boolean; config: ConfigResponse | null }) {
-  const { isMobile } = useSidebar();
+/**
+ * Primary navigation. A sticky vertical rail under the header on desktop, a
+ * horizontal scrolling strip on mobile (no off-canvas drawer to toggle).
+ */
+function NavRail(props: { onNavigate: (to: NavTarget) => void; pathname: string }) {
+  return (
+    <aside
+      className={cn(
+        "flex gap-1 overflow-x-auto border-border border-b px-4 py-2",
+        "md:sticky md:top-16 md:h-[calc(100dvh-4rem)] md:w-56 md:shrink-0 md:flex-col md:gap-1 md:overflow-visible md:border-r md:border-b-0 md:px-3 md:py-6",
+      )}
+    >
+      <nav className="flex gap-1 md:flex-col md:gap-1">
+        {NAV_ITEMS.map((item) => {
+          const active = item.isActive(props.pathname);
+          return (
+            <button
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors [&_svg]:size-[18px] [&_svg]:shrink-0",
+                active
+                  ? "bg-accent font-medium text-accent-foreground"
+                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )}
+              key={item.to}
+              onClick={() => props.onNavigate(item.to)}
+              type="button"
+            >
+              {item.icon}
+              <span className="whitespace-nowrap">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
+function SessionMenu(props: { config: ConfigResponse | null }) {
+  const { resolvedTheme, setTheme } = useTheme();
+  const isDark = resolvedTheme !== "light";
   const homeLabel = compactPathLabel(props.config?.homeDir) ?? "Local machine";
   const projectLabel = compactPathLabel(props.config?.projectRoot) ?? "No project root";
 
   return (
     <DropdownMenu>
-      {props.compact ? (
-        <DropdownMenuTrigger
-          render={<Button aria-label="Session menu" size="icon-sm" variant="ghost" />}
-        >
-          <UserCircle />
-        </DropdownMenuTrigger>
-      ) : (
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <DropdownMenuTrigger
-              render={
-                <SidebarMenuButton
-                  className="data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground group-data-[collapsible=icon]:w-10! group-data-[collapsible=icon]:justify-start! group-data-[collapsible=icon]:p-2!"
-                  size="lg"
-                />
-              }
-            >
-              <Avatar size="sm">
-                <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground [&>svg]:size-3.5">
-                  <UserCircle />
-                </AvatarFallback>
-              </Avatar>
-              <div className="grid flex-1 text-left text-sm leading-tight transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
-                <span className="truncate font-medium">Session</span>
-                <span className="truncate text-xs">{homeLabel}</span>
-              </div>
-              <ChevronsUpDown className="ml-auto size-4 transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
-            </DropdownMenuTrigger>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      )}
-      <DropdownMenuContent
-        align="end"
-        className="min-w-64 rounded-lg"
-        side={props.compact || isMobile ? "bottom" : "right"}
-        sideOffset={4}
+      <DropdownMenuTrigger
+        render={
+          <Button
+            aria-label="Session menu"
+            className="rounded-full"
+            size="icon-sm"
+            variant="ghost"
+          />
+        }
       >
+        <UserCircle />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-64 rounded-lg" side="bottom" sideOffset={8}>
         <DropdownMenuGroup>
           <DropdownMenuLabel className="p-0 font-normal">
             <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
@@ -539,6 +554,16 @@ function SessionMenu(props: { compact?: boolean; config: ConfigResponse | null }
             <span className="col-start-2 truncate font-mono text-xs">{projectLabel}</span>
           </DropdownMenuItem>
         </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault();
+            setTheme(isDark ? "light" : "dark");
+          }}
+        >
+          {isDark ? <Sun /> : <Moon />}
+          {isDark ? "Light theme" : "Dark theme"}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
