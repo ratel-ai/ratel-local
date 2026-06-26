@@ -655,9 +655,6 @@ function AppHeader(props: {
   onNavigate: (to: NavTarget) => void;
   onSearch: () => void;
 }) {
-  const { resolvedTheme } = useTheme();
-  const logoVariant = resolvedTheme === "light" ? "green" : "cream";
-
   return (
     <header className="sticky top-0 z-20 border-border border-b bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4 sm:px-6">
@@ -667,10 +664,7 @@ function AppHeader(props: {
           onClick={() => props.onNavigate("/")}
           type="button"
         >
-          <BrandLogo className="h-5 w-auto" variant={logoVariant} />
-          <span className="rounded-md border border-border bg-accent/60 px-1.5 py-0.5 font-mono font-semibold text-[11px] text-foreground uppercase leading-none tracking-[0.08em]">
-            MCP
-          </span>
+          <BrandLogo />
         </button>
 
         <div className="ml-auto flex items-center gap-1.5">
@@ -682,7 +676,7 @@ function AppHeader(props: {
           >
             <Search className="size-4" />
             <span className="text-sm">Search</span>
-            <span className="ml-1 rounded border border-border px-1.5 font-mono text-[11px] leading-none">
+            <span className="ml-1 rounded border border-border px-1.5 font-mono text-xs leading-none">
               ⌘K
             </span>
           </Button>
@@ -1022,7 +1016,7 @@ function CommandStatusBadge(props: { children: ReactNode; tone: "muted" | "succe
   return (
     <Badge
       className={cn(
-        "h-5 rounded-full px-2 text-[10px]",
+        "h-5 rounded-full px-2 text-xs",
         props.tone === "success" &&
           "border-emerald-300/70 bg-emerald-50 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200",
         props.tone === "warning" &&
