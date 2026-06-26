@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { type StructuredPatchHunk, structuredPatch } from "diff";
 import {
   ArrowLeft,
+  Check,
   Download,
   FileText,
   GitCompare,
@@ -1073,6 +1074,7 @@ function ImportSceneDialog(props: {
     >
       {scene === "recap" ? (
         <ScenePanel
+          flushFooter
           footer={
             <>
               <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
@@ -1087,7 +1089,7 @@ function ImportSceneDialog(props: {
           title="Choose entries to import"
         >
           <div className="grid gap-3">
-            <div className="max-h-60 overflow-auto border border-border">
+            <SceneScrollSection className="max-h-60">
               {props.preview.candidates.map((candidate) => {
                 const isSelected = selected.has(candidate.name);
                 return (
@@ -1119,7 +1121,7 @@ function ImportSceneDialog(props: {
                   </button>
                 );
               })}
-            </div>
+            </SceneScrollSection>
           </div>
         </ScenePanel>
       ) : null}
@@ -1162,6 +1164,7 @@ function ImportSceneDialog(props: {
       ) : null}
       {scene === "pick-conflicts" ? (
         <ScenePanel
+          flushFooter
           footer={
             <>
               <Button onClick={() => setScene("strategy")} type="button" variant="outline">
@@ -1175,21 +1178,26 @@ function ImportSceneDialog(props: {
           kicker="Conflicts"
           title="Pick agent versions"
         >
-          <p className="text-sm text-muted-foreground">
-            Selected entries will overwrite the matching Ratel entry. Unselected entries keep the
-            current Ratel version.
-          </p>
-          <ConflictPickList
-            conflicts={conflicts}
-            onToggleReplace={(key) =>
-              setReplaceConflicts((current) => toggleSelection(current, key))
-            }
-            replaceConflicts={new Set(replaceConflicts)}
-          />
+          <div className="grid gap-3">
+            <p className="text-sm text-muted-foreground">
+              Selected entries will overwrite the matching Ratel entry. Unselected entries keep the
+              current Ratel version.
+            </p>
+            <SceneScrollSection className="grid max-h-80 gap-2">
+              <ConflictPickList
+                conflicts={conflicts}
+                onToggleReplace={(key) =>
+                  setReplaceConflicts((current) => toggleSelection(current, key))
+                }
+                replaceConflicts={new Set(replaceConflicts)}
+              />
+            </SceneScrollSection>
+          </div>
         </ScenePanel>
       ) : null}
       {scene === "review" ? (
         <ScenePanel
+          flushFooter
           footer={
             <>
               <Button
@@ -1217,14 +1225,14 @@ function ImportSceneDialog(props: {
           title="Review config changes"
           wide
         >
-          <div className="grid max-h-[65vh] gap-4 overflow-auto pr-1">
+          <SceneScrollSection className="grid max-h-[65vh] gap-4">
             <ChangeList changes={draftPreview.plan.ratelChanges} defaultOpen title="Ratel config" />
             <ChangeList
               changes={draftPreview.plan.agentChanges}
               defaultOpen
               title={`${props.preview.host.displayName} config`}
             />
-          </div>
+          </SceneScrollSection>
         </ScenePanel>
       ) : null}
     </SceneDialog>
@@ -1250,6 +1258,7 @@ function LinkSceneDialog(props: {
   return (
     <SceneDialog open={props.open} onOpenChange={props.onOpenChange} scene="review" title="Link">
       <ScenePanel
+        flushFooter
         footer={
           <>
             <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
@@ -1265,13 +1274,13 @@ function LinkSceneDialog(props: {
         title="Review config changes"
         wide
       >
-        <div className="max-h-[65vh] overflow-auto pr-1">
+        <SceneScrollSection className="max-h-[65vh]">
           <ChangeList
             changes={props.preview.plan.agentChanges}
             defaultOpen
             title={`${props.preview.host.displayName} changes`}
           />
-        </div>
+        </SceneScrollSection>
       </ScenePanel>
     </SceneDialog>
   );
@@ -1307,11 +1316,11 @@ function SceneDialog(props: {
               transition: { duration: 0.27, ease: [0.25, 1, 0.5, 1] },
               y: 0,
             }}
-            className="relative w-full max-w-4xl overflow-hidden border border-border bg-background shadow-2xl"
+            className="relative w-full max-w-4xl min-w-0 overflow-hidden border border-border bg-background shadow-2xl"
             initial={{ y: 24, scale: 0.985 }}
             exit={{ y: 24, scale: 0.985 }}
           >
-            <div ref={measureRef}>
+            <div className="min-w-0" ref={measureRef}>
               <div className="flex items-center justify-between border-border border-b px-4 py-3">
                 <p className="font-medium">{props.title}</p>
                 <Button
@@ -1332,7 +1341,7 @@ function SceneDialog(props: {
                   exit={{ opacity: 0, scale: 0.985, filter: "blur(3px)" }}
                   transition={{ duration: 0.2, ease: [0.26, 0.08, 0.25, 1] }}
                 >
-                  {props.children}
+                  <div className="min-w-0">{props.children}</div>
                 </motion.div>
               </AnimatePresence>
             </div>
@@ -1345,20 +1354,33 @@ function SceneDialog(props: {
 
 function ScenePanel(props: {
   children: React.ReactNode;
+  flushFooter?: boolean;
   footer: React.ReactNode;
   kicker: string;
   title: string;
   wide?: boolean;
 }) {
   return (
-    <div className={cn("grid gap-5 p-4", props.wide ? "sm:p-5" : "sm:p-5")}>
-      <div>
+    <div className="grid min-w-0">
+      <div className="min-w-0 px-4 pt-4 pb-5 sm:px-5 sm:pt-5">
         <DetailLabel>{props.kicker}</DetailLabel>
         <h3 className="mt-1 text-xl font-semibold tracking-tight">{props.title}</h3>
       </div>
-      {props.children}
-      <div className="flex flex-wrap justify-end gap-2 border-border border-t pt-4">
+      <div className={cn("grid min-w-0 gap-5 px-4 sm:px-5", props.flushFooter ? "pb-0" : "pb-5")}>
+        {props.children}
+      </div>
+      <div className="flex flex-wrap justify-end gap-2 border-border border-t px-4 py-4 sm:px-5">
         {props.footer}
+      </div>
+    </div>
+  );
+}
+
+function SceneScrollSection(props: { children: React.ReactNode; className?: string }) {
+  return (
+    <div className="-mx-4 min-w-0 border-border border-t sm:-mx-5">
+      <div className={cn("min-w-0 overflow-auto px-4 py-3 sm:px-5", props.className)}>
+        {props.children}
       </div>
     </div>
   );
@@ -1391,16 +1413,13 @@ function ConflictPickList(props: {
   replaceConflicts: Set<string>;
 }) {
   return (
-    <div className="grid max-h-80 gap-2 overflow-auto pr-1">
+    <div className="grid gap-2">
       {props.conflicts.map((conflict) => {
         const key = `${conflict.scope}:${conflict.name}`;
         const selected = props.replaceConflicts.has(key);
         return (
           <button
-            className={cn(
-              "grid gap-1 border px-3 py-2 text-left",
-              selected ? "border-brand-green bg-brand-green/10" : "border-border bg-background",
-            )}
+            className="grid min-w-0 gap-2 border border-border bg-background px-3 py-2 text-left"
             key={key}
             onClick={() => props.onToggleReplace(key)}
             type="button"
@@ -1409,15 +1428,82 @@ function ConflictPickList(props: {
               <span className="font-medium">{conflict.name}</span>
               <Badge variant="outline">{conflict.scope}</Badge>
             </div>
-            <span className="text-xs text-muted-foreground">
-              Ratel: {summarizeEntry(conflict.existing)}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Agent: {summarizeEntry(conflict.incoming)}
-            </span>
+            <ConflictJsonDiff conflict={conflict} selected={selected} />
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function ConflictJsonDiff(props: { conflict: ImportConflict; selected: boolean }) {
+  const before = serializeEntryForDiff(props.conflict.existing);
+  const after = serializeEntryForDiff(props.conflict.incoming);
+  const patch = structuredPatch("Ratel config", "Agent config", before, after, "", "", {
+    context: 2,
+  });
+  const rows = patch.hunks.flatMap(diffRowsFromHunk);
+  if (rows.length === 0) {
+    return <p className="text-xs text-muted-foreground">No JSON differences.</p>;
+  }
+  return (
+    <div className="grid min-w-0 gap-2">
+      <ConflictResolutionPreview conflict={props.conflict} selected={props.selected} />
+      <p className="text-xs text-muted-foreground">
+        {props.selected ? "Import agent version" : "Keeping Ratel version"}
+      </p>
+      <div className="max-h-44 max-w-full overflow-auto border border-border bg-muted/20">
+        <DiffRowsTable conflictSelection={props.selected ? "agent" : "ratel"} rows={rows} />
+      </div>
+    </div>
+  );
+}
+
+function ConflictResolutionPreview(props: { conflict: ImportConflict; selected: boolean }) {
+  return (
+    <div className="grid min-w-0 gap-2 md:grid-cols-2">
+      <ConflictSidePreview
+        entry={props.conflict.existing}
+        label="Ratel"
+        state={props.selected ? "previous" : "next"}
+      />
+      <ConflictSidePreview
+        entry={props.conflict.incoming}
+        label="Agent"
+        state={props.selected ? "next" : "unused"}
+      />
+    </div>
+  );
+}
+
+function ConflictSidePreview(props: {
+  entry: ServerEntry;
+  label: string;
+  state: "next" | "previous" | "unused";
+}) {
+  const isNext = props.state === "next";
+  return (
+    <div
+      className={cn(
+        "grid min-w-0 gap-1 border px-2.5 py-2",
+        isNext ? "border-brand-green bg-brand-green/10" : "border-border bg-muted/25",
+        props.state === "unused" ? "opacity-70" : undefined,
+      )}
+    >
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="font-medium text-xs">{props.label}</span>
+        {isNext ? <Check className="size-4 shrink-0 text-brand-green" aria-hidden="true" /> : null}
+      </div>
+      <dl className="grid min-w-0 gap-1 text-xs">
+        <div className="grid min-w-0 grid-cols-[4.75rem_minmax(0,1fr)] gap-2">
+          <dt className="text-muted-foreground">Transport</dt>
+          <dd className="min-w-0 truncate font-mono">{entryTransport(props.entry)}</dd>
+        </div>
+        <div className="grid min-w-0 grid-cols-[4.75rem_minmax(0,1fr)] gap-2">
+          <dt className="text-muted-foreground">{entryStartupLabel(props.entry)}</dt>
+          <dd className="min-w-0 break-words font-mono">{entryStartupValue(props.entry)}</dd>
+        </div>
+      </dl>
     </div>
   );
 }
@@ -1449,9 +1535,9 @@ function ChangeList(props: { changes: FileChange[]; defaultOpen?: boolean; title
     { added: 0, removed: 0 },
   );
   return (
-    <div className="grid gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="flex items-center gap-2 text-sm font-medium">
+    <div className="grid min-w-0 gap-2">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <h4 className="flex min-w-0 items-center gap-2 text-sm font-medium">
           <GitCompare className="size-4" />
           {props.title}
         </h4>
@@ -1462,7 +1548,7 @@ function ChangeList(props: { changes: FileChange[]; defaultOpen?: boolean; title
       </div>
       {props.changes.map((change) => (
         <details
-          className="border border-border bg-background"
+          className="min-w-0 overflow-hidden border border-border bg-background"
           key={change.path}
           open={props.defaultOpen}
         >
@@ -1511,38 +1597,77 @@ function UnifiedDiff(props: { change: FileChange }) {
     );
   }
   return (
-    <div className="max-h-[32rem] overflow-auto border-border border-t bg-muted/20">
-      <table className="w-full border-collapse font-mono text-xs">
-        <tbody>
-          {rows.map((row) =>
-            row.kind === "hunk" ? (
-              <tr className="bg-brand-green/10 text-brand-green" key={diffRowKey(row)}>
-                <td className="w-12 select-none px-2 py-1 text-right text-brand-green/70">...</td>
-                <td className="w-12 select-none border-border border-r px-2 py-1 text-right text-brand-green/70">
-                  ...
-                </td>
-                <td className="px-2 py-1">{row.content}</td>
-              </tr>
-            ) : (
-              <tr className={diffRowClassName(row.kind)} key={diffRowKey(row)}>
-                <td className="w-12 select-none px-2 py-0.5 text-right text-muted-foreground">
-                  {row.oldLine ?? ""}
-                </td>
-                <td className="w-12 select-none border-border border-r px-2 py-0.5 text-right text-muted-foreground">
-                  {row.newLine ?? ""}
-                </td>
-                <td className="px-2 py-0.5 whitespace-pre-wrap break-words">
+    <div className="max-h-[32rem] max-w-full overflow-auto border-border border-t bg-muted/20">
+      <DiffRowsTable rows={rows} />
+    </div>
+  );
+}
+
+function DiffRowsTable(props: { conflictSelection?: "agent" | "ratel"; rows: DiffRow[] }) {
+  return (
+    <table className="w-full table-fixed border-collapse font-mono text-xs">
+      <colgroup>
+        <col className="w-12" />
+        <col className="w-12" />
+        <col />
+      </colgroup>
+      <tbody>
+        {props.rows.map((row) =>
+          row.kind === "hunk" ? (
+            <tr
+              className={
+                props.conflictSelection
+                  ? "bg-muted text-muted-foreground"
+                  : "bg-brand-green/10 text-brand-green"
+              }
+              key={diffRowKey(row)}
+            >
+              <td
+                className={cn(
+                  "select-none px-2 py-1 text-right",
+                  props.conflictSelection ? "text-muted-foreground" : "text-brand-green/70",
+                )}
+              >
+                ...
+              </td>
+              <td
+                className={cn(
+                  "select-none border-border border-r px-2 py-1 text-right",
+                  props.conflictSelection ? "text-muted-foreground" : "text-brand-green/70",
+                )}
+              >
+                ...
+              </td>
+              <td className="break-words px-2 py-1 whitespace-pre-wrap">{row.content}</td>
+            </tr>
+          ) : (
+            <tr
+              className={
+                props.conflictSelection
+                  ? conflictDiffRowClassName(row.kind, props.conflictSelection)
+                  : diffRowClassName(row.kind)
+              }
+              key={diffRowKey(row)}
+            >
+              <td className="select-none px-2 py-0.5 text-right text-muted-foreground">
+                {row.oldLine ?? ""}
+              </td>
+              <td className="select-none border-border border-r px-2 py-0.5 text-right text-muted-foreground">
+                {row.newLine ?? ""}
+              </td>
+              <td className="px-2 py-0.5 whitespace-pre-wrap break-words">
+                {props.conflictSelection ? null : (
                   <span className="mr-2 select-none text-muted-foreground">
                     {row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " "}
                   </span>
-                  {row.content.length > 0 ? row.content : " "}
-                </td>
-              </tr>
-            ),
-          )}
-        </tbody>
-      </table>
-    </div>
+                )}
+                {row.content.length > 0 ? row.content : " "}
+              </td>
+            </tr>
+          ),
+        )}
+      </tbody>
+    </table>
   );
 }
 
@@ -1619,6 +1744,17 @@ function diffRowClassName(kind: Exclude<DiffRow["kind"], "hunk">) {
   if (kind === "remove") {
     return "bg-red-50 text-red-950 dark:bg-red-500/15 dark:text-red-100";
   }
+  return "bg-background";
+}
+
+function conflictDiffRowClassName(
+  kind: Exclude<DiffRow["kind"], "hunk">,
+  selection: "agent" | "ratel",
+) {
+  const kept =
+    (selection === "agent" && kind === "add") || (selection === "ratel" && kind === "remove");
+  if (kept) return "bg-muted text-foreground";
+  if (kind === "add" || kind === "remove") return "bg-background text-muted-foreground opacity-70";
   return "bg-background";
 }
 
@@ -1735,4 +1871,36 @@ function summarizeEntry(entry: ServerEntry): string {
   const command = entry.command ?? "(missing command)";
   const args = entry.args && entry.args.length > 0 ? ` ${entry.args.join(" ")}` : "";
   return `${entry.type ?? "stdio"} ${command}${args}`;
+}
+
+function entryTransport(entry: ServerEntry): string {
+  return entry.type ?? "stdio";
+}
+
+function entryStartupLabel(entry: ServerEntry): string {
+  return entry.type === "http" || entry.type === "sse" ? "URL" : "Command";
+}
+
+function entryStartupValue(entry: ServerEntry): string {
+  if (entry.type === "http" || entry.type === "sse") return entry.url ?? "(missing url)";
+  const command = entry.command ?? "(missing command)";
+  return entry.args && entry.args.length > 0 ? `${command} ${entry.args.join(" ")}` : command;
+}
+
+function serializeEntryForDiff(entry: ServerEntry): string {
+  return `${JSON.stringify(sortJsonValue(entry), null, 2)}\n`;
+}
+
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!isPlainObject(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    out[key] = sortJsonValue(value[key]);
+  }
+  return out;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
