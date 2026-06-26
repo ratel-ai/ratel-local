@@ -46,6 +46,7 @@ import {
   ResponsiveToolbarGroup,
   ResponsiveToolbarLabeledButton,
 } from "@/components/responsive-toolbar";
+import { ShareBar, sharePercent } from "@/components/share-bar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -110,7 +111,8 @@ type EntryFormValues = {
   url: string;
 };
 
-const TOOL_SOURCE_GRID = "lg:grid-cols-[minmax(12rem,1.05fr)_7rem_minmax(13rem,1fr)_10rem_12rem]";
+const TOOL_SOURCE_GRID =
+  "lg:grid-cols-[minmax(12rem,1.05fr)_7rem_minmax(13rem,1fr)_8rem_9rem_11rem_12rem]";
 const ENTRY_INPUT_CLASS = "bg-background placeholder:text-muted-foreground/45";
 const ENTRY_TEXTAREA_CLASS =
   "min-h-28 bg-background font-mono text-sm placeholder:text-muted-foreground/45";
@@ -418,7 +420,9 @@ export function ToolsPage() {
             <span>Tool Source</span>
             <span>Type</span>
             <span>Target</span>
-            <span>Tools</span>
+            <span className="text-right">Tools</span>
+            <span className="text-right">Tokens</span>
+            <span className="text-right">Share</span>
             <span>Auth</span>
           </div>
           <div className="divide-border divide-y">
@@ -429,6 +433,8 @@ export function ToolsPage() {
                 entry={entry}
                 key={name}
                 name={name}
+                totalEstimatedTokens={scopeEstimatedTokens}
+                totalToolCount={scopeToolCount}
                 usage={usage}
                 onAuthorize={() => {
                   return runAction("Authorization updated", () =>
@@ -480,11 +486,16 @@ function ToolSourceRow(props: {
   name: string;
   onAuthorize: () => Promise<unknown> | undefined;
   onOpen: () => void;
+  totalEstimatedTokens: number;
+  totalToolCount: number;
   usage?: ServerToolTokenEstimate;
 }) {
+  const entryType = entryTypeOf(props.entry);
   const canAuthorize =
     (props.entry.type === "http" || props.entry.type === "sse") &&
     (props.authStatus === "needs auth" || props.authStatus === "expired");
+  const color = toolSourceTypeColor(entryType);
+  const share = toolSourceShare(props.usage, props.totalEstimatedTokens, props.totalToolCount);
 
   return (
     <div
@@ -501,13 +512,12 @@ function ToolSourceRow(props: {
       />
       <div className="relative z-20 grid min-w-0 gap-2 lg:hidden">
         <div className="pointer-events-none flex min-w-0 items-center gap-2">
+          <DataSwatch color={color} />
           <strong className="truncate font-medium">{props.name}</strong>
           <Badge className="shrink-0" variant="outline">
             MCP
           </Badge>
-          <Badge className="shrink-0 font-mono" variant="secondary">
-            {toolSourceTypeLabel(entryTypeOf(props.entry))}
-          </Badge>
+          <ToolTypeBadge type={entryType} />
           <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground" />
         </div>
         <p className="pointer-events-none line-clamp-1 text-muted-foreground">
@@ -515,7 +525,7 @@ function ToolSourceRow(props: {
         </p>
         <div className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
           <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
-            Command
+            Target
           </span>
           <code className="pointer-events-none block min-w-0 truncate rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs text-muted-foreground">
             {summaryOf(props.entry)}
@@ -523,8 +533,20 @@ function ToolSourceRow(props: {
           <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
             Tools
           </span>
-          <div className="pointer-events-none min-w-0">
+          <div className="pointer-events-none min-w-0 text-right">
             <ToolCountLabel usage={props.usage} />
+          </div>
+          <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
+            Tokens
+          </span>
+          <div className="pointer-events-none min-w-0 text-right">
+            <TokenEstimateLabel usage={props.usage} />
+          </div>
+          <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
+            Share
+          </span>
+          <div className="pointer-events-none flex min-w-0 items-center justify-end gap-2">
+            <ToolShareLabel color={color} share={share} />
           </div>
           <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
             Auth
@@ -542,6 +564,7 @@ function ToolSourceRow(props: {
 
       <div className="pointer-events-none relative z-20 hidden min-w-0 lg:block">
         <div className="flex min-w-0 items-center gap-2">
+          <DataSwatch color={color} />
           <strong className="truncate font-medium">{props.name}</strong>
           <Badge className="shrink-0" variant="outline">
             MCP
@@ -552,17 +575,21 @@ function ToolSourceRow(props: {
         </p>
       </div>
       <div className="pointer-events-none relative z-20 hidden lg:block">
-        <Badge className="font-mono" variant="secondary">
-          {toolSourceTypeLabel(entryTypeOf(props.entry))}
-        </Badge>
+        <ToolTypeBadge type={entryType} />
       </div>
       <div className="pointer-events-none relative z-20 hidden min-w-0 lg:grid">
         <code className="block min-w-0 truncate rounded-md bg-muted px-2 py-1.5 font-mono text-xs text-muted-foreground">
           {summaryOf(props.entry)}
         </code>
       </div>
-      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:grid">
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:grid">
         <ToolCountLabel usage={props.usage} />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:grid">
+        <TokenEstimateLabel usage={props.usage} />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:flex lg:items-center lg:justify-end">
+        <ToolShareLabel color={color} share={share} />
       </div>
       <div className="relative z-30 hidden lg:flex lg:flex-wrap lg:items-center lg:gap-2">
         <AuthStatusControl
@@ -573,6 +600,29 @@ function ToolSourceRow(props: {
         />
       </div>
     </div>
+  );
+}
+
+type RowShare = { total: number; value: number };
+
+function DataSwatch(props: { color: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block size-2.5 shrink-0 rounded-[3px]"
+      style={{ backgroundColor: props.color }}
+    />
+  );
+}
+
+function ToolTypeBadge(props: { type: EntryType }) {
+  const color = toolSourceTypeColor(props.type);
+
+  return (
+    <Badge className="gap-1.5 font-mono" variant="secondary">
+      <DataSwatch color={color} />
+      {toolSourceTypeLabel(props.type)}
+    </Badge>
   );
 }
 
@@ -587,6 +637,55 @@ function ToolCountLabel(props: { usage?: ServerToolTokenEstimate }) {
       </span>
     </span>
   );
+}
+
+function TokenEstimateLabel(props: { usage?: ServerToolTokenEstimate }) {
+  if (!props.usage) {
+    return <span className="block min-w-0 font-mono text-xs text-muted-foreground">N/A</span>;
+  }
+  return (
+    <span className="block min-w-0" title="Estimated prompt tokens saved by this source">
+      <span className="block truncate font-mono text-xs">
+        {formatTokenEstimate(props.usage.estimatedTokens)}
+      </span>
+    </span>
+  );
+}
+
+function ToolShareLabel(props: { color: string; share: RowShare | null }) {
+  if (!props.share) {
+    return <span className="block min-w-0 font-mono text-xs text-muted-foreground">N/A</span>;
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-3">
+      <ShareBar color={props.color} total={props.share.total} value={props.share.value} />
+      <span className="w-9 text-right font-mono text-xs">
+        {sharePercent(props.share.value, props.share.total)}%
+      </span>
+    </div>
+  );
+}
+
+function toolSourceShare(
+  usage: ServerToolTokenEstimate | undefined,
+  totalEstimatedTokens: number,
+  totalToolCount: number,
+): RowShare | null {
+  if (!usage) return null;
+  if (totalEstimatedTokens > 0) {
+    return { total: totalEstimatedTokens, value: usage.estimatedTokens };
+  }
+  if (totalToolCount > 0) {
+    return { total: totalToolCount, value: usage.toolCount };
+  }
+  return null;
+}
+
+function toolSourceTypeColor(type: EntryType): string {
+  if (type === "http") return "var(--color-ctx-memory)";
+  if (type === "sse") return "var(--color-ctx-user-input)";
+  return "var(--color-ctx-tools)";
 }
 
 function formatScopeTokenSummary(input: {

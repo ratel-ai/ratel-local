@@ -11,7 +11,8 @@ import {
   PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/page-header";
-import { type SkillSource, SourceIcon } from "@/components/source-icon";
+import { ShareBar, sharePercent } from "@/components/share-bar";
+import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { SkillSummary, SkillsResponse } from "@/lib/skills";
+import { cn } from "@/lib/utils";
 
 type LoadState =
   | { status: "loading" }
@@ -180,7 +182,6 @@ export function SkillsPage() {
         <SkillSection
           title="Managed by Ratel"
           caption="Served through the gateway. Stop managing one to return it to its agent."
-          iconSource="ratel"
           onView={openSkill}
           skills={managed}
           renderAction={(skill) =>
@@ -215,14 +216,14 @@ export function SkillsPage() {
 }
 
 const PAGE_SIZE = 8;
+const SKILL_ROW_GRID = "lg:grid-cols-[minmax(14rem,1.25fr)_10rem_minmax(12rem,0.9fr)_11rem_9rem]";
+const CODEX_SOURCE_COLOR = "#3941FF";
+const CLAUDE_CODE_SOURCE_COLOR = "#D97757";
 
 function SkillSection(props: {
   title: string;
   caption: string;
   skills: SkillSummary[];
-  /** Override the per-row source badge (e.g. force the Ratel mark for managed
-   *  skills, which are hosted by Ratel regardless of where they came from). */
-  iconSource?: SkillSource;
   onView: (id: string) => void;
   renderAction: (skill: SkillSummary) => ReactNode;
 }) {
@@ -231,6 +232,7 @@ function SkillSection(props: {
   const safePage = Math.min(page, pageCount - 1);
   const start = safePage * PAGE_SIZE;
   const visible = props.skills.slice(start, start + PAGE_SIZE);
+  const sourceCounts = countSkillsBySource(props.skills);
 
   return (
     <section className="grid gap-2">
@@ -240,39 +242,32 @@ function SkillSection(props: {
         </h2>
         <p className="text-muted-foreground text-xs">{props.caption}</p>
       </div>
-      <ul className="grid gap-2">
-        {visible.map((skill) => (
-          <li
-            key={`${skill.source}:${skill.id}`}
-            className="flex items-center gap-3 rounded-md border border-border bg-card p-3"
-          >
-            <SourceIcon source={props.iconSource ?? skill.source} />
-            <button
-              className="min-w-0 flex-1 text-left"
-              onClick={() => props.onView(skill.id)}
-              type="button"
-            >
-              <strong className="block truncate font-medium hover:underline">{skill.name}</strong>
-              {skill.description && (
-                <p className="mt-1 text-muted-foreground text-sm">{skill.description}</p>
-              )}
-              {skill.tags.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {skill.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </button>
-            <div className="shrink-0">{props.renderAction(skill)}</div>
-          </li>
-        ))}
-      </ul>
+      <div className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
+        <div
+          className={cn(
+            "hidden gap-3 border-border border-b bg-muted/30 px-4 py-2 font-mono text-xs text-muted-foreground uppercase sm:px-6 lg:grid",
+            SKILL_ROW_GRID,
+          )}
+        >
+          <span>Skill</span>
+          <span>Source</span>
+          <span className="text-right">Tags</span>
+          <span className="text-right">Source Share</span>
+          <span>Action</span>
+        </div>
+        <div className="divide-border divide-y">
+          {visible.map((skill) => (
+            <SkillRow
+              key={`${skill.source}:${skill.id}`}
+              skill={skill}
+              sourceCount={sourceCounts[skill.source]}
+              totalCount={props.skills.length}
+              onView={props.onView}
+              renderAction={props.renderAction}
+            />
+          ))}
+        </div>
+      </div>
       {pageCount > 1 && (
         <div className="flex items-center justify-between px-1 text-muted-foreground text-xs">
           <span>
@@ -303,6 +298,164 @@ function SkillSection(props: {
       )}
     </section>
   );
+}
+
+function SkillRow(props: {
+  onView: (id: string) => void;
+  renderAction: (skill: SkillSummary) => ReactNode;
+  skill: SkillSummary;
+  sourceCount: number;
+  totalCount: number;
+}) {
+  const color = skillSourceColor(props.skill.source);
+
+  return (
+    <div
+      className={cn(
+        "relative grid gap-3 px-4 py-3 text-sm transition-colors hover:bg-muted/30 sm:px-6 lg:grid lg:items-center",
+        SKILL_ROW_GRID,
+      )}
+    >
+      <button
+        aria-label={`Open ${props.skill.name}`}
+        className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+        onClick={() => props.onView(props.skill.id)}
+        type="button"
+      />
+      <div className="relative z-20 grid min-w-0 gap-3 lg:hidden">
+        <div className="pointer-events-none flex min-w-0 items-start gap-2">
+          <DataSwatch color={color} />
+          <div className="min-w-0 flex-1 text-left">
+            <strong className="block truncate font-medium hover:underline">
+              {props.skill.name}
+            </strong>
+            {props.skill.description && (
+              <p className="mt-1 line-clamp-2 text-muted-foreground">{props.skill.description}</p>
+            )}
+          </div>
+        </div>
+        <div className="pointer-events-none grid min-w-0 grid-cols-[5.75rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+          <span className="font-mono text-xs text-muted-foreground uppercase">Source</span>
+          <SkillSourceLabel source={props.skill.source} />
+          <span className="font-mono text-xs text-muted-foreground uppercase">Tags</span>
+          <div className="min-w-0 text-right">
+            <SkillTagLabel tags={props.skill.tags} />
+          </div>
+          <span className="font-mono text-xs text-muted-foreground uppercase">Share</span>
+          <div className="flex min-w-0 items-center justify-end gap-2">
+            <SkillShareLabel
+              color={color}
+              sourceCount={props.sourceCount}
+              totalCount={props.totalCount}
+            />
+          </div>
+          <div className="pointer-events-auto relative z-30 col-start-2 flex justify-end">
+            {props.renderAction(props.skill)}
+          </div>
+        </div>
+      </div>
+
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:block">
+        <div className="flex min-w-0 items-center gap-2">
+          <DataSwatch color={color} />
+          <div className="min-w-0 text-left">
+            <strong className="block truncate font-medium hover:underline">
+              {props.skill.name}
+            </strong>
+          </div>
+        </div>
+        {props.skill.description && (
+          <p className="mt-1 line-clamp-2 text-muted-foreground">{props.skill.description}</p>
+        )}
+      </div>
+      <div className="pointer-events-none relative z-20 hidden lg:block">
+        <SkillSourceLabel source={props.skill.source} />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:block">
+        <SkillTagLabel tags={props.skill.tags} />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:flex lg:items-center lg:justify-end">
+        <SkillShareLabel
+          color={color}
+          sourceCount={props.sourceCount}
+          totalCount={props.totalCount}
+        />
+      </div>
+      <div className="relative z-30 hidden lg:flex lg:justify-start">
+        {props.renderAction(props.skill)}
+      </div>
+    </div>
+  );
+}
+
+function SkillSourceLabel(props: { source: SkillSource }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <SourceIcon source={props.source} />
+      <span className="truncate font-medium">{sourceLabel(props.source)}</span>
+    </span>
+  );
+}
+
+function SkillTagLabel(props: { tags: string[] }) {
+  if (props.tags.length === 0) {
+    return <span className="font-mono text-xs text-muted-foreground">0 tags</span>;
+  }
+
+  return (
+    <div className="grid justify-items-end gap-1">
+      <span className="font-mono text-xs">{props.tags.length} tags</span>
+      <div className="flex max-w-full flex-wrap justify-end gap-1">
+        {props.tags.slice(0, 2).map((tag) => (
+          <span
+            className="max-w-24 truncate rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
+            key={tag}
+            title={tag}
+          >
+            {tag}
+          </span>
+        ))}
+        {props.tags.length > 2 && (
+          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs">
+            +{props.tags.length - 2}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SkillShareLabel(props: { color: string; sourceCount: number; totalCount: number }) {
+  return (
+    <div className="flex items-center justify-end gap-3">
+      <ShareBar color={props.color} total={props.totalCount} value={props.sourceCount} />
+      <span className="w-9 text-right font-mono text-xs">
+        {sharePercent(props.sourceCount, props.totalCount)}%
+      </span>
+    </div>
+  );
+}
+
+function DataSwatch(props: { color: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block size-2.5 shrink-0 rounded-[3px]"
+      style={{ backgroundColor: props.color }}
+    />
+  );
+}
+
+function countSkillsBySource(skills: readonly SkillSummary[]): Record<SkillSource, number> {
+  const counts: Record<SkillSource, number> = { claude: 0, codex: 0, ratel: 0 };
+  for (const skill of skills) counts[skill.source] += 1;
+  return counts;
+}
+
+function skillSourceColor(source: SkillSource): string {
+  if (source === "claude") return CLAUDE_CODE_SOURCE_COLOR;
+  if (source === "codex") return CODEX_SOURCE_COLOR;
+  return "var(--color-ctx-skills)";
 }
 
 function EmptyState(props: { title: string; description: string; children?: ReactNode }) {
