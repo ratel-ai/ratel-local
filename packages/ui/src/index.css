@@ -35,8 +35,8 @@
  * `--color-ctx-*` context-source charts. Mirrors @ratel/brand/theme.css.
  */
 @theme {
-  --color-base: #0a0e0c;
-  --color-base-deep: #070a08;
+  --color-ratel-base: #0a0e0c;
+  --color-ratel-base-deep: #070a08;
   --color-forest: #181f1a;
   --color-forest-600: #111613;
   --color-forest-300: #29312c;
@@ -365,7 +365,7 @@ textarea {
  */
 .dark {
   color-scheme: dark;
-  --background: var(--color-base);
+  --background: var(--color-ratel-base);
   --foreground: var(--color-cream);
   --card: var(--color-forest-600);
   --card-foreground: var(--color-cream);
@@ -375,7 +375,7 @@ textarea {
   --primary-foreground: #ffffff;
   --secondary: var(--color-forest);
   --secondary-foreground: var(--color-cream);
-  --muted: var(--color-base-deep);
+  --muted: var(--color-ratel-base-deep);
   --muted-foreground: var(--color-warm-muted);
   --accent: var(--color-forest);
   --accent-foreground: var(--color-cream);
@@ -389,7 +389,7 @@ textarea {
   --chart-3: var(--color-ctx-history);
   --chart-4: var(--color-ctx-memory);
   --chart-5: var(--color-ctx-user-input);
-  --sidebar: var(--color-base-deep);
+  --sidebar: var(--color-ratel-base-deep);
   --sidebar-foreground: var(--color-cream-dim);
   --sidebar-primary: var(--color-coral);
   --sidebar-primary-foreground: #ffffff;
