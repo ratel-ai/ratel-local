@@ -13,6 +13,7 @@ import {
   Sparkles,
   Sun,
   UserCircle,
+  Wand2,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
@@ -43,13 +44,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
+import type {
+  AgentHostKind,
+  AgentHostsResponse,
+  AgentPosture,
+  DetectedAgentHostSummary,
+} from "@/lib/agent-hosts";
+import { isOnboardingDismissed } from "@/lib/onboarding";
 import { cn } from "@/lib/utils";
 import "./App.css";
 
 export type RatelScope = "user" | "project" | "local";
 export type AuthStatus = "n/a" | "needs auth" | "expired" | "ok" | "unsupported";
-type AgentHostKind = "claude-code" | "codex";
-type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mixed";
 
 export interface ServerEntry {
   type: string;
@@ -105,56 +111,6 @@ export interface ServerToolTokenEstimate {
   lastSeen: string | null;
 }
 
-interface AgentHostDetection {
-  displayName: string;
-  present: boolean;
-  reasons: string[];
-  warnings: string[];
-}
-
-interface AgentScopePosture {
-  scope: RatelScope;
-  displayName: string;
-  path: string;
-  available: boolean;
-  posture: AgentPosture;
-  nativeEntryCount: number;
-  ratelEntryCount: number;
-  entryCount: number;
-  nativeEntryNames?: string[];
-  ratelEntryNames?: string[];
-}
-
-interface ClaudeStatuslineState {
-  settingsPath: string;
-  status: "not-installed" | "installed" | "other";
-  installed: boolean;
-  ownedByRatel: boolean;
-  command: string | null;
-  ratelEnabled: boolean;
-  ratelEnabledSources: string[];
-  warnings: string[];
-}
-
-interface DetectedAgentHostSummary {
-  kind: AgentHostKind;
-  displayName: string;
-  detection: AgentHostDetection;
-  posture: AgentPosture;
-  nativeEntryCount: number;
-  ratelEntryCount: number;
-  entryCount: number;
-  nativeEntryNames?: string[];
-  ratelEntryNames?: string[];
-  missingRatelEntryNames?: string[];
-  scopes: AgentScopePosture[];
-  statusline?: ClaudeStatuslineState;
-}
-
-interface AgentHostsResponse {
-  hosts: DetectedAgentHostSummary[];
-}
-
 export type JsonRequestInit = Omit<RequestInit, "body"> & { body?: unknown };
 type SetupIntent = { id: number; kind: "import" | "link" };
 
@@ -177,6 +133,17 @@ interface RatelAppContextValue {
 const RatelAppContext = createContext<RatelAppContextValue | null>(null);
 
 export const SCOPES: RatelScope[] = ["user", "project", "local"];
+
+/**
+ * True when Ratel has no MCP entries in any available scope — the signal used to
+ * auto-launch the onboarding flow on first run.
+ */
+export function isConfigEmpty(config: ConfigResponse): boolean {
+  return SCOPES.every((scope) => {
+    const state = config.scopes[scope];
+    return !state.available || Object.keys(state.config.mcpServers).length === 0;
+  });
+}
 
 export function AppShell() {
   const location = useLocation();
@@ -313,6 +280,16 @@ export function AppShell() {
     preventDefault: true,
   });
 
+  // First-run: send users with an empty Ratel config into the onboarding flow once the
+  // config has loaded, unless they've already dismissed it this session.
+  useEffect(() => {
+    if (!token || !config) return;
+    if (location.pathname === "/onboarding" || isOnboardingDismissed()) return;
+    if (isConfigEmpty(config)) {
+      void navigate({ to: `/onboarding?t=${encodeURIComponent(token)}` } as never);
+    }
+  }, [config, location.pathname, navigate, token]);
+
   const context: RatelAppContextValue = {
     busy,
     config,
@@ -325,6 +302,17 @@ export function AppShell() {
     openCommandMenu: () => setCommandOpen(true),
     triggerSetupIntent: (kind) => setSetupIntent({ id: Date.now(), kind }),
   };
+
+  // The onboarding flow is a dedicated, standalone experience: render it full-screen
+  // without the app header or nav rail.
+  if (location.pathname === "/onboarding") {
+    return (
+      <RatelAppContext.Provider value={context}>
+        <Outlet />
+        <Toaster />
+      </RatelAppContext.Provider>
+    );
+  }
 
   return (
     <RatelAppContext.Provider value={context}>
@@ -377,6 +365,12 @@ export function AppShell() {
         onSelectAgent={(kind) => {
           setCommandOpen(false);
           goToAgent(kind);
+        }}
+        onSetupWizard={() => {
+          setCommandOpen(false);
+          void navigate({
+            to: token ? `/onboarding?t=${encodeURIComponent(token)}` : "/onboarding",
+          } as never);
         }}
         open={commandOpen}
         setOpen={setCommandOpen}
@@ -584,6 +578,7 @@ function CommandMenu(props: {
   onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
   onSelectAgent: (kind: AgentHostKind) => void;
   onSelectToolSource: (scope: RatelScope, name: string) => void;
+  onSetupWizard: () => void;
   open: boolean;
   setOpen: (open: boolean) => void;
 }) {
@@ -680,6 +675,10 @@ function CommandMenu(props: {
             )}
             <CommandSeparator />
             <CommandGroup heading="Actions">
+              <CommandItem onSelect={props.onSetupWizard}>
+                <Wand2 />
+                Set up agents
+              </CommandItem>
               <CommandItem onSelect={props.onAddToolSource}>
                 <Plus />
                 Add tool source

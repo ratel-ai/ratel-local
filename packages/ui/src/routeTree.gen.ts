@@ -6,6 +6,7 @@ import { Route as rootRoute } from "./routes/__root";
 import { Route as AgentSetupRouteImport } from "./routes/agent-setup";
 import { Route as AgentSetupKindRouteImport } from "./routes/agent-setup.$kind";
 import { Route as IndexRouteImport } from "./routes/index";
+import { Route as OnboardingRouteImport } from "./routes/onboarding";
 import { Route as SkillsRouteImport } from "./routes/skills";
 import { Route as SkillsIdRouteImport } from "./routes/skills.$id";
 import { Route as ToolsScopeNameRouteImport } from "./routes/tools/$scope/$name";
@@ -14,6 +15,12 @@ import { Route as ToolsNewRouteImport } from "./routes/tools/new";
 const IndexRoute = IndexRouteImport.update({
   id: "/",
   path: "/",
+  getParentRoute: () => rootRoute,
+} as any);
+
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: "/onboarding",
+  path: "/onboarding",
   getParentRoute: () => rootRoute,
 } as any);
 
@@ -60,6 +67,13 @@ declare module "@tanstack/react-router" {
       path: "/";
       fullPath: "/";
       preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRoute;
+    };
+    "/onboarding": {
+      id: "/onboarding";
+      path: "/onboarding";
+      fullPath: "/onboarding";
+      preLoaderRoute: typeof OnboardingRouteImport;
       parentRoute: typeof rootRoute;
     };
     "/agent-setup": {
@@ -112,6 +126,7 @@ export const routeTree = rootRoute
     AgentSetupRoute,
     AgentSetupKindRoute,
     IndexRoute,
+    OnboardingRoute,
     SkillsRoute,
     SkillsIdRoute,
     ToolsNewRoute,

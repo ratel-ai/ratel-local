@@ -15,6 +15,18 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import useMeasure from "react-use-measure";
 import { type BackupManifest, type JsonRequestInit, type ServerEntry, useRatelApp } from "@/App";
+import {
+  AgentCountLabel,
+  AgentCoverageLabel,
+  AgentIcon,
+  AgentIconFrame,
+  agentColor,
+  agentDisplayName,
+  ClaudeStatuslineBadge,
+  LinkStatusBadge,
+  POSTURE_COPY,
+  StatusBadge,
+} from "@/components/agent-identity";
 import { SkillImportPicker, skillKey } from "@/components/import-skills-dialog";
 import {
   PageHeader,
@@ -29,7 +41,6 @@ import {
   ResponsiveToolbarButton,
   ResponsiveToolbarGroup,
 } from "@/components/responsive-toolbar";
-import { ShareBar, sharePercent } from "@/components/share-bar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,75 +53,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { availableSkillsForKind, fetchSkills, type SkillSummary } from "@/lib/skills";
+import {
+  type AgentScope,
+  agentHostsFromResponse,
+  type ClaudeStatuslineState,
+  type DetectedAgentHostSummary,
+  missingRatelEntryNames,
+  preferredHostKind,
+} from "@/lib/agent-hosts";
+import {
+  type AgentHostKind,
+  availableSkillsForKind,
+  fetchSkills,
+  type SkillSummary,
+} from "@/lib/skills";
 import { cn } from "@/lib/utils";
 
-type AgentHostKind = "claude-code" | "codex";
-type AgentScope = "user" | "project" | "local";
-type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mixed";
 type ConflictStrategy = "add-missing-only" | "replace-from-agent" | "replace-selected";
 type SetupFlow = "import" | "link";
-
-interface AgentHostDetection {
-  displayName: string;
-  present: boolean;
-  reasons: string[];
-  warnings: string[];
-}
-
-interface AgentScopePosture {
-  scope: AgentScope;
-  displayName: string;
-  path: string;
-  available: boolean;
-  posture: AgentPosture;
-  nativeEntryCount: number;
-  ratelEntryCount: number;
-  entryCount: number;
-  nativeEntryNames?: string[];
-  ratelEntryNames?: string[];
-}
-
-interface ClaudeStatuslineState {
-  settingsPath: string;
-  status: "not-installed" | "installed" | "other";
-  installed: boolean;
-  ownedByRatel: boolean;
-  command: string | null;
-  ratelEnabled: boolean;
-  ratelEnabledSources: string[];
-  warnings: string[];
-}
-
-interface DetectedAgentHostSummary {
-  kind: AgentHostKind;
-  displayName: string;
-  detection: AgentHostDetection;
-  posture: AgentPosture;
-  nativeEntryCount: number;
-  ratelEntryCount: number;
-  entryCount: number;
-  nativeEntryNames?: string[];
-  ratelEntryNames?: string[];
-  missingRatelEntryNames?: string[];
-  scopes: AgentScopePosture[];
-  statusline?: ClaudeStatuslineState;
-}
-
-interface AgentHostsResponse {
-  hosts: DetectedAgentHostSummary[];
-}
-
-function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
-  if (
-    typeof body === "object" &&
-    body !== null &&
-    Array.isArray((body as AgentHostsResponse).hosts)
-  ) {
-    return (body as AgentHostsResponse).hosts;
-  }
-  return [];
-}
 
 interface AgentCandidate {
   name: string;
@@ -157,41 +117,6 @@ interface AgentPlanPreview {
   emptyReason: string | null;
 }
 
-const POSTURE_COPY: Record<
-  AgentPosture,
-  { label: string; tone: "default" | "secondary" | "outline"; description: string }
-> = {
-  unavailable: {
-    label: "Unavailable",
-    tone: "outline",
-    description: "No config file found at known paths.",
-  },
-  empty: {
-    label: "Empty",
-    tone: "secondary",
-    description: "Config exists but has no MCP entries.",
-  },
-  "not-linked": {
-    label: "Not linked",
-    tone: "default",
-    description: "Native MCP entries exist without Ratel.",
-  },
-  "ratel-only": {
-    label: "Ratel only",
-    tone: "secondary",
-    description: "Only Ratel gateway entries are configured.",
-  },
-  mixed: {
-    label: "Mixed",
-    tone: "default",
-    description: "Native and Ratel entries are both present.",
-  },
-};
-
-const CODEX_ICON_SRC = new URL("../assets/codex-color.svg", import.meta.url).href;
-const CLAUDE_CODE_ICON_SRC = new URL("../assets/claudecode-color.svg", import.meta.url).href;
-const CODEX_SOURCE_COLOR = "#7A9DFF";
-const CLAUDE_CODE_SOURCE_COLOR = "#D97757";
 const AGENT_ROW_GRID = "lg:grid-cols-[minmax(14rem,1.1fr)_7rem_7rem_7rem_11rem_10rem]";
 const BACKUP_ROW_GRID = "lg:grid-cols-[minmax(14rem,1fr)_8rem_10rem_minmax(12rem,1fr)]";
 
@@ -201,7 +126,7 @@ const BACKUP_ROW_GRID = "lg:grid-cols-[minmax(14rem,1fr)_8rem_10rem_minmax(12rem
  * page (for the import section). Fail-soft to an empty list so a skills hiccup
  * never blocks the MCP setup flows.
  */
-function useAvailableSkills() {
+export function useAvailableSkills() {
   const { request } = useRatelApp();
   const [available, setAvailable] = useState<SkillSummary[]>([]);
   const reload = useCallback(async () => {
@@ -621,43 +546,11 @@ function AgentDirectoryCard(props: {
   );
 }
 
-function AgentCountLabel(props: { count: number; label: string; tone?: "warning" }) {
-  const hasWarning = props.tone === "warning" && props.count > 0;
-  return (
-    <span
-      className={cn(
-        "block truncate font-mono text-xs",
-        hasWarning ? "text-amber-700 dark:text-amber-400" : "text-foreground",
-      )}
-    >
-      {props.count} {props.label}
-    </span>
-  );
-}
-
-function AgentCoverageLabel(props: { color: string; total: number; value: number }) {
-  if (props.total <= 0) {
-    return <span className="font-mono text-muted-foreground text-xs">N/A</span>;
-  }
-
-  return (
-    <div className="flex items-center justify-end gap-3">
-      <ShareBar color={props.color} total={props.total} value={props.value} />
-      <span className="w-9 text-right font-mono text-xs">
-        {sharePercent(props.value, props.total)}%
-      </span>
-    </div>
-  );
-}
-
-function agentColor(kind: AgentHostKind): string {
-  return kind === "claude-code" ? CLAUDE_CODE_SOURCE_COLOR : CODEX_SOURCE_COLOR;
-}
-
-function AgentOperationPanel(props: {
+export function AgentOperationPanel(props: {
   availableSkills: SkillSummary[];
   host: DetectedAgentHostSummary;
   hostKind: AgentHostKind;
+  onApplied?: () => void;
   onScanHosts: () => Promise<void>;
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
@@ -686,6 +579,7 @@ function AgentOperationPanel(props: {
             host={props.host}
             hostKind={props.hostKind}
             key={`import:${props.hostKind}`}
+            onApplied={props.onApplied}
             onScanHosts={props.onScanHosts}
             onSkillsImported={props.onSkillsImported}
             request={props.request}
@@ -703,6 +597,7 @@ function AgentOperationPanel(props: {
             host={props.host}
             hostKind={props.hostKind}
             key={`link:${props.hostKind}`}
+            onApplied={props.onApplied}
             onScanHosts={props.onScanHosts}
             onSkillsImported={props.onSkillsImported}
             request={props.request}
@@ -803,6 +698,7 @@ function PreviewFlow(props: {
   flow: SetupFlow;
   host: DetectedAgentHostSummary;
   hostKind: AgentHostKind;
+  onApplied?: () => void;
   onScanHosts: () => Promise<void>;
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
@@ -920,6 +816,7 @@ function PreviewFlow(props: {
       if (!skillsApplied) return false;
     }
     setDialogOpen(false);
+    props.onApplied?.();
     return true;
   };
 
@@ -952,6 +849,7 @@ function PreviewFlow(props: {
       if (!linked) return false;
     }
     setDialogOpen(false);
+    props.onApplied?.();
     return true;
   };
 
@@ -2062,107 +1960,6 @@ function conflictDiffRowClassName(
 
 function diffRowKey(row: DiffRow) {
   return `${row.kind}:${row.oldLine ?? ""}:${row.newLine ?? ""}:${row.content}`;
-}
-
-function LinkStatusBadge(props: { host: DetectedAgentHostSummary }) {
-  if (props.host.posture === "unavailable") {
-    return <StatusBadge tone="muted">Unavailable</StatusBadge>;
-  }
-  if (props.host.ratelEntryCount > 0) {
-    return <StatusBadge tone="success">Linked</StatusBadge>;
-  }
-  return <StatusBadge tone="muted">Not linked</StatusBadge>;
-}
-
-function ClaudeStatuslineBadge(props: { state: ClaudeStatuslineState }) {
-  if (props.state.status === "installed") {
-    return <StatusBadge tone="success">Installed</StatusBadge>;
-  }
-  if (props.state.status === "other") {
-    return <StatusBadge tone="warning">Other configured</StatusBadge>;
-  }
-  return <StatusBadge tone="muted">Not installed</StatusBadge>;
-}
-
-function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "success" | "warning" }) {
-  const toneClass =
-    props.tone === "success"
-      ? "border-emerald-300/70 bg-emerald-50 text-emerald-900 dark:border-emerald-400/40 dark:bg-emerald-500/15 dark:text-emerald-200"
-      : props.tone === "warning"
-        ? "border-amber-300/70 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200"
-        : "border-border bg-muted text-muted-foreground";
-  const dotClass =
-    props.tone === "success"
-      ? "bg-emerald-500"
-      : props.tone === "warning"
-        ? "bg-amber-500"
-        : "bg-muted-foreground/50";
-  return (
-    <Badge className={cn("gap-1.5 rounded-full px-2 font-medium", toneClass)} variant="outline">
-      <span className={cn("size-1.5 rounded-full", dotClass)} />
-      {props.children}
-    </Badge>
-  );
-}
-
-function missingRatelEntryNames(host: DetectedAgentHostSummary): string[] {
-  return host.missingRatelEntryNames ?? [];
-}
-
-function AgentIcon(props: { kind: AgentHostKind; size?: "md" | "lg" }) {
-  const className = props.size === "lg" ? "size-16" : "size-12";
-  return (
-    <div
-      className={cn(
-        "grid shrink-0 place-items-center rounded-md border border-border bg-background",
-        className,
-      )}
-    >
-      {props.kind === "claude-code" ? <ClaudeMark /> : <CodexMark />}
-    </div>
-  );
-}
-
-function AgentIconFrame(props: { kind: AgentHostKind }) {
-  return (
-    <span className="grid size-5 shrink-0 place-items-center rounded border border-border bg-background">
-      {props.kind === "claude-code" ? (
-        <ClaudeMark className="size-3.5" />
-      ) : (
-        <CodexMark className="size-3.5" />
-      )}
-    </span>
-  );
-}
-
-function ClaudeMark(props: { className?: string } = {}) {
-  return (
-    <img
-      alt=""
-      aria-hidden="true"
-      className={cn("size-2/3", props.className)}
-      src={CLAUDE_CODE_ICON_SRC}
-    />
-  );
-}
-
-function CodexMark(props: { className?: string } = {}) {
-  return (
-    <img
-      alt=""
-      aria-hidden="true"
-      className={cn("size-2/3", props.className)}
-      src={CODEX_ICON_SRC}
-    />
-  );
-}
-
-function preferredHostKind(hosts: readonly DetectedAgentHostSummary[]): AgentHostKind {
-  return hosts.find((host) => host.detection.present)?.kind ?? hosts[0]?.kind ?? "claude-code";
-}
-
-function agentDisplayName(kind: AgentHostKind): string {
-  return kind === "claude-code" ? "Claude Code" : "Codex";
 }
 
 function toggleSelection(current: readonly string[], value: string): string[] {
