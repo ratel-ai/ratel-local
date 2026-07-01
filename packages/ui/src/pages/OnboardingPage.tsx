@@ -1,11 +1,16 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, Check, Download, LinkIcon, Sparkles } from "lucide-react";
+import { ArrowRight, Check, Download, LinkIcon, Sparkles } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { type JsonRequestInit, useRatelApp } from "@/App";
-import { AgentIcon, agentDisplayName } from "@/components/agent-identity";
+import { useRatelApp } from "@/App";
+import { agentDisplayName } from "@/components/agent-identity";
 import { RatelBadger } from "@/components/brand-logo";
 import { AgentPickCard } from "@/components/onboarding/AgentPickCard";
-import { OnboardingLayout } from "@/components/onboarding/OnboardingLayout";
+import {
+  OnboardingLayout,
+  StepFooter,
+  StepHeading,
+} from "@/components/onboarding/OnboardingLayout";
+import { SetupFlow } from "@/components/onboarding/SetupFlow";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -16,14 +21,14 @@ import {
 } from "@/lib/agent-hosts";
 import { dismissOnboarding } from "@/lib/onboarding";
 import { availableSkillsForKind, type SkillSummary } from "@/lib/skills";
-import { AgentOperationPanel, useAvailableSkills } from "@/pages/AgentSetupPage";
+import { useAvailableSkills } from "@/pages/AgentSetupPage";
 
 type OnboardingStep = "welcome" | "choose" | "setup" | "success";
 
 /**
- * Standalone first-run wizard: welcome → choose an agent → import & link → success.
- * Reuses the agent import/link machinery (`AgentOperationPanel`) so setup behaves exactly
- * like the Agent Setup page, wrapped in a focused, dedicated flow.
+ * Standalone first-run wizard: welcome → choose an agent → guided import/link → success.
+ * The setup phase (`SetupFlow`) renders the agent import scenes as first-class steps,
+ * reusing the same state machine and apply logic as the Agent Setup page dialog.
  */
 export function OnboardingPage() {
   const { available, reload: reloadSkills } = useAvailableSkills();
@@ -81,19 +86,28 @@ export function OnboardingPage() {
   }
 
   if (step === "setup") {
+    if (!selectedHost) {
+      return (
+        <OnboardingLayout onSkip={goToDashboard} progress={{ current: 1, total: 3 }}>
+          <StepHeading
+            description="Reading the agent configuration…"
+            kicker="Set up"
+            title="Set up your agent"
+          />
+        </OnboardingLayout>
+      );
+    }
     return (
-      <OnboardingLayout onSkip={goToDashboard} progress={{ current: 1, total: 3 }}>
-        <SetupStep
-          availableSkills={agentSkills}
-          host={selectedHost}
-          onApplied={() => setStep("success")}
-          onBack={() => setStep("choose")}
-          onContinue={() => setStep("success")}
-          onScanHosts={scanHosts}
-          onSkillsImported={reloadSkills}
-          request={request}
-        />
-      </OnboardingLayout>
+      <SetupFlow
+        availableSkills={agentSkills}
+        host={selectedHost}
+        onBack={() => setStep("choose")}
+        onDone={() => setStep("success")}
+        onScanHosts={scanHosts}
+        onSkillsImported={reloadSkills}
+        onSkip={goToDashboard}
+        request={request}
+      />
     );
   }
 
@@ -214,57 +228,6 @@ function ChooseAgentStep(props: {
   );
 }
 
-function SetupStep(props: {
-  availableSkills: SkillSummary[];
-  host: DetectedAgentHostSummary | null;
-  onApplied: () => void;
-  onBack: () => void;
-  onContinue: () => void;
-  onScanHosts: () => Promise<void>;
-  onSkillsImported: () => void | Promise<void>;
-  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
-}) {
-  if (!props.host) {
-    return (
-      <div className="grid gap-6">
-        <StepHeading description="Loading the agent configuration…" title="Set up your agent" />
-      </div>
-    );
-  }
-  const name = props.host.displayName ?? agentDisplayName(props.host.kind);
-  return (
-    <div className="grid gap-6">
-      <StepHeading
-        description="Import unmanaged MCP tools and skills, or link the Ratel gateway. Every change is previewed before anything is written."
-        icon={<AgentIcon kind={props.host.kind} />}
-        title={`Set up ${name}`}
-      />
-      <div className="overflow-hidden rounded-xl border border-border">
-        <div className="px-4 sm:px-6">
-          <AgentOperationPanel
-            availableSkills={props.availableSkills}
-            host={props.host}
-            hostKind={props.host.kind}
-            onApplied={props.onApplied}
-            onScanHosts={props.onScanHosts}
-            onSkillsImported={props.onSkillsImported}
-            request={props.request}
-          />
-        </div>
-      </div>
-      <StepFooter
-        onBack={props.onBack}
-        primary={
-          <Button onClick={props.onContinue} type="button" variant="outline">
-            Continue
-            <ArrowRight />
-          </Button>
-        }
-      />
-    </div>
-  );
-}
-
 function SuccessStep(props: {
   host: DetectedAgentHostSummary | null;
   onAnother: () => void;
@@ -298,28 +261,6 @@ function SuccessStep(props: {
           Set up another agent
         </Button>
       </div>
-    </div>
-  );
-}
-
-function StepHeading(props: { description: string; icon?: ReactNode; title: string }) {
-  return (
-    <div className="grid gap-2">
-      {props.icon ? <div className="mb-2 flex">{props.icon}</div> : null}
-      <h1 className="font-semibold text-2xl tracking-tight">{props.title}</h1>
-      <p className="text-muted-foreground text-sm">{props.description}</p>
-    </div>
-  );
-}
-
-function StepFooter(props: { onBack: () => void; primary: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <Button onClick={props.onBack} type="button" variant="ghost">
-        <ArrowLeft />
-        Back
-      </Button>
-      {props.primary}
     </div>
   );
 }

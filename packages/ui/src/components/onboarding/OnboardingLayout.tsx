@@ -1,3 +1,4 @@
+import { ArrowLeft } from "lucide-react";
 import type { ReactNode } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
@@ -37,6 +38,42 @@ export function OnboardingLayout(props: {
       <main className="flex flex-1 items-center justify-center px-4 pb-16 sm:px-6">
         <div className="w-full max-w-2xl">{props.children}</div>
       </main>
+    </div>
+  );
+}
+
+/** Heading for a wizard step: optional icon, an optional uppercase kicker, title, blurb. */
+export function StepHeading(props: {
+  description?: string;
+  icon?: ReactNode;
+  kicker?: string;
+  title: string;
+}) {
+  return (
+    <div className="grid gap-2">
+      {props.icon ? <div className="mb-2 flex">{props.icon}</div> : null}
+      {props.kicker ? (
+        <span className="font-mono text-muted-foreground text-xs uppercase tracking-wide">
+          {props.kicker}
+        </span>
+      ) : null}
+      <h1 className="font-semibold text-2xl tracking-tight">{props.title}</h1>
+      {props.description ? (
+        <p className="text-muted-foreground text-sm">{props.description}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Back (ghost, left) + a caller-supplied primary action (right). */
+export function StepFooter(props: { onBack: () => void; primary: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <Button onClick={props.onBack} type="button" variant="ghost">
+        <ArrowLeft />
+        Back
+      </Button>
+      {props.primary}
     </div>
   );
 }

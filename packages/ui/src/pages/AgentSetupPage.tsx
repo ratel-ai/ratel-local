@@ -92,7 +92,7 @@ interface ImportConflict {
   existing: ServerEntry;
 }
 
-interface AgentPlanPreview {
+export interface AgentPlanPreview {
   flow: SetupFlow;
   host: DetectedAgentHostSummary;
   candidates: AgentCandidate[];
@@ -693,6 +693,119 @@ function SetupActionSection(props: {
   );
 }
 
+/**
+ * The apply sequence for a preview: write Ratel config, rewrite/link the agent config, and
+ * activate selected skills — each via `runAction` (notify + refresh) and followed by a host
+ * rescan. Returns whether every step succeeded. Consumers own their own post-apply UI (the
+ * dialog reloads its preview; the onboarding flow advances to success). Shared by
+ * `PreviewFlow` and the guided onboarding `SetupFlow`.
+ */
+export function useAgentApply(props: {
+  hostKind: AgentHostKind;
+  onScanHosts: () => Promise<void>;
+  onSkillsImported: () => void | Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+}) {
+  const { runAction } = useRatelApp();
+
+  const applyRatel = async (
+    importPreview: AgentPlanPreview,
+    conflictStrategy: ConflictStrategy,
+    replaceConflicts: string[],
+  ) => {
+    const applied = await runAction("Ratel config changes applied", () =>
+      props.request("/api/agent-apply/import/ratel", {
+        method: "POST",
+        body: {
+          hostKind: props.hostKind,
+          selection: importPreview.selected,
+          conflictStrategy,
+          replaceConflicts,
+          planHash: importPreview.stageHashes.ratel,
+        },
+      }),
+    );
+    if (!applied) return false;
+    await props.onScanHosts();
+    return true;
+  };
+
+  const applyAgent = async (
+    activePreview: AgentPlanPreview,
+    flow: SetupFlow,
+    options?: { conflictStrategy?: ConflictStrategy; replaceConflicts?: string[] },
+  ) => {
+    const path = flow === "import" ? "/api/agent-apply/import/agent" : "/api/agent-apply/link";
+    const applied = await runAction(
+      flow === "import" ? "Agent config rewritten" : "Link complete",
+      () =>
+        props.request(path, {
+          method: "POST",
+          body: {
+            hostKind: props.hostKind,
+            selection: flow === "import" ? activePreview.selected : undefined,
+            conflictStrategy: flow === "import" ? options?.conflictStrategy : undefined,
+            replaceConflicts: flow === "import" ? options?.replaceConflicts : undefined,
+            planHash: activePreview.stageHashes.agent,
+          },
+        }),
+    );
+    if (!applied) return false;
+    await props.onScanHosts();
+    return true;
+  };
+
+  const activateSelectedSkills = async (selectedSkills: SkillSummary[]) => {
+    const idsBySource = new Map<SkillSummary["source"], string[]>();
+    for (const skill of selectedSkills) {
+      if (skill.source !== "claude" && skill.source !== "codex") continue;
+      const ids = idsBySource.get(skill.source) ?? [];
+      ids.push(skill.id);
+      idsBySource.set(skill.source, ids);
+    }
+    const applied = await runAction(
+      `Now managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"}`,
+      async () => {
+        for (const [source, ids] of idsBySource) {
+          await props.request("/api/skills/activate", { method: "POST", body: { ids, source } });
+        }
+      },
+    );
+    if (!applied) return false;
+    await props.onSkillsImported();
+    return true;
+  };
+
+  const commitImport = async (
+    importPreview: AgentPlanPreview,
+    conflictStrategy: ConflictStrategy,
+    replaceConflicts: string[],
+    selectedSkills: SkillSummary[],
+  ) => {
+    if (importPreview.plan.ratelChanges.length > 0) {
+      if (!(await applyRatel(importPreview, conflictStrategy, replaceConflicts))) return false;
+    }
+    if (importPreview.plan.agentChanges.length > 0) {
+      if (!(await applyAgent(importPreview, "import", { conflictStrategy, replaceConflicts }))) {
+        return false;
+      }
+    }
+    if (selectedSkills.length > 0) {
+      if (!(await activateSelectedSkills(selectedSkills))) return false;
+    }
+    return true;
+  };
+
+  const commitLink = async (linkPreview: AgentPlanPreview) => {
+    if (linkPreview.plan.agentChanges.length > 0) {
+      if (!(await applyAgent(linkPreview, "link"))) return false;
+    }
+    return true;
+  };
+
+  return { commitImport, commitLink };
+}
+
 function PreviewFlow(props: {
   availableSkills: SkillSummary[];
   flow: SetupFlow;
@@ -703,7 +816,12 @@ function PreviewFlow(props: {
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
-  const { runAction } = useRatelApp();
+  const { commitImport: applyImport, commitLink: applyLink } = useAgentApply({
+    hostKind: props.hostKind,
+    onScanHosts: props.onScanHosts,
+    onSkillsImported: props.onSkillsImported,
+    request: props.request,
+  });
   const [preview, setPreview] = useState<AgentPlanPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -735,63 +853,16 @@ function PreviewFlow(props: {
     };
   }, [previewPath, props.hostKind, props.request]);
 
-  const agentChanges = preview?.plan.agentChanges ?? [];
   const linkedAndCovered =
     props.host.ratelEntryCount > 0 && missingRatelEntryNames(props.host).length === 0;
   const friendlyNoOp = Boolean(
     preview?.emptyReason && linkedAndCovered && props.availableSkills.length === 0,
   );
 
-  const applyRatel = async (
-    importPreview: AgentPlanPreview,
-    conflictStrategy: ConflictStrategy,
-    replaceConflicts: string[],
-  ) => {
-    const applied = await runAction("Ratel config changes applied", () =>
-      props.request("/api/agent-apply/import/ratel", {
-        method: "POST",
-        body: {
-          hostKind: props.hostKind,
-          selection: importPreview.selected,
-          conflictStrategy,
-          replaceConflicts,
-          planHash: importPreview.stageHashes.ratel,
-        },
-      }),
-    );
-    if (!applied) return false;
-    await props.onScanHosts();
+  const afterApply = () => {
+    setDialogOpen(false);
     setRefreshNonce((value) => value + 1);
-    return true;
-  };
-
-  const applyAgent = async (
-    activePreview: AgentPlanPreview,
-    options?: {
-      conflictStrategy?: ConflictStrategy;
-      replaceConflicts?: string[];
-    },
-  ) => {
-    const path =
-      props.flow === "import" ? "/api/agent-apply/import/agent" : "/api/agent-apply/link";
-    const applied = await runAction(
-      props.flow === "import" ? "Agent config rewritten" : "Link complete",
-      () =>
-        props.request(path, {
-          method: "POST",
-          body: {
-            hostKind: props.hostKind,
-            selection: props.flow === "import" ? activePreview.selected : undefined,
-            conflictStrategy: props.flow === "import" ? options?.conflictStrategy : undefined,
-            replaceConflicts: props.flow === "import" ? options?.replaceConflicts : undefined,
-            planHash: activePreview.stageHashes.agent,
-          },
-        }),
-    );
-    if (!applied) return false;
-    await props.onScanHosts();
-    setRefreshNonce((value) => value + 1);
-    return true;
+    props.onApplied?.();
   };
 
   const commitImport = async (
@@ -800,56 +871,17 @@ function PreviewFlow(props: {
     replaceConflicts: string[],
     selectedSkills: SkillSummary[],
   ) => {
-    if (importPreview.plan.ratelChanges.length > 0) {
-      const ratelApplied = await applyRatel(importPreview, conflictStrategy, replaceConflicts);
-      if (!ratelApplied) return false;
-    }
-    if (importPreview.plan.agentChanges.length > 0) {
-      const agentApplied = await applyAgent(importPreview, {
-        conflictStrategy,
-        replaceConflicts,
-      });
-      if (!agentApplied) return false;
-    }
-    if (selectedSkills.length > 0) {
-      const skillsApplied = await activateSelectedSkills(selectedSkills);
-      if (!skillsApplied) return false;
-    }
-    setDialogOpen(false);
-    props.onApplied?.();
-    return true;
-  };
-
-  const activateSelectedSkills = async (selectedSkills: SkillSummary[]) => {
-    const idsBySource = new Map<SkillSummary["source"], string[]>();
-    for (const skill of selectedSkills) {
-      if (skill.source !== "claude" && skill.source !== "codex") continue;
-      const ids = idsBySource.get(skill.source) ?? [];
-      ids.push(skill.id);
-      idsBySource.set(skill.source, ids);
-    }
-    const applied = await runAction(
-      `Now managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"}`,
-      async () => {
-        for (const [source, ids] of idsBySource) {
-          await props.request("/api/skills/activate", { method: "POST", body: { ids, source } });
-        }
-      },
-    );
-    if (!applied) return false;
-    await props.onSkillsImported();
-    setRefreshNonce((value) => value + 1);
+    const ok = await applyImport(importPreview, conflictStrategy, replaceConflicts, selectedSkills);
+    if (!ok) return false;
+    afterApply();
     return true;
   };
 
   const commitLink = async () => {
     if (!preview) return false;
-    if (agentChanges.length > 0) {
-      const linked = await applyAgent(preview);
-      if (!linked) return false;
-    }
-    setDialogOpen(false);
-    props.onApplied?.();
+    const ok = await applyLink(preview);
+    if (!ok) return false;
+    afterApply();
     return true;
   };
 
@@ -1084,29 +1116,179 @@ function importAvailabilityLabel(mcpCount: number, skillCount: number) {
   return `${parts.join(" and ")} available.`;
 }
 
-type ImportScene = "skills" | "entries" | "strategy" | "pick-conflicts" | "review";
+// --- Import/link scene bodies -------------------------------------------------
+// Content-only components (no footer/chrome) shared by the ImportSceneDialog on the
+// Agent Setup page and the guided onboarding SetupFlow. Each renders one scene.
 
-function ImportSceneDialog(props: {
+export function ImportSkillsScene(props: {
+  onToggle: (skill: SkillSummary) => void;
+  onToggleAll: (skills: SkillSummary[], shouldSelect: boolean) => void;
+  resetKey: string;
+  selected: Set<string>;
+  skills: SkillSummary[];
+}) {
+  return (
+    <div className="grid gap-3">
+      {props.skills.length > 0 ? (
+        <div className="grid">
+          <SkillImportPicker
+            className="[&_[data-skill-scroll]]:max-h-72"
+            flushScroll
+            onToggle={props.onToggle}
+            onToggleAll={props.onToggleAll}
+            resetKey={props.resetKey}
+            selected={props.selected}
+            skills={props.skills}
+            title="Skills"
+          />
+        </div>
+      ) : (
+        <p className="rounded-md border border-border px-3 py-6 text-center text-muted-foreground text-sm">
+          No external skills to manage for this agent.
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function ImportEntriesScene(props: {
+  candidates: AgentCandidate[];
+  onToggle: (name: string) => void;
+  selected: Set<string>;
+}) {
+  if (props.candidates.length === 0) return null;
+  return (
+    <SceneScrollSection className="max-h-72">
+      {props.candidates.map((candidate) => {
+        const isSelected = props.selected.has(candidate.name);
+        return (
+          <button
+            className={cn(
+              "grid w-full gap-1 border-border border-b px-3 py-2 text-left transition-colors last:border-b-0",
+              isSelected ? "bg-brand-green/10" : "bg-background hover:bg-muted/35",
+            )}
+            key={`${candidate.scope}:${candidate.name}`}
+            onClick={() => props.onToggle(candidate.name)}
+            type="button"
+          >
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-2">
+                <Checkbox checked={isSelected} className="pointer-events-none" tabIndex={-1} />
+                <span className="truncate font-medium">{candidate.name}</span>
+              </span>
+              <Badge variant="outline">{candidate.scope}</Badge>
+            </div>
+            <span className="truncate pl-6 text-xs text-muted-foreground">
+              {summarizeEntry(candidate.entry)}
+            </span>
+          </button>
+        );
+      })}
+    </SceneScrollSection>
+  );
+}
+
+export function ImportStrategyScene(props: {
+  onChange: (strategy: ConflictStrategy) => void;
+  strategy: ConflictStrategy;
+}) {
+  return (
+    <div className="grid gap-2">
+      <ConflictStrategyButton
+        active={props.strategy === "add-missing-only"}
+        detail="Leave existing Ratel entries unchanged and import only new names."
+        label="Import new only"
+        onClick={() => props.onChange("add-missing-only")}
+      />
+      <ConflictStrategyButton
+        active={props.strategy === "replace-from-agent"}
+        detail="Use the agent version for every matching name."
+        label="Use all agent versions"
+        onClick={() => props.onChange("replace-from-agent")}
+      />
+      <ConflictStrategyButton
+        active={props.strategy === "replace-selected"}
+        detail="Pick which matching names should use the agent version."
+        label="Choose per entry"
+        onClick={() => props.onChange("replace-selected")}
+      />
+    </div>
+  );
+}
+
+export function ImportConflictsScene(props: {
+  conflicts: ImportConflict[];
+  onToggleReplace: (key: string) => void;
+  replaceConflicts: Set<string>;
+}) {
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm text-muted-foreground">
+        Selected entries will overwrite the matching Ratel entry. Unselected entries keep the
+        current Ratel version.
+      </p>
+      <SceneScrollSection className="grid max-h-80 gap-2">
+        <ConflictPickList
+          conflicts={props.conflicts}
+          onToggleReplace={props.onToggleReplace}
+          replaceConflicts={props.replaceConflicts}
+        />
+      </SceneScrollSection>
+    </div>
+  );
+}
+
+export function ImportReviewScene(props: {
+  hostDisplayName: string;
+  preview: AgentPlanPreview;
+  selectedSkills: SkillSummary[];
+}) {
+  return (
+    <SceneScrollSection className="grid max-h-[65vh] gap-4">
+      <ChangeList changes={props.preview.plan.ratelChanges} defaultOpen title="Ratel config" />
+      <ChangeList
+        changes={props.preview.plan.agentChanges}
+        defaultOpen
+        title={`${props.hostDisplayName} config`}
+      />
+      <SkillActivationReview skills={props.selectedSkills} />
+    </SceneScrollSection>
+  );
+}
+
+export function LinkReviewScene(props: { preview: AgentPlanPreview }) {
+  return (
+    <SceneScrollSection className="max-h-[65vh]">
+      <ChangeList
+        changes={props.preview.plan.agentChanges}
+        defaultOpen
+        title={`${props.preview.host.displayName} changes`}
+      />
+    </SceneScrollSection>
+  );
+}
+
+export type ImportScene = "skills" | "entries" | "strategy" | "pick-conflicts" | "review";
+
+/**
+ * Owns the import draft: the working selection/skill/conflict state, the preview that is
+ * re-fetched from `/api/agent-preview/import` as those change, and the derived flags +
+ * ordered `activeScenes` list. Shared by the ImportSceneDialog (Agent Setup page) and the
+ * guided onboarding SetupFlow so both drive the exact same state machine.
+ */
+export function useImportDraft(props: {
+  active: boolean;
   hostKind: AgentHostKind;
-  onCommit: (
-    preview: AgentPlanPreview,
-    conflictStrategy: ConflictStrategy,
-    replaceConflicts: string[],
-    selectedSkills: SkillSummary[],
-  ) => Promise<boolean>;
-  onOpenChange: (open: boolean) => void;
-  open: boolean;
   preview: AgentPlanPreview;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   skills: SkillSummary[];
 }) {
-  const [scene, setScene] = useState<ImportScene>("skills");
-  const [committing, setCommitting] = useState(false);
   const [draftPreview, setDraftPreview] = useState<AgentPlanPreview>(props.preview);
   const [draftSelection, setDraftSelection] = useState<string[]>(props.preview.selected);
   const [draftSkillSelection, setDraftSkillSelection] = useState<Set<string>>(new Set());
   const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("add-missing-only");
   const [replaceConflicts, setReplaceConflicts] = useState<string[]>([]);
+
   const selected = new Set(draftSelection);
   const selectedSkills = props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill)));
   const conflicts = draftPreview.plan.summary.conflicts;
@@ -1115,29 +1297,18 @@ function ImportSceneDialog(props: {
   const hasSelectedImport = draftSelection.length > 0 || selectedSkills.length > 0;
   const hasSelectableEntries = props.preview.candidates.length > 0;
   const canLeaveSkills = selectedSkills.length > 0 || hasSelectableEntries;
-  const goAfterSkills = () => setScene(hasSelectableEntries ? "entries" : "review");
-  const goAfterEntries = () =>
-    setScene(draftSelection.length > 0 && conflicts.length > 0 ? "strategy" : "review");
-  const goAfterStrategy = () =>
-    setScene(conflictStrategy === "replace-selected" ? "pick-conflicts" : "review");
-  const previousReviewScene = () => {
-    if (requiresConflictSelection) return "pick-conflicts";
-    if (draftSelection.length > 0 && conflicts.length > 0) return "strategy";
-    if (hasSelectableEntries) return "entries";
-    return "skills";
-  };
 
   useEffect(() => {
-    if (!props.open) return;
+    if (!props.active) return;
     setDraftPreview(props.preview);
     setDraftSelection(props.preview.selected);
     setDraftSkillSelection(new Set());
     setConflictStrategy("add-missing-only");
     setReplaceConflicts([]);
-  }, [props.open, props.preview]);
+  }, [props.active, props.preview]);
 
   useEffect(() => {
-    if (!props.open) return;
+    if (!props.active) return;
     let cancelled = false;
     const loadDraftPreview = async () => {
       const body = await props.request<AgentPlanPreview>("/api/agent-preview/import", {
@@ -1158,20 +1329,11 @@ function ImportSceneDialog(props: {
   }, [
     conflictStrategy,
     draftSelection,
+    props.active,
     props.hostKind,
-    props.open,
     props.request,
     replaceConflicts,
   ]);
-
-  const commit = async () => {
-    setCommitting(true);
-    try {
-      await props.onCommit(draftPreview, conflictStrategy, replaceConflicts, selectedSkills);
-    } finally {
-      setCommitting(false);
-    }
-  };
 
   const toggleSkill = (skill: SkillSummary) => {
     setDraftSkillSelection((current) => {
@@ -1193,6 +1355,107 @@ function ImportSceneDialog(props: {
       }
       return next;
     });
+  };
+
+  const toggleEntry = (name: string) =>
+    setDraftSelection((current) => toggleSelection(current, name));
+  const toggleReplaceConflict = (key: string) =>
+    setReplaceConflicts((current) => toggleSelection(current, key));
+
+  // Ordered list of scenes that actually apply given the current selection/conflicts.
+  // (An empty Skills scene is dropped so guided consumers don't show a dead step.)
+  const activeScenes: ImportScene[] = [];
+  if (props.skills.length > 0) activeScenes.push("skills");
+  if (hasSelectableEntries) activeScenes.push("entries");
+  if (draftSelection.length > 0 && conflicts.length > 0) activeScenes.push("strategy");
+  if (requiresConflictSelection) activeScenes.push("pick-conflicts");
+  activeScenes.push("review");
+
+  return {
+    activeScenes,
+    canLeaveSkills,
+    conflicts,
+    conflictStrategy,
+    draftPreview,
+    draftSelection,
+    draftSkillSelection,
+    hasSelectableEntries,
+    hasSelectedImport,
+    replaceConflicts,
+    requiresConflictSelection,
+    selected,
+    selectedSkills,
+    setConflictStrategy,
+    setDraftSelection,
+    setReplaceConflicts,
+    toggleEntry,
+    toggleReplaceConflict,
+    toggleSkill,
+    toggleSkills,
+  };
+}
+
+function ImportSceneDialog(props: {
+  hostKind: AgentHostKind;
+  onCommit: (
+    preview: AgentPlanPreview,
+    conflictStrategy: ConflictStrategy,
+    replaceConflicts: string[],
+    selectedSkills: SkillSummary[],
+  ) => Promise<boolean>;
+  onOpenChange: (open: boolean) => void;
+  open: boolean;
+  preview: AgentPlanPreview;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+  skills: SkillSummary[];
+}) {
+  const [scene, setScene] = useState<ImportScene>("skills");
+  const [committing, setCommitting] = useState(false);
+  const {
+    canLeaveSkills,
+    conflicts,
+    conflictStrategy,
+    draftPreview,
+    draftSelection,
+    draftSkillSelection,
+    hasSelectableEntries,
+    hasSelectedImport,
+    replaceConflicts,
+    requiresConflictSelection,
+    selected,
+    selectedSkills,
+    setConflictStrategy,
+    setDraftSelection,
+    setReplaceConflicts,
+    toggleSkill,
+    toggleSkills,
+  } = useImportDraft({
+    active: props.open,
+    hostKind: props.hostKind,
+    preview: props.preview,
+    request: props.request,
+    skills: props.skills,
+  });
+
+  const goAfterSkills = () => setScene(hasSelectableEntries ? "entries" : "review");
+  const goAfterEntries = () =>
+    setScene(draftSelection.length > 0 && conflicts.length > 0 ? "strategy" : "review");
+  const goAfterStrategy = () =>
+    setScene(conflictStrategy === "replace-selected" ? "pick-conflicts" : "review");
+  const previousReviewScene = () => {
+    if (requiresConflictSelection) return "pick-conflicts";
+    if (draftSelection.length > 0 && conflicts.length > 0) return "strategy";
+    if (hasSelectableEntries) return "entries";
+    return "skills";
+  };
+
+  const commit = async () => {
+    setCommitting(true);
+    try {
+      await props.onCommit(draftPreview, conflictStrategy, replaceConflicts, selectedSkills);
+    } finally {
+      setCommitting(false);
+    }
   };
 
   return (
@@ -1221,26 +1484,13 @@ function ImportSceneDialog(props: {
           kicker="Skills"
           title="Choose skills"
         >
-          <div className="grid gap-3">
-            {props.skills.length > 0 ? (
-              <div className="grid">
-                <SkillImportPicker
-                  className="[&_[data-skill-scroll]]:max-h-72"
-                  flushScroll
-                  onToggle={toggleSkill}
-                  onToggleAll={toggleSkills}
-                  resetKey={`${props.open}:${props.skills.length}`}
-                  selected={draftSkillSelection}
-                  skills={props.skills}
-                  title="Skills"
-                />
-              </div>
-            ) : (
-              <p className="rounded-md border border-border px-3 py-6 text-center text-muted-foreground text-sm">
-                No external skills to manage for this agent.
-              </p>
-            )}
-          </div>
+          <ImportSkillsScene
+            onToggle={toggleSkill}
+            onToggleAll={toggleSkills}
+            resetKey={`${props.open}:${props.skills.length}`}
+            selected={draftSkillSelection}
+            skills={props.skills}
+          />
         </ScenePanel>
       ) : null}
       {scene === "entries" ? (
@@ -1259,43 +1509,11 @@ function ImportSceneDialog(props: {
           kicker="Tools"
           title="Choose tool entries"
         >
-          <div className="grid gap-3">
-            {props.preview.candidates.length > 0 ? (
-              <SceneScrollSection className="max-h-72">
-                {props.preview.candidates.map((candidate) => {
-                  const isSelected = selected.has(candidate.name);
-                  return (
-                    <button
-                      className={cn(
-                        "grid w-full gap-1 border-border border-b px-3 py-2 text-left transition-colors last:border-b-0",
-                        isSelected ? "bg-brand-green/10" : "bg-background hover:bg-muted/35",
-                      )}
-                      key={`${candidate.scope}:${candidate.name}`}
-                      onClick={() =>
-                        setDraftSelection((current) => toggleSelection(current, candidate.name))
-                      }
-                      type="button"
-                    >
-                      <div className="flex min-w-0 items-center justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-2">
-                          <Checkbox
-                            checked={isSelected}
-                            className="pointer-events-none"
-                            tabIndex={-1}
-                          />
-                          <span className="truncate font-medium">{candidate.name}</span>
-                        </span>
-                        <Badge variant="outline">{candidate.scope}</Badge>
-                      </div>
-                      <span className="truncate pl-6 text-xs text-muted-foreground">
-                        {summarizeEntry(candidate.entry)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </SceneScrollSection>
-            ) : null}
-          </div>
+          <ImportEntriesScene
+            candidates={props.preview.candidates}
+            onToggle={(name) => setDraftSelection((current) => toggleSelection(current, name))}
+            selected={selected}
+          />
         </ScenePanel>
       ) : null}
       {scene === "strategy" ? (
@@ -1313,26 +1531,7 @@ function ImportSceneDialog(props: {
           kicker="Conflicts"
           title="Resolve matching names"
         >
-          <div className="grid gap-2">
-            <ConflictStrategyButton
-              active={conflictStrategy === "add-missing-only"}
-              detail="Leave existing Ratel entries unchanged and import only new names."
-              label="Import new only"
-              onClick={() => setConflictStrategy("add-missing-only")}
-            />
-            <ConflictStrategyButton
-              active={conflictStrategy === "replace-from-agent"}
-              detail="Use the agent version for every matching name."
-              label="Use all agent versions"
-              onClick={() => setConflictStrategy("replace-from-agent")}
-            />
-            <ConflictStrategyButton
-              active={conflictStrategy === "replace-selected"}
-              detail="Pick which matching names should use the agent version."
-              label="Choose per entry"
-              onClick={() => setConflictStrategy("replace-selected")}
-            />
-          </div>
+          <ImportStrategyScene onChange={setConflictStrategy} strategy={conflictStrategy} />
         </ScenePanel>
       ) : null}
       {scene === "pick-conflicts" ? (
@@ -1351,21 +1550,13 @@ function ImportSceneDialog(props: {
           kicker="Conflicts"
           title="Pick agent versions"
         >
-          <div className="grid gap-3">
-            <p className="text-sm text-muted-foreground">
-              Selected entries will overwrite the matching Ratel entry. Unselected entries keep the
-              current Ratel version.
-            </p>
-            <SceneScrollSection className="grid max-h-80 gap-2">
-              <ConflictPickList
-                conflicts={conflicts}
-                onToggleReplace={(key) =>
-                  setReplaceConflicts((current) => toggleSelection(current, key))
-                }
-                replaceConflicts={new Set(replaceConflicts)}
-              />
-            </SceneScrollSection>
-          </div>
+          <ImportConflictsScene
+            conflicts={conflicts}
+            onToggleReplace={(key) =>
+              setReplaceConflicts((current) => toggleSelection(current, key))
+            }
+            replaceConflicts={new Set(replaceConflicts)}
+          />
         </ScenePanel>
       ) : null}
       {scene === "review" ? (
@@ -1394,15 +1585,11 @@ function ImportSceneDialog(props: {
           title="Review import"
           wide
         >
-          <SceneScrollSection className="grid max-h-[65vh] gap-4">
-            <ChangeList changes={draftPreview.plan.ratelChanges} defaultOpen title="Ratel config" />
-            <ChangeList
-              changes={draftPreview.plan.agentChanges}
-              defaultOpen
-              title={`${props.preview.host.displayName} config`}
-            />
-            <SkillActivationReview skills={selectedSkills} />
-          </SceneScrollSection>
+          <ImportReviewScene
+            hostDisplayName={props.preview.host.displayName}
+            preview={draftPreview}
+            selectedSkills={selectedSkills}
+          />
         </ScenePanel>
       ) : null}
     </SceneDialog>
@@ -1444,13 +1631,7 @@ function LinkSceneDialog(props: {
         title="Review config changes"
         wide
       >
-        <SceneScrollSection className="max-h-[65vh]">
-          <ChangeList
-            changes={props.preview.plan.agentChanges}
-            defaultOpen
-            title={`${props.preview.host.displayName} changes`}
-          />
-        </SceneScrollSection>
+        <LinkReviewScene preview={props.preview} />
       </ScenePanel>
     </SceneDialog>
   );
