@@ -1158,7 +1158,7 @@ export function ImportEntriesScene(props: {
 }) {
   if (props.candidates.length === 0) return null;
   return (
-    <SceneScrollSection className="max-h-72">
+    <SceneScrollSection className="max-h-72" flush>
       {props.candidates.map((candidate) => {
         const isSelected = props.selected.has(candidate.name);
         return (
@@ -1757,10 +1757,20 @@ function ScenePanel(props: {
   );
 }
 
-function SceneScrollSection(props: { children: React.ReactNode; className?: string }) {
+function SceneScrollSection(props: {
+  children: React.ReactNode;
+  className?: string;
+  flush?: boolean;
+}) {
   return (
     <div className="-mx-4 min-w-0 border-border border-t sm:-mx-5">
-      <div className={cn("min-w-0 overflow-auto px-4 py-3 sm:px-5", props.className)}>
+      <div
+        className={cn(
+          "min-w-0 overflow-auto py-3",
+          !props.flush && "px-4 sm:px-5",
+          props.className,
+        )}
+      >
         {props.children}
       </div>
     </div>
