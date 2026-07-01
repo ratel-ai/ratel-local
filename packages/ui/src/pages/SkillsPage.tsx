@@ -11,7 +11,6 @@ import {
   PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/page-header";
-import { ShareBar, sharePercent } from "@/components/share-bar";
 import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
 import { Button } from "@/components/ui/button";
 import {
@@ -216,9 +215,7 @@ export function SkillsPage() {
 }
 
 const PAGE_SIZE = 8;
-const SKILL_ROW_GRID = "lg:grid-cols-[minmax(14rem,1.25fr)_10rem_minmax(12rem,0.9fr)_11rem_9rem]";
-const CODEX_SOURCE_COLOR = "#7A9DFF";
-const CLAUDE_CODE_SOURCE_COLOR = "#D97757";
+const SKILL_ROW_GRID = "lg:grid-cols-[minmax(16rem,1.45fr)_10rem_minmax(12rem,0.9fr)_9rem]";
 
 function SkillSection(props: {
   title: string;
@@ -232,7 +229,6 @@ function SkillSection(props: {
   const safePage = Math.min(page, pageCount - 1);
   const start = safePage * PAGE_SIZE;
   const visible = props.skills.slice(start, start + PAGE_SIZE);
-  const sourceCounts = countSkillsBySource(props.skills);
 
   return (
     <section className="grid gap-2">
@@ -252,7 +248,6 @@ function SkillSection(props: {
           <span>Skill</span>
           <span>Source</span>
           <span className="text-right">Tags</span>
-          <span className="text-right">Source Share</span>
           <span>Action</span>
         </div>
         <div className="divide-border divide-y">
@@ -260,8 +255,6 @@ function SkillSection(props: {
             <SkillRow
               key={`${skill.source}:${skill.id}`}
               skill={skill}
-              sourceCount={sourceCounts[skill.source]}
-              totalCount={props.skills.length}
               onView={props.onView}
               renderAction={props.renderAction}
             />
@@ -304,11 +297,7 @@ function SkillRow(props: {
   onView: (id: string) => void;
   renderAction: (skill: SkillSummary) => ReactNode;
   skill: SkillSummary;
-  sourceCount: number;
-  totalCount: number;
 }) {
-  const color = skillSourceColor(props.skill.source);
-
   return (
     <div
       className={cn(
@@ -345,14 +334,6 @@ function SkillRow(props: {
           <div className="min-w-0 text-right">
             <SkillTagLabel tags={props.skill.tags} />
           </div>
-          <span className="font-mono text-xs text-muted-foreground uppercase">Share</span>
-          <div className="flex min-w-0 items-center justify-end gap-2">
-            <SkillShareLabel
-              color={color}
-              sourceCount={props.sourceCount}
-              totalCount={props.totalCount}
-            />
-          </div>
         </div>
       </div>
 
@@ -373,13 +354,6 @@ function SkillRow(props: {
       </div>
       <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:block">
         <SkillTagLabel tags={props.skill.tags} />
-      </div>
-      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:flex lg:items-center lg:justify-end">
-        <SkillShareLabel
-          color={color}
-          sourceCount={props.sourceCount}
-          totalCount={props.totalCount}
-        />
       </div>
       <div className="relative z-30 hidden lg:flex lg:justify-start">
         {props.renderAction(props.skill)}
@@ -423,29 +397,6 @@ function SkillTagLabel(props: { tags: string[] }) {
       </div>
     </div>
   );
-}
-
-function SkillShareLabel(props: { color: string; sourceCount: number; totalCount: number }) {
-  return (
-    <div className="flex items-center justify-end gap-3">
-      <ShareBar color={props.color} total={props.totalCount} value={props.sourceCount} />
-      <span className="w-9 text-right font-mono text-xs">
-        {sharePercent(props.sourceCount, props.totalCount)}%
-      </span>
-    </div>
-  );
-}
-
-function countSkillsBySource(skills: readonly SkillSummary[]): Record<SkillSource, number> {
-  const counts: Record<SkillSource, number> = { claude: 0, codex: 0, ratel: 0 };
-  for (const skill of skills) counts[skill.source] += 1;
-  return counts;
-}
-
-function skillSourceColor(source: SkillSource): string {
-  if (source === "claude") return CLAUDE_CODE_SOURCE_COLOR;
-  if (source === "codex") return CODEX_SOURCE_COLOR;
-  return "var(--color-ctx-skills)";
 }
 
 function EmptyState(props: { title: string; description: string; children?: ReactNode }) {

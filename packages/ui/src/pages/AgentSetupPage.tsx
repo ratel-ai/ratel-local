@@ -1119,16 +1119,11 @@ function BackupRow(props: { backup: BackupManifest; latest: boolean }) {
 }
 
 function BackupFreshnessBadge(props: { latest: boolean }) {
+  if (!props.latest) return null;
+
   return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full border px-2 py-0.5 text-xs",
-        props.latest
-          ? "border-border bg-muted text-foreground"
-          : "border-transparent text-muted-foreground",
-      )}
-    >
-      {props.latest ? "Latest" : "Previous"}
+    <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-foreground text-xs">
+      Latest
     </span>
   );
 }

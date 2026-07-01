@@ -512,7 +512,6 @@ function ToolSourceRow(props: {
       />
       <div className="relative z-20 grid min-w-0 gap-2 lg:hidden">
         <div className="pointer-events-none flex min-w-0 items-center gap-2">
-          <DataSwatch color={color} />
           <strong className="truncate font-medium">{props.name}</strong>
           <Badge className="shrink-0" variant="outline">
             MCP
@@ -564,7 +563,6 @@ function ToolSourceRow(props: {
 
       <div className="pointer-events-none relative z-20 hidden min-w-0 lg:block">
         <div className="flex min-w-0 items-center gap-2">
-          <DataSwatch color={color} />
           <strong className="truncate font-medium">{props.name}</strong>
           <Badge className="shrink-0" variant="outline">
             MCP
