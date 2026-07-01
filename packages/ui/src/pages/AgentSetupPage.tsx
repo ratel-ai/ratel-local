@@ -8,7 +8,6 @@ import {
   GitCompare,
   LinkIcon,
   RefreshCw,
-  SearchIcon,
   Sparkles,
   X,
 } from "lucide-react";
@@ -23,7 +22,6 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import {
@@ -31,10 +29,10 @@ import {
   ResponsiveToolbarButton,
   ResponsiveToolbarGroup,
 } from "@/components/responsive-toolbar";
+import { ShareBar, sharePercent } from "@/components/share-bar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DetailGrid, DetailLabel } from "@/components/ui/detail-grid";
 import {
@@ -192,6 +190,10 @@ const POSTURE_COPY: Record<
 
 const CODEX_ICON_SRC = new URL("../assets/codex-color.svg", import.meta.url).href;
 const CLAUDE_CODE_ICON_SRC = new URL("../assets/claudecode-color.svg", import.meta.url).href;
+const CODEX_SOURCE_COLOR = "#7A9DFF";
+const CLAUDE_CODE_SOURCE_COLOR = "#D97757";
+const AGENT_ROW_GRID = "lg:grid-cols-[minmax(14rem,1.1fr)_7rem_7rem_7rem_11rem_10rem]";
+const BACKUP_ROW_GRID = "lg:grid-cols-[minmax(14rem,1fr)_8rem_10rem_minmax(12rem,1fr)]";
 
 /**
  * Load the unmanaged skills available across agents (those Ratel doesn't manage
@@ -217,8 +219,7 @@ function useAvailableSkills() {
 }
 
 export function AgentSetupPage() {
-  const { clearSetupIntent, config, openCommandMenu, refresh, request, setupIntent, token } =
-    useRatelApp();
+  const { clearSetupIntent, config, refresh, request, setupIntent, token } = useRatelApp();
   const navigate = useNavigate();
   const { available } = useAvailableSkills();
   const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
@@ -266,30 +267,17 @@ export function AgentSetupPage() {
           <PageHeaderBackRow>
             <PageHeaderTitle>Agent Setup</PageHeaderTitle>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
+              <Button
+                aria-label="Refresh"
+                disabled={scanning}
+                onClick={() => void Promise.all([refresh(), scanHosts()])}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <span className="sr-only">Refresh</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription className="max-w-sm sm:max-w-2xl">
@@ -300,12 +288,6 @@ export function AgentSetupPage() {
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
                 kbd="⌘R"
@@ -314,12 +296,24 @@ export function AgentSetupPage() {
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
-      <section className="grid gap-3">
-        <div className="grid gap-3 xl:grid-cols-2">
+      <section className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
+        <div
+          className={cn(
+            "hidden gap-3 border-border border-b bg-muted/30 px-4 py-2 font-mono text-xs text-muted-foreground uppercase sm:px-6 lg:grid",
+            AGENT_ROW_GRID,
+          )}
+        >
+          <span>Agent</span>
+          <span className="text-right">Native</span>
+          <span className="text-right">Ratel</span>
+          <span className="text-right">Skills</span>
+          <span className="text-right">Coverage</span>
+          <span>Status</span>
+        </div>
+        <div className="divide-border divide-y">
           {hosts.map((host) => (
             <AgentDirectoryCard
               host={host}
@@ -337,7 +331,7 @@ export function AgentSetupPage() {
 }
 
 export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupFlow }) {
-  const { openCommandMenu, refresh, request, token } = useRatelApp();
+  const { refresh, request, token } = useRatelApp();
   const navigate = useNavigate();
   const { available, reload: reloadSkills } = useAvailableSkills();
   const agentAvailable = availableSkillsForKind(available, props.kind);
@@ -382,30 +376,17 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
               Agents
             </Button>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
+              <Button
+                aria-label="Refresh"
+                disabled={scanning}
+                onClick={() => void Promise.all([refresh(), scanHosts()])}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <span className="sr-only">Refresh</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
@@ -440,12 +421,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
             ) : null}
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
                 kbd="⌘R"
@@ -454,7 +429,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -564,41 +538,120 @@ function AgentDirectoryCard(props: {
   const posture = POSTURE_COPY[props.host.posture];
   const primaryPath =
     props.host.scopes.find((scope) => scope.available)?.path ?? props.host.scopes[0]?.path;
+  const color = agentColor(props.host.kind);
+  const missingNativeCount = missingRatelEntryNames(props.host).length;
+  const coverageTotal = props.host.ratelEntryCount + missingNativeCount;
+  const coverageValue = props.host.ratelEntryCount;
+
   return (
-    <div className="group grid gap-3 border border-border bg-background p-4 transition-colors hover:border-brand-green/60 hover:bg-brand-green/5">
+    <div
+      className={cn(
+        "relative grid gap-3 px-4 py-3 text-sm transition-colors hover:bg-muted/30 sm:px-6 lg:grid lg:items-center",
+        AGENT_ROW_GRID,
+      )}
+    >
       <button
-        className="flex w-full min-w-0 items-start gap-3 text-left"
+        aria-label={`Open ${props.host.displayName}`}
+        className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
         onClick={props.onOpen}
         type="button"
-      >
-        <AgentIcon kind={props.host.kind} />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <h4 className="min-w-0 truncate text-xl font-semibold tracking-tight">
-              {props.host.displayName}
-            </h4>
-            <LinkStatusBadge host={props.host} />
+      />
+
+      <div className="relative z-20 grid min-w-0 gap-3 lg:hidden">
+        <div className="pointer-events-none flex min-w-0 items-start gap-3">
+          <AgentIcon kind={props.host.kind} />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <h4 className="min-w-0 truncate font-semibold tracking-tight">
+                {props.host.displayName}
+              </h4>
+            </div>
+            <p className="mt-1 line-clamp-2 text-muted-foreground">{posture.description}</p>
+            <p className="mt-2 truncate font-mono text-xs text-muted-foreground">
+              {primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable"}
+            </p>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{posture.description}</p>
-          {missingRatelEntryNames(props.host).length > 0 ? (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-              {missingRatelEntryNames(props.host).length} native tool
-              {missingRatelEntryNames(props.host).length === 1 ? "" : "s"} not in Ratel.
-            </p>
-          ) : null}
-          {props.unmanagedSkillCount > 0 ? (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-              {props.unmanagedSkillCount} skill{props.unmanagedSkillCount === 1 ? "" : "s"} not
-              managed by Ratel.
-            </p>
-          ) : null}
-          <p className="mt-3 truncate font-mono text-xs text-muted-foreground">
-            {primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable"}
-          </p>
         </div>
-      </button>
+        <div className="pointer-events-none grid min-w-0 grid-cols-[5.75rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+          <span className="font-mono text-xs text-muted-foreground uppercase">Native</span>
+          <AgentCountLabel count={props.host.nativeEntryCount} label="tools" />
+          <span className="font-mono text-xs text-muted-foreground uppercase">Ratel</span>
+          <AgentCountLabel count={props.host.ratelEntryCount} label="entries" />
+          <span className="font-mono text-xs text-muted-foreground uppercase">Skills</span>
+          <AgentCountLabel count={props.unmanagedSkillCount} label="unmanaged" tone="warning" />
+          <span className="font-mono text-xs text-muted-foreground uppercase">Coverage</span>
+          <AgentCoverageLabel color={color} total={coverageTotal} value={coverageValue} />
+          <span className="font-mono text-xs text-muted-foreground uppercase">Status</span>
+          <LinkStatusBadge host={props.host} />
+        </div>
+      </div>
+
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:block">
+        <div className="flex min-w-0 items-center gap-3">
+          <AgentIcon kind={props.host.kind} />
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <h4 className="min-w-0 truncate font-semibold tracking-tight">
+                {props.host.displayName}
+              </h4>
+            </div>
+            <p className="mt-1 line-clamp-1 text-muted-foreground">{posture.description}</p>
+            <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+              {primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable"}
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:block">
+        <AgentCountLabel count={props.host.nativeEntryCount} label="tools" />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:block">
+        <AgentCountLabel count={props.host.ratelEntryCount} label="entries" />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:block">
+        <AgentCountLabel count={props.unmanagedSkillCount} label="unmanaged" tone="warning" />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:flex lg:items-center lg:justify-end">
+        <AgentCoverageLabel color={color} total={coverageTotal} value={coverageValue} />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden lg:block">
+        <LinkStatusBadge host={props.host} />
+      </div>
     </div>
   );
+}
+
+function AgentCountLabel(props: { count: number; label: string; tone?: "warning" }) {
+  const hasWarning = props.tone === "warning" && props.count > 0;
+  return (
+    <span
+      className={cn(
+        "block truncate font-mono text-xs",
+        hasWarning ? "text-amber-700 dark:text-amber-400" : "text-foreground",
+      )}
+    >
+      {props.count} {props.label}
+    </span>
+  );
+}
+
+function AgentCoverageLabel(props: { color: string; total: number; value: number }) {
+  if (props.total <= 0) {
+    return <span className="font-mono text-muted-foreground text-xs">N/A</span>;
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-3">
+      <ShareBar color={props.color} total={props.total} value={props.value} />
+      <span className="w-9 text-right font-mono text-xs">
+        {sharePercent(props.value, props.total)}%
+      </span>
+    </div>
+  );
+}
+
+function agentColor(kind: AgentHostKind): string {
+  return kind === "claude-code" ? CLAUDE_CODE_SOURCE_COLOR : CODEX_SOURCE_COLOR;
 }
 
 function AgentOperationPanel(props: {
@@ -955,8 +1008,8 @@ function PreviewFlow(props: {
 
 function Backups(props: { backups: BackupManifest[] }) {
   return (
-    <section className="grid gap-3 border-border border-t pt-4">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+    <section className="grid gap-3">
+      <div className="flex flex-col gap-2 px-1 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 className="font-medium">Backups</h3>
           <p className="text-sm text-muted-foreground">
@@ -968,16 +1021,31 @@ function Backups(props: { backups: BackupManifest[] }) {
         </p>
       </div>
       {props.backups.length === 0 ? (
-        <div className="py-6 text-sm text-muted-foreground">No backups yet.</div>
+        <div className="-mx-4 border-border border-y bg-muted/15 px-4 py-6 text-sm text-muted-foreground sm:-mx-6 sm:px-6">
+          No backups yet.
+        </div>
       ) : (
-        <div className="divide-y divide-border border border-border">
-          {props.backups.map((backup, index) => (
-            <BackupRow
-              backup={backup}
-              key={`${backup.createdAt}-${backup.action}`}
-              latest={index === 0}
-            />
-          ))}
+        <div className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
+          <div
+            className={cn(
+              "hidden gap-3 border-border border-b bg-muted/30 px-4 py-2 font-mono text-xs text-muted-foreground uppercase sm:px-6 lg:grid",
+              BACKUP_ROW_GRID,
+            )}
+          >
+            <span>Backup</span>
+            <span className="text-right">Files</span>
+            <span className="text-right">Created</span>
+            <span>Paths</span>
+          </div>
+          <div className="divide-border divide-y">
+            {props.backups.map((backup, index) => (
+              <BackupRow
+                backup={backup}
+                key={`${backup.createdAt}-${backup.action}`}
+                latest={index === 0}
+              />
+            ))}
+          </div>
         </div>
       )}
     </section>
@@ -989,27 +1057,64 @@ function BackupRow(props: { backup: BackupManifest; latest: boolean }) {
   return (
     <div
       className={cn(
-        "grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center",
+        "grid gap-3 px-4 py-3 text-sm transition-colors hover:bg-muted/30 sm:px-6 lg:grid lg:items-center",
+        BACKUP_ROW_GRID,
         props.latest && "bg-muted/25",
       )}
     >
-      <div className="grid min-w-0 gap-1.5">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <p className="font-medium">{restoreActionLabel(props.backup.action)}</p>
-          <span className="text-xs text-muted-foreground">
+      <div className="grid min-w-0 gap-2 lg:hidden">
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="min-w-0 truncate font-medium">{restoreActionLabel(props.backup.action)}</p>
+          <BackupFreshnessBadge latest={props.latest} />
+        </div>
+        <div className="grid min-w-0 grid-cols-[5.75rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+          <span className="font-mono text-xs text-muted-foreground uppercase">Files</span>
+          <BackupFileCount count={props.backup.entries.length} />
+          <span className="font-mono text-xs text-muted-foreground uppercase">Created</span>
+          <span className="text-right font-mono text-xs">
             {restoreCreatedLabel(props.backup.createdAt)}
           </span>
+          <span className="font-mono text-xs text-muted-foreground uppercase">Paths</span>
+          <p className="truncate rounded-md bg-muted/50 px-2 py-1.5 font-mono text-right text-xs text-muted-foreground">
+            {paths}
+          </p>
         </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-          <span className={cn(props.latest && "font-medium text-foreground")}>
-            {props.latest ? "Latest backup" : "Previous backup"}
-          </span>
-          <span aria-hidden="true">/</span>
-          <span>{backupFileSummary(props.backup.entries.length)}</span>
-        </div>
-        <p className="truncate font-mono text-xs text-muted-foreground">{paths}</p>
       </div>
+
+      <div className="hidden min-w-0 lg:block">
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="min-w-0 truncate font-medium">{restoreActionLabel(props.backup.action)}</p>
+          <BackupFreshnessBadge latest={props.latest} />
+        </div>
+      </div>
+      <div className="hidden min-w-0 text-right lg:block">
+        <BackupFileCount count={props.backup.entries.length} />
+      </div>
+      <span className="hidden text-right font-mono text-xs lg:block">
+        {restoreCreatedLabel(props.backup.createdAt)}
+      </span>
+      <p className="hidden truncate rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs text-muted-foreground lg:block">
+        {paths}
+      </p>
     </div>
+  );
+}
+
+function BackupFreshnessBadge(props: { latest: boolean }) {
+  if (!props.latest) return null;
+
+  return (
+    <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-foreground text-xs">
+      Latest
+    </span>
+  );
+}
+
+function BackupFileCount(props: { count: number }) {
+  return (
+    <span className="block truncate text-right font-mono text-xs">
+      {props.count} file{props.count === 1 ? "" : "s"}
+    </span>
   );
 }
 
@@ -1034,10 +1139,6 @@ function restoreCreatedLabel(createdAt: string) {
     minute: "2-digit",
     month: "short",
   });
-}
-
-function backupFileSummary(count: number) {
-  return `${count} config file${count === 1 ? "" : "s"} backed up`;
 }
 
 function SetupRecap(props: {

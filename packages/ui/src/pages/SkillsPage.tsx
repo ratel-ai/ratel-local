@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { LinkIcon, SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
+import { LinkIcon, Sparkles, TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { skillPath, useRatelApp } from "@/App";
 import { ImportSkillsDialog } from "@/components/import-skills-dialog";
@@ -9,11 +9,9 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
-import { ResponsiveToolbar, ResponsiveToolbarButton } from "@/components/responsive-toolbar";
-import { type SkillSource, SourceIcon } from "@/components/source-icon";
+import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -29,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { SkillSummary, SkillsResponse } from "@/lib/skills";
+import { cn } from "@/lib/utils";
 
 type LoadState =
   | { status: "loading" }
@@ -36,7 +35,7 @@ type LoadState =
   | { status: "ready"; data: SkillsResponse };
 
 export function SkillsPage() {
-  const { openCommandMenu, request, runAction, busy, token } = useRatelApp();
+  const { request, runAction, busy, token } = useRatelApp();
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [importOpen, setImportOpen] = useState(false);
@@ -89,19 +88,6 @@ export function SkillsPage() {
         <PageHeaderContent>
           <PageHeaderBackRow>
             <PageHeaderTitle>Skills</PageHeaderTitle>
-            <div className="flex items-center gap-1 sm:hidden">
-              <Button
-                aria-label="Search"
-                onClick={openCommandMenu}
-                size="icon-lg"
-                type="button"
-                variant="outline"
-              >
-                <SearchIcon />
-                <span className="sr-only">Search</span>
-              </Button>
-              <PageHeaderSidebarTrigger />
-            </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
             Reusable playbooks Ratel manages and serves through the gateway. Link skills from Claude
@@ -136,15 +122,6 @@ export function SkillsPage() {
               Unmanage all
             </Button>
           )}
-          <ResponsiveToolbar>
-            <ResponsiveToolbarButton
-              icon={<SearchIcon />}
-              kbd="⌘K"
-              label="Search"
-              onClick={openCommandMenu}
-            />
-          </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -203,7 +180,6 @@ export function SkillsPage() {
         <SkillSection
           title="Managed by Ratel"
           caption="Served through the gateway. Linked native skills remain in their agent folders."
-          iconSource="ratel"
           onView={openSkill}
           skills={managed}
           renderAction={(skill) =>
@@ -238,14 +214,12 @@ export function SkillsPage() {
 }
 
 const PAGE_SIZE = 8;
+const SKILL_ROW_GRID = "lg:grid-cols-[minmax(16rem,1.45fr)_10rem_minmax(12rem,0.9fr)_9rem]";
 
 function SkillSection(props: {
   title: string;
   caption: string;
   skills: SkillSummary[];
-  /** Override the per-row source badge (e.g. force the Ratel mark for managed
-   *  skills, which are hosted by Ratel regardless of where they came from). */
-  iconSource?: SkillSource;
   onView: (id: string) => void;
   renderAction: (skill: SkillSummary) => ReactNode;
 }) {
@@ -263,39 +237,29 @@ function SkillSection(props: {
         </h2>
         <p className="text-muted-foreground text-xs">{props.caption}</p>
       </div>
-      <ul className="grid gap-2">
-        {visible.map((skill) => (
-          <li
-            key={`${skill.source}:${skill.id}`}
-            className="flex items-center gap-3 rounded-md border border-border bg-card p-3"
-          >
-            <SourceIcon source={props.iconSource ?? skill.source} />
-            <button
-              className="min-w-0 flex-1 text-left"
-              onClick={() => props.onView(skill.id)}
-              type="button"
-            >
-              <strong className="block truncate font-medium hover:underline">{skill.name}</strong>
-              {skill.description && (
-                <p className="mt-1 text-muted-foreground text-sm">{skill.description}</p>
-              )}
-              {skill.tags.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {skill.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </button>
-            <div className="shrink-0">{props.renderAction(skill)}</div>
-          </li>
-        ))}
-      </ul>
+      <div className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
+        <div
+          className={cn(
+            "hidden gap-3 border-border border-b bg-muted/30 px-4 py-2 font-mono text-xs text-muted-foreground uppercase sm:px-6 lg:grid",
+            SKILL_ROW_GRID,
+          )}
+        >
+          <span>Skill</span>
+          <span>Source</span>
+          <span className="text-right">Tags</span>
+          <span>Action</span>
+        </div>
+        <div className="divide-border divide-y">
+          {visible.map((skill) => (
+            <SkillRow
+              key={`${skill.source}:${skill.id}`}
+              skill={skill}
+              onView={props.onView}
+              renderAction={props.renderAction}
+            />
+          ))}
+        </div>
+      </div>
       {pageCount > 1 && (
         <div className="flex items-center justify-between px-1 text-muted-foreground text-xs">
           <span>
@@ -328,11 +292,117 @@ function SkillSection(props: {
   );
 }
 
+function SkillRow(props: {
+  onView: (id: string) => void;
+  renderAction: (skill: SkillSummary) => ReactNode;
+  skill: SkillSummary;
+}) {
+  return (
+    <div
+      className={cn(
+        "relative grid gap-3 px-4 py-3 text-sm transition-colors hover:bg-muted/30 sm:px-6 lg:grid lg:items-center",
+        SKILL_ROW_GRID,
+      )}
+    >
+      <button
+        aria-label={`Open ${props.skill.name}`}
+        className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+        onClick={() => props.onView(props.skill.id)}
+        type="button"
+      />
+      <div className="relative z-20 grid min-w-0 gap-3 lg:hidden">
+        <div className="pointer-events-none flex min-w-0 items-start justify-between gap-3">
+          <div className="pointer-events-none min-w-0 flex-1 text-left">
+            <strong className="block truncate font-medium hover:underline">
+              {props.skill.name}
+            </strong>
+          </div>
+          <div className="pointer-events-auto relative z-30 shrink-0">
+            {props.renderAction(props.skill)}
+          </div>
+        </div>
+        {props.skill.description && (
+          <p className="pointer-events-none line-clamp-2 text-muted-foreground">
+            {props.skill.description}
+          </p>
+        )}
+        <div className="pointer-events-none grid min-w-0 grid-cols-[5.75rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+          <span className="font-mono text-xs text-muted-foreground uppercase">Source</span>
+          <SkillSourceLabel source={props.skill.source} />
+          <span className="font-mono text-xs text-muted-foreground uppercase">Tags</span>
+          <div className="min-w-0 text-right">
+            <SkillTagLabel tags={props.skill.tags} />
+          </div>
+        </div>
+      </div>
+
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:block">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 text-left">
+            <strong className="block truncate font-medium hover:underline">
+              {props.skill.name}
+            </strong>
+          </div>
+        </div>
+        {props.skill.description && (
+          <p className="mt-1 line-clamp-2 text-muted-foreground">{props.skill.description}</p>
+        )}
+      </div>
+      <div className="pointer-events-none relative z-20 hidden lg:block">
+        <SkillSourceLabel source={props.skill.source} />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:block">
+        <SkillTagLabel tags={props.skill.tags} />
+      </div>
+      <div className="relative z-30 hidden lg:flex lg:justify-start">
+        {props.renderAction(props.skill)}
+      </div>
+    </div>
+  );
+}
+
+function SkillSourceLabel(props: { source: SkillSource }) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <SourceIcon source={props.source} />
+      <span className="truncate font-medium">{sourceLabel(props.source)}</span>
+    </span>
+  );
+}
+
+function SkillTagLabel(props: { tags: string[] }) {
+  if (props.tags.length === 0) {
+    return <span className="font-mono text-xs text-muted-foreground">0 tags</span>;
+  }
+
+  return (
+    <div className="grid justify-items-end gap-1">
+      <span className="font-mono text-xs">{props.tags.length} tags</span>
+      <div className="flex max-w-full flex-wrap justify-end gap-1">
+        {props.tags.slice(0, 2).map((tag) => (
+          <span
+            className="max-w-24 truncate rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
+            key={tag}
+            title={tag}
+          >
+            {tag}
+          </span>
+        ))}
+        {props.tags.length > 2 && (
+          <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs">
+            +{props.tags.length - 2}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EmptyState(props: { title: string; description: string; children?: ReactNode }) {
   return (
     <section className="-mx-4 grid min-h-72 flex-1 place-items-center border-border border-y bg-muted/15 px-4 py-8 text-center sm:-mx-6 sm:px-6">
       <div className="grid max-w-md gap-3">
-        <div className="mx-auto rounded-md bg-muted p-2 text-brand-green">
+        <div className="mx-auto rounded-md bg-muted p-2 text-muted-foreground">
           <Sparkles className="size-5" />
         </div>
         <div>

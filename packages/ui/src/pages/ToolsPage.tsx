@@ -3,13 +3,13 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Check,
+  ChevronRight,
   Copy,
   ExternalLink,
   Pencil,
   Plus,
   RefreshCw,
   Save,
-  SearchIcon,
   Server,
   Trash2,
   Wand2,
@@ -46,6 +46,7 @@ import {
   ResponsiveToolbarGroup,
   ResponsiveToolbarLabeledButton,
 } from "@/components/responsive-toolbar";
+import { ShareBar, sharePercent } from "@/components/share-bar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -80,7 +81,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   AUTH_STATUS_LABELS,
@@ -111,7 +111,8 @@ type EntryFormValues = {
   url: string;
 };
 
-const TOOL_SOURCE_GRID = "lg:grid-cols-[minmax(12rem,1.05fr)_7rem_minmax(13rem,1fr)_10rem_12rem]";
+const TOOL_SOURCE_GRID =
+  "lg:grid-cols-[minmax(12rem,1.05fr)_7rem_minmax(13rem,1fr)_8rem_9rem_11rem_12rem]";
 const ENTRY_INPUT_CLASS = "bg-background placeholder:text-muted-foreground/45";
 const ENTRY_TEXTAREA_CLASS =
   "min-h-28 bg-background font-mono text-sm placeholder:text-muted-foreground/45";
@@ -219,8 +220,7 @@ const entrySubmitSchema = entryFormSchema.transform((value, context) => {
 
 export function ToolsPage() {
   const navigate = useNavigate();
-  const { busy, config, openCommandMenu, refresh, request, runAction, token, triggerSetupIntent } =
-    useRatelApp();
+  const { busy, config, refresh, request, runAction, token, triggerSetupIntent } = useRatelApp();
   const [scope, setScope] = useState<RatelScope>("user");
   const [authFilter, setAuthFilter] = useState<AuthFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -259,28 +259,16 @@ export function ToolsPage() {
           <PageHeaderBackRow>
             <PageHeaderTitle>Tool Sources</PageHeaderTitle>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  onClick={() => void refresh()}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
+              <Button
+                aria-label="Refresh"
+                onClick={() => void refresh()}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw />
+                <span className="sr-only">Refresh</span>
+              </Button>
               <Button
                 aria-label="Add source"
                 disabled={!scopeData?.available}
@@ -291,7 +279,6 @@ export function ToolsPage() {
                 <Plus />
                 <span className="sr-only">Add source</span>
               </Button>
-              <PageHeaderSidebarTrigger />
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
@@ -301,12 +288,6 @@ export function ToolsPage() {
         <PageHeaderActions className="hidden sm:flex">
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
-              <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
               <ResponsiveToolbarButton
                 icon={<RefreshCw />}
                 kbd="⌘R"
@@ -326,25 +307,13 @@ export function ToolsPage() {
         </PageHeaderActions>
       </PageHeader>
 
-      <section className="-mx-4 flex flex-col gap-3 border-border border-y bg-muted/20 px-4 py-3 sm:-mx-6 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <Tabs value={scope} onValueChange={(value) => setScope(value as RatelScope)}>
-            <TabsList variant="line" className="justify-start">
-              {SCOPES.map((item) => (
-                <TabsTrigger
-                  className="font-mono text-[11px] tracking-[0.14em] uppercase data-active:text-brand-green"
-                  key={item}
-                  value={item}
-                >
-                  {item}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <p className="mt-2 truncate font-mono text-xs text-muted-foreground">
-            {scopeData?.available ? scopeData.path : "scope unavailable"}
+      <section className="-mx-4 grid gap-3 border-border border-y bg-muted/15 px-4 py-3 sm:-mx-6 sm:px-6 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div className="grid min-w-0 gap-2">
+          <ScopeSelector value={scope} onChange={setScope} />
+          <p className="truncate font-mono text-xs text-muted-foreground">
+            {scopeData?.available ? scopeData.path : "Scope unavailable"}
           </p>
-          <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+          <p className="truncate text-sm text-muted-foreground">
             {scopeData?.available
               ? formatScopeTokenSummary({
                   estimatedTokens: scopeEstimatedTokens,
@@ -444,14 +413,16 @@ export function ToolsPage() {
         <section className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
           <div
             className={cn(
-              "hidden gap-3 border-border border-b bg-muted/35 px-4 py-2 font-mono text-[11px] text-muted-foreground uppercase sm:px-6 lg:grid",
+              "hidden gap-3 border-border border-b bg-muted/30 px-4 py-2 font-mono text-xs text-muted-foreground uppercase sm:px-6 lg:grid",
               TOOL_SOURCE_GRID,
             )}
           >
             <span>Tool Source</span>
             <span>Type</span>
             <span>Target</span>
-            <span>Tools</span>
+            <span className="text-right">Tools</span>
+            <span className="text-right">Tokens</span>
+            <span className="text-right">Share</span>
             <span>Auth</span>
           </div>
           <div className="divide-border divide-y">
@@ -462,6 +433,8 @@ export function ToolsPage() {
                 entry={entry}
                 key={name}
                 name={name}
+                totalEstimatedTokens={scopeEstimatedTokens}
+                totalToolCount={scopeToolCount}
                 usage={usage}
                 onAuthorize={() => {
                   return runAction("Authorization updated", () =>
@@ -483,6 +456,29 @@ export function ToolsPage() {
   );
 }
 
+function ScopeSelector(props: { onChange: (scope: RatelScope) => void; value: RatelScope }) {
+  return (
+    <div className="flex w-fit rounded-lg border border-border bg-background/70 p-1 text-sm">
+      {SCOPES.map((item) => (
+        <button
+          aria-pressed={props.value === item}
+          className={cn(
+            "rounded-md px-3 py-1.5 font-medium capitalize transition-colors",
+            props.value === item
+              ? "bg-accent text-accent-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          key={item}
+          onClick={() => props.onChange(item)}
+          type="button"
+        >
+          {item}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ToolSourceRow(props: {
   authStatus?: AuthStatus;
   busy: boolean;
@@ -490,26 +486,82 @@ function ToolSourceRow(props: {
   name: string;
   onAuthorize: () => Promise<unknown> | undefined;
   onOpen: () => void;
+  totalEstimatedTokens: number;
+  totalToolCount: number;
   usage?: ServerToolTokenEstimate;
 }) {
+  const entryType = entryTypeOf(props.entry);
   const canAuthorize =
     (props.entry.type === "http" || props.entry.type === "sse") &&
     (props.authStatus === "needs auth" || props.authStatus === "expired");
+  const color = toolSourceTypeColor(entryType);
+  const share = toolSourceShare(props.usage, props.totalEstimatedTokens, props.totalToolCount);
 
   return (
     <div
       className={cn(
-        "relative grid grid-cols-2 gap-x-3 gap-y-3 px-4 py-4 transition-colors hover:bg-muted/35 sm:px-6 lg:grid lg:items-center lg:py-3",
+        "relative grid gap-3 px-4 py-3 text-sm transition-colors hover:bg-muted/30 sm:px-6 lg:grid lg:items-center",
         TOOL_SOURCE_GRID,
       )}
     >
       <button
         aria-label={`Open ${props.name}`}
-        className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+        className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
         onClick={props.onOpen}
         type="button"
       />
-      <div className="pointer-events-none relative z-10 order-1 col-span-2 min-w-0 lg:order-none lg:col-span-1">
+      <div className="relative z-20 grid min-w-0 gap-2 lg:hidden">
+        <div className="pointer-events-none flex min-w-0 items-center gap-2">
+          <strong className="truncate font-medium">{props.name}</strong>
+          <Badge className="shrink-0" variant="outline">
+            MCP
+          </Badge>
+          <ToolTypeBadge type={entryType} />
+          <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground" />
+        </div>
+        <p className="pointer-events-none line-clamp-1 text-muted-foreground">
+          {props.entry.description || "No description stored for this tool source."}
+        </p>
+        <div className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+          <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
+            Target
+          </span>
+          <code className="pointer-events-none block min-w-0 truncate rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs text-muted-foreground">
+            {summaryOf(props.entry)}
+          </code>
+          <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
+            Tools
+          </span>
+          <div className="pointer-events-none min-w-0 text-right">
+            <ToolCountLabel usage={props.usage} />
+          </div>
+          <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
+            Tokens
+          </span>
+          <div className="pointer-events-none min-w-0 text-right">
+            <TokenEstimateLabel usage={props.usage} />
+          </div>
+          <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
+            Share
+          </span>
+          <div className="pointer-events-none flex min-w-0 items-center justify-end gap-2">
+            <ToolShareLabel color={color} share={share} />
+          </div>
+          <span className="pointer-events-none font-mono text-xs text-muted-foreground uppercase">
+            Auth
+          </span>
+          <div className="relative z-30 min-w-0">
+            <AuthStatusControl
+              busy={props.busy}
+              canAuthorize={canAuthorize}
+              onAuthorize={props.onAuthorize}
+              status={props.authStatus}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:block">
         <div className="flex min-w-0 items-center gap-2">
           <strong className="truncate font-medium">{props.name}</strong>
           <Badge className="shrink-0" variant="outline">
@@ -520,32 +572,24 @@ function ToolSourceRow(props: {
           {props.entry.description || "No description stored for this tool source."}
         </p>
       </div>
-      <div className="pointer-events-none relative z-10 order-2 col-span-1 grid gap-1.5 lg:order-none lg:col-span-1 lg:block">
-        <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
-          Transport
-        </span>
-        <Badge className="font-mono" variant="secondary">
-          {toolSourceTypeLabel(entryTypeOf(props.entry))}
-        </Badge>
+      <div className="pointer-events-none relative z-20 hidden lg:block">
+        <ToolTypeBadge type={entryType} />
       </div>
-      <div className="pointer-events-none relative z-10 order-4 col-span-2 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
-        <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
-          Target
-        </span>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:grid">
         <code className="block min-w-0 truncate rounded-md bg-muted px-2 py-1.5 font-mono text-xs text-muted-foreground">
           {summaryOf(props.entry)}
         </code>
       </div>
-      <div className="pointer-events-none relative z-10 order-3 col-span-1 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
-        <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
-          Tools
-        </span>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:grid">
         <ToolCountLabel usage={props.usage} />
       </div>
-      <div className="relative z-10 order-5 col-span-2 grid gap-1.5 sm:col-span-1 lg:order-none lg:col-span-1 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
-        <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
-          Auth
-        </span>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 text-right lg:grid">
+        <TokenEstimateLabel usage={props.usage} />
+      </div>
+      <div className="pointer-events-none relative z-20 hidden min-w-0 lg:flex lg:items-center lg:justify-end">
+        <ToolShareLabel color={color} share={share} />
+      </div>
+      <div className="relative z-30 hidden lg:flex lg:flex-wrap lg:items-center lg:gap-2">
         <AuthStatusControl
           busy={props.busy}
           canAuthorize={canAuthorize}
@@ -554,6 +598,29 @@ function ToolSourceRow(props: {
         />
       </div>
     </div>
+  );
+}
+
+type RowShare = { total: number; value: number };
+
+function DataSwatch(props: { color: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-block size-2.5 shrink-0 rounded-[3px]"
+      style={{ backgroundColor: props.color }}
+    />
+  );
+}
+
+function ToolTypeBadge(props: { type: EntryType }) {
+  const color = toolSourceTypeColor(props.type);
+
+  return (
+    <Badge className="gap-1.5 font-mono" variant="secondary">
+      <DataSwatch color={color} />
+      {toolSourceTypeLabel(props.type)}
+    </Badge>
   );
 }
 
@@ -568,6 +635,55 @@ function ToolCountLabel(props: { usage?: ServerToolTokenEstimate }) {
       </span>
     </span>
   );
+}
+
+function TokenEstimateLabel(props: { usage?: ServerToolTokenEstimate }) {
+  if (!props.usage) {
+    return <span className="block min-w-0 font-mono text-xs text-muted-foreground">N/A</span>;
+  }
+  return (
+    <span className="block min-w-0" title="Estimated prompt tokens saved by this source">
+      <span className="block truncate font-mono text-xs">
+        {formatTokenEstimate(props.usage.estimatedTokens)}
+      </span>
+    </span>
+  );
+}
+
+function ToolShareLabel(props: { color: string; share: RowShare | null }) {
+  if (!props.share) {
+    return <span className="block min-w-0 font-mono text-xs text-muted-foreground">N/A</span>;
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-3">
+      <ShareBar color={props.color} total={props.share.total} value={props.share.value} />
+      <span className="w-9 text-right font-mono text-xs">
+        {sharePercent(props.share.value, props.share.total)}%
+      </span>
+    </div>
+  );
+}
+
+function toolSourceShare(
+  usage: ServerToolTokenEstimate | undefined,
+  totalEstimatedTokens: number,
+  totalToolCount: number,
+): RowShare | null {
+  if (!usage) return null;
+  if (totalEstimatedTokens > 0) {
+    return { total: totalEstimatedTokens, value: usage.estimatedTokens };
+  }
+  if (totalToolCount > 0) {
+    return { total: totalToolCount, value: usage.toolCount };
+  }
+  return null;
+}
+
+function toolSourceTypeColor(type: EntryType): string {
+  if (type === "http") return "var(--color-ctx-memory)";
+  if (type === "sse") return "var(--color-ctx-user-input)";
+  return "var(--color-ctx-tools)";
 }
 
 function formatScopeTokenSummary(input: {
@@ -609,10 +725,10 @@ function ToolSourceFilterSelect(props: {
   valueLabel: string;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="flex min-w-0 items-center gap-1.5">
       <DetailLabel>{props.label}</DetailLabel>
       <Select value={props.value} onValueChange={props.onValueChange}>
-        <SelectTrigger className="h-8 min-w-0 flex-1 bg-background px-2.5 text-xs sm:min-w-32">
+        <SelectTrigger className="h-7 min-w-0 flex-1 rounded-md bg-background px-2 text-xs sm:min-w-28">
           <SelectValue>{props.valueLabel}</SelectValue>
         </SelectTrigger>
         <SelectContent>{props.children}</SelectContent>
@@ -1544,7 +1660,7 @@ function authStatusLabel(status?: AuthStatus) {
 
 function authControlTextClassName(status?: AuthStatus) {
   return cn(
-    "h-6 px-2 text-[11px] leading-none font-medium shadow-none",
+    "h-6 px-2 text-xs leading-none font-medium shadow-none",
     status === "needs auth" &&
       "border-amber-300/70 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-500/15 dark:text-amber-200",
     status === "expired" && "border-border bg-muted text-muted-foreground",
@@ -1568,7 +1684,7 @@ function EmptyTools(props: { action: ReactNode; children: ReactNode; title: stri
   return (
     <section className="-mx-4 grid min-h-64 place-items-center border-border border-y bg-muted/15 px-4 py-8 text-center sm:-mx-6 sm:px-6">
       <div className="grid max-w-md gap-3">
-        <div className="mx-auto rounded-md bg-muted p-2 text-brand-green">
+        <div className="mx-auto rounded-md bg-muted p-2 text-muted-foreground">
           <Server className="size-5" />
         </div>
         <div>

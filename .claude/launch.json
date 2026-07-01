@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ratel-ui",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "RATEL_MCP_UI_OPEN=0 RATEL_MCP_UI_VITE_PORT=5173 pnpm dev:ui"],
+      "port": 5173
+    }
+  ]
+}
