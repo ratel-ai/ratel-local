@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Download, SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
+import { LinkIcon, SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { skillPath, useRatelApp } from "@/App";
 import { ImportSkillsDialog } from "@/components/import-skills-dialog";
@@ -103,9 +103,8 @@ export function SkillsPage() {
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
-            Reusable playbooks Ratel manages and serves through the gateway. Import skills from
-            Claude Code or Codex to manage them here; stop managing one to return it to where it
-            came from.
+            Reusable playbooks Ratel manages and serves through the gateway. Link skills from Claude
+            Code or Codex as invoke-only without moving their native folders.
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="hidden items-center sm:flex">
@@ -117,8 +116,8 @@ export function SkillsPage() {
               size="sm"
               variant="outline"
             >
-              <Download />
-              Import skills
+              <LinkIcon />
+              Manage skills
             </Button>
           )}
           {canDeactivateAll && (
@@ -184,11 +183,11 @@ export function SkillsPage() {
       {ready && managed.length === 0 && available.length > 0 && (
         <EmptyState
           title="No skills managed by Ratel yet"
-          description="Import skills from Claude Code or Codex to serve them through the gateway."
+          description="Manage skills from Claude Code or Codex as invoke-only so Ratel can serve them through the gateway."
         >
           <Button onClick={() => setImportOpen(true)} size="sm">
-            <Download />
-            Import skills
+            <LinkIcon />
+            Manage skills
           </Button>
         </EmptyState>
       )}
@@ -196,14 +195,14 @@ export function SkillsPage() {
       {ready && managed.length === 0 && available.length === 0 && (
         <EmptyState
           title="No skills managed by Ratel yet"
-          description="Add skills under ~/.claude/skills (Claude Code) or ~/.codex/skills (Codex), or create one in Ratel, then import them here."
+          description="Add skills under ~/.claude/skills (Claude Code) or ~/.codex/skills (Codex), or create one in Ratel, then manage them here."
         />
       )}
 
       {ready && managed.length > 0 && (
         <SkillSection
           title="Managed by Ratel"
-          caption="Served through the gateway. Stop managing one to return it to its agent."
+          caption="Served through the gateway. Linked native skills remain in their agent folders."
           iconSource="ratel"
           onView={openSkill}
           skills={managed}

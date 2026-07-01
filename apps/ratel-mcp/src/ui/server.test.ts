@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1041,5 +1041,38 @@ describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
       body: JSON.stringify({ description: "x", tags: [], body: "y" }),
     });
     expect(patch.status).toBe(409);
+  });
+
+  it("activates a native skill as a linked managed skill and edits through the link", async () => {
+    const activate = await fetch(url("/api/skills/activate"), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ ids: ["from-claude"], source: "claude" }),
+    });
+    expect(activate.status).toBe(200);
+    expect((await lstat(join(home, ".ratel", "skills", "from-claude"))).isSymbolicLink()).toBe(
+      true,
+    );
+
+    const list = await fetch(url("/api/skills"), { headers: headers() });
+    const body = (await list.json()) as {
+      managed: Array<{ id: string; mode?: string; source: string }>;
+      available: Array<{ id: string; source: string }>;
+    };
+    expect(body.managed.find((s) => s.id === "from-claude")).toMatchObject({
+      mode: "linked",
+      source: "claude",
+    });
+    expect(body.available.some((s) => s.id === "from-claude" && s.source === "claude")).toBe(false);
+
+    const patch = await fetch(url("/api/skills/from-claude"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: "updated", tags: ["x"], body: "# Updated" }),
+    });
+    expect(patch.status).toBe(200);
+    expect(
+      await readFile(join(home, ".claude", "skills", "from-claude", "SKILL.md"), "utf8"),
+    ).toContain('description: "updated"');
   });
 });

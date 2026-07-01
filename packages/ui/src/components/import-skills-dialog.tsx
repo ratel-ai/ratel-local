@@ -17,11 +17,11 @@ import type { SkillSummary } from "@/lib/skills";
 interface ImportSkillsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The unmanaged skills available to bring into Ratel. */
+  /** The unmanaged skills available to manage through Ratel. */
   available: SkillSummary[];
   /** Restrict the list to one agent's skills (Agent Setup). Omit to list all. */
   source?: SkillSource;
-  /** Called after a successful import so the caller can refresh its lists. */
+  /** Called after successful activation so the caller can refresh its lists. */
   onImported: () => void | Promise<void>;
 }
 
@@ -34,8 +34,8 @@ function skillKey(skill: SkillSummary): string {
 const PAGE_SIZE = 6;
 
 /**
- * Bring unmanaged Claude Code / Codex skills into Ratel's managed folder. A
- * single screen: pick skills, then import. There is no conflict step — a name
+ * Manage unmanaged Claude Code / Codex skills through Ratel. A single screen:
+ * pick skills, then activate. There is no conflict step — a name
  * already managed by Ratel is excluded from `available` upstream — so unlike the
  * MCP import this stays a simple checkbox list.
  */
@@ -79,7 +79,7 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
   const submit = async () => {
     if (chosen.length === 0) return;
     // `activate` takes a single `source` to disambiguate a name present in both
-    // agents, so import each source group separately.
+    // agents, so activate each source group separately.
     const idsBySource = new Map<SkillSource, string[]>();
     for (const skill of chosen) {
       const ids = idsBySource.get(skill.source) ?? [];
@@ -102,16 +102,16 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Import skills</DialogTitle>
+          <DialogTitle>Manage skills</DialogTitle>
           <DialogDescription>
-            Bring skills from Claude Code and Codex into Ratel's managed folder so the gateway
-            serves them. Stop managing one later to return it to where it came from.
+            Link skills from Claude Code and Codex into Ratel as invoke-only. The native folders
+            stay in place, and the gateway serves them on demand.
           </DialogDescription>
         </DialogHeader>
 
         {skills.length === 0 ? (
           <p className="py-6 text-center text-muted-foreground text-sm">
-            No external skills to import.
+            No external skills to manage.
           </p>
         ) : (
           <div className="grid gap-2">
@@ -191,7 +191,7 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
         <DialogFooter>
           <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
           <Button disabled={busy || chosen.length === 0} onClick={() => void submit()} size="sm">
-            {chosen.length > 0 ? `Import ${chosen.length}` : "Import"}
+            {chosen.length > 0 ? `Manage ${chosen.length}` : "Manage"}
           </Button>
         </DialogFooter>
       </DialogContent>

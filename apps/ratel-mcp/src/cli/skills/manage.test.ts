@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -49,20 +49,25 @@ async function exists(path: string): Promise<boolean> {
 }
 
 describe("activateSkills", () => {
-  it("moves native skills into the managed folder and records a manifest", async () => {
+  it("links native skills into the managed folder and records a manifest", async () => {
     await writeNativeSkill("api-design");
     await writeNativeSkill("slides");
 
     const result = await activateSkills(paths);
     expect(result.moved.map((m) => m.id).sort()).toEqual(["api-design", "slides"]);
 
-    // moved out of native, into managed
-    expect(await exists(join(paths.nativeDir, "api-design", "SKILL.md"))).toBe(false);
+    // native stays in place, managed folder gets a symlink
+    expect(await exists(join(paths.nativeDir, "api-design", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.managedDir, "api-design", "SKILL.md"))).toBe(true);
+    expect((await lstat(join(paths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
 
     const managed = await listManaged(paths);
     expect(managed.map((m) => m.id).sort()).toEqual(["api-design", "slides"]);
+    expect(managed[0].mode).toBe("linked");
     expect(managed[0].originalPath).toContain(join(".claude", "skills"));
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toContain(
+      "disable-model-invocation: true",
+    );
   });
 
   it("is idempotent — a second activate moves nothing new", async () => {
@@ -110,13 +115,16 @@ describe("activateSkills", () => {
     expect(await exists(join(paths.nativeDir, "beta", "SKILL.md"))).toBe(true);
   });
 
-  it("moves Codex skills into the managed folder and records source=codex", async () => {
+  it("links Codex skills into the managed folder and records source=codex", async () => {
     await writeCodexSkill("from-codex");
     const result = await activateSkills(paths);
     expect(result.moved.map((m) => m.id)).toEqual(["from-codex"]);
-    expect(await exists(join(paths.codexDir, "from-codex", "SKILL.md"))).toBe(false);
+    expect(await exists(join(paths.codexDir, "from-codex", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.managedDir, "from-codex", "SKILL.md"))).toBe(true);
     expect((await listManaged(paths)).find((m) => m.id === "from-codex")?.source).toBe("codex");
+    expect(
+      await readFile(join(paths.codexDir, "from-codex", "agents", "openai.yaml"), "utf8"),
+    ).toContain("allow_implicit_invocation: false");
   });
 
   it("takes a name present in both agents from Claude and skips the Codex copy", async () => {
@@ -136,14 +144,14 @@ describe("activateSkills", () => {
     const result = await activateSkills(paths, { ids: ["shared"], source: "codex" });
     expect(result.moved.map((m) => m.id)).toEqual(["shared"]);
     expect((await listManaged(paths)).find((m) => m.id === "shared")?.source).toBe("codex");
-    // Codex copy moved out; Claude copy stays put.
-    expect(await exists(join(paths.codexDir, "shared", "SKILL.md"))).toBe(false);
+    // both native copies stay put; the managed slot links to Codex.
+    expect(await exists(join(paths.codexDir, "shared", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.nativeDir, "shared", "SKILL.md"))).toBe(true);
   });
 });
 
 describe("deactivateSkills", () => {
-  it("restores managed skills back to their original location and clears the manifest", async () => {
+  it("removes linked managed skills and clears the manifest", async () => {
     await writeNativeSkill("api-design");
     await activateSkills(paths);
 
@@ -152,19 +160,32 @@ describe("deactivateSkills", () => {
     expect(await exists(join(paths.nativeDir, "api-design", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.managedDir, "api-design"))).toBe(false);
     expect(await listManaged(paths)).toEqual([]);
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).not.toContain(
+      "disable-model-invocation",
+    );
   });
 
-  it("leaves a skill managed when its original destination is already occupied", async () => {
+  it("restores only Ratel metadata when it is unchanged", async () => {
     await writeNativeSkill("api-design");
     await activateSkills(paths);
-    // user re-created a native skill with the same name
-    await writeNativeSkill("api-design", "# recreated");
+    await deactivateSkills(paths);
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
+      "---\nname: api-design\ndescription: d\n---\n# body",
+    );
+  });
 
-    const result = await deactivateSkills(paths);
-    expect(result.restored).toEqual([]);
-    expect(result.skipped[0]?.id).toBe("api-design");
-    // still managed, manifest preserved
-    expect((await listManaged(paths)).map((m) => m.id)).toEqual(["api-design"]);
+  it("preserves user metadata edits made after activation", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths);
+    await writeFile(
+      join(paths.nativeDir, "api-design", "SKILL.md"),
+      "---\nname: api-design\ndescription: changed\ndisable-model-invocation: true\n---\n# body",
+    );
+
+    await deactivateSkills(paths);
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toContain(
+      "description: changed",
+    );
   });
 
   it("only restores skills it moved, leaving manually-added managed skills in place", async () => {
@@ -180,7 +201,7 @@ describe("deactivateSkills", () => {
     expect(await exists(join(paths.managedDir, "hand-authored", "SKILL.md"))).toBe(true);
   });
 
-  it("restores a Codex-sourced skill to the Codex folder, not Claude's", async () => {
+  it("deactivates a Codex-sourced linked skill without moving native files", async () => {
     await writeCodexSkill("from-codex");
     await activateSkills(paths);
     const result = await deactivateSkills(paths);
@@ -190,15 +211,20 @@ describe("deactivateSkills", () => {
     expect(await exists(join(paths.managedDir, "from-codex"))).toBe(false);
   });
 
-  it("restores a sourceless (legacy) manifest entry to Claude", async () => {
-    await writeNativeSkill("legacy");
-    await activateSkills(paths);
-    // Simulate a manifest written before multi-source support (no `source`).
-    const manifest = JSON.parse(await readFile(paths.manifestPath, "utf8")) as {
-      managed: Array<Record<string, unknown>>;
-    };
-    for (const entry of manifest.managed) delete entry.source;
-    await writeFile(paths.manifestPath, JSON.stringify(manifest));
+  it("restores a sourceless legacy moved manifest entry to Claude", async () => {
+    await mkdir(join(paths.managedDir, "legacy"), { recursive: true });
+    await writeFile(
+      join(paths.managedDir, "legacy", "SKILL.md"),
+      "---\nname: legacy\ndescription: d\n---\n# body",
+    );
+    await mkdir(join(home, ".ratel"), { recursive: true });
+    await writeFile(
+      paths.manifestPath,
+      JSON.stringify({
+        version: 1,
+        managed: [{ id: "legacy", originalPath: join(paths.nativeDir, "legacy"), movedAt: "x" }],
+      }),
+    );
 
     const result = await deactivateSkills(paths);
     expect(result.restored.map((m) => m.id)).toEqual(["legacy"]);
@@ -221,8 +247,11 @@ describe("deactivateSkills", () => {
   });
 
   it("restores to the canonical native path, ignoring a stale/crafted originalPath (#7)", async () => {
-    await writeNativeSkill("api-design");
-    await activateSkills(paths);
+    await mkdir(join(paths.managedDir, "api-design"), { recursive: true });
+    await writeFile(
+      join(paths.managedDir, "api-design", "SKILL.md"),
+      "---\nname: api-design\ndescription: d\n---\n# body",
+    );
     // Tamper the manifest: point originalPath outside ~/.claude/skills (e.g. a
     // different machine's $HOME, or a crafted escape).
     const evil = join(home, "evil-target");

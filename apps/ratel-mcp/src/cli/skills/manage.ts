@@ -1,6 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
-import { access, cp, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  cp,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -32,13 +44,26 @@ export function defaultSkillManagePaths(home: string = homedir()): SkillManagePa
 
 export interface ManagedEntry {
   id: string;
-  /** Absolute path the skill was moved *from* (where deactivate restores it). */
+  /** New entries are linked in place; missing mode means a legacy moved entry. */
+  mode?: "linked";
+  /** Absolute path to the native skill directory. Legacy entries were moved from here. */
   originalPath: string;
+  /** Absolute path of the Ratel-managed symlink for linked entries. */
+  linkPath?: string;
   /** Which agent's folder it came from; restore targets this agent's dir.
    *  Optional for manifests written before multi-source support (treated as
    *  "claude", the only source that existed then). */
   source?: SkillSource;
   movedAt: string;
+  /** Metadata edits Ratel made to keep the native host manual-only. */
+  metadataPatch?: MetadataPatch[];
+}
+
+export interface MetadataPatch {
+  path: string;
+  before?: string;
+  after: string;
+  created?: boolean;
 }
 
 interface SkillManifest {
@@ -70,10 +95,11 @@ export interface DeactivateResult {
 }
 
 /**
- * Move every native skill (a `<name>/SKILL.md` under `nativeDir`) into the
- * Ratel-managed folder, recording each in the manifest. Idempotent and
- * non-destructive: a name already present in `managedDir` is skipped, never
- * overwritten.
+ * Link every native skill (a `<name>/SKILL.md` under the host skill dir) into
+ * the Ratel-managed folder, recording each in the manifest. The native folder
+ * stays in place but is patched manual-only so the host won't auto-load it.
+ * Idempotent and non-destructive: a name already present in `managedDir` is
+ * skipped, never overwritten.
  */
 export async function activateSkills(
   paths: SkillManagePaths,
@@ -105,30 +131,58 @@ export async function activateSkills(
         if (options.ids && !options.ids.includes(id)) continue;
         const from = join(dir, id);
         const to = join(paths.managedDir, id);
-        if (already.has(id) || (await exists(to))) {
+        if (already.has(id) || (await pathExists(to))) {
           skipped.push({ id, reason: "already present in managed folder" });
           log(`[ratel] skill ${id}: already managed — skipping`);
           continue;
         }
         if (options.dryRun) {
-          log(`[ratel] would move skill ${id} (${source}) → ${paths.managedDir}`);
-          moved.push({ id, originalPath: from, source, movedAt: now().toISOString() });
+          log(`[ratel] would manage skill ${id} (${source}) as invoke-only`);
+          moved.push({
+            id,
+            mode: "linked",
+            originalPath: from,
+            linkPath: to,
+            source,
+            movedAt: now().toISOString(),
+          });
           already.add(id);
           continue;
         }
         await mkdir(paths.managedDir, { recursive: true });
-        await moveDir(from, to);
+        try {
+          await symlink(from, to, process.platform === "win32" ? "junction" : "dir");
+        } catch (err) {
+          skipped.push({ id, reason: `could not create managed link: ${(err as Error).message}` });
+          log(`[ratel] skill ${id}: could not create managed link — skipping`);
+          continue;
+        }
+        let metadataPatch: MetadataPatch[];
+        try {
+          metadataPatch = await applyManualOnlyMetadata(from, source);
+        } catch (err) {
+          await rm(to, { recursive: true, force: true }).catch(() => {});
+          skipped.push({
+            id,
+            reason: `could not apply manual-only metadata: ${(err as Error).message}`,
+          });
+          log(`[ratel] skill ${id}: could not apply manual-only metadata — skipping`);
+          continue;
+        }
         const entry: ManagedEntry = {
           id,
+          mode: "linked",
           originalPath: from,
+          linkPath: to,
           source,
           movedAt: now().toISOString(),
+          metadataPatch,
         };
         manifest.managed.push(entry);
         moved.push(entry);
         already.add(id);
         await writeManifest(paths.manifestPath, manifest);
-        log(`[ratel] moved skill ${id} (${source}) → ${paths.managedDir}`);
+        log(`[ratel] managing skill ${id} (${source}) as invoke-only`);
       }
     }
   } finally {
@@ -180,6 +234,25 @@ export async function deactivateSkills(
       log(`[ratel] skill ${String(entry.id)}: unsafe id in manifest — leaving managed`);
       continue;
     }
+    if (entry.mode === "linked") {
+      const linkPath = entry.linkPath ?? join(paths.managedDir, entry.id);
+      if (!(await pathExists(linkPath))) {
+        skipped.push({ id: entry.id, reason: "no longer in managed folder" });
+        log(`[ratel] skill ${entry.id}: managed link is gone — dropping from manifest`);
+      } else if (options.dryRun) {
+        log(`[ratel] would stop managing skill ${entry.id}`);
+        restored.push(entry);
+        remaining.push(entry);
+        continue;
+      } else {
+        await rm(linkPath, { recursive: true, force: true });
+        await restoreManualOnlyMetadata(entry, log);
+        restored.push(entry);
+        log(`[ratel] stopped managing skill ${entry.id}`);
+      }
+      continue;
+    }
+
     const from = join(paths.managedDir, entry.id);
     // Restore to the canonical path derived from the id plus the recorded source
     // agent — do NOT trust the manifest's `originalPath`, which can be stale
@@ -235,11 +308,21 @@ async function skillDirNames(dir: string): Promise<string[]> {
   }
   const names: string[] = [];
   for (const entry of entries) {
-    if (entry.isDirectory() && (await exists(join(dir, entry.name, "SKILL.md")))) {
+    if ((await isDirectoryEntry(dir, entry)) && (await exists(join(dir, entry.name, "SKILL.md")))) {
       names.push(entry.name);
     }
   }
   return names;
+}
+
+async function isDirectoryEntry(parent: string, entry: Dirent): Promise<boolean> {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return (await stat(join(parent, entry.name))).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Move a directory, falling back to a copy across filesystems (EXDEV). */
@@ -343,4 +426,119 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function applyManualOnlyMetadata(
+  skillDir: string,
+  source: SkillSource,
+): Promise<MetadataPatch[]> {
+  return source === "claude"
+    ? [await patchClaudeSkill(skillDir)]
+    : [await patchCodexSkill(skillDir)];
+}
+
+async function patchClaudeSkill(skillDir: string): Promise<MetadataPatch> {
+  const path = join(skillDir, "SKILL.md");
+  const before = await readFile(path, "utf8");
+  const after = setYamlScalarInFrontmatter(before, "disable-model-invocation", "true");
+  if (after !== before) await writeFile(path, after, "utf8");
+  return { path, before, after };
+}
+
+async function patchCodexSkill(skillDir: string): Promise<MetadataPatch> {
+  const path = join(skillDir, "agents", "openai.yaml");
+  let before: string | undefined;
+  try {
+    before = await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const after = setCodexManualOnly(before ?? "");
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, after, "utf8");
+  return { path, before, after, created: before === undefined };
+}
+
+async function restoreManualOnlyMetadata(
+  entry: ManagedEntry,
+  log: (message: string) => void,
+): Promise<void> {
+  for (const patch of entry.metadataPatch ?? []) {
+    let current: string | undefined;
+    try {
+      current = await readFile(patch.path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    if (current !== patch.after) {
+      log(`[ratel] skill ${entry.id}: metadata changed since activation — leaving ${patch.path}`);
+      continue;
+    }
+    if (patch.created) {
+      await rm(patch.path, { force: true });
+    } else if (patch.before !== undefined) {
+      await writeFile(patch.path, patch.before, "utf8");
+    }
+  }
+}
+
+function setYamlScalarInFrontmatter(raw: string, key: string, value: string): string {
+  const lines = raw.split(/\r?\n/);
+  const newline = raw.includes("\r\n") ? "\r\n" : "\n";
+  let first = 0;
+  while (first < lines.length && lines[first].trim() === "") first++;
+  if (lines[first]?.trim() !== "---") throw new Error("SKILL.md is missing YAML frontmatter");
+  let end = -1;
+  for (let i = first + 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) throw new Error("SKILL.md frontmatter is not closed");
+  const re = new RegExp(`^\\s*${escapeRegExp(key)}\\s*:`);
+  for (let i = first + 1; i < end; i++) {
+    if (re.test(lines[i])) {
+      lines[i] = `${key}: ${value}`;
+      return lines.join(newline);
+    }
+  }
+  lines.splice(end, 0, `${key}: ${value}`);
+  return lines.join(newline);
+}
+
+function setCodexManualOnly(raw: string): string {
+  const hasPolicy = /^policy\s*:/m.test(raw);
+  const hasAllow = /^\s+allow_implicit_invocation\s*:/m.test(raw);
+  if (!raw.trim()) return "policy:\n  allow_implicit_invocation: false\n";
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  if (hasAllow) {
+    return `${lines
+      .map((line) =>
+        /^\s+allow_implicit_invocation\s*:/.test(line)
+          ? `${line.match(/^\s*/)?.[0] ?? "  "}allow_implicit_invocation: false`
+          : line,
+      )
+      .join("\n")
+      .replace(/\n*$/, "")}\n`;
+  }
+  if (hasPolicy) {
+    const index = lines.findIndex((line) => /^policy\s*:/.test(line));
+    lines.splice(index + 1, 0, "  allow_implicit_invocation: false");
+    return `${lines.join("\n").replace(/\n*$/, "")}\n`;
+  }
+  return `${raw.replace(/\s*$/, "")}\npolicy:\n  allow_implicit_invocation: false\n`;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

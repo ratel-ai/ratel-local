@@ -28,9 +28,9 @@ import type { HandlerCtx } from "./types.js";
 export const SKILL_USAGE = `usage: ratel-mcp skill <verb>
 
 Verbs:
-  activate         move Claude Code skills (~/.claude/skills) into the Ratel-managed
-                   folder (~/.ratel/skills) so the gateway serves them on demand
-  deactivate       move managed skills back to ~/.claude/skills (reverses activate)
+  activate         manage Claude/Codex skills through Ratel as invoke-only
+                   without moving the native skill folders
+  deactivate       stop managing linked skills and restore Ratel metadata edits
   list             show which skills Ratel currently manages
   suggest          rank skills for a prompt (--prompt, --cwd, --dir, --limit, --min-score)
   preload-hook     UserPromptSubmit hook entrypoint (reads JSON on stdin; injects a nudge)
@@ -51,16 +51,16 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
     case "activate": {
       const pending = await activateSkills(paths, { dryRun: true });
       if (pending.moved.length === 0) {
-        ctx.log("no skills to activate (nothing new in ~/.claude/skills)");
+        ctx.log("no skills to activate (nothing new in native skill folders)");
         return;
       }
       if (dryRun) {
-        for (const m of pending.moved) ctx.log(`would activate ${m.id}`);
+        for (const m of pending.moved) ctx.log(`would manage ${m.id} as invoke-only`);
         return;
       }
       if (!assumeYes) {
         const answer = await ctx.prompts.confirm({
-          message: `Move ${pending.moved.length} skill(s) out of ~/.claude/skills into Ratel? (reversible with "skill deactivate")`,
+          message: `Manage ${pending.moved.length} skill(s) through Ratel as invoke-only? (reversible with "skill deactivate")`,
           initialValue: true,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {
@@ -69,7 +69,7 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
         }
       }
       const result = await activateSkills(paths, { logger: ctx.log });
-      ctx.log(`activated ${result.moved.length} skill(s)`);
+      ctx.log(`managing ${result.moved.length} skill(s) as invoke-only`);
       return;
     }
 
@@ -80,12 +80,12 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
         return;
       }
       if (dryRun) {
-        for (const r of pending.restored) ctx.log(`would restore ${r.id} → ${r.originalPath}`);
+        for (const r of pending.restored) ctx.log(`would stop managing ${r.id}`);
         return;
       }
       if (!assumeYes) {
         const answer = await ctx.prompts.confirm({
-          message: `Restore ${pending.restored.length} skill(s) back to ~/.claude/skills?`,
+          message: `Stop managing ${pending.restored.length} skill(s) through Ratel?`,
           initialValue: true,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {

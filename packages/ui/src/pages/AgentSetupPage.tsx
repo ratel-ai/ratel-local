@@ -671,7 +671,7 @@ function AgentOperationPanel(props: {
           <h3 className="text-lg font-semibold tracking-tight">Nothing to do</h3>
           <p className="mt-1 text-sm text-muted-foreground">
             This agent is linked, all native entries are already in Ratel, and every skill is
-            managed.
+            managed through Ratel.
           </p>
         </div>
       ) : null}
@@ -753,9 +753,9 @@ function SkillImportSection(props: {
   const count = props.available.length;
   return (
     <SetupActionSection
-      description="Bring this agent's skills into Ratel's managed folder so the gateway serves them."
+      description="Link this agent's skills into Ratel as invoke-only without moving their native folders."
       icon={<Sparkles />}
-      title="Import skills"
+      title="Manage skills"
     >
       <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
         <div>
@@ -766,7 +766,7 @@ function SkillImportSection(props: {
         </div>
         <Button className="min-h-12 px-6 text-base md:min-w-40" onClick={() => setOpen(true)}>
           <Sparkles />
-          Import skills
+          Manage skills
         </Button>
       </div>
       <ImportSkillsDialog

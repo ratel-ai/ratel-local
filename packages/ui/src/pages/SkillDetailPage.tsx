@@ -104,7 +104,7 @@ export function SkillDetailPage(props: { id: string }) {
 
   const detail = state.status === "ready" ? state.data : null;
   // Unmanaged skills live in an agent's own folder (Claude / Codex); they're
-  // read-only here until brought into Ratel (the backend rejects the PATCH too).
+  // read-only here until managed through Ratel (the backend rejects the PATCH too).
   const canEdit = detail?.state === "active";
   const canSave = description.trim() !== "" && !busy;
 
@@ -223,8 +223,8 @@ export function SkillDetailPage(props: { id: string }) {
           ) : (
             detail && (
               <p className="text-muted-foreground text-xs">
-                This skill is managed by {sourceLabel(detail.source)} and is read-only here. Bring
-                it into Ratel from the Skills page to edit it.
+                This skill is owned by {sourceLabel(detail.source)} and is read-only here. Manage it
+                through Ratel from the Skills page to edit it.
               </p>
             )
           )}

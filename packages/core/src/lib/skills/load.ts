@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
@@ -48,7 +48,7 @@ export async function loadSkills(
     }
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!(await isDirectoryEntry(dir, entry))) continue;
       const skillDir = join(dir, entry.name);
       const skillMd = join(skillDir, "SKILL.md");
 
@@ -93,6 +93,16 @@ export async function loadSkills(
   }
 
   return Array.from(byId.values());
+}
+
+async function isDirectoryEntry(parent: string, entry: Dirent): Promise<boolean> {
+  if (entry.isDirectory()) return true;
+  if (!entry.isSymbolicLink()) return false;
+  try {
+    return (await stat(join(parent, entry.name))).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 interface ParsedSkill {
