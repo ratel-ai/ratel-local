@@ -50,7 +50,7 @@ const TOP_USAGE = `usage: ratel-local <command> [args...]
 Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
            or --auto-config to load user/project/local Ratel configs)
-  daemon   start a loopback HTTP daemon with /mcp plus the UI/API [--port N] [--no-open]
+  daemon   run, install, inspect, or stop the loopback HTTP daemon with /mcp plus the UI/API
   import   migrate agent MCP configs and native skills into Ratel
   link     point an agent at Ratel while preserving native MCP entries
   mcp      manage MCP servers (add, remove, list, get, edit, auth)

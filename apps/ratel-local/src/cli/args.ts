@@ -17,6 +17,8 @@ export type BackupVerb = "list";
 
 export type StatuslineVerb = "install" | "uninstall";
 
+export type DaemonVerb = "run" | "install" | "uninstall" | "status" | "start" | "stop" | "restart";
+
 export type SkillVerb =
   | "activate"
   | "deactivate"
@@ -31,6 +33,16 @@ const MCP_VERBS: ReadonlySet<string> = new Set(["add", "remove", "list", "get", 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
 
 const STATUSLINE_VERBS: ReadonlySet<string> = new Set(["install", "uninstall"]);
+
+const DAEMON_VERBS: ReadonlySet<string> = new Set([
+  "run",
+  "install",
+  "uninstall",
+  "status",
+  "start",
+  "stop",
+  "restart",
+]);
 
 const SKILL_VERBS: ReadonlySet<string> = new Set([
   "activate",
@@ -156,6 +168,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
   } else if (first === "daemon") {
     group = "daemon";
     i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-") && DAEMON_VERBS.has(argv[1])) {
+      verb = argv[1];
+      i = 2;
+    }
   } else if (first === "ui") {
     group = "ui";
     i = 1;
