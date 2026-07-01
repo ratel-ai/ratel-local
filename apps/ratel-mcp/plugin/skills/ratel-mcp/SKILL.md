@@ -150,7 +150,9 @@ ratel-mcp mcp link --agent codex
 ratel-mcp mcp link --agent claude-code
 ```
 
-Install the Claude Code statusline:
+`ratel-mcp mcp link` and `ratel-mcp mcp import` install the Claude Code
+statusline automatically once they finish wiring up Claude Code (skipped if a
+non-Ratel statusline is already configured). Manage it directly with:
 
 ```bash
 ratel-mcp statusline install
@@ -159,9 +161,10 @@ ratel-mcp statusline uninstall
 ```
 
 Claude Code plugins cannot currently set top-level `statusLine` defaults
-directly; use the CLI or the Claude Code agent page in `ratel-mcp ui`. The
-statusline reports Ratel as on when Claude Code starts Ratel via a linked MCP
-entry or an enabled `ratel-mcp@...` plugin.
+directly; use the CLI (directly, or automatically via `link`/`import`) or the
+Claude Code agent page in `ratel-mcp ui`. The statusline reports Ratel as on
+when Claude Code starts Ratel via a linked MCP entry or an enabled
+`ratel-mcp@...` plugin.
 
 Authorize HTTP/SSE upstreams:
 

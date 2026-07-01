@@ -11,6 +11,7 @@ import {
   type SupportedAgentHostKind,
 } from "@ratel-ai/mcp-core";
 import { resolveCliRatelBin } from "../ratel-bin.js";
+import { maybeAutoInstallStatusline } from "./statusline.js";
 import type { HandlerCtx } from "./types.js";
 
 export interface LinkOptions {
@@ -76,6 +77,7 @@ export async function runLink(
   });
 
   if (plan.agentChanges.length === 0) {
+    await maybeAutoInstallStatusline(ctx, agentState.host.kind, bin);
     ctx.prompts.outro(`nothing to do (${agentState.host.displayName} already points at Ratel)`);
     return null;
   }
@@ -101,6 +103,7 @@ export async function runLink(
     action: "link",
   });
   ctx.prompts.note(`Backup created. Run \`ratel-mcp backup list\` to inspect backups.`, "Done");
+  await maybeAutoInstallStatusline(ctx, agentState.host.kind, bin);
   ctx.prompts.outro(
     `link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
   );

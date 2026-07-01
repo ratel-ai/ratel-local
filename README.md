@@ -79,11 +79,13 @@ claude plugin marketplace add .
 claude plugin install ratel-mcp@ratel
 ```
 
-Claude Code plugins cannot currently set a top-level `statusLine` default.
-Install the Ratel statusline separately with `ratel-mcp statusline install`
-or from the Claude Code agent page in `ratel-mcp ui`. See Claude's
-[statusline docs](https://code.claude.com/docs/en/statusline) and
-[plugin reference](https://code.claude.com/docs/en/plugins-reference).
+Claude Code plugins cannot currently set a top-level `statusLine` default, so
+`ratel-mcp mcp link` and `ratel-mcp mcp import` install the Ratel statusline
+automatically after wiring up Claude Code (skipped if you already have a
+non-Ratel statusline configured). Install or reinstall it manually with
+`ratel-mcp statusline install` or from the Claude Code agent page in
+`ratel-mcp ui`. See Claude's [statusline docs](https://code.claude.com/docs/en/statusline)
+and [plugin reference](https://code.claude.com/docs/en/plugins-reference).
 
 ## CLI quickstart
 

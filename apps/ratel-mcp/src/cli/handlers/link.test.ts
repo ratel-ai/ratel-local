@@ -104,6 +104,43 @@ describe("runLink", () => {
     expect(claude.mcpServers.other).toEqual({ type: "stdio", command: "elsewhere" });
   });
 
+  it("auto-installs the Claude Code statusline after linking", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(HOME_CLAUDE, JSON.stringify({ mcpServers: {} }));
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+    await runLink(ctx, { bin: BIN, yes: true });
+
+    const settings = JSON.parse(fs.files.get("/home/u/.claude/settings.json") as string);
+    expect(settings.statusLine).toEqual({
+      type: "command",
+      command: "ratel-mcp statusline",
+      padding: 0,
+      refreshInterval: 30,
+    });
+  });
+
+  it("leaves an existing non-Ratel statusline alone", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(HOME_CLAUDE, JSON.stringify({ mcpServers: {} }));
+    fs.files.set(
+      "/home/u/.claude/settings.json",
+      JSON.stringify({ statusLine: { type: "command", command: "my-custom-statusline" } }),
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+    await runLink(ctx, { bin: BIN, yes: true });
+
+    const settings = JSON.parse(fs.files.get("/home/u/.claude/settings.json") as string);
+    expect(settings.statusLine).toEqual({ type: "command", command: "my-custom-statusline" });
+  });
+
   it("does not touch the Ratel global config", async () => {
     const fs = new MemFs();
     const ratelBefore = JSON.stringify({
