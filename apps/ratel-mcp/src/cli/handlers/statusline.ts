@@ -1,12 +1,43 @@
 import {
+  ClaudeStatuslineConflictError,
   installClaudeCodeStatusline,
   renderRatelStatusline,
+  type ResolvedBin,
   uninstallClaudeCodeStatusline,
 } from "@ratel-ai/mcp-core";
 import { currentGitBranch } from "../git.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import { readStdin } from "../stdin.js";
 import type { HandlerCtx } from "./types.js";
+
+/**
+ * Best-effort statusline install invoked after `link`/`import` wire up Claude
+ * Code, so users get it without a separate `statusline install` step. Never
+ * blocks or fails the caller: a pre-existing non-Ratel statusLine is left
+ * alone (reported as a note) rather than treated as a conflict to resolve.
+ */
+export async function maybeAutoInstallStatusline(
+  ctx: HandlerCtx,
+  agentHostKind: string,
+  bin: ResolvedBin,
+): Promise<void> {
+  if (agentHostKind !== "claude-code") return;
+  try {
+    const result = await installClaudeCodeStatusline(ctx, { bin });
+    if (result.changed) {
+      ctx.prompts.note(`Installed the Ratel statusline into ${result.path}`, "Statusline");
+    }
+  } catch (err) {
+    if (err instanceof ClaudeStatuslineConflictError) {
+      ctx.prompts.note(
+        "Skipped statusline install: a non-Ratel statusLine is already configured. Run `ratel-mcp statusline install --force` to replace it.",
+        "Statusline",
+      );
+      return;
+    }
+    throw err;
+  }
+}
 
 export const STATUSLINE_USAGE = `usage: ratel-mcp statusline [install|uninstall]
 
