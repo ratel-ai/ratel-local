@@ -139,6 +139,7 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
           </p>
         ) : (
           <SkillImportPicker
+            title="Skills"
             onToggle={toggle}
             onToggleAll={toggleAll}
             resetKey={`${props.open}:${skills.length}`}
@@ -166,11 +167,13 @@ function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>): s
 export function SkillImportPicker(props: {
   className?: string;
   emptyLabel?: string;
+  flushScroll?: boolean;
   onToggle: (skill: SkillSummary) => void;
   onToggleAll: (skills: SkillSummary[], shouldSelect: boolean) => void;
   resetKey?: string;
   selected: Set<string>;
   skills: SkillSummary[];
+  title?: string;
 }) {
   const [query, setQuery] = useState("");
   const [visibleLimit, setVisibleLimit] = useState(INITIAL_SKILL_LIMIT);
@@ -221,7 +224,23 @@ export function SkillImportPicker(props: {
   };
 
   return (
-    <div className={cn("grid min-w-0 gap-2", props.className)}>
+    <div className={cn("grid min-w-0 gap-3", props.className)}>
+      {props.title ? (
+        <div className="flex min-w-0 items-center justify-between gap-3 px-1">
+          <h4 className="truncate font-medium text-sm">
+            {props.title} <span className="text-muted-foreground">({filtered.length})</span>
+          </h4>
+          <button
+            className="shrink-0 text-muted-foreground text-xs transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            disabled={filtered.length === 0}
+            onClick={() => props.onToggleAll(filtered, !allFilteredSelected)}
+            type="button"
+          >
+            {allFilteredSelected ? "Deselect all" : "Select all"}
+            {selectedCount > 0 ? ` · ${selectedCount}` : ""}
+          </button>
+        </div>
+      ) : null}
       <div className="relative">
         <SearchIcon className="-translate-y-1/2 pointer-events-none absolute top-1/2 left-2.5 size-4 text-muted-foreground" />
         <Input
@@ -231,86 +250,79 @@ export function SkillImportPicker(props: {
           value={query}
         />
       </div>
-      <button
-        className="flex items-center gap-2 px-1 text-left text-muted-foreground text-xs hover:text-foreground"
-        disabled={filtered.length === 0}
-        onClick={() => props.onToggleAll(filtered, !allFilteredSelected)}
-        type="button"
-      >
-        <Checkbox checked={allFilteredSelected} className="pointer-events-none" tabIndex={-1} />
-        {allFilteredSelected ? "Deselect matching" : "Select matching"} ({filtered.length})
-        {selectedCount > 0 ? <span className="ml-auto">{selectedCount} selected</span> : null}
-      </button>
       {filtered.length === 0 ? (
         <p className="rounded-md border border-border px-3 py-6 text-center text-muted-foreground text-sm">
           {props.emptyLabel ?? "No matching skills."}
         </p>
       ) : (
-        <div
-          data-skill-scroll
-          className="max-h-[55vh] min-h-52 overflow-auto rounded-md border border-border bg-background"
-          onScroll={maybeLoadMore}
-          ref={scrollRef}
-        >
-          <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const skill = loaded[virtualRow.index];
-              if (!skill) return null;
-              const isSelected = props.selected.has(skillKey(skill));
-              return (
-                <div
-                  data-index={virtualRow.index}
-                  key={skillKey(skill)}
-                  ref={rowVirtualizer.measureElement}
-                  className="absolute top-0 left-0 w-full px-2 py-1"
-                  style={{ transform: `translateY(${virtualRow.start}px)` }}
-                >
-                  <button
-                    className={cn(
-                      "flex w-full min-w-0 items-start gap-3 rounded-md border p-3 text-left transition-colors",
-                      isSelected
-                        ? "border-brand-green bg-brand-green/10"
-                        : "border-border bg-card hover:bg-muted/35",
-                    )}
-                    onClick={() => props.onToggle(skill)}
-                    type="button"
+        <div className={cn("border-border border-t", props.flushScroll && "-mx-4 sm:-mx-5")}>
+          <div
+            data-skill-scroll
+            className="max-h-[55vh] min-h-52 overflow-auto bg-background"
+            onScroll={maybeLoadMore}
+            ref={scrollRef}
+          >
+            <div
+              className="relative w-full"
+              style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+            >
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const skill = loaded[virtualRow.index];
+                if (!skill) return null;
+                const isSelected = props.selected.has(skillKey(skill));
+                return (
+                  <div
+                    data-index={virtualRow.index}
+                    key={skillKey(skill)}
+                    ref={rowVirtualizer.measureElement}
+                    className="absolute top-0 left-0 w-full"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
                   >
-                    <Checkbox
-                      checked={isSelected}
-                      className="pointer-events-none mt-0.5"
-                      tabIndex={-1}
-                    />
-                    <SourceIcon className="mt-0.5" source={skill.source} />
-                    <span className="min-w-0 flex-1">
-                      <strong className="block truncate font-medium">{skill.name}</strong>
-                      {skill.description && (
-                        <span className="mt-0.5 line-clamp-2 break-words text-muted-foreground text-sm">
-                          {skill.description}
-                        </span>
+                    <button
+                      className={cn(
+                        "flex w-full min-w-0 items-start gap-3 border-border border-b px-3 py-2 text-left transition-colors",
+                        isSelected ? "bg-brand-green/10" : "bg-background hover:bg-muted/35",
                       )}
-                      {skill.tags.length > 0 ? (
-                        <span className="mt-2 flex flex-wrap gap-1">
-                          {skill.tags.slice(0, 4).map((tag) => (
-                            <span
-                              className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
-                              key={tag}
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </span>
-                      ) : null}
-                    </span>
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          {canLoadMore ? (
-            <div className="border-border border-t px-3 py-2 text-center text-muted-foreground text-xs">
-              Scroll to load more ({loaded.length} of {filtered.length})
+                      onClick={() => props.onToggle(skill)}
+                      type="button"
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        className="pointer-events-none mt-0.5"
+                        tabIndex={-1}
+                      />
+                      <SourceIcon className="mt-0.5" source={skill.source} />
+                      <span className="min-w-0 flex-1">
+                        <strong className="block truncate font-medium">{skill.name}</strong>
+                        {skill.description && (
+                          <span className="mt-0.5 line-clamp-2 break-words text-muted-foreground text-sm">
+                            {skill.description}
+                          </span>
+                        )}
+                        {skill.tags.length > 0 ? (
+                          <span className="mt-2 flex flex-wrap gap-1">
+                            {skill.tags.slice(0, 4).map((tag) => (
+                              <span
+                                className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
+                                key={tag}
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
             </div>
-          ) : null}
+            {canLoadMore ? (
+              <div className="border-border border-t px-3 py-2 text-center text-muted-foreground text-xs">
+                Scroll to load more ({loaded.length} of {filtered.length})
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
     </div>

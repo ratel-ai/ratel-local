@@ -624,9 +624,8 @@ function AgentOperationPanel(props: {
       ) : null}
       {canImport ? (
         <SetupActionSection
-          description="Choose native MCP entries and skills to bring under Ratel in one reviewed flow."
-          icon={<Download />}
-          title="Import into Ratel"
+          description="Choose unmanaged MCP entries and native skills, resolve MCP conflicts, then apply them together."
+          title="Import MCPs and skills"
         >
           <PreviewFlow
             availableSkills={props.availableSkills}
@@ -642,8 +641,7 @@ function AgentOperationPanel(props: {
       ) : null}
       {canLink ? (
         <SetupActionSection
-          description="Write the Ratel gateway entry into this agent config."
-          icon={<LinkIcon />}
+          description="Add the Ratel gateway entry when this agent is not routed through Ratel yet."
           title="Link Ratel gateway"
         >
           <PreviewFlow
@@ -684,16 +682,11 @@ function ClaudeStatuslineSection(props: {
     : otherConfigured
       ? "Replace statusline"
       : "Install statusline";
-  const title = installed
-    ? "Remove Ratel statusline"
-    : otherConfigured
-      ? "Replace configured statusline"
-      : "Install Ratel statusline";
   const description = installed
-    ? "Remove the Ratel-owned command from Claude Code user settings."
+    ? "Remove the Ratel-owned statusLine command from Claude Code."
     : otherConfigured
-      ? "Replace the existing Claude Code statusLine command with Ratel."
-      : "Write the Ratel statusline command into Claude Code user settings.";
+      ? "Replace the existing Claude Code statusLine command with Ratel's statusline."
+      : "Show Claude context usage, Ratel enablement, and Ratel tool telemetry in the statusline.";
 
   const commit = async () => {
     const ok = await runAction(actionLabel, () =>
@@ -708,18 +701,18 @@ function ClaudeStatuslineSection(props: {
   };
 
   return (
-    <SetupActionSection
-      description="Manage the Claude Code user-level statusLine setting."
-      icon={<FileText />}
-      title="Claude statusline"
-    >
+    <SetupActionSection description={description} title={actionLabel}>
       <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
         <div>
-          <h4 className="font-medium">{title}</h4>
-          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+          <p className="font-medium text-sm">Context and Ratel telemetry at a glance</p>
+          <p className="mt-1 max-w-xl text-muted-foreground text-xs">
+            Shows model, context-window usage, session duration, git branch, whether Ratel is
+            enabled, and the estimated tool tokens/tool count Ratel keeps out of Claude's prompt.
+          </p>
           {!props.state.ratelEnabled ? (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-              Ratel MCP is not enabled in Claude Code.
+            <p className="mt-2 max-w-xl text-amber-700 text-xs dark:text-amber-400">
+              Ratel is not enabled in Claude Code yet, so the statusline will report that until the
+              gateway is linked or the plugin is enabled.
             </p>
           ) : null}
         </div>
@@ -739,16 +732,12 @@ function ClaudeStatuslineSection(props: {
 function SetupActionSection(props: {
   children: React.ReactNode;
   description: string;
-  icon: React.ReactNode;
   title: string;
 }) {
   return (
     <section className="grid gap-3">
       <div>
-        <h3 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-          {props.icon}
-          {props.title}
-        </h3>
+        <h3 className="text-lg font-semibold tracking-tight">{props.title}</h3>
         <p className="mt-1 text-sm text-muted-foreground">{props.description}</p>
       </div>
       {props.children}
@@ -1058,19 +1047,22 @@ function SetupRecap(props: {
   preview: AgentPlanPreview;
 }) {
   const changes = props.preview.plan.ratelChanges.length + props.preview.plan.agentChanges.length;
-  const importableCount =
-    props.preview.candidates.length + (props.flow === "import" ? props.availableSkills.length : 0);
+  const mcpCount = props.preview.candidates.length;
+  const skillCount = props.flow === "import" ? props.availableSkills.length : 0;
+  const importableCount = mcpCount + skillCount;
   const actionLabel = props.flow === "import" ? "Import" : "Link";
   return (
     <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
       <div>
-        <h4 className="font-medium">
-          {props.flow === "import" ? "Import into Ratel" : "Link Ratel gateway"}
-        </h4>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="font-medium text-sm">
           {props.flow === "import"
-            ? "Choose MCP entries and skills, resolve conflicts if needed, then review changes."
-            : "Review the exact agent config change before writing it."}
+            ? importAvailabilityLabel(mcpCount, skillCount)
+            : "One agent config change will be reviewed before writing."}
+        </p>
+        <p className="mt-1 text-muted-foreground text-xs">
+          {props.flow === "import"
+            ? "Skills are selected first; MCP conflict handling follows only when needed."
+            : "Native MCP entries are preserved."}
         </p>
       </div>
       <Button
@@ -1083,6 +1075,14 @@ function SetupRecap(props: {
       </Button>
     </div>
   );
+}
+
+function importAvailabilityLabel(mcpCount: number, skillCount: number) {
+  const parts: string[] = [];
+  if (mcpCount > 0) parts.push(`${mcpCount} MCP entr${mcpCount === 1 ? "y" : "ies"}`);
+  if (skillCount > 0) parts.push(`${skillCount} skill${skillCount === 1 ? "" : "s"}`);
+  if (parts.length === 0) return "Nothing available to import.";
+  return `${parts.join(" and ")} available.`;
 }
 
 type ImportScene = "skills" | "entries" | "strategy" | "pick-conflicts" | "review";
@@ -1224,17 +1224,16 @@ function ImportSceneDialog(props: {
         >
           <div className="grid gap-3">
             {props.skills.length > 0 ? (
-              <div className="grid gap-2">
-                <h4 className="px-1 font-medium text-sm">
-                  Skills <span className="text-muted-foreground">({props.skills.length})</span>
-                </h4>
+              <div className="grid">
                 <SkillImportPicker
                   className="[&_[data-skill-scroll]]:max-h-72"
+                  flushScroll
                   onToggle={toggleSkill}
                   onToggleAll={toggleSkills}
                   resetKey={`${props.open}:${props.skills.length}`}
                   selected={draftSkillSelection}
                   skills={props.skills}
+                  title="Skills"
                 />
               </div>
             ) : (

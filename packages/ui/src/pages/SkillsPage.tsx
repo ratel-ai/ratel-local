@@ -81,6 +81,7 @@ export function SkillsPage() {
   const problems = ready?.problems ?? [];
   const canImport = available.length > 0;
   const canDeactivateAll = managed.length > 0;
+  const loading = state.status === "loading";
 
   return (
     <main className="flex w-full flex-1 flex-col gap-4 px-4 py-5 sm:px-6">
@@ -109,17 +110,16 @@ export function SkillsPage() {
         </PageHeaderContent>
         <PageHeaderActions className="hidden items-center sm:flex">
           <NewSkillDialog onCreated={load} />
-          {canImport && (
-            <Button
-              className="h-10"
-              onClick={() => setImportOpen(true)}
-              size="sm"
-              variant="outline"
-            >
-              <LinkIcon />
-              Manage skills
-            </Button>
-          )}
+          <Button
+            className="h-10"
+            disabled={loading || !canImport}
+            onClick={() => setImportOpen(true)}
+            size="sm"
+            variant="outline"
+          >
+            <LinkIcon />
+            Manage skills
+          </Button>
           {canDeactivateAll && (
             <Button
               className="h-10"
