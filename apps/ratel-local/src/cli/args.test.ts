@@ -64,6 +64,17 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it("recognizes daemon lifecycle verbs", () => {
+    expect(parseArgs(["daemon"]).verb).toBeUndefined();
+    expect(parseArgs(["daemon", "run"]).verb).toBe("run");
+    expect(parseArgs(["daemon", "install"]).verb).toBe("install");
+    expect(parseArgs(["daemon", "uninstall"]).verb).toBe("uninstall");
+    expect(parseArgs(["daemon", "status"]).verb).toBe("status");
+    expect(parseArgs(["daemon", "start"]).verb).toBe("start");
+    expect(parseArgs(["daemon", "stop"]).verb).toBe("stop");
+    expect(parseArgs(["daemon", "restart"]).verb).toBe("restart");
+  });
+
   it("recognizes backup list", () => {
     const r = parseArgs(["backup", "list"]);
     expect(r.group).toBe("backup");
@@ -128,6 +139,18 @@ describe("parseArgs — flags and config paths", () => {
     const r = parseArgs(["serve", "--auto-config", "--project-root", "/repo"]);
     expect(r.flags["auto-config"]).toBe(true);
     expect(r.flags["project-root"]).toBe("/repo");
+  });
+
+  it("collects daemon run positionals as config paths after the verb", () => {
+    const r = parseArgs(["daemon", "run", "base.json", "--config", "extra.json"]);
+    expect(r.verb).toBe("run");
+    expect(r.configPaths).toEqual(["base.json", "extra.json"]);
+  });
+
+  it("keeps daemon positional config compatibility when no lifecycle verb is present", () => {
+    const r = parseArgs(["daemon", "base.json"]);
+    expect(r.verb).toBeUndefined();
+    expect(r.configPaths).toEqual(["base.json"]);
   });
 
   it("does not treat positionals as config paths under non-serve commands", () => {
