@@ -1085,7 +1085,7 @@ function SetupRecap(props: {
   );
 }
 
-type ImportScene = "recap" | "strategy" | "pick-conflicts" | "review";
+type ImportScene = "skills" | "entries" | "strategy" | "pick-conflicts" | "review";
 
 function ImportSceneDialog(props: {
   hostKind: AgentHostKind;
@@ -1101,7 +1101,7 @@ function ImportSceneDialog(props: {
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   skills: SkillSummary[];
 }) {
-  const [scene, setScene] = useState<ImportScene>("recap");
+  const [scene, setScene] = useState<ImportScene>("skills");
   const [committing, setCommitting] = useState(false);
   const [draftPreview, setDraftPreview] = useState<AgentPlanPreview>(props.preview);
   const [draftSelection, setDraftSelection] = useState<string[]>(props.preview.selected);
@@ -1114,10 +1114,19 @@ function ImportSceneDialog(props: {
   const requiresConflictSelection =
     draftSelection.length > 0 && conflicts.length > 0 && conflictStrategy === "replace-selected";
   const hasSelectedImport = draftSelection.length > 0 || selectedSkills.length > 0;
-  const goAfterRecap = () =>
+  const hasSelectableEntries = props.preview.candidates.length > 0;
+  const canLeaveSkills = selectedSkills.length > 0 || hasSelectableEntries;
+  const goAfterSkills = () => setScene(hasSelectableEntries ? "entries" : "review");
+  const goAfterEntries = () =>
     setScene(draftSelection.length > 0 && conflicts.length > 0 ? "strategy" : "review");
   const goAfterStrategy = () =>
     setScene(conflictStrategy === "replace-selected" ? "pick-conflicts" : "review");
+  const previousReviewScene = () => {
+    if (requiresConflictSelection) return "pick-conflicts";
+    if (draftSelection.length > 0 && conflicts.length > 0) return "strategy";
+    if (hasSelectableEntries) return "entries";
+    return "skills";
+  };
 
   useEffect(() => {
     if (!props.open) return;
@@ -1192,12 +1201,12 @@ function ImportSceneDialog(props: {
       open={props.open}
       onOpenChange={(open) => {
         props.onOpenChange(open);
-        if (open) setScene("recap");
+        if (open) setScene("skills");
       }}
       scene={scene}
       title="Import"
     >
-      {scene === "recap" ? (
+      {scene === "skills" ? (
         <ScenePanel
           flushFooter
           footer={
@@ -1205,56 +1214,15 @@ function ImportSceneDialog(props: {
               <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
                 Cancel
               </Button>
-              <Button disabled={!hasSelectedImport} onClick={goAfterRecap} type="button">
+              <Button disabled={!canLeaveSkills} onClick={goAfterSkills} type="button">
                 Continue
               </Button>
             </>
           }
-          kicker="Import"
-          title="Choose what to import"
+          kicker="Skills"
+          title="Choose skills"
         >
           <div className="grid gap-3">
-            {props.preview.candidates.length > 0 ? (
-              <div className="grid gap-2">
-                <h4 className="px-1 font-medium text-sm">
-                  MCP entries{" "}
-                  <span className="text-muted-foreground">({props.preview.candidates.length})</span>
-                </h4>
-                <SceneScrollSection className="max-h-60">
-                  {props.preview.candidates.map((candidate) => {
-                    const isSelected = selected.has(candidate.name);
-                    return (
-                      <button
-                        className={cn(
-                          "grid w-full gap-1 border-border border-b px-3 py-2 text-left transition-colors last:border-b-0",
-                          isSelected ? "bg-brand-green/10" : "bg-background hover:bg-muted/35",
-                        )}
-                        key={`${candidate.scope}:${candidate.name}`}
-                        onClick={() =>
-                          setDraftSelection((current) => toggleSelection(current, candidate.name))
-                        }
-                        type="button"
-                      >
-                        <div className="flex min-w-0 items-center justify-between gap-2">
-                          <span className="flex min-w-0 items-center gap-2">
-                            <Checkbox
-                              checked={isSelected}
-                              className="pointer-events-none"
-                              tabIndex={-1}
-                            />
-                            <span className="truncate font-medium">{candidate.name}</span>
-                          </span>
-                          <Badge variant="outline">{candidate.scope}</Badge>
-                        </div>
-                        <span className="truncate pl-6 text-xs text-muted-foreground">
-                          {summarizeEntry(candidate.entry)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </SceneScrollSection>
-              </div>
-            ) : null}
             {props.skills.length > 0 ? (
               <div className="grid gap-2">
                 <h4 className="px-1 font-medium text-sm">
@@ -1269,6 +1237,65 @@ function ImportSceneDialog(props: {
                   skills={props.skills}
                 />
               </div>
+            ) : (
+              <p className="rounded-md border border-border px-3 py-6 text-center text-muted-foreground text-sm">
+                No external skills to manage for this agent.
+              </p>
+            )}
+          </div>
+        </ScenePanel>
+      ) : null}
+      {scene === "entries" ? (
+        <ScenePanel
+          flushFooter
+          footer={
+            <>
+              <Button onClick={() => setScene("skills")} type="button" variant="outline">
+                Back
+              </Button>
+              <Button disabled={!hasSelectedImport} onClick={goAfterEntries} type="button">
+                Continue
+              </Button>
+            </>
+          }
+          kicker="Tools"
+          title="Choose tool entries"
+        >
+          <div className="grid gap-3">
+            {props.preview.candidates.length > 0 ? (
+              <SceneScrollSection className="max-h-72">
+                {props.preview.candidates.map((candidate) => {
+                  const isSelected = selected.has(candidate.name);
+                  return (
+                    <button
+                      className={cn(
+                        "grid w-full gap-1 border-border border-b px-3 py-2 text-left transition-colors last:border-b-0",
+                        isSelected ? "bg-brand-green/10" : "bg-background hover:bg-muted/35",
+                      )}
+                      key={`${candidate.scope}:${candidate.name}`}
+                      onClick={() =>
+                        setDraftSelection((current) => toggleSelection(current, candidate.name))
+                      }
+                      type="button"
+                    >
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <Checkbox
+                            checked={isSelected}
+                            className="pointer-events-none"
+                            tabIndex={-1}
+                          />
+                          <span className="truncate font-medium">{candidate.name}</span>
+                        </span>
+                        <Badge variant="outline">{candidate.scope}</Badge>
+                      </div>
+                      <span className="truncate pl-6 text-xs text-muted-foreground">
+                        {summarizeEntry(candidate.entry)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </SceneScrollSection>
             ) : null}
           </div>
         </ScenePanel>
@@ -1277,7 +1304,7 @@ function ImportSceneDialog(props: {
         <ScenePanel
           footer={
             <>
-              <Button onClick={() => setScene("recap")} type="button" variant="outline">
+              <Button onClick={() => setScene("entries")} type="button" variant="outline">
                 Back
               </Button>
               <Button onClick={goAfterStrategy} type="button">
@@ -1349,15 +1376,7 @@ function ImportSceneDialog(props: {
           footer={
             <>
               <Button
-                onClick={() =>
-                  setScene(
-                    requiresConflictSelection
-                      ? "pick-conflicts"
-                      : conflicts.length > 0
-                        ? "strategy"
-                        : "recap",
-                  )
-                }
+                onClick={() => setScene(previousReviewScene())}
                 type="button"
                 variant="outline"
               >
@@ -1374,7 +1393,7 @@ function ImportSceneDialog(props: {
             </>
           }
           kicker="Review"
-          title="Review config changes"
+          title="Review import"
           wide
         >
           <SceneScrollSection className="grid max-h-[65vh] gap-4">
