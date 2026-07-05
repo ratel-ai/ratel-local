@@ -24,7 +24,7 @@
 
 `@ratel-ai/mcp-server` does two things:
 
-- **Gateway** — sits between your MCP host (Claude Code, Cursor, ChatGPT) and your upstream MCP servers. Your agent sees only `search_capabilities` and `invoke_tool`, never the full tool list from every upstream.
+- **MCP and Skills Gateway** — sits between your MCP host (Claude Code, Cursor, ChatGPT) and your upstream MCP servers. Your agent sees only `search_capabilities`, `invoke_tool` and `get_skill`, never the full tool list from every upstream.
 - **CLI** (`ratel-mcp`) — manages your MCP scopes from one place. Add, remove, import, link, and authenticate upstreams across user / project / local scopes.
 
 No changes to your existing MCP servers. No code in your agent.
