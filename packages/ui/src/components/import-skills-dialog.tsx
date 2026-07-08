@@ -33,6 +33,10 @@ function skillKey(skill: SkillSummary): string {
 /** Rows per page; long skill lists page rather than scroll forever. */
 const PAGE_SIZE = 6;
 
+interface ActivateSkillsResponse {
+  skipped?: Array<{ id: string; reason: string }>;
+}
+
 /**
  * Manage unmanaged Claude Code / Codex skills through Ratel. A single screen:
  * pick skills, then activate. There is no conflict step — a name
@@ -89,7 +93,13 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
     const label = `Now managing ${chosen.length} skill${chosen.length === 1 ? "" : "s"}`;
     const ok = await runAction(label, async () => {
       for (const [source, ids] of idsBySource) {
-        await request("/api/skills/activate", { method: "POST", body: { ids, source } });
+        const result = await request<ActivateSkillsResponse>("/api/skills/activate", {
+          method: "POST",
+          body: { ids, source },
+        });
+        if (result.skipped && result.skipped.length > 0) {
+          throw new Error(skippedSkillsMessage(result.skipped));
+        }
       }
     });
     if (ok) {
@@ -197,4 +207,9 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>): string {
+  const details = skipped.map((s) => `${s.id}: ${s.reason}`).join("; ");
+  return `Could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
 }

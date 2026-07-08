@@ -1075,4 +1075,31 @@ describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
       await readFile(join(home, ".claude", "skills", "from-claude", "SKILL.md"), "utf8"),
     ).toContain('description: "updated"');
   });
+
+  it("returns 409 when selected skill activation is skipped", async () => {
+    await writeSkill(".codex/skills", "flow-policy");
+    const policyDir = join(home, ".codex", "skills", "flow-policy", "agents");
+    await mkdir(policyDir, { recursive: true });
+    await writeFile(
+      join(policyDir, "openai.yaml"),
+      "policy: { allow_implicit_invocation: true, review: manual }\n",
+    );
+
+    const activate = await fetch(url("/api/skills/activate"), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ ids: ["flow-policy"], source: "codex" }),
+    });
+
+    expect(activate.status).toBe(409);
+    const body = (await activate.json()) as {
+      error: string;
+      skipped: Array<{ id: string; reason: string }>;
+    };
+    expect(body.error).toMatch(/could not manage selected skill/i);
+    expect(body.skipped[0]).toMatchObject({
+      id: "flow-policy",
+      reason: expect.stringMatching(/unsupported/i),
+    });
+  });
 });

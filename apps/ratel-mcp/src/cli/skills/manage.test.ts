@@ -381,6 +381,28 @@ describe("deactivateSkills", () => {
     expect(await listManaged(paths)).toEqual([]);
   });
 
+  it("keeps a linked skill managed when Codex metadata cannot be safely restored", async () => {
+    await writeCodexSkill("from-codex");
+    const policyPath = join(paths.codexDir, "from-codex", "agents", "openai.yaml");
+    await mkdir(join(paths.codexDir, "from-codex", "agents"), { recursive: true });
+    await writeFile(policyPath, "policy:\n  allow_implicit_invocation: true\n  review: manual\n");
+    await activateSkills(paths, { source: "codex" });
+    await writeFile(policyPath, "policy: { allow_implicit_invocation: false, review: edited }\n");
+
+    const result = await deactivateSkills(paths);
+
+    expect(result.restored).toEqual([]);
+    expect(result.skipped[0]).toMatchObject({
+      id: "from-codex",
+      reason: expect.stringMatching(/metadata/i),
+    });
+    expect((await lstat(join(paths.managedDir, "from-codex"))).isSymbolicLink()).toBe(true);
+    expect(await readFile(policyPath, "utf8")).toBe(
+      "policy: { allow_implicit_invocation: false, review: edited }\n",
+    );
+    expect((await listManaged(paths)).map((m) => m.id)).toEqual(["from-codex"]);
+  });
+
   it("removes the Ratel marker after editing a linked Claude skill", async () => {
     await writeNativeSkill("api-design");
     await activateSkills(paths);

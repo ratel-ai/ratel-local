@@ -277,13 +277,20 @@ export async function deactivateSkills(
         log(`[ratel] skill ${entry.id}: managed path is not a link — leaving managed`);
         continue;
       }
-      if (linkState === "link") {
-        await rm(linkPath, { force: true });
-      } else {
+      if (linkState === "missing") {
         log(`[ratel] skill ${entry.id}: managed link is gone — restoring metadata only`);
       }
       try {
-        await restoreManualOnlyMetadata(paths, entry, log);
+        const metadataRestored = await restoreManualOnlyMetadata(paths, entry, log);
+        if (!metadataRestored) {
+          skipped.push({
+            id: entry.id,
+            reason: "could not restore native metadata",
+          });
+          remaining.push(entry);
+          log(`[ratel] skill ${entry.id}: could not restore native metadata — leaving managed`);
+          continue;
+        }
       } catch (err) {
         skipped.push({
           id: entry.id,
@@ -292,6 +299,9 @@ export async function deactivateSkills(
         remaining.push(entry);
         log(`[ratel] skill ${entry.id}: could not restore native metadata — leaving managed`);
         continue;
+      }
+      if (linkState === "link") {
+        await rm(linkPath, { force: true });
       }
       restored.push(entry);
       log(`[ratel] stopped managing skill ${entry.id}`);
@@ -542,7 +552,8 @@ async function restoreManualOnlyMetadata(
   paths: SkillManagePaths,
   entry: ManagedEntry,
   log: (message: string) => void,
-): Promise<void> {
+): Promise<boolean> {
+  let restoredAll = true;
   for (const patch of entry.metadataPatch ?? []) {
     const expectedPath = expectedMetadataPatchPath(paths, entry);
     const safePatch: MetadataPatch = {
@@ -565,6 +576,9 @@ async function restoreManualOnlyMetadata(
       log(
         `[ratel] skill ${entry.id}: metadata changed since activation — leaving ${safePatch.path}`,
       );
+      if (hasManualOnlyMarker(current, entry.source ?? "claude")) {
+        restoredAll = false;
+      }
       continue;
     }
     if (safePatch.created) {
@@ -573,6 +587,7 @@ async function restoreManualOnlyMetadata(
       await writeTextFileAtomic(safePatch.path, safePatch.before);
     }
   }
+  return restoredAll;
 }
 
 function restoreManualOnlyMarker(
@@ -608,6 +623,14 @@ function restoreCodexManualOnlyMarker(
 ): string | undefined {
   if (current === undefined || !patch.path.endsWith("openai.yaml")) return current;
   return restoreYamlScalarInCodexPolicy(current, "allow_implicit_invocation", patch.before);
+}
+
+function hasManualOnlyMarker(current: string | undefined, source: SkillSource): boolean {
+  if (current === undefined) return false;
+  if (source === "codex") {
+    return /allow_implicit_invocation\s*:\s*(?:"false"|'false'|false)\b/.test(current);
+  }
+  return /^\s*disable-model-invocation\s*:\s*(?:"true"|'true'|true)\s*(?:#.*)?$/m.test(current);
 }
 
 function setYamlScalarInFrontmatter(raw: string, key: string, value: string): string {
