@@ -269,6 +269,62 @@ describe("deactivateSkills", () => {
     expect(await listManaged(paths)).toEqual([]);
   });
 
+  it("ignores a crafted linked manifest path on deactivate", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths);
+    const victimDir = join(home, "victim");
+    await mkdir(victimDir, { recursive: true });
+    await writeFile(join(victimDir, "SKILL.md"), "# do not delete");
+
+    const manifest = JSON.parse(await readFile(paths.manifestPath, "utf8"));
+    manifest.managed[0].linkPath = victimDir;
+    await writeFile(paths.manifestPath, JSON.stringify(manifest));
+
+    await deactivateSkills(paths);
+
+    expect(await readFile(join(victimDir, "SKILL.md"), "utf8")).toBe("# do not delete");
+    expect(await exists(join(paths.managedDir, "api-design", "SKILL.md"))).toBe(false);
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
+      "---\nname: api-design\ndescription: d\n---\n# body",
+    );
+  });
+
+  it("ignores a crafted metadata patch path on deactivate", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths);
+    const manifest = JSON.parse(await readFile(paths.manifestPath, "utf8"));
+    const victimPath = join(home, "victim", "SKILL.md");
+    const ratelPatchedContent = manifest.managed[0].metadataPatch[0].after;
+    await mkdir(join(home, "victim"), { recursive: true });
+    await writeFile(victimPath, ratelPatchedContent);
+    manifest.managed[0].metadataPatch[0].path = victimPath;
+    await writeFile(paths.manifestPath, JSON.stringify(manifest));
+
+    await deactivateSkills(paths);
+
+    expect(await readFile(victimPath, "utf8")).toBe(ratelPatchedContent);
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
+      "---\nname: api-design\ndescription: d\n---\n# body",
+    );
+  });
+
+  it("ignores a crafted created metadata patch path on deactivate", async () => {
+    await writeCodexSkill("from-codex");
+    await activateSkills(paths, { source: "codex" });
+    const manifest = JSON.parse(await readFile(paths.manifestPath, "utf8"));
+    const victimPath = join(home, "victim", "openai.yaml");
+    const ratelCreatedContent = manifest.managed[0].metadataPatch[0].after;
+    await mkdir(join(home, "victim"), { recursive: true });
+    await writeFile(victimPath, ratelCreatedContent);
+    manifest.managed[0].metadataPatch[0].path = victimPath;
+    await writeFile(paths.manifestPath, JSON.stringify(manifest));
+
+    await deactivateSkills(paths);
+
+    expect(await readFile(victimPath, "utf8")).toBe(ratelCreatedContent);
+    expect(await exists(join(paths.codexDir, "from-codex", "agents", "openai.yaml"))).toBe(false);
+  });
+
   it("preserves user metadata edits made after activation", async () => {
     await writeNativeSkill("api-design");
     await activateSkills(paths);

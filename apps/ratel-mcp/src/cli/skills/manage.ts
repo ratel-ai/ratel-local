@@ -263,7 +263,7 @@ export async function deactivateSkills(
       continue;
     }
     if (entry.mode === "linked") {
-      const linkPath = entry.linkPath ?? join(paths.managedDir, entry.id);
+      const linkPath = join(paths.managedDir, entry.id);
       const linkExists = await pathExists(linkPath);
       if (options.dryRun) {
         log(`[ratel] would stop managing skill ${entry.id}`);
@@ -277,7 +277,7 @@ export async function deactivateSkills(
         log(`[ratel] skill ${entry.id}: managed link is gone — restoring metadata only`);
       }
       try {
-        await restoreManualOnlyMetadata(entry, log);
+        await restoreManualOnlyMetadata(paths, entry, log);
       } catch (err) {
         skipped.push({
           id: entry.id,
@@ -523,31 +523,47 @@ async function applyMetadataPatches(patches: MetadataPatch[]): Promise<void> {
 }
 
 async function restoreManualOnlyMetadata(
+  paths: SkillManagePaths,
   entry: ManagedEntry,
   log: (message: string) => void,
 ): Promise<void> {
   for (const patch of entry.metadataPatch ?? []) {
+    const expectedPath = expectedMetadataPatchPath(paths, entry);
+    const safePatch: MetadataPatch = {
+      ...patch,
+      path: expectedPath,
+      created: entry.source === "codex" ? patch.created : false,
+    };
     let current: string | undefined;
     try {
-      current = await readFile(patch.path, "utf8");
+      current = await readFile(safePatch.path, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
-    if (current !== patch.after) {
-      const restored = restoreClaudeManualOnlyMarker(current, patch);
+    if (current !== safePatch.after) {
+      const restored = restoreClaudeManualOnlyMarker(current, safePatch);
       if (restored !== undefined && restored !== current) {
-        await writeTextFileAtomic(patch.path, restored);
+        await writeTextFileAtomic(safePatch.path, restored);
         continue;
       }
-      log(`[ratel] skill ${entry.id}: metadata changed since activation — leaving ${patch.path}`);
+      log(
+        `[ratel] skill ${entry.id}: metadata changed since activation — leaving ${safePatch.path}`,
+      );
       continue;
     }
-    if (patch.created) {
-      await rm(patch.path, { force: true });
-    } else if (patch.before !== undefined) {
-      await writeTextFileAtomic(patch.path, patch.before);
+    if (safePatch.created) {
+      await rm(safePatch.path, { force: true });
+    } else if (safePatch.before !== undefined) {
+      await writeTextFileAtomic(safePatch.path, safePatch.before);
     }
   }
+}
+
+function expectedMetadataPatchPath(paths: SkillManagePaths, entry: ManagedEntry): string {
+  if (entry.source === "codex") {
+    return join(paths.codexDir, entry.id, "agents", "openai.yaml");
+  }
+  return join(paths.nativeDir, entry.id, "SKILL.md");
 }
 
 function restoreClaudeManualOnlyMarker(
