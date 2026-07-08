@@ -25,7 +25,7 @@ export function BrandLogo({ className, suffix = "MCP" }: { className?: string; s
     <span className={cn("inline-flex items-center gap-2.5", className)}>
       <RatelBadger className="h-[17px] w-[37px] bg-brand-green dark:bg-brand-cream" />
       <span className="text-sm font-semibold text-foreground tracking-tight">
-        Ratel <span className="font-normal text-muted-foreground">{suffix}</span>
+        Ratel <span className="font-normal inline-block text-muted-foreground">{suffix}</span>
       </span>
     </span>
   );
