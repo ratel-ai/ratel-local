@@ -269,6 +269,29 @@ describe("deactivateSkills", () => {
     expect(await listManaged(paths)).toEqual([]);
   });
 
+  it("does not delete a non-link managed path for a linked manifest entry", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths);
+    await rm(join(paths.managedDir, "api-design"), { recursive: true, force: true });
+    await mkdir(join(paths.managedDir, "api-design"), { recursive: true });
+    await writeFile(join(paths.managedDir, "api-design", "SKILL.md"), "# direct managed skill");
+
+    const result = await deactivateSkills(paths);
+
+    expect(result.restored).toEqual([]);
+    expect(result.skipped[0]).toMatchObject({
+      id: "api-design",
+      reason: expect.stringMatching(/not.*link/i),
+    });
+    expect(await readFile(join(paths.managedDir, "api-design", "SKILL.md"), "utf8")).toBe(
+      "# direct managed skill",
+    );
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toContain(
+      "disable-model-invocation: true",
+    );
+    expect((await listManaged(paths)).map((m) => m.id)).toEqual(["api-design"]);
+  });
+
   it("ignores a crafted linked manifest path on deactivate", async () => {
     await writeNativeSkill("api-design");
     await activateSkills(paths);
@@ -337,6 +360,25 @@ describe("deactivateSkills", () => {
     expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toContain(
       "description: changed",
     );
+  });
+
+  it("restores Codex manual-only metadata after user edits", async () => {
+    await writeCodexSkill("from-codex");
+    const policyPath = join(paths.codexDir, "from-codex", "agents", "openai.yaml");
+    await mkdir(join(paths.codexDir, "from-codex", "agents"), { recursive: true });
+    await writeFile(policyPath, "policy:\n  allow_implicit_invocation: true\n  review: manual\n");
+    await activateSkills(paths, { source: "codex" });
+    await writeFile(
+      policyPath,
+      "policy:\n  allow_implicit_invocation: false\n  review: edited\n  user_key: kept\n",
+    );
+
+    await deactivateSkills(paths);
+
+    expect(await readFile(policyPath, "utf8")).toBe(
+      "policy:\n  allow_implicit_invocation: true\n  review: edited\n  user_key: kept\n",
+    );
+    expect(await listManaged(paths)).toEqual([]);
   });
 
   it("removes the Ratel marker after editing a linked Claude skill", async () => {

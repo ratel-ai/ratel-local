@@ -264,15 +264,21 @@ export async function deactivateSkills(
     }
     if (entry.mode === "linked") {
       const linkPath = join(paths.managedDir, entry.id);
-      const linkExists = await pathExists(linkPath);
+      const linkState = await managedLinkState(linkPath);
       if (options.dryRun) {
         log(`[ratel] would stop managing skill ${entry.id}`);
         restored.push(entry);
         remaining.push(entry);
         continue;
       }
-      if (linkExists) {
-        await rm(linkPath, { recursive: true, force: true });
+      if (linkState === "not-link") {
+        skipped.push({ id: entry.id, reason: "managed path is not a link" });
+        remaining.push(entry);
+        log(`[ratel] skill ${entry.id}: managed path is not a link — leaving managed`);
+        continue;
+      }
+      if (linkState === "link") {
+        await rm(linkPath, { force: true });
       } else {
         log(`[ratel] skill ${entry.id}: managed link is gone — restoring metadata only`);
       }
@@ -488,6 +494,16 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function managedLinkState(path: string): Promise<"link" | "missing" | "not-link"> {
+  try {
+    const stats = await lstat(path);
+    return stats.isSymbolicLink() ? "link" : "not-link";
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+    throw err;
+  }
+}
+
 async function prepareManualOnlyMetadata(
   skillDir: string,
   source: SkillSource,
@@ -541,7 +557,7 @@ async function restoreManualOnlyMetadata(
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
     if (current !== safePatch.after) {
-      const restored = restoreClaudeManualOnlyMarker(current, safePatch);
+      const restored = restoreManualOnlyMarker(current, safePatch, entry.source ?? "claude");
       if (restored !== undefined && restored !== current) {
         await writeTextFileAtomic(safePatch.path, restored);
         continue;
@@ -559,6 +575,16 @@ async function restoreManualOnlyMetadata(
   }
 }
 
+function restoreManualOnlyMarker(
+  current: string | undefined,
+  patch: MetadataPatch,
+  source: SkillSource,
+): string | undefined {
+  return source === "codex"
+    ? restoreCodexManualOnlyMarker(current, patch)
+    : restoreClaudeManualOnlyMarker(current, patch);
+}
+
 function expectedMetadataPatchPath(paths: SkillManagePaths, entry: ManagedEntry): string {
   if (entry.source === "codex") {
     return join(paths.codexDir, entry.id, "agents", "openai.yaml");
@@ -574,6 +600,14 @@ function restoreClaudeManualOnlyMarker(
     return current;
   }
   return restoreYamlScalarInFrontmatter(current, "disable-model-invocation", patch.before);
+}
+
+function restoreCodexManualOnlyMarker(
+  current: string | undefined,
+  patch: MetadataPatch,
+): string | undefined {
+  if (current === undefined || !patch.path.endsWith("openai.yaml")) return current;
+  return restoreYamlScalarInCodexPolicy(current, "allow_implicit_invocation", patch.before);
 }
 
 function setYamlScalarInFrontmatter(raw: string, key: string, value: string): string {
@@ -634,6 +668,65 @@ function getYamlScalarLineFromFrontmatter(raw: string, key: string): string | un
     if (re.test(lines[i])) return lines[i];
   }
   return undefined;
+}
+
+function restoreYamlScalarInCodexPolicy(
+  raw: string,
+  key: string,
+  before: string | undefined,
+): string {
+  const beforeLine =
+    before === undefined ? undefined : getYamlScalarLineFromCodexPolicy(before, key);
+  const lines = raw.split(/\r?\n/);
+  const newline = raw.includes("\r\n") ? "\r\n" : "\n";
+  const policyIndex = codexPolicyBlockIndex(lines);
+  if (policyIndex === undefined) return raw;
+
+  const policyEnd = findYamlTopLevelBlockEnd(lines, policyIndex);
+  const childIndent = codexPolicyChildIndent(lines.slice(policyIndex + 1, policyEnd));
+  const re = new RegExp(`^\\s*${escapeRegExp(key)}\\s*:`);
+  const allowIndexes = lines
+    .map((line, index) => (re.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+  const directAllowIndexes = allowIndexes.filter((index) => {
+    if (index <= policyIndex || index >= policyEnd) return false;
+    return (lines[index].match(/^\s*/)?.[0].length ?? 0) === childIndent.length;
+  });
+  if (directAllowIndexes.length === 0 || directAllowIndexes.length !== allowIndexes.length) {
+    return raw;
+  }
+
+  if (beforeLine === undefined) {
+    for (const index of directAllowIndexes.reverse()) lines.splice(index, 1);
+  } else {
+    lines[directAllowIndexes[0]] = `${childIndent}${beforeLine.trimStart()}`;
+    for (const index of directAllowIndexes.slice(1).reverse()) lines.splice(index, 1);
+  }
+  return lines.join(newline);
+}
+
+function getYamlScalarLineFromCodexPolicy(raw: string, key: string): string | undefined {
+  const lines = raw.split(/\r?\n/);
+  const policyIndex = codexPolicyBlockIndex(lines);
+  if (policyIndex === undefined) return undefined;
+
+  const policyEnd = findYamlTopLevelBlockEnd(lines, policyIndex);
+  const childIndent = codexPolicyChildIndent(lines.slice(policyIndex + 1, policyEnd));
+  const re = new RegExp(`^\\s*${escapeRegExp(key)}\\s*:`);
+  for (let i = policyIndex + 1; i < policyEnd; i++) {
+    if (!re.test(lines[i])) continue;
+    if ((lines[i].match(/^\s*/)?.[0].length ?? 0) === childIndent.length) return lines[i];
+  }
+  return undefined;
+}
+
+function codexPolicyBlockIndex(lines: string[]): number | undefined {
+  const indexes = lines
+    .map((line, index) => (/^policy\s*:/.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+  if (indexes.length !== 1) return undefined;
+  const index = indexes[0];
+  return /^policy\s*:\s*(?:#.*)?$/.test(lines[index]) ? index : undefined;
 }
 
 function yamlFrontmatterRange(lines: string[]): { start: number; end: number } | undefined {
