@@ -421,7 +421,7 @@ async function previewSkillCandidates(
     now: opts.now,
   });
   return {
-    candidates: result.moved.map((entry) => ({
+    candidates: result.managed.map((entry) => ({
       id: entry.id,
       source: entry.source ?? "claude",
     })),
@@ -472,7 +472,7 @@ async function activateSelectedSkills(
       logger: ctx.log,
       now: opts.now,
     });
-    moved += result.moved.length;
+    moved += result.managed.length;
     skipped.push(...result.skipped);
   }
   if (skipped.length > 0) {
