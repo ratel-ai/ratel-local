@@ -1,4 +1,4 @@
-# Ratel MCP UI
+# Ratel Local UI
 
 Local UI development uses the real `ratel-mcp ui` API server and Vite for the React app.
 

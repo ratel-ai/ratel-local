@@ -12,7 +12,7 @@
 # This is a LOCAL/manual check, not a CI job: it needs the unified SDK linked and
 # built (the SDK isn't published yet). Prereqs:
 #   cd ../ratel/src/sdk/ts && pnpm build
-#   cd ../../../../ratel-mcp
+#   cd ../../../../ratel-local
 #   mv node_modules/@ratel-ai/sdk node_modules/@ratel-ai/sdk.orig
 #   ln -s ../ratel/src/sdk/ts node_modules/@ratel-ai/sdk
 #   pnpm build

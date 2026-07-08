@@ -1,6 +1,6 @@
 ---
 name: ratel-improve-tools
-description: Analyze Ratel MCP tool usage logs and propose improvements to the configured tool catalog. Use when the user asks to review Ratel tool usage, improve available MCP tools, audit failed or repeated tool calls, tune Ratel upstream servers, or suggest better tools based on Codex or Claude Code hook logs.
+description: Analyze Ratel Local tool usage logs and propose improvements to the configured tool catalog. Use when the user asks to review Ratel tool usage, improve available MCP tools, audit failed or repeated tool calls, tune Ratel upstream servers, or suggest better tools based on Codex or Claude Code hook logs.
 ---
 
 # Ratel Improve Tools
@@ -21,7 +21,7 @@ ${RATEL_HOME:-$HOME/.ratel}/tool-usage/tool-usage.jsonl
 
 Each line is JSON with `schemaVersion`, `timestamp`, `host`, `event`, `toolName`, optional `toolInput`, optional `outcome`, and hook payload metadata. Handle missing files, empty files, and malformed lines gracefully.
 
-If no logs exist, say that there is no tool usage data yet and suggest enabling/trusting the Ratel MCP plugin hooks, then running normal agent work before trying again.
+If no logs exist, say that there is no tool usage data yet and suggest enabling/trusting the Ratel Local plugin hooks, then running normal agent work before trying again.
 
 ## Analysis Workflow
 

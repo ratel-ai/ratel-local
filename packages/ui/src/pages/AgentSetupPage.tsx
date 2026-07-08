@@ -479,7 +479,7 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
               <>
                 <DetailLabel>Statusline</DetailLabel>
                 <ClaudeStatuslineBadge state={host.statusline} />
-                <DetailLabel>Ratel MCP</DetailLabel>
+                <DetailLabel>Ratel Local</DetailLabel>
                 <StatusBadge tone={host.statusline.ratelEnabled ? "success" : "warning"}>
                   {host.statusline.ratelEnabled ? "Enabled" : "Not enabled"}
                 </StatusBadge>

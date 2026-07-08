@@ -482,7 +482,7 @@ Practical inference:
 Local observed prompt context:
 
 - App/connector tools are lazy-loaded through `tool_search`.
-- Tool discovery text says some sources expose tools for repositories, issues, pull requests, Gmail, Linear, Vercel, node REPL, and Ratel MCP.
+- Tool discovery text says some sources expose tools for repositories, issues, pull requests, Gmail, Linear, Vercel, node REPL, and Ratel Local.
 - In the session instructions, tools from deferred MCP/app sources are described as coming from upstream MCP servers and may require app auth. This supports the idea that connector tools and plugin tools are exposed as MCP-like tools to the model, but does not document the read/write UI grouping.
 
 Unknown/gap:

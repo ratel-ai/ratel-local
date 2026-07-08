@@ -1,6 +1,6 @@
-# Ratel MCP Plugin
+# Ratel Local Plugin
 
-This plugin root is shared by Codex and Claude Code. It exposes the Ratel MCP gateway and bundles skills for operating the gateway and improving the tool catalog from usage logs.
+This plugin root is shared by Codex and Claude Code. It exposes the Ratel Local gateway and bundles skills for operating the gateway and improving the tool catalog from usage logs.
 
 ## Layout
 
@@ -50,7 +50,7 @@ codex plugin marketplace add .
 ```
 
 The repo root contains `.agents/plugins/marketplace.json`, which points Codex at
-`./apps/ratel-mcp/plugin`. Then restart Codex, install **Ratel MCP** from the
+`./apps/ratel-mcp/plugin`. Then restart Codex, install **Ratel Local** from the
 **Ratel** marketplace, and start a new thread.
 
 ## Claude Code Local Validation
@@ -72,7 +72,7 @@ claude plugin install ratel-mcp@ratel
 For GitHub distribution, publish the repo and add the root marketplace:
 
 ```bash
-claude plugin marketplace add ratel-ai/ratel-mcp
+claude plugin marketplace add ratel-ai/ratel-local
 claude plugin install ratel-mcp@ratel
 ```
 

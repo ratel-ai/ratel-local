@@ -105,7 +105,7 @@ async function makeAssetDir(): Promise<string> {
   await mkdir(join(dir, "assets"), { recursive: true });
   await writeFile(
     join(dir, "index.html"),
-    '<!doctype html><html><head><title>Ratel MCP</title><script type="module" src="/assets/app.js"></script></head><body><div id="root"></div></body></html>',
+    '<!doctype html><html><head><title>Ratel Local</title><script type="module" src="/assets/app.js"></script></head><body><div id="root"></div></body></html>',
   );
   await writeFile(join(dir, "assets", "app.js"), "window.__ratelTestAsset = true;\n");
   await writeFile(join(dir, "assets", "app.css"), "body { color: black; }\n");
@@ -224,7 +224,7 @@ describe("UI server — auth", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type") ?? "").toContain("text/html");
     const text = await res.text();
-    expect(text).toContain("<title>Ratel MCP</title>");
+    expect(text).toContain("<title>Ratel Local</title>");
   });
 
   it("rejects requests with a non-loopback Host header", async () => {
@@ -686,7 +686,7 @@ describe("UI server — routing", () => {
   it("serves the SPA entry for extensionless paths with the query token", async () => {
     const res = await fetch(apiUrl(`/servers?t=${session.token}`));
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain("<title>Ratel MCP</title>");
+    expect(await res.text()).toContain("<title>Ratel Local</title>");
   });
 
   it("returns 404 for missing static assets", async () => {

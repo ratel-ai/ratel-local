@@ -316,7 +316,7 @@ export function AppShell() {
   useHotkey("Mod+R", () => void refresh(), {
     meta: {
       name: "Refresh configuration",
-      description: "Reload the current Ratel MCP configuration.",
+      description: "Reload the current Ratel Local configuration.",
     },
     preventDefault: true,
   });

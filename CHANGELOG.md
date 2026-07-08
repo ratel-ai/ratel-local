@@ -2,6 +2,11 @@
 
 All notable changes to this package are documented here. The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Renamed repo-facing and product-facing references from Ratel MCP to Ratel Local after the repository moved to `ratel-ai/ratel-local`; the published npm package `@ratel-ai/mcp-server` and `ratel-mcp` binary remain unchanged.
+
 ## [0.4.0] - 2026-06-30
 
 ### Changed
@@ -53,7 +58,7 @@ All notable changes to this package are documented here. The format is based on 
 - Source split: `src/lib/` (library) + `src/cli/` (CLI) + `src/index.ts` (library entrypoint) + `src/bin.ts` (CLI entrypoint).
 
 ### Changed
-- Package now hosted in [`ratel-ai/ratel-mcp`](https://github.com/ratel-ai/ratel-mcp); previously shipped from the `ratel-ai/ratel` monorepo as one of several workspace packages. Library API surface is unchanged.
+- Package now hosted in [`ratel-ai/ratel-local`](https://github.com/ratel-ai/ratel-local); previously shipped from the `ratel-ai/ratel` monorepo as one of several workspace packages. Library API surface is unchanged.
 - The Claude Code rewrite (`mcp import` / `link`) plants `command: "ratel-mcp"` (was `"ratel"` when this lived inside `@ratel-ai/cli`).
 - Bin-locator env var renamed `$RATEL_BIN` → `$RATEL_MCP_BIN`.
 
