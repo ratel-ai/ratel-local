@@ -16,15 +16,16 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-/** The agent whose folder a skill is moved in from (and restored back to). */
+/** The agent whose native skill folder Ratel manages. */
 export type SkillSource = "claude" | "codex";
 
 /**
- * Locations the skill manager moves between. `nativeDir` (Claude Code) and
+ * Locations the skill manager links and patches. `nativeDir` (Claude Code) and
  * `codexDir` (Codex) are where each agent auto-loads skills (always-on
  * metadata); `managedDir` is the Ratel-managed folder the gateway scans (loaded
- * on demand). The manifest records exactly which skills Ratel moved and from
- * where, so `deactivate` restores each — and only those — to its own agent.
+ * on demand). The manifest records exactly which skills Ratel linked, where
+ * their native metadata lives, and the Ratel-owned metadata edits to revert on
+ * `deactivate`.
  */
 export interface SkillManagePaths {
   nativeDir: string;
@@ -46,11 +47,11 @@ export interface ManagedEntry {
   id: string;
   /** New entries are linked in place; missing mode means a legacy moved entry. */
   mode?: "linked";
-  /** Absolute path to the native skill directory. Legacy entries were moved from here. */
+  /** Absolute path to the native skill directory. Legacy entries were originally moved from here. */
   originalPath: string;
   /** Absolute path of the Ratel-managed symlink for linked entries. */
   linkPath?: string;
-  /** Which agent's folder it came from; restore targets this agent's dir.
+  /** Which agent's folder owns the native skill.
    *  Optional for manifests written before multi-source support (treated as
    *  "claude", the only source that existed then). */
   source?: SkillSource;
@@ -73,7 +74,7 @@ interface SkillManifest {
 
 export interface ManageOptions {
   logger?: (message: string) => void;
-  /** When true, report what would move without touching the filesystem. */
+  /** When true, report what would be managed without touching the filesystem. */
   dryRun?: boolean;
   /** Restrict the operation to these skill ids. Omit to operate on all. */
   ids?: string[];
@@ -85,11 +86,13 @@ export interface ManageOptions {
 }
 
 export interface ActivateResult {
+  /** Compatibility field name: entries newly managed through Ratel. */
   moved: ManagedEntry[];
   skipped: Array<{ id: string; reason: string }>;
 }
 
 export interface DeactivateResult {
+  /** Compatibility field name: entries Ratel stopped managing. */
   restored: ManagedEntry[];
   skipped: Array<{ id: string; reason: string }>;
 }
@@ -120,10 +123,9 @@ export async function activateSkills(
     { dir: paths.codexDir, source: "codex" },
   ];
 
-  // Persist the manifest after *each* move (atomically), so a crash or a failed
-  // move mid-loop leaves a manifest that exactly reflects what's on disk — every
-  // already-moved skill stays restorable by `deactivate`. The finally is a backstop
-  // in case the throw was the manifest write itself.
+  // Persist the manifest after each successful management change (atomically),
+  // so a crash mid-loop leaves a manifest that reflects what Ratel owns. The
+  // finally is a backstop in case the throw was the manifest write itself.
   try {
     for (const { dir, source } of sources) {
       if (options.source && options.source !== source) continue;
@@ -159,7 +161,7 @@ export async function activateSkills(
         }
         let metadataPatch: MetadataPatch[];
         try {
-          metadataPatch = await applyManualOnlyMetadata(from, source);
+          metadataPatch = await prepareManualOnlyMetadata(from, source);
         } catch (err) {
           await rm(to, { recursive: true, force: true }).catch(() => {});
           skipped.push({
@@ -179,9 +181,33 @@ export async function activateSkills(
           metadataPatch,
         };
         manifest.managed.push(entry);
+        try {
+          await writeManifest(paths.manifestPath, manifest);
+        } catch (err) {
+          manifest.managed = manifest.managed.filter((managed) => managed !== entry);
+          await rm(to, { recursive: true, force: true }).catch(() => {});
+          skipped.push({
+            id,
+            reason: `could not record managed skill: ${(err as Error).message}`,
+          });
+          log(`[ratel] skill ${id}: could not record manifest entry — skipping`);
+          continue;
+        }
+        try {
+          await applyMetadataPatches(metadataPatch);
+        } catch (err) {
+          manifest.managed = manifest.managed.filter((managed) => managed !== entry);
+          await rm(to, { recursive: true, force: true }).catch(() => {});
+          await writeManifest(paths.manifestPath, manifest).catch(() => {});
+          skipped.push({
+            id,
+            reason: `could not apply manual-only metadata: ${(err as Error).message}`,
+          });
+          log(`[ratel] skill ${id}: could not apply manual-only metadata — skipping`);
+          continue;
+        }
         moved.push(entry);
         already.add(id);
-        await writeManifest(paths.manifestPath, manifest);
         log(`[ratel] managing skill ${id} (${source}) as invoke-only`);
       }
     }
@@ -194,10 +220,12 @@ export async function activateSkills(
 }
 
 /**
- * Restore every skill the manifest recorded back to where it came from, then
- * clear those entries. Skills added directly to the managed folder (not in the
- * manifest) stay put. Idempotent: a missing skill or an occupied destination is
- * skipped, not clobbered.
+ * Stop managing every skill the manifest recorded, then clear those entries.
+ * Linked entries have their managed symlink removed and their native metadata
+ * restored. Legacy moved entries are copied back to their canonical native
+ * folder. Skills added directly to the managed folder (not in the manifest)
+ * stay put. Idempotent: a missing skill or an occupied destination is skipped,
+ * not clobbered.
  */
 export async function deactivateSkills(
   paths: SkillManagePaths,
@@ -236,20 +264,31 @@ export async function deactivateSkills(
     }
     if (entry.mode === "linked") {
       const linkPath = entry.linkPath ?? join(paths.managedDir, entry.id);
-      if (!(await pathExists(linkPath))) {
-        skipped.push({ id: entry.id, reason: "no longer in managed folder" });
-        log(`[ratel] skill ${entry.id}: managed link is gone — dropping from manifest`);
-      } else if (options.dryRun) {
+      const linkExists = await pathExists(linkPath);
+      if (options.dryRun) {
         log(`[ratel] would stop managing skill ${entry.id}`);
         restored.push(entry);
         remaining.push(entry);
         continue;
-      } else {
-        await rm(linkPath, { recursive: true, force: true });
-        await restoreManualOnlyMetadata(entry, log);
-        restored.push(entry);
-        log(`[ratel] stopped managing skill ${entry.id}`);
       }
+      if (linkExists) {
+        await rm(linkPath, { recursive: true, force: true });
+      } else {
+        log(`[ratel] skill ${entry.id}: managed link is gone — restoring metadata only`);
+      }
+      try {
+        await restoreManualOnlyMetadata(entry, log);
+      } catch (err) {
+        skipped.push({
+          id: entry.id,
+          reason: `could not restore native metadata: ${(err as Error).message}`,
+        });
+        remaining.push(entry);
+        log(`[ratel] skill ${entry.id}: could not restore native metadata — leaving managed`);
+        continue;
+      }
+      restored.push(entry);
+      log(`[ratel] stopped managing skill ${entry.id}`);
       continue;
     }
 
@@ -274,14 +313,14 @@ export async function deactivateSkills(
       continue;
     }
     if (options.dryRun) {
-      log(`[ratel] would restore skill ${entry.id} → ${dest}`);
+      log(`[ratel] would restore legacy skill ${entry.id} → ${dest}`);
       restored.push(entry);
       continue;
     }
     await mkdir(dirname(dest), { recursive: true });
     await moveDir(from, dest);
     restored.push(entry);
-    log(`[ratel] restored skill ${entry.id} → ${dest}`);
+    log(`[ratel] restored legacy skill ${entry.id} → ${dest}`);
   }
 
   // Only rewrite the manifest when it actually changed (an entry was restored or
@@ -390,6 +429,18 @@ async function writeManifest(path: string, manifest: SkillManifest): Promise<voi
   }
 }
 
+async function writeTextFileAtomic(path: string, text: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.ratel-tmp-${randomUUID()}`;
+  await writeFile(tmp, text, "utf8");
+  try {
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
 /** Thrown when the on-disk manifest is corrupt; surfaced as a clean CLI error. */
 export class SkillManifestError extends Error {
   constructor(message: string) {
@@ -437,24 +488,23 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function applyManualOnlyMetadata(
+async function prepareManualOnlyMetadata(
   skillDir: string,
   source: SkillSource,
 ): Promise<MetadataPatch[]> {
   return source === "claude"
-    ? [await patchClaudeSkill(skillDir)]
-    : [await patchCodexSkill(skillDir)];
+    ? [await prepareClaudeSkillPatch(skillDir)]
+    : [await prepareCodexSkillPatch(skillDir)];
 }
 
-async function patchClaudeSkill(skillDir: string): Promise<MetadataPatch> {
+async function prepareClaudeSkillPatch(skillDir: string): Promise<MetadataPatch> {
   const path = join(skillDir, "SKILL.md");
   const before = await readFile(path, "utf8");
   const after = setYamlScalarInFrontmatter(before, "disable-model-invocation", "true");
-  if (after !== before) await writeFile(path, after, "utf8");
   return { path, before, after };
 }
 
-async function patchCodexSkill(skillDir: string): Promise<MetadataPatch> {
+async function prepareCodexSkillPatch(skillDir: string): Promise<MetadataPatch> {
   const path = join(skillDir, "agents", "openai.yaml");
   let before: string | undefined;
   try {
@@ -463,9 +513,13 @@ async function patchCodexSkill(skillDir: string): Promise<MetadataPatch> {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   const after = setCodexManualOnly(before ?? "");
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, after, "utf8");
   return { path, before, after, created: before === undefined };
+}
+
+async function applyMetadataPatches(patches: MetadataPatch[]): Promise<void> {
+  for (const patch of patches) {
+    if (patch.after !== patch.before) await writeTextFileAtomic(patch.path, patch.after);
+  }
 }
 
 async function restoreManualOnlyMetadata(
@@ -480,15 +534,30 @@ async function restoreManualOnlyMetadata(
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
     if (current !== patch.after) {
+      const restored = restoreClaudeManualOnlyMarker(current, patch);
+      if (restored !== undefined && restored !== current) {
+        await writeTextFileAtomic(patch.path, restored);
+        continue;
+      }
       log(`[ratel] skill ${entry.id}: metadata changed since activation — leaving ${patch.path}`);
       continue;
     }
     if (patch.created) {
       await rm(patch.path, { force: true });
     } else if (patch.before !== undefined) {
-      await writeFile(patch.path, patch.before, "utf8");
+      await writeTextFileAtomic(patch.path, patch.before);
     }
   }
+}
+
+function restoreClaudeManualOnlyMarker(
+  current: string | undefined,
+  patch: MetadataPatch,
+): string | undefined {
+  if (current === undefined || patch.before === undefined || !patch.path.endsWith("SKILL.md")) {
+    return current;
+  }
+  return restoreYamlScalarInFrontmatter(current, "disable-model-invocation", patch.before);
 }
 
 function setYamlScalarInFrontmatter(raw: string, key: string, value: string): string {
@@ -516,27 +585,108 @@ function setYamlScalarInFrontmatter(raw: string, key: string, value: string): st
   return lines.join(newline);
 }
 
+function restoreYamlScalarInFrontmatter(raw: string, key: string, before: string): string {
+  const beforeLine = getYamlScalarLineFromFrontmatter(before, key);
+  const lines = raw.split(/\r?\n/);
+  const newline = raw.includes("\r\n") ? "\r\n" : "\n";
+  const range = yamlFrontmatterRange(lines);
+  if (!range) return raw;
+
+  const re = new RegExp(`^\\s*${escapeRegExp(key)}\\s*:`);
+  const indexes: number[] = [];
+  for (let i = range.start + 1; i < range.end; i++) {
+    if (re.test(lines[i])) indexes.push(i);
+  }
+  if (indexes.length === 0) return raw;
+
+  if (beforeLine === undefined) {
+    for (const index of indexes.reverse()) lines.splice(index, 1);
+  } else {
+    lines[indexes[0]] = beforeLine;
+    for (const index of indexes.slice(1).reverse()) lines.splice(index, 1);
+  }
+  return lines.join(newline);
+}
+
+function getYamlScalarLineFromFrontmatter(raw: string, key: string): string | undefined {
+  const lines = raw.split(/\r?\n/);
+  const range = yamlFrontmatterRange(lines);
+  if (!range) return undefined;
+
+  const re = new RegExp(`^\\s*${escapeRegExp(key)}\\s*:`);
+  for (let i = range.start + 1; i < range.end; i++) {
+    if (re.test(lines[i])) return lines[i];
+  }
+  return undefined;
+}
+
+function yamlFrontmatterRange(lines: string[]): { start: number; end: number } | undefined {
+  let first = 0;
+  while (first < lines.length && lines[first].trim() === "") first++;
+  if (lines[first]?.trim() !== "---") return undefined;
+
+  for (let i = first + 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") return { start: first, end: i };
+  }
+  return undefined;
+}
+
 function setCodexManualOnly(raw: string): string {
-  const hasPolicy = /^policy\s*:/m.test(raw);
-  const hasAllow = /^\s+allow_implicit_invocation\s*:/m.test(raw);
   if (!raw.trim()) return "policy:\n  allow_implicit_invocation: false\n";
-  const lines = raw.replace(/\r\n/g, "\n").split("\n");
-  if (hasAllow) {
-    return `${lines
-      .map((line) =>
-        /^\s+allow_implicit_invocation\s*:/.test(line)
-          ? `${line.match(/^\s*/)?.[0] ?? "  "}allow_implicit_invocation: false`
-          : line,
-      )
-      .join("\n")
-      .replace(/\n*$/, "")}\n`;
+
+  const lines = raw.replace(/\r\n/g, "\n").replace(/\n*$/, "").split("\n");
+  const policyIndexes = lines
+    .map((line, index) => (/^policy\s*:/.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+  if (policyIndexes.length > 1) throw new Error("unsupported Codex policy shape");
+
+  const allowIndexes = lines
+    .map((line, index) => (/^\s*allow_implicit_invocation\s*:/.test(line) ? index : -1))
+    .filter((index) => index >= 0);
+
+  const policyIndex = policyIndexes[0];
+  if (policyIndex === undefined) {
+    if (allowIndexes.length > 0) {
+      throw new Error("unsupported Codex allow_implicit_invocation placement");
+    }
+    return `${lines.join("\n")}\npolicy:\n  allow_implicit_invocation: false\n`;
   }
-  if (hasPolicy) {
-    const index = lines.findIndex((line) => /^policy\s*:/.test(line));
-    lines.splice(index + 1, 0, "  allow_implicit_invocation: false");
-    return `${lines.join("\n").replace(/\n*$/, "")}\n`;
+
+  if (!/^policy\s*:\s*(?:#.*)?$/.test(lines[policyIndex])) {
+    throw new Error("unsupported Codex policy shape");
   }
-  return `${raw.replace(/\s*$/, "")}\npolicy:\n  allow_implicit_invocation: false\n`;
+
+  const policyEnd = findYamlTopLevelBlockEnd(lines, policyIndex);
+  const childIndent = codexPolicyChildIndent(lines.slice(policyIndex + 1, policyEnd));
+  const directAllowIndexes = allowIndexes.filter((index) => {
+    if (index <= policyIndex || index >= policyEnd) return false;
+    return (lines[index].match(/^\s*/)?.[0].length ?? 0) === childIndent.length;
+  });
+  if (directAllowIndexes.length !== allowIndexes.length || directAllowIndexes.length > 1) {
+    throw new Error("unsupported Codex allow_implicit_invocation placement");
+  }
+
+  if (directAllowIndexes.length === 1) {
+    const index = directAllowIndexes[0];
+    lines[index] = `${childIndent}allow_implicit_invocation: false`;
+  } else {
+    lines.splice(policyIndex + 1, 0, `${childIndent}allow_implicit_invocation: false`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function findYamlTopLevelBlockEnd(lines: string[], start: number): number {
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i].trim() === "") continue;
+    if (/^\S/.test(lines[i])) return i;
+  }
+  return lines.length;
+}
+
+function codexPolicyChildIndent(lines: string[]): string {
+  const child = lines.find((line) => line.trim() !== "" && !line.trimStart().startsWith("#"));
+  const indent = child?.match(/^\s*/)?.[0];
+  return indent && indent.length > 0 ? indent : "  ";
 }
 
 function escapeRegExp(s: string): string {

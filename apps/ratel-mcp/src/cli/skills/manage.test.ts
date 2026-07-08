@@ -89,6 +89,23 @@ describe("activateSkills", () => {
     expect(await exists(join(paths.nativeDir, "dup", "SKILL.md"))).toBe(true);
   });
 
+  it("rolls back the managed link when metadata patching fails", async () => {
+    const dir = join(paths.nativeDir, "broken");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "SKILL.md"), "# missing frontmatter");
+
+    const result = await activateSkills(paths);
+
+    expect(result.moved).toEqual([]);
+    expect(result.skipped[0]).toMatchObject({
+      id: "broken",
+      reason: expect.stringMatching(/manual-only metadata/i),
+    });
+    expect(await exists(join(paths.managedDir, "broken"))).toBe(false);
+    expect(await exists(paths.manifestPath)).toBe(false);
+    expect(await readFile(join(dir, "SKILL.md"), "utf8")).toBe("# missing frontmatter");
+  });
+
   it("ignores subdirectories without a SKILL.md", async () => {
     await mkdir(join(paths.nativeDir, "not-a-skill"), { recursive: true });
     await writeNativeSkill("real");
@@ -125,6 +142,70 @@ describe("activateSkills", () => {
     expect(
       await readFile(join(paths.codexDir, "from-codex", "agents", "openai.yaml"), "utf8"),
     ).toContain("allow_implicit_invocation: false");
+  });
+
+  it("updates Codex block policy without disturbing sibling policy keys", async () => {
+    await writeCodexSkill("block-policy");
+    const policyPath = join(paths.codexDir, "block-policy", "agents", "openai.yaml");
+    await mkdir(join(paths.codexDir, "block-policy", "agents"), { recursive: true });
+    await writeFile(policyPath, "policy:\n  allow_implicit_invocation: true\n  review: manual\n");
+
+    const result = await activateSkills(paths, { source: "codex" });
+
+    expect(result.moved.map((m) => m.id)).toEqual(["block-policy"]);
+    expect(await readFile(policyPath, "utf8")).toBe(
+      "policy:\n  allow_implicit_invocation: false\n  review: manual\n",
+    );
+  });
+
+  it("skips Codex skills with flow-style policy instead of corrupting openai.yaml", async () => {
+    await writeCodexSkill("flow-policy");
+    const policyPath = join(paths.codexDir, "flow-policy", "agents", "openai.yaml");
+    await mkdir(join(paths.codexDir, "flow-policy", "agents"), { recursive: true });
+    await writeFile(policyPath, "policy: { allow_implicit_invocation: true, review: manual }\n");
+
+    const result = await activateSkills(paths, { source: "codex" });
+
+    expect(result.moved).toEqual([]);
+    expect(result.skipped[0]).toMatchObject({
+      id: "flow-policy",
+      reason: expect.stringMatching(/unsupported/i),
+    });
+    expect(await readFile(policyPath, "utf8")).toBe(
+      "policy: { allow_implicit_invocation: true, review: manual }\n",
+    );
+    expect(await exists(join(paths.managedDir, "flow-policy"))).toBe(false);
+    expect(await listManaged(paths)).toEqual([]);
+  });
+
+  it("skips Codex skills with top-level allow_implicit_invocation", async () => {
+    await writeCodexSkill("top-level-allow");
+    const policyPath = join(paths.codexDir, "top-level-allow", "agents", "openai.yaml");
+    await mkdir(join(paths.codexDir, "top-level-allow", "agents"), { recursive: true });
+    await writeFile(policyPath, "allow_implicit_invocation: true\n");
+
+    const result = await activateSkills(paths, { source: "codex" });
+
+    expect(result.moved).toEqual([]);
+    expect(result.skipped[0]?.reason).toMatch(/unsupported/i);
+    expect(await readFile(policyPath, "utf8")).toBe("allow_implicit_invocation: true\n");
+    expect(await exists(join(paths.managedDir, "top-level-allow"))).toBe(false);
+  });
+
+  it("skips Codex skills with nested allow_implicit_invocation outside policy", async () => {
+    await writeCodexSkill("nested-allow");
+    const policyPath = join(paths.codexDir, "nested-allow", "agents", "openai.yaml");
+    await mkdir(join(paths.codexDir, "nested-allow", "agents"), { recursive: true });
+    await writeFile(policyPath, "profiles:\n  default:\n    allow_implicit_invocation: true\n");
+
+    const result = await activateSkills(paths, { source: "codex" });
+
+    expect(result.moved).toEqual([]);
+    expect(result.skipped[0]?.reason).toMatch(/unsupported/i);
+    expect(await readFile(policyPath, "utf8")).toBe(
+      "profiles:\n  default:\n    allow_implicit_invocation: true\n",
+    );
+    expect(await exists(join(paths.managedDir, "nested-allow"))).toBe(false);
   });
 
   it("takes a name present in both agents from Claude and skips the Codex copy", async () => {
@@ -174,6 +255,20 @@ describe("deactivateSkills", () => {
     );
   });
 
+  it("restores native metadata even if the managed link is missing", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths);
+    await rm(join(paths.managedDir, "api-design"), { recursive: true, force: true });
+
+    const result = await deactivateSkills(paths);
+
+    expect(result.restored.map((m) => m.id)).toEqual(["api-design"]);
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
+      "---\nname: api-design\ndescription: d\n---\n# body",
+    );
+    expect(await listManaged(paths)).toEqual([]);
+  });
+
   it("preserves user metadata edits made after activation", async () => {
     await writeNativeSkill("api-design");
     await activateSkills(paths);
@@ -185,6 +280,22 @@ describe("deactivateSkills", () => {
     await deactivateSkills(paths);
     expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toContain(
       "description: changed",
+    );
+  });
+
+  it("removes the Ratel marker after editing a linked Claude skill", async () => {
+    await writeNativeSkill("api-design");
+    await activateSkills(paths);
+    await writeFile(
+      join(paths.managedDir, "api-design", "SKILL.md"),
+      "---\nname: api-design\ndescription: changed through Ratel\ntags: [api]\ndisable-model-invocation: true\n---\n# edited body",
+    );
+
+    await deactivateSkills(paths);
+
+    const restored = await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8");
+    expect(restored).toBe(
+      "---\nname: api-design\ndescription: changed through Ratel\ntags: [api]\n---\n# edited body",
     );
   });
 

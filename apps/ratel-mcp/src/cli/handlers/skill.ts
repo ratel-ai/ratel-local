@@ -38,7 +38,7 @@ Verbs:
   uninstall-hook   remove the preload hook from settings.json (--scope user|project)
 
 Flags:
-  --dry-run        report what would move without touching any files
+  --dry-run        report what would be managed without touching any files
   --yes            skip the confirmation prompt`;
 
 export async function runSkill(ctx: HandlerCtx): Promise<void> {
