@@ -20,6 +20,12 @@ import {
 } from "@ratel-ai/mcp-core";
 import { ArgError } from "../args.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
+import {
+  activateSkills,
+  defaultSkillManagePaths,
+  type SkillManagePaths,
+  type SkillSource,
+} from "../skills/manage.js";
 import { maybeAutoInstallStatusline } from "./statusline.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -36,6 +42,8 @@ export interface ImportFlowOptions {
   agentKind?: SupportedAgentHostKind;
   exists?: (path: string) => Promise<boolean>;
   probe?: ProbeFn;
+  skillPaths?: SkillManagePaths;
+  now?: () => Date;
 }
 
 interface Candidate {
@@ -49,6 +57,16 @@ interface ConflictResolution {
   replaceConflicts?: Set<string>;
 }
 
+interface SkillCandidate {
+  id: string;
+  source: SkillSource;
+}
+
+interface SkillPreview {
+  candidates: SkillCandidate[];
+  skipped: Array<{ id: string; reason: string }>;
+}
+
 type ConflictResolutionResult =
   | { kind: "resolved"; resolution: ConflictResolution }
   | { kind: "cancelled" };
@@ -57,82 +75,117 @@ export async function runImport(
   ctx: HandlerCtx,
   opts: ImportFlowOptions = {},
 ): Promise<BackupManifest | null> {
-  ctx.prompts.intro("Ratel · import agent MCP servers");
+  ctx.prompts.intro("Ratel · import agent MCP servers and skills");
 
   const agentHost = opts.agentKind
     ? new NamedAgentHostAdapter(opts.agentKind)
     : new AutomaticAgentHostAdapter();
   const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
-  if (!detection.present) {
-    ctx.prompts.note("No supported agent MCP servers found at any scope. Nothing to import.");
-    ctx.prompts.outro("done");
-    return null;
+  let agentState: AgentHostState | null = null;
+  let candidates: Candidate[] = [];
+  if (detection.present) {
+    agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+    candidates = collectCandidates(agentState);
   }
-  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
 
-  const candidates = collectCandidates(agentState);
-  if (candidates.length === 0) {
+  const skillPaths = opts.skillPaths ?? defaultSkillManagePaths(ctx.env.homeDir);
+  const skillPreview = await previewSkillCandidates(skillPaths, {
+    source: resolveSkillSource(opts.agentKind, agentState),
+    now: opts.now,
+  });
+
+  if (!detection.present && skillPreview.candidates.length === 0) {
     ctx.prompts.note(
-      `No ${agentState.host.displayName} MCP servers found at any scope. Nothing to import.`,
+      "No supported agent MCP servers or native skills found at any scope. Nothing to import.",
     );
     ctx.prompts.outro("done");
     return null;
   }
-  ctx.prompts.note(renderDetectedAgentSources(agentState), "Detected agent");
+  if (agentState && candidates.length === 0 && skillPreview.candidates.length === 0) {
+    ctx.prompts.note(
+      `No ${agentState.host.displayName} MCP servers or native skills found at any scope. Nothing to import.`,
+    );
+    ctx.prompts.outro("done");
+    return null;
+  }
 
-  const ratelUserPath = ratelConfigPath("user", ctx.env);
-  const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
-  const ratelLocalPath = ctx.env.projectRoot ? ratelConfigPath("local", ctx.env) : undefined;
+  if (agentState) {
+    ctx.prompts.note(renderDetectedAgentSources(agentState), "Detected agent");
+  }
+  if (skillPreview.candidates.length > 0 || skillPreview.skipped.length > 0) {
+    ctx.prompts.note(renderDetectedSkills(skillPreview, skillPaths), "Detected skills");
+  }
 
-  const bin = opts.bin ?? (await resolveBin(ctx, opts));
-
-  const ratelUser = await readJson<RatelConfig>(ctx.fs, ratelUserPath);
-  const ratelProject = ratelProjectPath
-    ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath)
-    : null;
-  const ratelLocal = ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null;
-
-  const selection = await selectCandidates(ctx, candidates, opts);
+  const selection = candidates.length > 0 ? await selectCandidates(ctx, candidates, opts) : [];
   if (selection === null) {
     ctx.prompts.cancel("import cancelled");
     return null;
   }
-
-  await captureDescriptions(ctx, selection, agentState, opts);
-
-  const planInputs = {
-    agentHost,
-    agentState,
-    ratelUser,
-    ratelProject,
-    ratelLocal,
-    bin,
-    ratelUserPath,
-    ratelProjectPath,
-    ratelLocalPath,
-    projectRoot: ctx.env.projectRoot,
-  };
-  const planOptions = { selection: new Set(selection.map((c) => c.name)) };
-  const initialPlan = await buildAgentImportPlan(planInputs, planOptions);
-  const conflictResolution = await resolveConflictStrategy(
-    ctx,
-    initialPlan,
-    opts,
-    agentState.host.displayName,
-  );
-  if (conflictResolution.kind === "cancelled") {
-    ctx.prompts.cancel("import cancelled (no writes)");
+  const selectedSkills = await selectSkillCandidates(ctx, skillPreview.candidates, opts);
+  if (selectedSkills === null) {
+    ctx.prompts.cancel("import cancelled");
     return null;
   }
 
-  const plan = await buildAgentImportPlan(planInputs, {
-    ...planOptions,
-    ...conflictResolution.resolution,
-  });
+  let plan: ImportPlan = emptyImportPlan();
+  let bin: ResolvedBin | null = null;
 
-  ctx.prompts.note(renderSummary(plan, agentState.host.displayName), "Summary");
+  if (agentState && selection.length > 0) {
+    await captureDescriptions(ctx, selection, agentState, opts);
 
-  if (plan.ratelChanges.length === 0 && plan.agentChanges.length === 0) {
+    const ratelUserPath = ratelConfigPath("user", ctx.env);
+    const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
+    const ratelLocalPath = ctx.env.projectRoot ? ratelConfigPath("local", ctx.env) : undefined;
+
+    bin = opts.bin ?? (await resolveBin(ctx, opts));
+
+    const ratelUser = await readJson<RatelConfig>(ctx.fs, ratelUserPath);
+    const ratelProject = ratelProjectPath
+      ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath)
+      : null;
+    const ratelLocal = ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null;
+
+    const planInputs = {
+      agentHost,
+      agentState,
+      ratelUser,
+      ratelProject,
+      ratelLocal,
+      bin,
+      ratelUserPath,
+      ratelProjectPath,
+      ratelLocalPath,
+      projectRoot: ctx.env.projectRoot,
+    };
+    const planOptions = { selection: new Set(selection.map((c) => c.name)) };
+    const initialPlan = await buildAgentImportPlan(planInputs, planOptions);
+    const conflictResolution = await resolveConflictStrategy(
+      ctx,
+      initialPlan,
+      opts,
+      agentState.host.displayName,
+    );
+    if (conflictResolution.kind === "cancelled") {
+      ctx.prompts.cancel("import cancelled (no writes)");
+      return null;
+    }
+
+    plan = await buildAgentImportPlan(planInputs, {
+      ...planOptions,
+      ...conflictResolution.resolution,
+    });
+  }
+
+  ctx.prompts.note(
+    renderSummary(plan, agentState?.host.displayName ?? "agent", selectedSkills),
+    "Summary",
+  );
+
+  if (
+    plan.ratelChanges.length === 0 &&
+    plan.agentChanges.length === 0 &&
+    selectedSkills.length === 0
+  ) {
     ctx.prompts.outro("nothing to do");
     return null;
   }
@@ -140,6 +193,9 @@ export async function runImport(
   if (opts.dryRun) {
     for (const c of [...plan.ratelChanges, ...plan.agentChanges]) {
       if (c.kind === "write") ctx.log(`would write ${c.path}`);
+    }
+    for (const skill of selectedSkills) {
+      ctx.log(`would manage skill ${skill.id} (${skill.source}) as invoke-only`);
     }
     ctx.prompts.outro("dry-run complete");
     return null;
@@ -161,41 +217,60 @@ export async function runImport(
     stageAManifest = await tryExecute(ctx, plan.ratelChanges, "import");
   }
 
-  if (plan.agentChanges.length === 0) {
+  let latestManifest = stageAManifest;
+
+  if (agentState && plan.agentChanges.length === 0 && bin) {
     await maybeAutoInstallStatusline(ctx, agentState.host.kind, bin);
-    ctx.prompts.outro(`import complete · no ${agentState.host.displayName} changes needed`);
-    return stageAManifest;
   }
 
-  ctx.prompts.note(
-    renderAgentStage(plan, agentState.host.displayName),
-    `${agentState.host.displayName} config changes`,
-  );
-  if (!opts.yes) {
-    const ok = await ctx.prompts.confirm({
-      message: `Replace ${plan.agentChanges.length} ${agentState.host.displayName} entr${
-        plan.agentChanges.length === 1 ? "y" : "ies"
-      } with the ratel-mcp entry?`,
-      initialValue: true,
-    });
-    if (ctx.prompts.isCancel(ok) || ok === false) {
-      ctx.log(
-        `${agentState.host.displayName} config changes skipped. Run \`ratel-mcp link\` (or re-run \`ratel-mcp import\`) to point ${agentState.host.displayName} at Ratel later.`,
-      );
-      ctx.prompts.outro(
-        `Ratel config changes applied · ${agentState.host.displayName} config changes skipped`,
-      );
-      return stageAManifest;
+  if (agentState && plan.agentChanges.length > 0 && bin) {
+    ctx.prompts.note(
+      renderAgentStage(plan, agentState.host.displayName),
+      `${agentState.host.displayName} config changes`,
+    );
+    if (!opts.yes) {
+      const ok = await ctx.prompts.confirm({
+        message: `Replace ${plan.agentChanges.length} ${agentState.host.displayName} entr${
+          plan.agentChanges.length === 1 ? "y" : "ies"
+        } with the ratel-mcp entry?`,
+        initialValue: true,
+      });
+      if (ctx.prompts.isCancel(ok) || ok === false) {
+        ctx.log(
+          `${agentState.host.displayName} config changes skipped. Run \`ratel-mcp link\` (or re-run \`ratel-mcp import\`) to point ${agentState.host.displayName} at Ratel later.`,
+        );
+        ctx.prompts.outro(
+          `Ratel config changes applied · ${agentState.host.displayName} config changes skipped`,
+        );
+        return stageAManifest;
+      }
     }
+    latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
+    await maybeAutoInstallStatusline(ctx, agentState.host.kind, bin);
   }
 
-  const stageBManifest = await tryExecute(ctx, plan.agentChanges, "import");
-  ctx.prompts.note(`Backup created. Run \`ratel-mcp backup list\` to inspect backups.`, "Done");
-  await maybeAutoInstallStatusline(ctx, agentState.host.kind, bin);
-  ctx.prompts.outro(
-    `import complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
-  );
-  return stageBManifest;
+  if (selectedSkills.length > 0) {
+    ctx.prompts.note(renderSkillStage(selectedSkills), "Skill changes");
+    if (!opts.yes) {
+      const ok = await ctx.prompts.confirm({
+        message: `Manage ${selectedSkills.length} native skill${
+          selectedSkills.length === 1 ? "" : "s"
+        } through Ratel as invoke-only?`,
+        initialValue: true,
+      });
+      if (ctx.prompts.isCancel(ok) || ok === false) {
+        ctx.prompts.cancel("import cancelled (skill changes skipped)");
+        return latestManifest;
+      }
+    }
+    await activateSelectedSkills(ctx, skillPaths, selectedSkills, opts);
+  }
+
+  if (latestManifest) {
+    ctx.prompts.note(`Backup created. Run \`ratel-mcp backup list\` to inspect backups.`, "Done");
+  }
+  ctx.prompts.outro(renderCompletion(agentState, plan, selectedSkills));
+  return latestManifest;
 }
 
 async function resolveConflictStrategy(
@@ -322,6 +397,103 @@ function collectCandidates(state: AgentHostState): Candidate[] {
   return out;
 }
 
+function resolveSkillSource(
+  agentKind: SupportedAgentHostKind | undefined,
+  state: AgentHostState | null,
+): SkillSource | undefined {
+  if (agentKind) return skillSourceForAgentKind(agentKind);
+  return skillSourceForAgentKind(state?.host.kind);
+}
+
+function skillSourceForAgentKind(kind: string | undefined): SkillSource | undefined {
+  if (kind === "claude-code") return "claude";
+  if (kind === "codex") return "codex";
+  return undefined;
+}
+
+async function previewSkillCandidates(
+  paths: SkillManagePaths,
+  opts: { source?: SkillSource; now?: () => Date },
+): Promise<SkillPreview> {
+  const result = await activateSkills(paths, {
+    dryRun: true,
+    source: opts.source,
+    now: opts.now,
+  });
+  return {
+    candidates: result.moved.map((entry) => ({
+      id: entry.id,
+      source: entry.source ?? "claude",
+    })),
+    skipped: result.skipped,
+  };
+}
+
+async function selectSkillCandidates(
+  ctx: HandlerCtx,
+  candidates: SkillCandidate[],
+  opts: ImportFlowOptions,
+): Promise<SkillCandidate[] | null> {
+  if (candidates.length === 0) return [];
+  if (opts.yes) return candidates;
+  const picked = await ctx.prompts.multiselect<string>({
+    message: "Pick native skills to manage through Ratel",
+    options: candidates.map((skill) => ({
+      value: skillTagOf(skill),
+      label: `${skill.id} [${sourceLabel(skill.source)}]`,
+      hint: "Managed as invoke-only; native folder stays in place.",
+    })),
+    initialValues: candidates.map(skillTagOf),
+    required: false,
+  });
+  if (ctx.prompts.isCancel(picked)) return null;
+  const selected = new Set(picked as string[]);
+  return candidates.filter((skill) => selected.has(skillTagOf(skill)));
+}
+
+async function activateSelectedSkills(
+  ctx: HandlerCtx,
+  paths: SkillManagePaths,
+  skills: SkillCandidate[],
+  opts: ImportFlowOptions,
+): Promise<void> {
+  const idsBySource = new Map<SkillSource, string[]>();
+  for (const skill of skills) {
+    const ids = idsBySource.get(skill.source) ?? [];
+    ids.push(skill.id);
+    idsBySource.set(skill.source, ids);
+  }
+  const skipped: Array<{ id: string; reason: string }> = [];
+  let moved = 0;
+  for (const [source, ids] of idsBySource) {
+    const result = await activateSkills(paths, {
+      ids,
+      source,
+      logger: ctx.log,
+      now: opts.now,
+    });
+    moved += result.moved.length;
+    skipped.push(...result.skipped);
+  }
+  if (skipped.length > 0) {
+    throw new Error(skippedSkillsMessage(skipped));
+  }
+  ctx.log(`managing ${moved} skill${moved === 1 ? "" : "s"} as invoke-only`);
+}
+
+function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>): string {
+  const details = skipped.map((s) => `${s.id}: ${s.reason}`).join("; ");
+  return `could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
+}
+
+function skillTagOf(skill: SkillCandidate): string {
+  return `${skill.source}:${skill.id}`;
+}
+
+function sourceLabel(source: SkillSource): string {
+  return source === "codex" ? "Codex" : "Claude Code";
+}
+
 function renderDetectedAgentSources(state: AgentHostState): string {
   const lines = [`${state.host.displayName} (${state.host.kind})`];
   for (const scopeState of state.scopes) {
@@ -334,6 +506,32 @@ function renderDetectedAgentSources(state: AgentHostState): string {
         nativeEntries.length === 1 ? "" : "s"
       })`,
     );
+  }
+  return lines.join("\n");
+}
+
+function renderDetectedSkills(preview: SkillPreview, paths: SkillManagePaths): string {
+  const lines: string[] = [];
+  const bySource = new Map<SkillSource, SkillCandidate[]>();
+  for (const skill of preview.candidates) {
+    const skills = bySource.get(skill.source) ?? [];
+    skills.push(skill);
+    bySource.set(skill.source, skills);
+  }
+  for (const source of ["claude", "codex"] as const) {
+    const skills = bySource.get(source) ?? [];
+    if (skills.length === 0) continue;
+    const dir = source === "claude" ? paths.nativeDir : paths.codexDir;
+    lines.push(
+      `- ${sourceLabel(source)}: ${dir} (${skills.length} skill${skills.length === 1 ? "" : "s"})`,
+    );
+  }
+  if (preview.skipped.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("Already managed or skipped:");
+    for (const skipped of preview.skipped) {
+      lines.push(`  - ${skipped.id}: ${skipped.reason}`);
+    }
   }
   return lines.join("\n");
 }
@@ -442,7 +640,31 @@ async function resolveBin(ctx: HandlerCtx, opts: ImportFlowOptions): Promise<Res
   });
 }
 
-function renderSummary(plan: ImportPlan, agentHostName: string): string {
+function emptyImportPlan(): ImportPlan {
+  return {
+    ratelChanges: [],
+    agentChanges: [],
+    summary: {
+      movedFromUser: [],
+      movedFromProject: [],
+      movedFromLocal: [],
+      replacedFromUser: [],
+      replacedFromProject: [],
+      replacedFromLocal: [],
+      skipped: [],
+      conflicts: [],
+      conflictStrategy: "add-missing-only",
+      ratelEntryArgsByScope: {},
+      overwrittenRatelEntries: [],
+    },
+  };
+}
+
+function renderSummary(
+  plan: ImportPlan,
+  agentHostName: string,
+  selectedSkills: readonly SkillCandidate[],
+): string {
   const lines: string[] = [];
   if (plan.summary.movedFromUser.length > 0) {
     lines.push(`user: ${plan.summary.movedFromUser.join(", ")}`);
@@ -468,6 +690,13 @@ function renderSummary(plan: ImportPlan, agentHostName: string): string {
         agentHostName,
       )})`,
     );
+  }
+  if (selectedSkills.length > 0) {
+    lines.push("");
+    lines.push("Skills to manage:");
+    for (const skill of selectedSkills) {
+      lines.push(`  - ${skill.id} (${sourceLabel(skill.source)})`);
+    }
   }
   if (plan.summary.overwrittenRatelEntries.length > 0) {
     lines.push("");
@@ -535,4 +764,29 @@ function renderAgentStage(plan: ImportPlan, hostName = "agent"): string {
     }
   }
   return lines.join("\n");
+}
+
+function renderSkillStage(skills: readonly SkillCandidate[]): string {
+  return skills
+    .map((skill) => `manage ${skill.id} (${sourceLabel(skill.source)}) as invoke-only`)
+    .join("\n");
+}
+
+function renderCompletion(
+  agentState: AgentHostState | null,
+  plan: ImportPlan,
+  selectedSkills: readonly SkillCandidate[],
+): string {
+  const parts: string[] = ["import complete"];
+  if (agentState && plan.agentChanges.length > 0) {
+    parts.push(`restart ${agentState.host.displayName} to pick up the new MCP entry`);
+  } else if (agentState && plan.ratelChanges.length > 0) {
+    parts.push(`no ${agentState.host.displayName} changes needed`);
+  }
+  if (selectedSkills.length > 0) {
+    parts.push(
+      `managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"} as invoke-only`,
+    );
+  }
+  return parts.join(" · ");
 }
