@@ -8,15 +8,15 @@
   "plugins": [
     {
       "name": "ratel-mcp",
-      "displayName": "Ratel MCP",
+      "displayName": "Ratel Local",
       "source": "./apps/ratel-mcp/plugin",
-      "description": "Expose upstream MCP servers through a searchable Ratel gateway.",
+      "description": "Expose upstream MCP servers through the local Ratel gateway.",
       "author": {
         "name": "Agentified",
         "email": "support@agentified.com"
       },
-      "homepage": "https://github.com/ratel-ai/ratel-mcp",
-      "repository": "https://github.com/ratel-ai/ratel-mcp",
+      "homepage": "https://github.com/ratel-ai/ratel-local",
+      "repository": "https://github.com/ratel-ai/ratel-local",
       "license": "MIT",
       "category": "Developer Tools",
       "tags": [

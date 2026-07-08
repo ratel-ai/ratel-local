@@ -1,6 +1,6 @@
 <div align="center">
-  <h1>@ratel-ai/mcp-server</h1>
-  <h4>Expose a Ratel catalog over MCP — and manage your MCP scopes from one CLI.</h4>
+  <h1>Ratel Local</h1>
+  <h4>Local MCP gateway and management CLI, published as @ratel-ai/mcp-server.</h4>
 
   <p>
     <a href="https://github.com/ratel-ai/ratel">Ratel core</a> •
@@ -10,13 +10,13 @@
 
   <p>
     <a href="https://www.npmjs.com/package/@ratel-ai/mcp-server"><img src="https://img.shields.io/npm/v/@ratel-ai/mcp-server?label=npm&color=cb3837" alt="npm" /></a>
-    <a href="https://github.com/ratel-ai/ratel-mcp/stargazers"><img src="https://img.shields.io/github/stars/ratel-ai/ratel-mcp?style=social" alt="GitHub stars" /></a>
+    <a href="https://github.com/ratel-ai/ratel-local/stargazers"><img src="https://img.shields.io/github/stars/ratel-ai/ratel-local?style=social" alt="GitHub stars" /></a>
     <a href="https://discord.gg/hdKpx69NR"><img src="https://img.shields.io/discord/1478702964003705015?logo=discord&logoColor=white&color=7289da&label=discord" alt="Discord" /></a>
     <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license" /></a>
   </p>
 </div>
 
-`@ratel-ai/mcp-server` is two things in one package:
+Ratel Local ships as `@ratel-ai/mcp-server` and is two things in one package:
 
 - a **library** that takes a Ratel [`ToolCatalog`](https://github.com/ratel-ai/ratel) and exposes it as a Model Context Protocol server — the MCP client (Claude Desktop, an agent framework, an `@modelcontextprotocol/sdk` `Client`) sees `search_capabilities` + `invoke_tool` (plus `get_skill_content` when skills are configured) instead of every upstream's full tool list;
 - a **CLI** (`ratel-mcp`) that drops the gateway between an MCP host (Claude Code, Cursor, ChatGPT) and an arbitrary set of upstream MCP servers — with Claude-compatible config UX, three-scope hierarchy, OAuth 2.1 / PKCE for HTTP+SSE upstreams, and a one-shot `import` wizard for migrating an existing agent's MCP setup and skills.
@@ -41,17 +41,17 @@ npx -y @ratel-ai/mcp-server --help
 
 ### Agent plugin marketplaces
 
-The repo also ships a shared Ratel MCP plugin for Codex and Claude Code. It
+The repo also ships a shared Ratel Local plugin for Codex and Claude Code. It
 starts the gateway over stdio with `npx -y @ratel-ai/mcp-server@latest serve
 --auto-config` and bundles skills for setup, debugging, and tool-usage review.
 
 #### Codex
 
-Add the remote marketplace, then install **Ratel MCP** from the **Ratel**
+Add the remote marketplace, then install **Ratel Local** from the **Ratel**
 marketplace in Codex:
 
 ```bash
-codex plugin marketplace add ratel-ai/ratel-mcp
+codex plugin marketplace add ratel-ai/ratel-local
 ```
 
 For Codex local development from a checkout, run this from the repo root:
@@ -65,7 +65,7 @@ codex plugin marketplace add .
 Add the remote marketplace and install the plugin:
 
 ```bash
-claude plugin marketplace add ratel-ai/ratel-mcp
+claude plugin marketplace add ratel-ai/ratel-local
 claude plugin install ratel-mcp@ratel
 ```
 
@@ -101,7 +101,7 @@ ratel-mcp mcp add --scope user stripe https://mcp.stripe.com --transport http
 # List what's configured
 ratel-mcp mcp list
 
-# Import your existing agent MCP setup into ratel-mcp's scopes
+# Import your existing agent MCP setup into Ratel Local's scopes
 ratel-mcp import
 ratel-mcp import --agent codex
 

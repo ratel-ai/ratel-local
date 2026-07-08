@@ -23,7 +23,7 @@ built (the SDK isn't published yet):
 
 ```bash
 cd ../ratel/src/sdk/ts && pnpm build
-cd ../../../../ratel-mcp
+cd ../../../../ratel-local
 mv node_modules/@ratel-ai/sdk node_modules/@ratel-ai/sdk.orig
 ln -s ../ratel/src/sdk/ts node_modules/@ratel-ai/sdk
 pnpm build

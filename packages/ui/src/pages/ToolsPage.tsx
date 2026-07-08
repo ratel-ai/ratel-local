@@ -578,7 +578,7 @@ function formatScopeTokenSummary(input: {
 }): string {
   if (input.sourceCount === 0) return "No tool sources in this scope";
   if (input.measuredSourceCount === 0) {
-    return "Use Ratel MCP to estimate tool counts and token savings";
+    return "Use Ratel Local to estimate tool counts and token savings";
   }
   return `${formatToolCount(input.toolCount)} in this scope, estimated to save ~${formatTokenEstimate(
     input.estimatedTokens,

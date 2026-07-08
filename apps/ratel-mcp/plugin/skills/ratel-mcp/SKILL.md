@@ -1,13 +1,13 @@
 ---
 name: ratel-mcp
-description: Configure, use, and debug the Ratel MCP plugin and ratel-mcp CLI. Use when working with Codex or Claude Code plugin setup, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
+description: Configure, use, and debug the Ratel Local plugin and ratel-mcp CLI. Use when working with Codex or Claude Code plugin setup, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
 ---
 
-# Ratel MCP
+# Ratel Local
 
 ## Model
 
-Ratel MCP sits between a host agent and upstream MCP servers:
+Ratel Local sits between a host agent and upstream MCP servers:
 
 ```text
 Codex / Claude Code -> Ratel gateway -> upstream MCP servers

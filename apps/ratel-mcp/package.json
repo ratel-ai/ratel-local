@@ -1,20 +1,20 @@
 {
   "name": "@ratel-ai/mcp-server",
   "version": "0.4.0",
-  "description": "MCP server library + ratel-mcp CLI: expose a Ratel tool catalog as a Model Context Protocol server. Manage upstream MCP servers, OAuth, and Claude Code import from one binary.",
+  "description": "Ratel Local package: an MCP server library plus the ratel-mcp CLI for managing upstream MCP servers, OAuth, and agent imports from one binary.",
   "private": false,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "license": "MIT",
   "author": "Agentified",
-  "homepage": "https://github.com/ratel-ai/ratel-mcp",
+  "homepage": "https://github.com/ratel-ai/ratel-local",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ratel-ai/ratel-mcp.git"
+    "url": "git+https://github.com/ratel-ai/ratel-local.git"
   },
   "bugs": {
-    "url": "https://github.com/ratel-ai/ratel-mcp/issues"
+    "url": "https://github.com/ratel-ai/ratel-local/issues"
   },
   "keywords": [
     "mcp",

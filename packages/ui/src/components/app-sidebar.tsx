@@ -31,7 +31,7 @@ const data = {
   },
   teams: [
     {
-      name: "Ratel MCP",
+      name: "Ratel Local",
       logo: <GalleryVerticalEndIcon />,
       plan: "Gateway",
     },

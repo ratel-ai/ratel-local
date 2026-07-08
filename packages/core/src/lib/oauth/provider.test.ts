@@ -18,6 +18,11 @@ describe("RatelOAuthProvider", () => {
     return new RatelOAuthStore(join(dir, "oauth", `${name}.json`));
   }
 
+  it("clientMetadata uses the Ratel Local gateway default client name", () => {
+    const provider = new RatelOAuthProvider({ store: makeStore() });
+    expect(provider.clientMetadata.client_name).toBe("Ratel Local gateway");
+  });
+
   it("clientMetadata exposes the configured redirect_uris and scope", () => {
     const provider = new RatelOAuthProvider({
       store: makeStore(),
