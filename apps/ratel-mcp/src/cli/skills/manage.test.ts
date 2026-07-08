@@ -54,7 +54,7 @@ describe("activateSkills", () => {
     await writeNativeSkill("slides");
 
     const result = await activateSkills(paths);
-    expect(result.moved.map((m) => m.id).sort()).toEqual(["api-design", "slides"]);
+    expect(result.managed.map((m) => m.id).sort()).toEqual(["api-design", "slides"]);
 
     // native stays in place, managed folder gets a symlink
     expect(await exists(join(paths.nativeDir, "api-design", "SKILL.md"))).toBe(true);
@@ -64,17 +64,19 @@ describe("activateSkills", () => {
     const managed = await listManaged(paths);
     expect(managed.map((m) => m.id).sort()).toEqual(["api-design", "slides"]);
     expect(managed[0].mode).toBe("linked");
+    expect(managed[0].managedAt).toBeTruthy();
+    expect(managed[0].movedAt).toBeUndefined();
     expect(managed[0].originalPath).toContain(join(".claude", "skills"));
     expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toContain(
       "disable-model-invocation: true",
     );
   });
 
-  it("is idempotent — a second activate moves nothing new", async () => {
+  it("is idempotent — a second activate manages nothing new", async () => {
     await writeNativeSkill("api-design");
     await activateSkills(paths);
     const second = await activateSkills(paths);
-    expect(second.moved).toEqual([]);
+    expect(second.managed).toEqual([]);
   });
 
   it("skips (never overwrites) a name already present in the managed folder", async () => {
@@ -83,7 +85,7 @@ describe("activateSkills", () => {
     await writeFile(join(paths.managedDir, "dup", "SKILL.md"), "existing managed copy");
 
     const result = await activateSkills(paths);
-    expect(result.moved).toEqual([]);
+    expect(result.managed).toEqual([]);
     expect(result.skipped[0]?.id).toBe("dup");
     // the native copy is left untouched
     expect(await exists(join(paths.nativeDir, "dup", "SKILL.md"))).toBe(true);
@@ -96,7 +98,7 @@ describe("activateSkills", () => {
 
     const result = await activateSkills(paths);
 
-    expect(result.moved).toEqual([]);
+    expect(result.managed).toEqual([]);
     expect(result.skipped[0]).toMatchObject({
       id: "broken",
       reason: expect.stringMatching(/manual-only metadata/i),
@@ -110,13 +112,13 @@ describe("activateSkills", () => {
     await mkdir(join(paths.nativeDir, "not-a-skill"), { recursive: true });
     await writeNativeSkill("real");
     const result = await activateSkills(paths);
-    expect(result.moved.map((m) => m.id)).toEqual(["real"]);
+    expect(result.managed.map((m) => m.id)).toEqual(["real"]);
   });
 
-  it("dry-run reports moves without touching the filesystem", async () => {
+  it("dry-run reports managed entries without touching the filesystem", async () => {
     await writeNativeSkill("api-design");
     const result = await activateSkills(paths, { dryRun: true });
-    expect(result.moved.map((m) => m.id)).toEqual(["api-design"]);
+    expect(result.managed.map((m) => m.id)).toEqual(["api-design"]);
     expect(await exists(join(paths.nativeDir, "api-design", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.managedDir, "api-design", "SKILL.md"))).toBe(false);
     expect(await exists(paths.manifestPath)).toBe(false);
@@ -126,7 +128,7 @@ describe("activateSkills", () => {
     await writeNativeSkill("alpha");
     await writeNativeSkill("beta");
     const result = await activateSkills(paths, { ids: ["alpha"] });
-    expect(result.moved.map((m) => m.id)).toEqual(["alpha"]);
+    expect(result.managed.map((m) => m.id)).toEqual(["alpha"]);
     expect(await exists(join(paths.managedDir, "alpha", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.managedDir, "beta"))).toBe(false);
     expect(await exists(join(paths.nativeDir, "beta", "SKILL.md"))).toBe(true);
@@ -135,7 +137,7 @@ describe("activateSkills", () => {
   it("links Codex skills into the managed folder and records source=codex", async () => {
     await writeCodexSkill("from-codex");
     const result = await activateSkills(paths);
-    expect(result.moved.map((m) => m.id)).toEqual(["from-codex"]);
+    expect(result.managed.map((m) => m.id)).toEqual(["from-codex"]);
     expect(await exists(join(paths.codexDir, "from-codex", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.managedDir, "from-codex", "SKILL.md"))).toBe(true);
     expect((await listManaged(paths)).find((m) => m.id === "from-codex")?.source).toBe("codex");
@@ -152,7 +154,7 @@ describe("activateSkills", () => {
 
     const result = await activateSkills(paths, { source: "codex" });
 
-    expect(result.moved.map((m) => m.id)).toEqual(["block-policy"]);
+    expect(result.managed.map((m) => m.id)).toEqual(["block-policy"]);
     expect(await readFile(policyPath, "utf8")).toBe(
       "policy:\n  allow_implicit_invocation: false\n  review: manual\n",
     );
@@ -166,7 +168,7 @@ describe("activateSkills", () => {
 
     const result = await activateSkills(paths, { source: "codex" });
 
-    expect(result.moved).toEqual([]);
+    expect(result.managed).toEqual([]);
     expect(result.skipped[0]).toMatchObject({
       id: "flow-policy",
       reason: expect.stringMatching(/unsupported/i),
@@ -186,7 +188,7 @@ describe("activateSkills", () => {
 
     const result = await activateSkills(paths, { source: "codex" });
 
-    expect(result.moved).toEqual([]);
+    expect(result.managed).toEqual([]);
     expect(result.skipped[0]?.reason).toMatch(/unsupported/i);
     expect(await readFile(policyPath, "utf8")).toBe("allow_implicit_invocation: true\n");
     expect(await exists(join(paths.managedDir, "top-level-allow"))).toBe(false);
@@ -200,7 +202,7 @@ describe("activateSkills", () => {
 
     const result = await activateSkills(paths, { source: "codex" });
 
-    expect(result.moved).toEqual([]);
+    expect(result.managed).toEqual([]);
     expect(result.skipped[0]?.reason).toMatch(/unsupported/i);
     expect(await readFile(policyPath, "utf8")).toBe(
       "profiles:\n  default:\n    allow_implicit_invocation: true\n",
@@ -212,7 +214,7 @@ describe("activateSkills", () => {
     await writeNativeSkill("shared");
     await writeCodexSkill("shared");
     const result = await activateSkills(paths);
-    expect(result.moved.map((m) => m.id)).toEqual(["shared"]);
+    expect(result.managed.map((m) => m.id)).toEqual(["shared"]);
     expect((await listManaged(paths)).find((m) => m.id === "shared")?.source).toBe("claude");
     expect(result.skipped.map((s) => s.id)).toContain("shared");
     // the Codex copy is left untouched
@@ -223,7 +225,7 @@ describe("activateSkills", () => {
     await writeNativeSkill("shared");
     await writeCodexSkill("shared");
     const result = await activateSkills(paths, { ids: ["shared"], source: "codex" });
-    expect(result.moved.map((m) => m.id)).toEqual(["shared"]);
+    expect(result.managed.map((m) => m.id)).toEqual(["shared"]);
     expect((await listManaged(paths)).find((m) => m.id === "shared")?.source).toBe("codex");
     // both native copies stay put; the managed slot links to Codex.
     expect(await exists(join(paths.codexDir, "shared", "SKILL.md"))).toBe(true);
@@ -237,7 +239,7 @@ describe("deactivateSkills", () => {
     await activateSkills(paths);
 
     const result = await deactivateSkills(paths);
-    expect(result.restored.map((m) => m.id)).toEqual(["api-design"]);
+    expect(result.unmanaged.map((m) => m.id)).toEqual(["api-design"]);
     expect(await exists(join(paths.nativeDir, "api-design", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.managedDir, "api-design"))).toBe(false);
     expect(await listManaged(paths)).toEqual([]);
@@ -262,7 +264,7 @@ describe("deactivateSkills", () => {
 
     const result = await deactivateSkills(paths);
 
-    expect(result.restored.map((m) => m.id)).toEqual(["api-design"]);
+    expect(result.unmanaged.map((m) => m.id)).toEqual(["api-design"]);
     expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
       "---\nname: api-design\ndescription: d\n---\n# body",
     );
@@ -278,7 +280,7 @@ describe("deactivateSkills", () => {
 
     const result = await deactivateSkills(paths);
 
-    expect(result.restored).toEqual([]);
+    expect(result.unmanaged).toEqual([]);
     expect(result.skipped[0]).toMatchObject({
       id: "api-design",
       reason: expect.stringMatching(/not.*link/i),
@@ -391,7 +393,7 @@ describe("deactivateSkills", () => {
 
     const result = await deactivateSkills(paths);
 
-    expect(result.restored).toEqual([]);
+    expect(result.unmanaged).toEqual([]);
     expect(result.skipped[0]).toMatchObject({
       id: "from-codex",
       reason: expect.stringMatching(/metadata/i),
@@ -419,15 +421,15 @@ describe("deactivateSkills", () => {
     );
   });
 
-  it("only restores skills it moved, leaving manually-added managed skills in place", async () => {
-    await writeNativeSkill("moved");
+  it("only stops managing manifest entries, leaving manually-added managed skills in place", async () => {
+    await writeNativeSkill("linked");
     await activateSkills(paths);
     // a skill the user authored directly in the managed folder
     await mkdir(join(paths.managedDir, "hand-authored"), { recursive: true });
     await writeFile(join(paths.managedDir, "hand-authored", "SKILL.md"), "# direct");
 
     await deactivateSkills(paths);
-    expect(await exists(join(paths.nativeDir, "moved", "SKILL.md"))).toBe(true);
+    expect(await exists(join(paths.nativeDir, "linked", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.nativeDir, "hand-authored"))).toBe(false);
     expect(await exists(join(paths.managedDir, "hand-authored", "SKILL.md"))).toBe(true);
   });
@@ -436,13 +438,13 @@ describe("deactivateSkills", () => {
     await writeCodexSkill("from-codex");
     await activateSkills(paths);
     const result = await deactivateSkills(paths);
-    expect(result.restored.map((m) => m.id)).toEqual(["from-codex"]);
+    expect(result.unmanaged.map((m) => m.id)).toEqual(["from-codex"]);
     expect(await exists(join(paths.codexDir, "from-codex", "SKILL.md"))).toBe(true);
     expect(await exists(join(paths.nativeDir, "from-codex"))).toBe(false);
     expect(await exists(join(paths.managedDir, "from-codex"))).toBe(false);
   });
 
-  it("restores a sourceless legacy moved manifest entry to Claude", async () => {
+  it("restores a sourceless legacy move-based manifest entry to Claude", async () => {
     await mkdir(join(paths.managedDir, "legacy"), { recursive: true });
     await writeFile(
       join(paths.managedDir, "legacy", "SKILL.md"),
@@ -458,13 +460,13 @@ describe("deactivateSkills", () => {
     );
 
     const result = await deactivateSkills(paths);
-    expect(result.restored.map((m) => m.id)).toEqual(["legacy"]);
+    expect(result.unmanaged.map((m) => m.id)).toEqual(["legacy"]);
     expect(await exists(join(paths.nativeDir, "legacy", "SKILL.md"))).toBe(true);
   });
 
   it("does nothing when there is no manifest", async () => {
     const result = await deactivateSkills(paths);
-    expect(result.restored).toEqual([]);
+    expect(result.unmanaged).toEqual([]);
   });
 
   it("with `ids` deactivates only the selected skills", async () => {
@@ -472,7 +474,7 @@ describe("deactivateSkills", () => {
     await writeNativeSkill("beta");
     await activateSkills(paths);
     const result = await deactivateSkills(paths, { ids: ["alpha"] });
-    expect(result.restored.map((m) => m.id)).toEqual(["alpha"]);
+    expect(result.unmanaged.map((m) => m.id)).toEqual(["alpha"]);
     expect(await exists(join(paths.nativeDir, "alpha", "SKILL.md"))).toBe(true);
     expect((await listManaged(paths)).map((m) => m.id)).toEqual(["beta"]);
   });
@@ -511,7 +513,7 @@ describe("deactivateSkills", () => {
     );
 
     const result = await deactivateSkills(paths);
-    expect(result.restored).toEqual([]);
+    expect(result.unmanaged).toEqual([]);
     expect(result.skipped[0]?.reason).toMatch(/unsafe/);
   });
 });
@@ -536,10 +538,10 @@ describe("manifest integrity", () => {
     await writeFile(paths.manifestPath, text);
   }
 
-  it("persists the manifest per move (a moved skill is recorded immediately)", async () => {
+  it("persists the manifest per management change", async () => {
     await writeNativeSkill("a");
     await activateSkills(paths);
-    // manifest on disk is valid JSON and lists the move (atomic write left no temp)
+    // manifest on disk is valid JSON and lists the managed skill (atomic write left no temp)
     const onDisk = JSON.parse(await readFile(paths.manifestPath, "utf8"));
     expect(onDisk.managed.map((m: { id: string }) => m.id)).toEqual(["a"]);
   });
@@ -566,7 +568,7 @@ describe("manifest integrity", () => {
     );
 
     const result = await deactivateSkills(paths);
-    expect(result.restored.map((r) => r.id)).toEqual(["good"]);
+    expect(result.unmanaged.map((r) => r.id)).toEqual(["good"]);
     expect(await exists(join(paths.nativeDir, "good", "SKILL.md"))).toBe(true);
     // the malformed entry is kept (not lost), the valid one cleared
     const remaining = JSON.parse(await readFile(paths.manifestPath, "utf8")).managed;

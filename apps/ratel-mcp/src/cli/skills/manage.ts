@@ -9,12 +9,12 @@ import {
   readFile,
   rename,
   rm,
-  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { isDirectoryEntry } from "@ratel-ai/mcp-core";
 
 /** The agent whose native skill folder Ratel manages. */
 export type SkillSource = "claude" | "codex";
@@ -45,17 +45,20 @@ export function defaultSkillManagePaths(home: string = homedir()): SkillManagePa
 
 export interface ManagedEntry {
   id: string;
-  /** New entries are linked in place; missing mode means a legacy moved entry. */
+  /** New entries are linked in place; missing mode means a legacy move-based entry. */
   mode?: "linked";
-  /** Absolute path to the native skill directory. Legacy entries were originally moved from here. */
+  /** Absolute path to the native skill directory. Legacy entries originally came from here. */
   originalPath: string;
-  /** Absolute path of the Ratel-managed symlink for linked entries. */
+  /** Historical audit path for linked entries; deactivate derives the link path from the id. */
   linkPath?: string;
   /** Which agent's folder owns the native skill.
    *  Optional for manifests written before multi-source support (treated as
    *  "claude", the only source that existed then). */
   source?: SkillSource;
-  movedAt: string;
+  /** When Ratel started managing this skill. */
+  managedAt?: string;
+  /** Legacy manifest timestamp field from move-based manifests. */
+  movedAt?: string;
   /** Metadata edits Ratel made to keep the native host manual-only. */
   metadataPatch?: MetadataPatch[];
 }
@@ -86,14 +89,14 @@ export interface ManageOptions {
 }
 
 export interface ActivateResult {
-  /** Compatibility field name: entries newly managed through Ratel. */
-  moved: ManagedEntry[];
+  /** Entries newly managed through Ratel. */
+  managed: ManagedEntry[];
   skipped: Array<{ id: string; reason: string }>;
 }
 
 export interface DeactivateResult {
-  /** Compatibility field name: entries Ratel stopped managing. */
-  restored: ManagedEntry[];
+  /** Entries Ratel stopped managing. */
+  unmanaged: ManagedEntry[];
   skipped: Array<{ id: string; reason: string }>;
 }
 
@@ -113,7 +116,7 @@ export async function activateSkills(
   const manifest = await readManifest(paths.manifestPath);
   const already = new Set(manifest.managed.filter(isValidEntry).map((m) => m.id));
 
-  const moved: ManagedEntry[] = [];
+  const managed: ManagedEntry[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
 
   // Claude first, then Codex: a skill id present in both is taken from Claude and
@@ -140,13 +143,13 @@ export async function activateSkills(
         }
         if (options.dryRun) {
           log(`[ratel] would manage skill ${id} (${source}) as invoke-only`);
-          moved.push({
+          managed.push({
             id,
             mode: "linked",
             originalPath: from,
             linkPath: to,
             source,
-            movedAt: now().toISOString(),
+            managedAt: now().toISOString(),
           });
           already.add(id);
           continue;
@@ -177,7 +180,7 @@ export async function activateSkills(
           originalPath: from,
           linkPath: to,
           source,
-          movedAt: now().toISOString(),
+          managedAt: now().toISOString(),
           metadataPatch,
         };
         manifest.managed.push(entry);
@@ -206,26 +209,26 @@ export async function activateSkills(
           log(`[ratel] skill ${id}: could not apply manual-only metadata — skipping`);
           continue;
         }
-        moved.push(entry);
+        managed.push(entry);
         already.add(id);
         log(`[ratel] managing skill ${id} (${source}) as invoke-only`);
       }
     }
   } finally {
-    if (!options.dryRun && moved.length > 0) {
+    if (!options.dryRun && managed.length > 0) {
       await writeManifest(paths.manifestPath, manifest).catch(() => {});
     }
   }
-  return { moved, skipped };
+  return { managed, skipped };
 }
 
 /**
  * Stop managing every skill the manifest recorded, then clear those entries.
  * Linked entries have their managed symlink removed and their native metadata
- * restored. Legacy moved entries are copied back to their canonical native
- * folder. Skills added directly to the managed folder (not in the manifest)
- * stay put. Idempotent: a missing skill or an occupied destination is skipped,
- * not clobbered.
+ * restored in place. Legacy move-based entries are copied back to their canonical
+ * native folder. Skills added directly to the managed folder (not in the
+ * manifest) stay put. Idempotent: a missing skill or an occupied destination is
+ * skipped, not clobbered.
  */
 export async function deactivateSkills(
   paths: SkillManagePaths,
@@ -234,7 +237,7 @@ export async function deactivateSkills(
   const log = options.logger ?? (() => {});
   const manifest = await readManifest(paths.manifestPath);
 
-  const restored: ManagedEntry[] = [];
+  const unmanaged: ManagedEntry[] = [];
   const skipped: Array<{ id: string; reason: string }> = [];
   const remaining: ManagedEntry[] = [];
 
@@ -267,7 +270,7 @@ export async function deactivateSkills(
       const linkState = await managedLinkState(linkPath);
       if (options.dryRun) {
         log(`[ratel] would stop managing skill ${entry.id}`);
-        restored.push(entry);
+        unmanaged.push(entry);
         remaining.push(entry);
         continue;
       }
@@ -303,7 +306,7 @@ export async function deactivateSkills(
       if (linkState === "link") {
         await rm(linkPath, { force: true });
       }
-      restored.push(entry);
+      unmanaged.push(entry);
       log(`[ratel] stopped managing skill ${entry.id}`);
       continue;
     }
@@ -329,23 +332,23 @@ export async function deactivateSkills(
       continue;
     }
     if (options.dryRun) {
-      log(`[ratel] would restore legacy skill ${entry.id} → ${dest}`);
-      restored.push(entry);
+      log(`[ratel] would restore legacy managed copy ${entry.id} → ${dest}`);
+      unmanaged.push(entry);
       continue;
     }
     await mkdir(dirname(dest), { recursive: true });
     await moveDir(from, dest);
-    restored.push(entry);
-    log(`[ratel] restored legacy skill ${entry.id} → ${dest}`);
+    unmanaged.push(entry);
+    log(`[ratel] restored legacy managed copy ${entry.id} → ${dest}`);
   }
 
-  // Only rewrite the manifest when it actually changed (an entry was restored or
-  // dropped). Avoids touching disk — and failing on a missing/unwritable `.ratel`
-  // dir — when there was nothing to deactivate.
+  // Only rewrite the manifest when it actually changed (an entry was unmanaged
+  // or dropped). Avoids touching disk — and failing on a missing/unwritable
+  // `.ratel` dir — when there was nothing to deactivate.
   if (!options.dryRun && remaining.length !== manifest.managed.length) {
     await writeManifest(paths.manifestPath, { version: 1, managed: remaining });
   }
-  return { restored, skipped };
+  return { unmanaged, skipped };
 }
 
 /** Read the well-formed managed-skill entries (empty when none). */
@@ -368,16 +371,6 @@ async function skillDirNames(dir: string): Promise<string[]> {
     }
   }
   return names;
-}
-
-async function isDirectoryEntry(parent: string, entry: Dirent): Promise<boolean> {
-  if (entry.isDirectory()) return true;
-  if (!entry.isSymbolicLink()) return false;
-  try {
-    return (await stat(join(parent, entry.name))).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 /** Move a directory, falling back to a copy across filesystems (EXDEV). */
@@ -465,12 +458,14 @@ export class SkillManifestError extends Error {
   }
 }
 
-/** A well-formed manifest entry: `id`/`originalPath`/`movedAt` all present strings. */
+/** A well-formed manifest entry: `id`/`originalPath` and a lifecycle timestamp. */
 function isValidEntry(entry: unknown): entry is ManagedEntry {
   if (typeof entry !== "object" || entry === null) return false;
   const e = entry as Record<string, unknown>;
   return (
-    typeof e.id === "string" && typeof e.originalPath === "string" && typeof e.movedAt === "string"
+    typeof e.id === "string" &&
+    typeof e.originalPath === "string" &&
+    (typeof e.managedAt === "string" || typeof e.movedAt === "string")
   );
 }
 

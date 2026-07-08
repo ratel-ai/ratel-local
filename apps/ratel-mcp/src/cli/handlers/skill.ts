@@ -50,17 +50,17 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
   switch (verb) {
     case "activate": {
       const pending = await activateSkills(paths, { dryRun: true });
-      if (pending.moved.length === 0) {
+      if (pending.managed.length === 0) {
         ctx.log("no skills to activate (nothing new in native skill folders)");
         return;
       }
       if (dryRun) {
-        for (const m of pending.moved) ctx.log(`would manage ${m.id} as invoke-only`);
+        for (const m of pending.managed) ctx.log(`would manage ${m.id} as invoke-only`);
         return;
       }
       if (!assumeYes) {
         const answer = await ctx.prompts.confirm({
-          message: `Manage ${pending.moved.length} skill(s) through Ratel as invoke-only? (reversible with "skill deactivate")`,
+          message: `Manage ${pending.managed.length} skill(s) through Ratel as invoke-only? (reversible with "skill deactivate")`,
           initialValue: true,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {
@@ -69,23 +69,23 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
         }
       }
       const result = await activateSkills(paths, { logger: ctx.log });
-      ctx.log(`managing ${result.moved.length} skill(s) as invoke-only`);
+      ctx.log(`managing ${result.managed.length} skill(s) as invoke-only`);
       return;
     }
 
     case "deactivate": {
       const pending = await deactivateSkills(paths, { dryRun: true });
-      if (pending.restored.length === 0) {
+      if (pending.unmanaged.length === 0) {
         ctx.log("no managed skills to deactivate");
         return;
       }
       if (dryRun) {
-        for (const r of pending.restored) ctx.log(`would stop managing ${r.id}`);
+        for (const r of pending.unmanaged) ctx.log(`would stop managing ${r.id}`);
         return;
       }
       if (!assumeYes) {
         const answer = await ctx.prompts.confirm({
-          message: `Stop managing ${pending.restored.length} skill(s) through Ratel?`,
+          message: `Stop managing ${pending.unmanaged.length} skill(s) through Ratel?`,
           initialValue: true,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {
@@ -94,7 +94,7 @@ export async function runSkill(ctx: HandlerCtx): Promise<void> {
         }
       }
       const result = await deactivateSkills(paths, { logger: ctx.log });
-      ctx.log(`deactivated ${result.restored.length} skill(s)`);
+      ctx.log(`deactivated ${result.unmanaged.length} skill(s)`);
       return;
     }
 

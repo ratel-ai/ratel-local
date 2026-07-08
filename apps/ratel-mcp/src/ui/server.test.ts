@@ -168,8 +168,8 @@ describe("UI server — auth", () => {
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { moved: string[]; skipped: unknown[] };
-    expect(Array.isArray(body.moved)).toBe(true);
+    const body = (await res.json()) as { managed: unknown[]; skipped: unknown[] };
+    expect(Array.isArray(body.managed)).toBe(true);
   });
 
   it("deactivates skills via POST /api/skills/deactivate (no-op when none managed)", async () => {
@@ -179,8 +179,8 @@ describe("UI server — auth", () => {
       body: JSON.stringify({ ids: ["nonexistent"] }),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { restored: string[] };
-    expect(Array.isArray(body.restored)).toBe(true);
+    const body = (await res.json()) as { unmanaged: string[] };
+    expect(Array.isArray(body.unmanaged)).toBe(true);
   });
 
   it("rejects POST /api/skills (create) without a bearer token", async () => {

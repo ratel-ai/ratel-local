@@ -12,7 +12,7 @@ export interface SkillSummary {
   /** Managed skills report their origin agent (or "ratel" when created here);
    *  available skills report the agent whose folder they live in. */
   source: SkillSource;
-  /** Managed skills may be linked native folders or legacy moved entries. */
+  /** Managed skills may be linked native folders, legacy managed copies, or Ratel-authored. */
   mode?: "linked" | "moved" | "ratel";
 }
 

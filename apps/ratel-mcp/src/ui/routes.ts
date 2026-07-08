@@ -1,7 +1,7 @@
 import { type SpawnOptions, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { type Dirent, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type AuthFlowResult,
@@ -17,6 +17,7 @@ import {
   type ImportConflictStrategy,
   importAgentServers,
   installClaudeCodeStatusline,
+  isDirectoryEntry,
   linkAgentToRatel,
   loadSkills,
   parseSkillMd,
@@ -198,16 +199,6 @@ async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | 
   return null;
 }
 
-async function isDirectoryEntry(parent: string, entry: Dirent): Promise<boolean> {
-  if (entry.isDirectory()) return true;
-  if (!entry.isSymbolicLink()) return false;
-  try {
-    return (await stat(join(parent, entry.name))).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Full detail of a single skill, by id. Returns the *author* body straight from
  * the `SKILL.md` (without the absolute-path bundled-resources index that
@@ -254,8 +245,7 @@ export async function activateSkillsRoute(
     logger: ctx.log,
   });
   const responseBody = {
-    moved: result.moved.map((m) => m.id),
-    managed: result.moved.map((m) => ({ id: m.id, mode: m.mode ?? "moved" })),
+    managed: result.managed.map((m) => ({ id: m.id, mode: m.mode ?? "moved" })),
     skipped: result.skipped,
   };
   if (ids !== undefined && result.skipped.length > 0) {
@@ -285,7 +275,7 @@ export async function deactivateSkillsRoute(
     ids,
     logger: ctx.log,
   });
-  return ok({ restored: result.restored.map((m) => m.id), skipped: result.skipped });
+  return ok({ unmanaged: result.unmanaged.map((m) => m.id), skipped: result.skipped });
 }
 
 const SAFE_SKILL_NAME = /^[a-z0-9][a-z0-9-]*$/i;
