@@ -19,8 +19,9 @@ Verbs:
   list    list MCP servers configured across Ratel scopes
   get     show one entry's resolved details
   edit    edit fields on an existing entry (interactive when no flags supplied)
-  import  migrate Claude Code MCP configs into Ratel (two stages: Ratel write, then Claude rewrite)
-  link    rewrite Claude Code's config to point at Ratel for entries already in Ratel scopes
+  import  migrate agent MCP configs and native skills into Ratel
+          (config import is two stages: Ratel write, then agent rewrite)
+  link    rewrite an agent config to point at Ratel for entries already in Ratel scopes
   auth    drive an interactive OAuth flow for one or all http/sse upstreams that need authorization
 
 Agent-aware verbs accept --agent auto|claude-code|codex (default: auto).

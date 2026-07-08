@@ -1,6 +1,10 @@
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { BackupFs, JsonFs, ResolvedBin } from "@ratel-ai/mcp-core";
 import { describe, expect, it } from "vitest";
 import { CANCEL_SYMBOL, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
+import type { SkillManagePaths } from "../skills/manage.js";
 import { runImport } from "./import.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -68,6 +72,42 @@ function ctxOf(
       prompts,
     },
   };
+}
+
+async function makeSkillPaths(): Promise<SkillManagePaths & { root: string }> {
+  const root = await mkdtemp(join(tmpdir(), "ratel-import-skills-"));
+  return {
+    root,
+    nativeDir: join(root, ".claude", "skills"),
+    codexDir: join(root, ".codex", "skills"),
+    managedDir: join(root, ".ratel", "skills"),
+    manifestPath: join(root, ".ratel", "skill-manifest.json"),
+  };
+}
+
+async function writeCliClaudeSkill(paths: SkillManagePaths, name: string): Promise<string> {
+  const dir = join(paths.nativeDir, name);
+  await mkdir(dir, { recursive: true });
+  const text = `---\nname: ${name}\ndescription: d\n---\n# body`;
+  await writeFile(join(dir, "SKILL.md"), text, "utf8");
+  return text;
+}
+
+async function writeCliCodexSkill(paths: SkillManagePaths, name: string): Promise<string> {
+  const dir = join(paths.codexDir, name);
+  await mkdir(dir, { recursive: true });
+  const text = `---\nname: ${name}\ndescription: d\n---\n# body`;
+  await writeFile(join(dir, "SKILL.md"), text, "utf8");
+  return text;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function autoConfirm(): PromptAdapter {
@@ -367,6 +407,117 @@ command = "codex"
     expect(fs.files.has(RATEL_USER)).toBe(false);
     expect(logs.join("\n")).toMatch(/would write/);
     expect(logs.join("\n")).toMatch(/\/home\/u\/\.ratel\/config\.json/);
+  });
+
+  it("--dry-run previews native skills for the requested agent without touching files", async () => {
+    const fs = new MemFs();
+    const skillPaths = await makeSkillPaths();
+    try {
+      const before = await writeCliClaudeSkill(skillPaths, "api-design");
+      const { ctx, logs } = ctxOf(fs, autoConfirm(), false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        yes: true,
+        dryRun: true,
+        agentKind: "claude-code",
+        skillPaths,
+      });
+
+      expect(logs.join("\n")).toMatch(/would manage skill api-design \(claude\) as invoke-only/);
+      expect(await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
+        before,
+      );
+      expect(await pathExists(join(skillPaths.managedDir, "api-design"))).toBe(false);
+      expect(await pathExists(skillPaths.manifestPath)).toBe(false);
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("imports MCP entries and native skills in one requested-agent flow", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "echo" } },
+      }),
+    );
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliClaudeSkill(skillPaths, "api-design");
+      const prompts: PromptAdapter = {
+        ...autoConfirm(),
+        async multiselect(opts) {
+          if (opts.message.includes("skills")) {
+            return opts.options
+              .filter((option) => String(option.value).endsWith(":api-design"))
+              .map((option) => option.value) as unknown as never;
+          }
+          return opts.options.map((option) => option.value) as unknown as never;
+        },
+      };
+      const { ctx } = ctxOf(fs, prompts, false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        agentKind: "claude-code",
+        skillPaths,
+        probe: async () => undefined,
+      });
+
+      const ratelUser = JSON.parse(fs.files.get(RATEL_USER) as string);
+      expect(ratelUser.mcpServers.fs).toEqual({ type: "stdio", command: "echo" });
+      const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
+      expect(claude.mcpServers["ratel-mcp"]).toEqual({
+        type: "stdio",
+        command: "ratel-mcp",
+        args: ["serve", "--config", RATEL_USER],
+      });
+      expect((await lstat(join(skillPaths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
+      expect(
+        await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8"),
+      ).toContain("disable-model-invocation: true");
+      const manifest = JSON.parse(await readFile(skillPaths.manifestPath, "utf8"));
+      expect(manifest.managed[0]).toMatchObject({
+        id: "api-design",
+        mode: "linked",
+        source: "claude",
+      });
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("can manage Codex skills through requested-agent import without an MCP config", async () => {
+    const fs = new MemFs();
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliCodexSkill(skillPaths, "review-flow");
+      const { ctx, logs } = ctxOf(fs, autoConfirm(), false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        yes: true,
+        agentKind: "codex",
+        skillPaths,
+      });
+
+      expect(fs.files.size).toBe(0);
+      expect((await lstat(join(skillPaths.managedDir, "review-flow"))).isSymbolicLink()).toBe(true);
+      expect(
+        await readFile(join(skillPaths.codexDir, "review-flow", "agents", "openai.yaml"), "utf8"),
+      ).toContain("allow_implicit_invocation: false");
+      const manifest = JSON.parse(await readFile(skillPaths.manifestPath, "utf8"));
+      expect(manifest.managed[0]).toMatchObject({
+        id: "review-flow",
+        mode: "linked",
+        source: "codex",
+      });
+      expect(logs.join("\n")).toMatch(/managing 1 skill as invoke-only/);
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
   });
 
   it("--yes skips the confirm prompt entirely", async () => {
