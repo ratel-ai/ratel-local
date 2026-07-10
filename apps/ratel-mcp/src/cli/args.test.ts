@@ -42,18 +42,20 @@ describe("parseArgs — group/verb routing", () => {
     expect(parseArgs(["statusline", "uninstall"]).verb).toBe("uninstall");
   });
 
-  it.each([
-    "add",
-    "remove",
-    "list",
-    "get",
-    "edit",
-    "import",
-    "link",
-  ] as const)("recognizes mcp %s", (verb) => {
+  it.each(["add", "remove", "list", "get", "edit"] as const)("recognizes mcp %s", (verb) => {
     const r = parseArgs(["mcp", verb]);
     expect(r.group).toBe("mcp");
     expect(r.verb).toBe(verb);
+  });
+
+  it.each(["import", "link"] as const)("recognizes top-level %s", (command) => {
+    const r = parseArgs([command]);
+    expect(r.group).toBe(command);
+    expect(r.verb).toBeUndefined();
+  });
+
+  it.each(["import", "link"] as const)("does not expose %s as an mcp verb", (verb) => {
+    expect(() => parseArgs(["mcp", verb])).toThrow(new RegExp(`unknown mcp verb: ${verb}`));
   });
 
   it("recognizes the top-level serve group", () => {
@@ -146,7 +148,7 @@ describe("parseArgs — flags and config paths", () => {
   });
 
   it("treats a bare --key followed by another flag as a boolean", () => {
-    const r = parseArgs(["mcp", "import", "--yes", "--dry-run"]);
+    const r = parseArgs(["import", "--yes", "--dry-run"]);
     expect(r.flags).toEqual({ yes: true, "dry-run": true });
   });
 

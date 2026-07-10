@@ -54,19 +54,19 @@ Run the command for your agent from the project where you use those servers:
 
 ```bash
 # Claude Code
-ratel-mcp mcp import --agent claude-code
+ratel-mcp import --agent claude-code
 
 # Codex
-ratel-mcp mcp import --agent codex
+ratel-mcp import --agent codex
 ```
 
 Select the upstreams to migrate, approve the Ratel Local configuration, then approve replacing their native entries with one Ratel Local entry. The wizard preserves scopes and backs up every changed file.
 
-If your upstreams are already in Ratel Local configuration, `mcp link` adds Ratel Local to the agent without importing or removing native entries:
+If your upstreams are already in Ratel Local configuration, `link` adds Ratel Local to the agent without importing or removing native entries:
 
 ```bash
-ratel-mcp mcp link --agent claude-code
-ratel-mcp mcp link --agent codex
+ratel-mcp link --agent claude-code
+ratel-mcp link --agent codex
 ```
 
 Native entries remain directly exposed, so their schemas still enter the agent's context without capability search.
