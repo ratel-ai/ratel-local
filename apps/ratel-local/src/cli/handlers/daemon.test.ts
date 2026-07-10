@@ -349,6 +349,19 @@ describe("runDaemon", () => {
     );
   });
 
+  it("preserves the install-time PATH for macOS upstream commands", () => {
+    const plist = createLaunchAgentPlist({
+      executablePath: "/opt/node/bin/node",
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+      pathEnv: "/opt/node/bin:/usr/bin:/bin",
+    });
+
+    expect(plist).toContain("<key>EnvironmentVariables</key>");
+    expect(plist).toContain("<key>PATH</key>");
+    expect(plist).toContain("<string>/opt/node/bin:/usr/bin:/bin</string>");
+  });
+
   it("installs the macOS daemon LaunchAgent and probes the stable port", async () => {
     const fs = new MemFs();
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -410,6 +423,17 @@ describe("runDaemon", () => {
     expect(service).toContain(
       "ExecStart=/opt/node/bin/node /opt/node/lib/node_modules/npm/bin/npx-cli.js -y @ratel-ai/ratel-local@0.5.0-rc.0 daemon run",
     );
+  });
+
+  it("preserves the install-time PATH for Linux upstream commands", () => {
+    const service = createSystemdUserService({
+      executablePath: "/opt/node/bin/node",
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+      pathEnv: "/opt/node/bin:/usr/bin:/bin",
+    });
+
+    expect(service).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");
   });
 
   it("installs the Linux user systemd service and probes the stable port", async () => {
