@@ -190,7 +190,12 @@ export function resolveSetupServiceExecutable(
 ): SetupServiceExecutable {
   const env = input.env ?? process.env;
   const explicit = env.RATEL_LOCAL_BIN;
-  if (explicit) return { executablePath: explicit };
+  if (explicit) {
+    return {
+      executablePath: input.execPath ?? process.execPath,
+      executableArgs: [explicit],
+    };
+  }
 
   const isExecutable = input.isExecutable ?? defaultIsExecutable;
   const npx = findOnPath("npx", env.PATH, isExecutable);

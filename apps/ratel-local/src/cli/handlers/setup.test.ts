@@ -38,6 +38,18 @@ function setupCtx(overrides: Partial<HandlerCtx> = {}): HandlerCtx {
 }
 
 describe("runSetup", () => {
+  it("runs an explicit local JS binary with the absolute Node executable", () => {
+    expect(
+      resolveSetupServiceExecutable({
+        env: { RATEL_LOCAL_BIN: "/workspace/dist/bin.js" },
+        execPath: "/opt/node/bin/node",
+      }),
+    ).toEqual({
+      executablePath: "/opt/node/bin/node",
+      executableArgs: ["/workspace/dist/bin.js"],
+    });
+  });
+
   it("persists a stable node+npx package runner instead of the npx cache script", () => {
     expect(
       resolveSetupServiceExecutable({

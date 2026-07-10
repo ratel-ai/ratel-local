@@ -296,6 +296,7 @@ export function createLaunchAgentPlist(input: {
   executableArgs?: string[];
   homeDir: string;
   port: number;
+  pathEnv?: string;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const args = [
@@ -324,7 +325,16 @@ ${args.map((arg) => `    <string>${escapePlist(arg)}</string>`).join("\n")}
   <true/>
   <key>WorkingDirectory</key>
   <string>${escapePlist(input.homeDir)}</string>
-  <key>StandardOutPath</key>
+${
+  input.pathEnv
+    ? `  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${escapePlist(input.pathEnv)}</string>
+  </dict>
+`
+    : ""
+}  <key>StandardOutPath</key>
   <string>${escapePlist(paths.stdoutLog)}</string>
   <key>StandardErrorPath</key>
   <string>${escapePlist(paths.stderrLog)}</string>
@@ -338,6 +348,7 @@ export function createSystemdUserService(input: {
   executableArgs?: string[];
   homeDir: string;
   port: number;
+  pathEnv?: string;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const command = [input.executablePath, ...(input.executableArgs ?? [])]
@@ -351,7 +362,7 @@ After=network.target
 Type=simple
 ExecStart=${command} daemon run --port ${input.port} --no-open --auto-config
 WorkingDirectory=${systemdQuote(input.homeDir)}
-Restart=always
+${input.pathEnv ? `Environment=${systemdQuote(`PATH=${input.pathEnv}`)}\n` : ""}Restart=always
 RestartSec=2
 StandardOutput=append:${systemdPath(paths.stdoutLog)}
 StandardError=append:${systemdPath(paths.stderrLog)}
@@ -384,6 +395,7 @@ async function installDaemon(
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
+      pathEnv: process.env.PATH,
     }),
   );
   await bootstrapDaemon(ctx, opts);
@@ -466,6 +478,7 @@ async function installLinuxDaemon(
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
+      pathEnv: process.env.PATH,
     }),
   );
   await systemctl(opts, ["daemon-reload"]);
