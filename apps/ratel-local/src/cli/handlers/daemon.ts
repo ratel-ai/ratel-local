@@ -68,11 +68,18 @@ interface DaemonHandlerDeps {
   open?: typeof openBrowser;
   commandRunner?: CommandRunner;
   executablePath?: string;
+  executableArgs?: string[];
   getUid?: () => number;
   now?: () => Date;
   platform?: NodeJS.Platform;
   probe?: ProbeDaemon;
   ensureToken?: (homeDir: string) => Promise<string>;
+}
+
+export interface DaemonServiceStatus {
+  state: "running" | "stopped" | "not-installed";
+  port: number;
+  version?: string;
 }
 
 export async function runDaemon(
@@ -117,6 +124,39 @@ export async function runDaemon(
     return {};
   }
   throw new Error(`unknown daemon verb: ${verb}`);
+}
+
+export async function inspectDaemonService(
+  parsed: ParsedArgs,
+  ctx: HandlerCtx,
+  opts: DaemonHandlerDeps = {},
+): Promise<DaemonServiceStatus> {
+  const paths = daemonPaths(ctx.env.homeDir);
+  const platform = daemonPlatform(opts);
+  const installed =
+    platform === "darwin"
+      ? await ctx.fs.exists(paths.plist)
+      : platform === "linux"
+        ? await ctx.fs.exists(paths.systemdService)
+        : false;
+  if (!installed) {
+    return { state: "not-installed", port: parseDaemonPort(parsed.flags.port) };
+  }
+
+  const port = await daemonPort(parsed, ctx);
+  const persisted = await readDaemonState(ctx);
+  const probe = await (opts.probe ?? probeDaemon)(port);
+  if (probe.ok) {
+    const version = probe.status?.version ?? persisted?.version;
+    return { state: "running", port, ...(version ? { version } : {}) };
+  }
+
+  const version = persisted?.version;
+  return {
+    state: "stopped",
+    port,
+    ...(version ? { version } : {}),
+  };
 }
 
 export async function runDaemonServer(
@@ -253,12 +293,14 @@ export function daemonPaths(homeDir: string) {
 
 export function createLaunchAgentPlist(input: {
   executablePath: string;
+  executableArgs?: string[];
   homeDir: string;
   port: number;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const args = [
     input.executablePath,
+    ...(input.executableArgs ?? []),
     "daemon",
     "run",
     "--port",
@@ -293,17 +335,21 @@ ${args.map((arg) => `    <string>${escapePlist(arg)}</string>`).join("\n")}
 
 export function createSystemdUserService(input: {
   executablePath: string;
+  executableArgs?: string[];
   homeDir: string;
   port: number;
 }): string {
   const paths = daemonPaths(input.homeDir);
+  const command = [input.executablePath, ...(input.executableArgs ?? [])]
+    .map(systemdQuote)
+    .join(" ");
   return `[Unit]
 Description=Ratel Local daemon
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${systemdQuote(input.executablePath)} daemon run --port ${input.port} --no-open --auto-config
+ExecStart=${command} daemon run --port ${input.port} --no-open --auto-config
 WorkingDirectory=${systemdQuote(input.homeDir)}
 Restart=always
 RestartSec=2
@@ -335,6 +381,7 @@ async function installDaemon(
     paths.plist,
     createLaunchAgentPlist({
       executablePath: opts.executablePath ?? process.argv[1] ?? "ratel-local",
+      executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
     }),
@@ -416,6 +463,7 @@ async function installLinuxDaemon(
     paths.systemdService,
     createSystemdUserService({
       executablePath: opts.executablePath ?? process.argv[1] ?? "ratel-local",
+      executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
     }),

@@ -16,6 +16,7 @@ import {
   createSystemdUserService,
   DEFAULT_DAEMON_PORT,
   daemonPaths,
+  inspectDaemonService,
   runDaemon,
   SYSTEMD_SERVICE,
 } from "./daemon.js";
@@ -77,6 +78,51 @@ function makeCtx(fs: MemFs, env: HierarchyEnv = { homeDir: HOME, projectRoot: RO
 }
 
 describe("runDaemon", () => {
+  it("reports an installed service as stopped when its health probe is offline", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, "<plist />");
+
+    await expect(
+      inspectDaemonService(daemonArgs({ flags: {} }), makeCtx(fs), {
+        platform: "darwin",
+        probe: async () => ({ ok: false, error: "offline" }),
+      }),
+    ).resolves.toEqual({ state: "stopped", port: DEFAULT_DAEMON_PORT });
+  });
+
+  it("reports the running daemon package version for setup compatibility checks", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, "<plist />");
+
+    await expect(
+      inspectDaemonService(daemonArgs({ flags: {} }), makeCtx(fs), {
+        platform: "darwin",
+        probe: async (port) => ({
+          ok: true,
+          status: {
+            pid: 123,
+            port,
+            uiUrl: `http://127.0.0.1:${port}`,
+            mcpUrl: `http://127.0.0.1:${port}/mcp`,
+            startedAt: "2026-07-10T08:00:00.000Z",
+            version: "0.5.0-rc.0",
+            configMode: "auto",
+            uptimeSeconds: 10,
+            upstreamCount: 0,
+            activeClientCount: 0,
+            activeGatewayCount: 0,
+            activeUserGatewayCount: 0,
+            activeProjectGatewayCount: 0,
+          },
+        }),
+      }),
+    ).resolves.toEqual({
+      state: "running",
+      port: DEFAULT_DAEMON_PORT,
+      version: "0.5.0-rc.0",
+    });
+  });
+
   it("serves MCP, health, daemon status, and active initialized clients in the UI API", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
@@ -284,6 +330,25 @@ describe("runDaemon", () => {
     expect(plist).toContain("<string>/home/u/.ratel/logs/daemon.log</string>");
   });
 
+  it("preserves a stable package-runner prefix in the macOS service", () => {
+    const plist = createLaunchAgentPlist({
+      executablePath: "/opt/node/bin/node",
+      executableArgs: [
+        "/opt/node/lib/node_modules/npm/bin/npx-cli.js",
+        "-y",
+        "@ratel-ai/ratel-local@0.5.0-rc.0",
+      ],
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+    });
+
+    expect(plist).toContain("<string>/opt/node/bin/node</string>");
+    expect(plist).toContain("<string>/opt/node/lib/node_modules/npm/bin/npx-cli.js</string>");
+    expect(plist.indexOf("@ratel-ai/ratel-local@0.5.0-rc.0")).toBeLessThan(
+      plist.indexOf("<string>daemon</string>"),
+    );
+  });
+
   it("installs the macOS daemon LaunchAgent and probes the stable port", async () => {
     const fs = new MemFs();
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -328,6 +393,23 @@ describe("runDaemon", () => {
     expect(service).toContain("Restart=always");
     expect(service).toContain("StandardOutput=append:/home/u/.ratel/logs/daemon.log");
     expect(service).toContain("WantedBy=default.target");
+  });
+
+  it("preserves a stable package-runner prefix in the Linux service", () => {
+    const service = createSystemdUserService({
+      executablePath: "/opt/node/bin/node",
+      executableArgs: [
+        "/opt/node/lib/node_modules/npm/bin/npx-cli.js",
+        "-y",
+        "@ratel-ai/ratel-local@0.5.0-rc.0",
+      ],
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+    });
+
+    expect(service).toContain(
+      "ExecStart=/opt/node/bin/node /opt/node/lib/node_modules/npm/bin/npx-cli.js -y @ratel-ai/ratel-local@0.5.0-rc.0 daemon run",
+    );
   });
 
   it("installs the Linux user systemd service and probes the stable port", async () => {

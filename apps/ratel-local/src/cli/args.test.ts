@@ -54,6 +54,12 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it("recognizes the top-level setup wizard and automation flags", () => {
+    const result = parseArgs(["setup", "--yes", "--port", "7331"]);
+    expect(result.group).toBe("setup");
+    expect(result.flags).toEqual({ yes: true, port: "7331" });
+  });
+
   it("recognizes the top-level connect command and project root flag", () => {
     const result = parseArgs(["connect", "--project-root", "/repo"]);
     expect(result.group).toBe("connect");

@@ -4,6 +4,7 @@ export type Group =
   | "skill"
   | "import"
   | "link"
+  | "setup"
   | "statusline"
   | "serve"
   | "connect"
@@ -149,7 +150,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
-  } else if (first === "import" || first === "link") {
+  } else if (first === "import" || first === "link" || first === "setup") {
     group = first;
     i = 1;
   } else if (first === "statusline") {
