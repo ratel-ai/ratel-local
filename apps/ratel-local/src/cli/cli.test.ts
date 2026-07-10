@@ -220,7 +220,7 @@ describe("runCli — serve", () => {
 });
 
 describe("runCli — help and routing", () => {
-  it("--help advertises import and link as top-level commands", async () => {
+  it("--help advertises setup, import, and link as top-level commands", async () => {
     const logs: string[] = [];
     await runCli(["--help"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
@@ -228,6 +228,7 @@ describe("runCli — help and routing", () => {
     expect(out).toMatch(/backup/);
     expect(out).toMatch(/^\s*import\s/m);
     expect(out).toMatch(/^\s*link\s/m);
+    expect(out).toMatch(/^\s*setup\s/m);
   });
 
   it("prints command-specific help for import and link without running either workflow", async () => {
@@ -267,6 +268,14 @@ describe("runCli — help and routing", () => {
     const out = logs.join("\n");
     expect(out).toMatch(/list/);
     expect(out).not.toMatch(/undo/);
+  });
+
+  it("`ratel-local setup --help` describes interactive and automated setup", async () => {
+    const logs: string[] = [];
+    await runCli(["setup", "--help"], { logger: (message) => logs.push(message) });
+    const out = logs.join("\n");
+    expect(out).toContain("--yes");
+    expect(out).toContain("--port N");
   });
 
   it("rejects an unknown command with ArgError", async () => {

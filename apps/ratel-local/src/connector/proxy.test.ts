@@ -101,7 +101,7 @@ describe("runConnectorProxy", () => {
 
     const result = await host.callTool({ name: "ratel_daemon_setup", arguments: {} });
     expect((result.content as Array<{ text: string }>)[0].text).toContain(
-      "ratel-local daemon install",
+      "npx -y @ratel-ai/ratel-local@1.0.0 setup",
     );
 
     await host.close();

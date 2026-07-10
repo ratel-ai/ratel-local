@@ -4,8 +4,11 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.5.0-rc.0] - 2026-07-10
+
 ### Added
 - Added `ratel-local connect`, a lightweight stdio MCP bridge that carries the agent's resolved project root to the persistent daemon and exposes actionable daemon status/start/setup tools while the daemon is unavailable.
+- Added the idempotent `ratel-local setup` wizard, which installs a missing daemon login service, starts an installed service, replaces an incompatible daemon version, or reports an already-running matching daemon. It supports `--yes` automation and a custom first-install `--port`.
 
 ## [0.5.0] - 2026-07-24
 
@@ -15,6 +18,8 @@ All notable changes to this package are documented here. The format is based on 
 - Strengthened the MCP server instructions so agents search Ratel capabilities before answering substantive requests or concluding that a workflow is unavailable, while exempting casual conversation and pure writing or reasoning.
 - Renamed Ratel MCP to Ratel Local: the repository moved from `ratel-ai/ratel-mcp` to `ratel-ai/ratel-local`, the npm package changed from `@ratel-ai/mcp-server` to `@ratel-ai/ratel-local`, and the CLI changed from `ratel-mcp` to `ratel-local`. This is a breaking package/CLI rename: reinstall the new package and rename `$RATEL_MCP_BIN` to `$RATEL_LOCAL_BIN`. Existing agent gateway entries named `ratel-mcp` remain recognized during import/link migration, while rewritten entries use `ratel-local`.
 - The persistent daemon now authenticates MCP traffic with `~/.ratel/daemon-token` and builds isolated, ref-counted gateways for user or canonical project scopes while sharing upstream connections between sessions in the same scope.
+- The Codex and Claude Code plugin now starts `ratel-local connect` instead of a per-session `serve --auto-config` gateway, and both plugin manifests are aligned with package version `0.5.0-rc.0`.
+- Daemon services installed through the `npx` setup flow now persist a stable Node/npm runner and the pinned Ratel package version rather than an ephemeral npm-cache package script.
 
 ### Fixed
 - Added Agent Setup actions to fix duplicate plugin-plus-MCP installations and promote MCP-only installations to the plugin for both Claude Code and Codex. Plugin promotion removes the explicit fallback only after installation succeeds, and cleanup preserves unrelated MCP entries.

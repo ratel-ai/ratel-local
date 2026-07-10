@@ -10,7 +10,7 @@
       "name": "ratel-local",
       "displayName": "Ratel Local",
       "source": "./apps/ratel-local/plugin",
-      "description": "Expose upstream MCP servers through the local Ratel gateway.",
+      "description": "Expose project-scoped upstream MCP tools through one persistent local Ratel daemon.",
       "author": {
         "name": "Agentified",
         "email": "support@agentified.com"
