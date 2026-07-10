@@ -1115,7 +1115,15 @@ function ImportSceneDialog(props: {
     draftSelection.length > 0 && conflicts.length > 0 && conflictStrategy === "replace-selected";
   const hasSelectedImport = draftSelection.length > 0 || selectedSkills.length > 0;
   const hasSelectableEntries = props.preview.candidates.length > 0;
-  const goAfterSkills = () => setScene(hasSelectableEntries ? "entries" : "review");
+  const goAfterSkills = () => {
+    if (hasSelectableEntries) {
+      setScene("entries");
+    } else if (selectedSkills.length > 0) {
+      setScene("review");
+    } else {
+      props.onOpenChange(false);
+    }
+  };
   const goAfterEntries = () =>
     setScene(draftSelection.length > 0 && conflicts.length > 0 ? "strategy" : "review");
   const goAfterStrategy = () =>
@@ -1214,7 +1222,7 @@ function ImportSceneDialog(props: {
                 Cancel
               </Button>
               <Button onClick={goAfterSkills} type="button">
-                Continue
+                {hasSelectableEntries || selectedSkills.length > 0 ? "Continue" : "Done"}
               </Button>
             </>
           }
