@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { readJson, writeJson } from "@ratel-ai/ratel-local-core";
+import { type DaemonRequestScope, ensureDaemonToken } from "../../daemon/access.js";
 import { InMemoryMcpClientRegistry } from "../../daemon/client-registry.js";
 import { createMcpHttpRoute } from "../../daemon/mcp-http.js";
+import { InMemoryScopedGatewayPool } from "../../daemon/scoped-gateway-pool.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { newSessionToken } from "../../ui/security.js";
 import { startUiServer } from "../../ui/server.js";
@@ -47,6 +49,9 @@ export interface DaemonStatusBody extends DaemonState {
   uptimeSeconds: number;
   upstreamCount: number;
   activeClientCount: number;
+  activeGatewayCount: number;
+  activeUserGatewayCount: number;
+  activeProjectGatewayCount: number;
 }
 
 interface CommandResult {
@@ -67,6 +72,7 @@ interface DaemonHandlerDeps {
   now?: () => Date;
   platform?: NodeJS.Platform;
   probe?: ProbeDaemon;
+  ensureToken?: (homeDir: string) => Promise<string>;
 }
 
 export async function runDaemon(
@@ -124,19 +130,21 @@ export async function runDaemonServer(
   const noOpen = parsed.flags.open === false;
   const token = newSessionToken();
   const startedAt = (opts.now ?? (() => new Date()))();
-  const { config, gateway } = await buildConfiguredGateway(parsed, options, log);
   const registry = new InMemoryMcpClientRegistry();
   const serverVersion = options.serverVersion ?? "0.0.0";
+  const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
+  const gatewayPool = new InMemoryScopedGatewayPool(async (scope) => {
+    const scoped = scopeBuildInputs(parsed, ctx, options, scope);
+    return (await buildConfiguredGateway(scoped.parsed, scoped.options, log)).gateway;
+  }, log);
   const mcp = createMcpHttpRoute({
-    gateway,
+    gatewayPool,
+    daemonToken,
     registry,
     serverName: options.serverName ?? "ratel",
     serverVersion,
     log,
   });
-  gateway.setListChangedNotifier(mcp.notifyToolListChanged);
-
-  const upstreamCount = Object.keys(config.mcpServers).length;
   const stateForPort = (serverPort: number): DaemonState => ({
     pid: process.pid,
     port: serverPort,
@@ -159,11 +167,15 @@ export async function runDaemonServer(
       }
       if (req.method === "GET" && path === "/api/daemon/status") {
         const requestPort = (req.socket.localPort as number | undefined) ?? port;
+        const poolStats = gatewayPool.stats();
         writeJsonResponse(res, 200, {
           ...stateForPort(requestPort),
           uptimeSeconds: Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000)),
-          upstreamCount,
+          upstreamCount: poolStats.upstreamCount,
           activeClientCount: registry.listActiveClients().length,
+          activeGatewayCount: poolStats.activeGatewayCount,
+          activeUserGatewayCount: poolStats.activeUserGatewayCount,
+          activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
         });
         return true;
       }
@@ -179,7 +191,7 @@ export async function runDaemonServer(
   log(`[ratel] daemon running at ${ui.url}`);
   log(`[ratel] daemon UI: ${state.uiUrl}`);
   log(`[ratel] MCP HTTP endpoint: ${state.mcpUrl}`);
-  log(`[ratel] ready, ${upstreamCount} upstream server(s) configured`);
+  log("[ratel] ready for scoped MCP clients");
   log("[ratel] Press Ctrl-C to stop.");
 
   if (!noOpen) {
@@ -190,7 +202,35 @@ export async function runDaemonServer(
     shutdown: async () => {
       await mcp.shutdown();
       await ui.shutdown();
-      await gateway.close();
+      await gatewayPool.shutdown();
+    },
+  };
+}
+
+function scopeBuildInputs(
+  parsed: ParsedArgs,
+  ctx: HandlerCtx,
+  options: ServeOptions,
+  scope: DaemonRequestScope,
+): { parsed: ParsedArgs; options: ServeOptions } {
+  const autoConfig = parsed.flags["auto-config"];
+  if (autoConfig !== true && autoConfig !== "true") {
+    return { parsed, options };
+  }
+  const flags = { ...parsed.flags };
+  if (scope.kind === "project") flags["project-root"] = scope.projectRoot;
+  else delete flags["project-root"];
+  const processEnv = { ...(options.processEnv ?? process.env) };
+  delete processEnv.RATEL_PROJECT_ROOT;
+  delete processEnv.CLAUDE_PROJECT_DIR;
+  return {
+    parsed: { ...parsed, flags },
+    options: {
+      ...options,
+      env: { homeDir: ctx.env.homeDir },
+      processEnv,
+      cwd: scope.kind === "project" ? scope.projectRoot : ctx.env.homeDir,
+      ...(scope.kind === "user" ? { existsSync: () => false } : {}),
     },
   };
 }
