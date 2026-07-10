@@ -55,7 +55,7 @@ function ctxOf(
   return {
     logs,
     ctx: {
-      argv: { group: "mcp", verb: "link", configPaths: [], rest: [], extras: [], flags: {} },
+      argv: { group: "link", configPaths: [], rest: [], extras: [], flags: {} },
       env: { homeDir: HOME, projectRoot: withProjectRoot ? ROOT : undefined },
       fs,
       log: (m) => logs.push(m),

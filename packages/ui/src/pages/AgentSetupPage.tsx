@@ -1115,7 +1115,6 @@ function ImportSceneDialog(props: {
     draftSelection.length > 0 && conflicts.length > 0 && conflictStrategy === "replace-selected";
   const hasSelectedImport = draftSelection.length > 0 || selectedSkills.length > 0;
   const hasSelectableEntries = props.preview.candidates.length > 0;
-  const canLeaveSkills = selectedSkills.length > 0 || hasSelectableEntries;
   const goAfterSkills = () => setScene(hasSelectableEntries ? "entries" : "review");
   const goAfterEntries = () =>
     setScene(draftSelection.length > 0 && conflicts.length > 0 ? "strategy" : "review");
@@ -1214,7 +1213,7 @@ function ImportSceneDialog(props: {
               <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
                 Cancel
               </Button>
-              <Button disabled={!canLeaveSkills} onClick={goAfterSkills} type="button">
+              <Button onClick={goAfterSkills} type="button">
                 Continue
               </Button>
             </>

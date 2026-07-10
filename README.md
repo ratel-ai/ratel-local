@@ -19,7 +19,7 @@
 `@ratel-ai/mcp-server` is two things in one package:
 
 - a **library** that takes a Ratel [`ToolCatalog`](https://github.com/ratel-ai/ratel) and exposes it as a Model Context Protocol server — the MCP client (Claude Desktop, an agent framework, an `@modelcontextprotocol/sdk` `Client`) sees `search_capabilities` + `invoke_tool` (plus `get_skill_content` when skills are configured) instead of every upstream's full tool list;
-- a **CLI** (`ratel-mcp`) that drops the gateway between an MCP host (Claude Code, Cursor, ChatGPT) and an arbitrary set of upstream MCP servers — with Claude-compatible config UX, three-scope hierarchy, OAuth 2.1 / PKCE for HTTP+SSE upstreams, and a one-shot `mcp import` wizard for migrating an existing Claude Code MCP setup.
+- a **CLI** (`ratel-mcp`) that drops the gateway between an MCP host (Claude Code, Cursor, ChatGPT) and an arbitrary set of upstream MCP servers — with Claude-compatible config UX, three-scope hierarchy, OAuth 2.1 / PKCE for HTTP+SSE upstreams, and a one-shot `import` wizard for migrating an existing agent's MCP setup and skills.
 
 This is the inverse of `@ratel-ai/sdk`'s [`registerMcpServer`](https://github.com/ratel-ai/ratel/blob/main/src/sdk/ts/README.md#registermcpserver--index-an-mcp-servers-tools-into-the-catalog), which ingests an upstream MCP server's tools *into* a catalog. `createMcpServer` exposes a catalog *as* an MCP server.
 
@@ -80,7 +80,7 @@ claude plugin install ratel-mcp@ratel
 ```
 
 Claude Code plugins cannot currently set a top-level `statusLine` default, so
-`ratel-mcp mcp link` and `ratel-mcp mcp import` install the Ratel statusline
+`ratel-mcp link` and `ratel-mcp import` install the Ratel statusline
 automatically after wiring up Claude Code (skipped if you already have a
 non-Ratel statusline configured). Install or reinstall it manually with
 `ratel-mcp statusline install` or from the Claude Code agent page in
@@ -102,12 +102,12 @@ ratel-mcp mcp add --scope user stripe https://mcp.stripe.com --transport http
 ratel-mcp mcp list
 
 # Import your existing agent MCP setup into ratel-mcp's scopes
-ratel-mcp mcp import
-ratel-mcp mcp import --agent codex
+ratel-mcp import
+ratel-mcp import --agent codex
 
 # Point an agent at the Ratel gateway without removing native MCP entries
-ratel-mcp mcp link
-ratel-mcp mcp link --agent claude-code
+ratel-mcp link
+ratel-mcp link --agent claude-code
 
 # Install the Claude Code statusline
 ratel-mcp statusline install
@@ -120,10 +120,10 @@ Run `ratel-mcp <group>` for the verbs in a group:
 
 | Group | Verbs |
 |---|---|
-| `mcp` | `add`, `remove`, `list`, `get`, `edit`, `import`, `link`, `auth` |
+| `mcp` | `add`, `remove`, `list`, `get`, `edit`, `auth` |
 | `backup` | `list` |
 | `statusline` | render from stdin, `install`, `uninstall` |
-| (top-level) | `serve`, `ui` |
+| (top-level) | `import`, `link`, `serve`, `ui` |
 
 ### `ratel-mcp mcp add` — Claude-compatible
 

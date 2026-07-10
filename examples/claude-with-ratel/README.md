@@ -60,6 +60,6 @@ Critical signal: every tool call you see in the UI is `mcp__ratel-mcp__*`. If yo
 
 To aggregate your own MCPs, edit `ratel-config.json`. The shape mirrors Claude Code's `mcpServers` field — for migrating your existing setup, copy the relevant entries from `~/.claude.json` here. Stdio and HTTP transports are supported; SSE and unknown types are skipped at runtime with a stderr warning. If one upstream fails to start, ratel-mcp logs it and continues — the session stays up.
 
-For a non-isolated installation (i.e. you want ratel-mcp to take over your real Claude Code MCP setup, not a sandboxed `--mcp-config` session), use the `ratel-mcp mcp import` wizard instead of this template.
+For a non-isolated installation (i.e. you want ratel-mcp to take over your real Claude Code MCP setup, not a sandboxed `--mcp-config` session), use the `ratel-mcp import` wizard instead of this template.
 
 For details on the library API itself (gateway construction, result wrapping, transport boundary adaptations), see the [repo README](../../README.md).

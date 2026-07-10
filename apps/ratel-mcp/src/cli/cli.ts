@@ -5,12 +5,17 @@ import {
   type BackupFs,
   findProjectRoot,
   type HierarchyEnv,
+  type ImportConflictStrategy,
+  isSupportedAgentHostKind,
   type JsonFs,
   nodeFs,
+  type SupportedAgentHostKind,
   type TransportFactory,
 } from "@ratel-ai/mcp-core";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
+import { runImport } from "./handlers/import.js";
+import { runLink } from "./handlers/link.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { runServe } from "./handlers/serve.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
@@ -44,7 +49,9 @@ const TOP_USAGE = `usage: ratel-mcp <command> [args...]
 Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
            or --auto-config to load user/project/local Ratel configs)
-  mcp      manage MCP servers (add, remove, list, get, edit, import, link, auth)
+  import   migrate agent MCP configs and native skills into Ratel
+  link     point an agent at Ratel while preserving native MCP entries
+  mcp      manage MCP servers (add, remove, list, get, edit, auth)
   backup   manage backup snapshots (list)
   skill    manage Claude Code/Codex skills through Ratel (activate, deactivate, list)
   statusline render or install the Claude Code Ratel statusline
@@ -107,6 +114,24 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     return runUi(parsed, ctx, log);
   }
 
+  if (parsed.group === "import") {
+    await runImport(ctx, {
+      yes: parsed.flags.yes === true,
+      dryRun: parsed.flags["dry-run"] === true,
+      conflictStrategy: resolveImportConflictStrategy(parsed.flags["conflict-strategy"]),
+      agentKind: resolveAgentKind(parsed.flags.agent),
+    });
+    return {};
+  }
+
+  if (parsed.group === "link") {
+    await runLink(ctx, {
+      yes: parsed.flags.yes === true,
+      agentKind: resolveAgentKind(parsed.flags.agent),
+    });
+    return {};
+  }
+
   if (parsed.group === "mcp") {
     await runMcp(ctx);
     return {};
@@ -128,6 +153,36 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
   }
 
   throw new ArgError(`unhandled command: ${parsed.group} ${parsed.verb}`);
+}
+
+function resolveAgentKind(value: unknown): SupportedAgentHostKind | undefined {
+  if (value === undefined || value === false || value === "auto") return undefined;
+  if (typeof value !== "string") {
+    throw new ArgError("--agent must be one of auto|claude-code|codex");
+  }
+  if (!isSupportedAgentHostKind(value)) {
+    throw new ArgError(`--agent must be one of auto|claude-code|codex, got "${value}"`);
+  }
+  return value;
+}
+
+function resolveImportConflictStrategy(value: unknown): ImportConflictStrategy | undefined {
+  if (value === undefined || value === false) return undefined;
+  if (typeof value !== "string") {
+    throw new ArgError(
+      "--conflict-strategy must be one of add-missing-only|replace-selected|replace-from-agent",
+    );
+  }
+  if (
+    value !== "add-missing-only" &&
+    value !== "replace-selected" &&
+    value !== "replace-from-agent"
+  ) {
+    throw new ArgError(
+      `--conflict-strategy must be one of add-missing-only|replace-selected|replace-from-agent, got "${value}"`,
+    );
+  }
+  return value;
 }
 
 function defaultEnv(): HierarchyEnv {

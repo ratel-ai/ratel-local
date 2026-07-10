@@ -132,25 +132,25 @@ ratel-mcp mcp add --scope local docs https://example.com/mcp --header "Authoriza
 Import existing host MCP servers into Ratel:
 
 ```bash
-ratel-mcp mcp import --agent codex
-ratel-mcp mcp import --agent claude-code
+ratel-mcp import --agent codex
+ratel-mcp import --agent claude-code
 ```
 
 Preview or automate an import:
 
 ```bash
-ratel-mcp mcp import --agent codex --dry-run
-ratel-mcp mcp import --agent codex --yes --conflict-strategy add-missing-only
+ratel-mcp import --agent codex --dry-run
+ratel-mcp import --agent codex --yes --conflict-strategy add-missing-only
 ```
 
 Link a host to Ratel after entries already exist in Ratel config:
 
 ```bash
-ratel-mcp mcp link --agent codex
-ratel-mcp mcp link --agent claude-code
+ratel-mcp link --agent codex
+ratel-mcp link --agent claude-code
 ```
 
-`ratel-mcp mcp link` and `ratel-mcp mcp import` install the Claude Code
+`ratel-mcp link` and `ratel-mcp import` install the Claude Code
 statusline automatically once they finish wiring up Claude Code (skipped if a
 non-Ratel statusline is already configured). Manage it directly with:
 

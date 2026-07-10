@@ -217,12 +217,14 @@ describe("runCli — serve", () => {
 });
 
 describe("runCli — help and routing", () => {
-  it("--help logs a top-level usage that names the mcp and backup groups", async () => {
+  it("--help advertises import and link as top-level commands", async () => {
     const logs: string[] = [];
     await runCli(["--help"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
     expect(out).toMatch(/mcp/);
     expect(out).toMatch(/backup/);
+    expect(out).toMatch(/^\s*import\s/m);
+    expect(out).toMatch(/^\s*link\s/m);
   });
 
   it("--version logs the injected package version", async () => {
@@ -236,7 +238,8 @@ describe("runCli — help and routing", () => {
     await runCli(["mcp"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
     expect(out).toMatch(/add/);
-    expect(out).toMatch(/import/);
+    expect(out).not.toMatch(/^\s*import\s/m);
+    expect(out).not.toMatch(/^\s*link\s/m);
   });
 
   it("`ratel-mcp backup` (no verb) logs the backup group usage", async () => {
