@@ -14,6 +14,7 @@ import {
 } from "@ratel-ai/ratel-local-core";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
+import { runConnect } from "./handlers/connect.js";
 import { runDaemon } from "./handlers/daemon.js";
 import { runImport } from "./handlers/import.js";
 import { runLink } from "./handlers/link.js";
@@ -50,6 +51,7 @@ const TOP_USAGE = `usage: ratel-local <command> [args...]
 Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
            or --auto-config to load user/project/local Ratel configs)
+  connect  bridge this agent session to the scoped local daemon [--project-root <path>]
   daemon   run, install, inspect, or stop the loopback HTTP daemon with /mcp plus the UI/API
   import   migrate agent MCP configs and native skills into Ratel
   link     point an agent at Ratel while preserving native MCP entries
@@ -114,6 +116,10 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "ui") {
     return runUi(parsed, ctx, log);
+  }
+
+  if (parsed.group === "connect") {
+    return runConnect(parsed, ctx, { ...options, cliVersion: options.cliVersion }, log);
   }
 
   if (parsed.group === "daemon") {

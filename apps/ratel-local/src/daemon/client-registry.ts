@@ -10,6 +10,9 @@ export interface PendingMcpClientRegistration {
   userAgent?: string;
   remoteAddress?: string;
   capabilities: string[];
+  scope: "user" | "project";
+  scopeKey: string;
+  projectRoot?: string;
 }
 
 interface ActiveMcpClientRecord extends ActiveMcpClientSummary {
@@ -33,6 +36,9 @@ export class InMemoryMcpClientRegistry implements ActiveMcpClientReader {
       ...(registration.userAgent ? { userAgent: registration.userAgent } : {}),
       ...(registration.remoteAddress ? { remoteAddress: registration.remoteAddress } : {}),
       capabilities: registration.capabilities,
+      scope: registration.scope,
+      scopeKey: registration.scopeKey,
+      ...(registration.projectRoot ? { projectRoot: registration.projectRoot } : {}),
     });
   }
 
@@ -66,6 +72,9 @@ export class InMemoryMcpClientRegistry implements ActiveMcpClientReader {
         ...(client.userAgent ? { userAgent: client.userAgent } : {}),
         ...(client.remoteAddress ? { remoteAddress: client.remoteAddress } : {}),
         capabilities: [...client.capabilities],
+        scope: client.scope,
+        scopeKey: client.scopeKey,
+        ...(client.projectRoot ? { projectRoot: client.projectRoot } : {}),
       }));
   }
 }
@@ -73,6 +82,10 @@ export class InMemoryMcpClientRegistry implements ActiveMcpClientReader {
 export function pendingRegistrationFromInitialize(
   req: IncomingMessage,
   message: InitializeRequest,
+  scope: Pick<PendingMcpClientRegistration, "scope" | "scopeKey" | "projectRoot"> = {
+    scope: "user",
+    scopeKey: "user",
+  },
 ): PendingMcpClientRegistration {
   const { clientInfo, protocolVersion, capabilities } = message.params;
   return {
@@ -83,6 +96,7 @@ export function pendingRegistrationFromInitialize(
     ...userAgentHeader(req.headers["user-agent"]),
     ...(req.socket.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
     capabilities: capabilityNames(capabilities),
+    ...scope,
   };
 }
 

@@ -55,6 +55,9 @@ export interface ActiveMcpClientSummary {
   userAgent?: string;
   remoteAddress?: string;
   capabilities: string[];
+  scope: "user" | "project";
+  scopeKey: string;
+  projectRoot?: string;
 }
 
 export interface ActiveMcpClientReader {

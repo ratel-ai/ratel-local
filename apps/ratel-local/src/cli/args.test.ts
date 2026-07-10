@@ -54,6 +54,12 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it("recognizes the top-level connect command and project root flag", () => {
+    const result = parseArgs(["connect", "--project-root", "/repo"]);
+    expect(result.group).toBe("connect");
+    expect(result.flags["project-root"]).toBe("/repo");
+  });
+
   it.each(["import", "link"] as const)("does not expose %s as an mcp verb", (verb) => {
     expect(() => parseArgs(["mcp", verb])).toThrow(new RegExp(`unknown mcp verb: ${verb}`));
   });

@@ -1,7 +1,14 @@
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it } from "vitest";
+import { connectorHeaders } from "../../daemon/access.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
@@ -83,7 +90,7 @@ describe("runDaemon", () => {
         }),
       },
       (message) => logs.push(message),
-      { open: () => {} },
+      { open: () => {}, ensureToken: async () => "daemon-test-token" },
     );
     const uiUrl = daemonUrlFromLogs(logs);
     const token = new URL(uiUrl).searchParams.get("t");
@@ -92,6 +99,22 @@ describe("runDaemon", () => {
     const healthRes = await fetch(new URL("/healthz", uiUrl));
     expect(healthRes.status).toBe(200);
     expect(await healthRes.text()).toBe("ok\n");
+
+    const unauthorized = await fetch(new URL("/mcp", uiUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "unauthorized", version: "1.0.0" },
+        },
+      }),
+    });
+    expect(unauthorized.status).toBe(401);
 
     const statusRes = await fetch(new URL("/api/daemon/status", uiUrl));
     expect(statusRes.status).toBe(200);
@@ -121,7 +144,11 @@ describe("runDaemon", () => {
     const client = new Client({ name: "daemon-test-client", version: "1.0.0" });
 
     try {
-      await client.connect(new StreamableHTTPClientTransport(mcpUrl));
+      await client.connect(
+        new StreamableHTTPClientTransport(mcpUrl, {
+          requestInit: { headers: connectorHeaders("daemon-test-token") },
+        }),
+      );
       await client.listTools();
 
       const res = await fetch(new URL("/api/mcp-clients", uiUrl), {
@@ -135,6 +162,8 @@ describe("runDaemon", () => {
       expect(body.clients[0]).toMatchObject({
         name: "daemon-test-client",
         version: "1.0.0",
+        scope: "user",
+        scopeKey: "user",
       });
       expect(body.clients[0].requestCount).toBeGreaterThanOrEqual(1);
 
@@ -144,6 +173,96 @@ describe("runDaemon", () => {
     } finally {
       await client.close();
       await result.shutdown();
+    }
+  });
+
+  it("isolates project config chains while sharing one daemon", async () => {
+    const fs = new MemFs();
+    const temp = await mkdtemp(join(tmpdir(), "ratel-daemon-scopes-"));
+    const projectA = await realpath(await mkdtemp(join(temp, "a-")));
+    const projectB = await realpath(await mkdtemp(join(temp, "b-")));
+    const upstreams: Server[] = [];
+    const logs: string[] = [];
+    const result = await runDaemon(
+      daemonArgs({
+        configPaths: [],
+        flags: { open: false, telemetry: "off", port: "0", "auto-config": true },
+      }),
+      makeCtx(fs, { homeDir: HOME }),
+      {
+        readConfig: async (path) => {
+          const command = path.startsWith(projectA)
+            ? "project-a"
+            : path.startsWith(projectB)
+              ? "project-b"
+              : "user";
+          return { mcpServers: { scoped: { type: "stdio", command } } };
+        },
+        transportFactory: (_name, entry) => {
+          const command = entry.command ?? "unknown";
+          const server = new Server(
+            { name: command, version: "1.0.0" },
+            { capabilities: { tools: {} } },
+          );
+          server.setRequestHandler(ListToolsRequestSchema, async () => ({
+            tools: [
+              {
+                name: `${command}_tool`,
+                description: `${command} capability`,
+                inputSchema: { type: "object" },
+              },
+            ],
+          }));
+          server.setRequestHandler(CallToolRequestSchema, async () => ({ content: [] }));
+          const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+          upstreams.push(server);
+          void server.connect(serverTransport);
+          return clientTransport;
+        },
+      },
+      (message) => logs.push(message),
+      { open: () => {}, ensureToken: async () => "daemon-test-token" },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    const connect = async (projectRoot: string) => {
+      const client = new Client({ name: "scope-test", version: "1.0.0" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("/mcp", daemonUrl), {
+          requestInit: { headers: connectorHeaders("daemon-test-token", projectRoot) },
+        }),
+      );
+      return client;
+    };
+    const clientA = await connect(projectA);
+    const clientB = await connect(projectB);
+    try {
+      const searchA = await clientA.callTool({
+        name: "search_capabilities",
+        arguments: { query: "project-a" },
+      });
+      const searchB = await clientB.callTool({
+        name: "search_capabilities",
+        arguments: { query: "project-b" },
+      });
+      const textA = (searchA.content as Array<{ text: string }>)[0].text;
+      const textB = (searchB.content as Array<{ text: string }>)[0].text;
+      expect(textA).toContain("scoped__project-a_tool");
+      expect(textA).not.toContain("project-b_tool");
+      expect(textB).toContain("scoped__project-b_tool");
+      expect(textB).not.toContain("project-a_tool");
+
+      const status = await fetch(new URL("/api/daemon/status", daemonUrl));
+      expect(await status.json()).toMatchObject({
+        activeGatewayCount: 2,
+        activeProjectGatewayCount: 2,
+      });
+    } finally {
+      await clientA.close();
+      await clientB.close();
+      await result.shutdown();
+      await Promise.all(upstreams.map((server) => server.close()));
+      await rm(temp, { recursive: true, force: true });
     }
   });
 
@@ -275,6 +394,9 @@ describe("runDaemon", () => {
             uptimeSeconds: 10,
             upstreamCount: 2,
             activeClientCount: 1,
+            activeGatewayCount: 1,
+            activeUserGatewayCount: 1,
+            activeProjectGatewayCount: 0,
           },
         }),
       },

@@ -100,7 +100,7 @@ export async function buildConfiguredGateway(
   }
   const config = mergeConfigs(parts);
 
-  const trace = await resolveTraceSink(parsed, log);
+  const trace = await resolveTraceSink(parsed, log, options.cwd ?? process.cwd());
 
   const gateway = await buildGatewayFromConfig(config, {
     transportFactory: options.transportFactory,
@@ -185,6 +185,7 @@ function resolveProjectRoot(input: {
 async function resolveTraceSink(
   parsed: ParsedArgs,
   log: (m: string) => void,
+  cwd: string,
 ): Promise<TraceSinkConfig | undefined> {
   const flag = parsed.flags.telemetry;
   const flagFile = parsed.flags["telemetry-file"];
@@ -196,7 +197,7 @@ async function resolveTraceSink(
   if (typeof flagFile === "string" && flagFile.length > 0) {
     return { kind: "jsonl", sessionId, path: flagFile };
   }
-  const bucket = projectBucketDir(defaultTelemetryDir(), process.cwd());
+  const bucket = projectBucketDir(defaultTelemetryDir(), cwd);
   try {
     await mkdir(bucket, { recursive: true });
   } catch (err) {

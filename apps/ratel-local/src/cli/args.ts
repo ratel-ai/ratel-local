@@ -6,6 +6,7 @@ export type Group =
   | "link"
   | "statusline"
   | "serve"
+  | "connect"
   | "daemon"
   | "ui"
   | "help"
@@ -162,8 +163,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
-  } else if (first === "serve") {
+  } else if (first === "serve" || first === "connect") {
     group = "serve";
+    if (first === "connect") group = "connect";
     i = 1;
   } else if (first === "daemon") {
     group = "daemon";

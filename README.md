@@ -118,6 +118,9 @@ ratel-local serve --config ~/.ratel/config.json
 # Install the stable local daemon on macOS or Linux
 ratel-local daemon install
 ratel-local daemon status
+
+# Bridge one agent session to the daemon using the current project scope
+ratel-local connect
 ```
 
 Run `ratel-local <group>` for the verbs in a group:
@@ -128,7 +131,7 @@ Run `ratel-local <group>` for the verbs in a group:
 | `backup` | `list` |
 | `statusline` | render from stdin, `install`, `uninstall` |
 | `daemon` | `run`, `install`, `uninstall`, `status`, `start`, `stop`, `restart` |
-| (top-level) | `import`, `link`, `serve`, `ui` |
+| (top-level) | `import`, `link`, `serve`, `connect`, `ui` |
 
 ### `ratel-local mcp add` — Claude-compatible
 
@@ -247,7 +250,37 @@ ratel-local daemon uninstall
 ```
 
 The daemon exposes unauthenticated loopback-only health endpoints at `/healthz`
-and `/api/daemon/status`; UI APIs remain protected by the session token.
+and `/api/daemon/status`. MCP requests require the private token stored at
+`~/.ratel/daemon-token`; UI APIs remain protected by the UI session token.
+
+### Scoped daemon connector
+
+`ratel-local connect` is a lightweight stdio MCP server that bridges an agent
+session to the persistent HTTP daemon. It inherits the agent process's working
+directory and resolves the project root in this order:
+
+1. `--project-root <path>`
+2. `RATEL_PROJECT_ROOT`
+3. `CLAUDE_PROJECT_DIR`
+4. the connector process's current working directory
+
+The connector sends the canonical root to the daemon over the authenticated
+loopback connection. The daemon derives and merges the config chain itself:
+
+```text
+~/.ratel/config.json
+<project>/.ratel/config.json
+<project>/.ratel/config.local.json
+```
+
+Sessions for the same canonical project share one gateway and its upstream MCP
+connections. Different projects receive isolated gateways. When no project root
+is found, the connector uses user scope only. Configuration changes take effect
+after reconnecting the agent session.
+
+If the daemon is unavailable, the connector still initializes and exposes
+bootstrap tools for status, starting an installed daemon, and setup guidance.
+This keeps host MCP errors actionable without mixing prompts into MCP stdout.
 
 ### Browser UI
 
