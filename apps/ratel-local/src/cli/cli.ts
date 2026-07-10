@@ -20,6 +20,7 @@ import { runImport } from "./handlers/import.js";
 import { runLink } from "./handlers/link.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { runServe } from "./handlers/serve.js";
+import { runSetup, SETUP_USAGE } from "./handlers/setup.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
 import { runStatusline } from "./handlers/statusline.js";
 import type { HandlerCtx } from "./handlers/types.js";
@@ -52,6 +53,7 @@ Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
            or --auto-config to load user/project/local Ratel configs)
   connect  bridge this agent session to the scoped local daemon [--project-root <path>]
+  setup    interactively install or start the persistent daemon [--yes] [--port N]
   daemon   run, install, inspect, or stop the loopback HTTP daemon with /mcp plus the UI/API
   import   migrate agent MCP configs and native skills into Ratel
   link     point an agent at Ratel while preserving native MCP entries
@@ -100,6 +102,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     return {};
   }
 
+  if (parsed.group === "setup" && parsed.flags.help === true) {
+    log(SETUP_USAGE);
+    return {};
+  }
+
   if (parsed.group === "serve") {
     return runServe(parsed, options, log);
   }
@@ -122,8 +129,24 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     return runConnect(parsed, ctx, { ...options, cliVersion: options.cliVersion }, log);
   }
 
+  if (parsed.group === "setup") {
+    const version = options.cliVersion ?? options.serverVersion;
+    await runSetup(ctx, {
+      ...options,
+      serverVersion: options.serverVersion ?? version,
+      expectedVersion: version,
+      yes: parsed.flags.yes === true,
+    });
+    return {};
+  }
+
   if (parsed.group === "daemon") {
-    return runDaemon(parsed, ctx, options, log);
+    return runDaemon(
+      parsed,
+      ctx,
+      { ...options, serverVersion: options.serverVersion ?? options.cliVersion },
+      log,
+    );
   }
 
   if (parsed.group === "import") {

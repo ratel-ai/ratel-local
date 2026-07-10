@@ -19,7 +19,7 @@
 Ratel Local ships as `@ratel-ai/ratel-local` and is two things in one package:
 
 - a **library** that takes a Ratel [`ToolCatalog`](https://github.com/ratel-ai/ratel) and exposes it as a Model Context Protocol server — the MCP client (Claude Desktop, an agent framework, an `@modelcontextprotocol/sdk` `Client`) sees `search_capabilities` + `invoke_tool` (plus `get_skill_content` when skills are configured) instead of every upstream's full tool list;
-- a **CLI** (`ratel-local`) that drops the gateway between an MCP host (Claude Code, Cursor, ChatGPT) and an arbitrary set of upstream MCP servers — with Claude-compatible config UX, three-scope hierarchy, OAuth 2.1 / PKCE for HTTP+SSE upstreams, and a one-shot `import` wizard for migrating an existing agent's MCP setup and skills.
+- a **CLI** (`ratel-local`) that drops the gateway between an MCP host (Claude Code, Cursor, ChatGPT) and an arbitrary set of upstream MCP servers — with a persistent scoped daemon, an interactive `setup` wizard, Claude-compatible config UX, three-scope hierarchy, OAuth 2.1 / PKCE for HTTP+SSE upstreams, and a one-shot `import` wizard for migrating an existing agent's MCP setup and skills.
 
 This is the inverse of `@ratel-ai/sdk`'s [`registerMcpServer`](https://github.com/ratel-ai/ratel/blob/main/src/sdk/ts/README.md#registermcpserver--index-an-mcp-servers-tools-into-the-catalog), which ingests an upstream MCP server's tools *into* a catalog. `createMcpServer` exposes a catalog *as* an MCP server.
 
@@ -42,8 +42,16 @@ npx -y @ratel-ai/ratel-local --help
 ### Agent plugin marketplaces
 
 The repo also ships a shared Ratel Local plugin for Codex and Claude Code. It
-starts the gateway over stdio with `npx -y @ratel-ai/ratel-local@latest serve
---auto-config` and bundles skills for setup, debugging, and tool-usage review.
+starts the lightweight scoped connector with `npx -y
+@ratel-ai/ratel-local@0.5.0-rc.0 connect` and bundles skills for setup, debugging,
+and tool-usage review. Run the daemon setup wizard once from a terminal:
+
+```bash
+npx -y @ratel-ai/ratel-local@0.5.0-rc.0 setup
+```
+
+Until setup is complete, the connector remains a valid MCP server and exposes
+status, start, and setup-guidance tools instead of failing plugin startup.
 
 #### Codex
 
@@ -115,9 +123,8 @@ ratel-local statusline install
 # Start the gateway over stdio (this is what linked agents spawn)
 ratel-local serve --config ~/.ratel/config.json
 
-# Install the stable local daemon on macOS or Linux
-ratel-local daemon install
-ratel-local daemon status
+# Install or start the stable local daemon on macOS or Linux
+ratel-local setup
 
 # Bridge one agent session to the daemon using the current project scope
 ratel-local connect
@@ -131,7 +138,7 @@ Run `ratel-local <group>` for the verbs in a group:
 | `backup` | `list` |
 | `statusline` | render from stdin, `install`, `uninstall` |
 | `daemon` | `run`, `install`, `uninstall`, `status`, `start`, `stop`, `restart` |
-| (top-level) | `import`, `link`, `serve`, `connect`, `ui` |
+| (top-level) | `setup`, `import`, `link`, `serve`, `connect`, `ui` |
 
 ### `ratel-local mcp add` — Claude-compatible
 
@@ -224,6 +231,21 @@ Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touch
 
 ### Local daemon
 
+The recommended entry point is the idempotent setup wizard:
+
+```bash
+ratel-local setup
+ratel-local setup --yes          # non-interactive
+ratel-local setup --port 7331    # choose the service port on first install
+```
+
+It reports success if the matching daemon is already running, starts an
+installed but stopped service, replaces an incompatible daemon version, or asks
+before installing a missing login service. When launched through `npx`, the
+service records the stable Node/npm runner plus the pinned Ratel package version
+instead of an ephemeral npm-cache script. MCP import and agent linking remain
+separate `ratel-local import` and `ratel-local link` workflows.
+
 `ratel-local daemon run` starts the same gateway over loopback HTTP with a stable
 default endpoint:
 
@@ -280,7 +302,9 @@ after reconnecting the agent session.
 
 If the daemon is unavailable, the connector still initializes and exposes
 bootstrap tools for status, starting an installed daemon, and setup guidance.
-This keeps host MCP errors actionable without mixing prompts into MCP stdout.
+The setup tool directs the user to run `npx -y
+@ratel-ai/ratel-local@0.5.0-rc.0 setup` in a terminal; interactive prompts never
+share MCP stdout. This keeps host MCP errors actionable and protocol-safe.
 
 ### Browser UI
 

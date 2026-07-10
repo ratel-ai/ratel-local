@@ -44,7 +44,7 @@ const BOOTSTRAP_TOOLS = [
   },
   {
     name: "ratel_daemon_setup",
-    description: "Return the command needed to install the persistent local Ratel daemon.",
+    description: "Return the interactive command that installs or starts the local Ratel daemon.",
     inputSchema: { type: "object" as const, properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
@@ -54,6 +54,7 @@ export async function runConnectorProxy(
   options: ConnectorProxyOptions,
 ): Promise<ConnectorProxyHandle> {
   const log = options.log ?? (() => {});
+  const setupCommand = `npx -y @ratel-ai/ratel-local@${options.serverVersion} setup`;
   let backend: Client | null = null;
   let attaching: Promise<Client> | null = null;
   let closed = false;
@@ -111,9 +112,8 @@ export async function runConnectorProxy(
     if (request.params.name === "ratel_daemon_setup") {
       return jsonResult({
         state: "setup-required",
-        command: "ratel-local daemon install",
-        message:
-          "Install the persistent daemon from a terminal, then call ratel_daemon_start or reconnect.",
+        command: setupCommand,
+        message: "Run the setup wizard from a terminal, then call ratel_daemon_start or reconnect.",
       });
     }
     if (request.params.name === "ratel_daemon_start") {
@@ -127,7 +127,7 @@ export async function runConnectorProxy(
           {
             state: "start-failed",
             error: (err as Error).message,
-            setupCommand: "ratel-local daemon install",
+            setupCommand,
           },
           true,
         );

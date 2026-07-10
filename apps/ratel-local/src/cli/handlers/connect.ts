@@ -6,7 +6,13 @@ import { readJson } from "@ratel-ai/ratel-local-core";
 import { type ConnectorDaemonStatus, runConnectorProxy } from "../../connector/proxy.js";
 import { connectorHeaders, readDaemonToken } from "../../daemon/access.js";
 import type { ParsedArgs } from "../args.js";
-import { type DaemonState, DEFAULT_DAEMON_PORT, daemonPaths, runDaemon } from "./daemon.js";
+import {
+  type DaemonState,
+  DEFAULT_DAEMON_PORT,
+  daemonPaths,
+  inspectDaemonService,
+  runDaemon,
+} from "./daemon.js";
 import { resolveAutoConfig, type ServeOptions } from "./serve.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -46,7 +52,11 @@ export async function runConnect(
 
   const attach = async () => {
     const token = await (options.readToken ?? readDaemonToken)(ctx.env.homeDir);
-    if (!token) throw new Error("daemon is not installed; run `ratel-local daemon install`");
+    if (!token) {
+      throw new Error(
+        `daemon is not installed; run \`npx -y @ratel-ai/ratel-local@${version} setup\``,
+      );
+    }
     return connectBackend({ daemonUrl, token, projectRoot, clientVersion: version });
   };
 
@@ -71,7 +81,10 @@ export async function runConnect(
   return runConnectorProxy({
     serverTransport: options.connectorTransport ?? new StdioServerTransport(),
     connectBackend: attach,
-    daemonStatus: () => (options.daemonStatus ?? defaultDaemonStatus)(daemonUrl, ctx),
+    daemonStatus: () =>
+      options.daemonStatus
+        ? options.daemonStatus(daemonUrl, ctx)
+        : defaultDaemonStatus(daemonUrl, parsed, ctx),
     startDaemon: start,
     serverVersion: version,
     log,
@@ -99,19 +112,15 @@ async function defaultConnectBackend(input: ConnectBackendInput): Promise<Client
 
 async function defaultDaemonStatus(
   daemonUrl: URL,
+  parsed: ParsedArgs,
   ctx: HandlerCtx,
 ): Promise<ConnectorDaemonStatus> {
-  try {
-    const health = new URL("/healthz", daemonUrl);
-    const response = await fetch(health, { signal: AbortSignal.timeout(1_000) });
-    if (response.ok) return { state: "running" };
-  } catch {
-    // Inspect the service files below to distinguish stopped from not installed.
-  }
-  const paths = daemonPaths(ctx.env.homeDir);
-  const installed =
-    (await ctx.fs.exists(paths.plist)) || (await ctx.fs.exists(paths.systemdService));
-  return installed ? { state: "stopped" } : { state: "not-installed" };
+  const port = Number(daemonUrl.port || "80");
+  const status = await inspectDaemonService(
+    { ...parsed, flags: { ...parsed.flags, port: String(port) } },
+    ctx,
+  );
+  return { state: status.state };
 }
 
 async function resolveDaemonUrl(parsed: ParsedArgs, ctx: HandlerCtx): Promise<URL> {
