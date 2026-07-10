@@ -21,7 +21,7 @@ Two alternatives were considered:
 
 Use `smol-toml` to parse Codex config TOML. It is small, ESM-compatible, and sufficient for reading the supported Codex MCP server fields.
 
-For writes, prefer text-preserving edits: remove explicit MCP table sections from the original text and append the `ratel-local` table with Ratel's own renderer. This keeps unrelated comments, whitespace, and ordering intact in the normal path.
+For writes, prefer text-preserving edits: remove explicit MCP table sections from the original text and append the `ratel-mcp` table with Ratel's own renderer. This keeps unrelated comments, whitespace, and ordering intact in the normal path.
 
 Keep `smol-toml` stringification only as a structured fallback for shapes the text-preserving path cannot safely edit, such as inline `mcp_servers` definitions. That fallback is acceptable because it is explicit and limited, but it is not the preferred write strategy.
 

@@ -58,7 +58,7 @@ All notable changes to this package are documented here. The format is based on 
 - Source split: `src/lib/` (library) + `src/cli/` (CLI) + `src/index.ts` (library entrypoint) + `src/bin.ts` (CLI entrypoint).
 
 ### Changed
-- Package now hosted in [`ratel-ai/ratel-local`](https://github.com/ratel-ai/ratel-local); previously shipped from the `ratel-ai/ratel` monorepo as one of several workspace packages. Library API surface is unchanged.
+- Package now hosted in [`ratel-ai/ratel-mcp`](https://github.com/ratel-ai/ratel-local); previously shipped from the `ratel-ai/ratel` monorepo as one of several workspace packages. Library API surface is unchanged.
 - The Claude Code rewrite (`mcp import` / `link`) plants `command: "ratel-mcp"` (was `"ratel"` when this lived inside `@ratel-ai/cli`).
 - Bin-locator env var renamed `$RATEL_BIN` → `$RATEL_MCP_BIN`.
 

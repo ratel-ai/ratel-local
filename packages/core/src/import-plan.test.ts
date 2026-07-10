@@ -198,6 +198,22 @@ describe("buildImportPlan", () => {
     expect(findWrite(plan, RATEL_USER)).toBeUndefined();
   });
 
+  it("skips legacy ratel-mcp gateway entries during migration", () => {
+    const legacyGateway: ServerEntry = {
+      type: "stdio",
+      command: "ratel-mcp",
+      args: ["serve", "--config", RATEL_USER],
+    };
+    const plan = buildImportPlan(
+      emptyInputs({
+        agentState: agentState({ user: { "ratel-mcp": legacyGateway } }),
+      }),
+    );
+
+    expect(plan.summary.movedFromUser).toEqual([]);
+    expect(findWrite(plan, RATEL_USER)).toBeUndefined();
+  });
+
   it("keeps Ratel entries on conflicts by default and exposes structured conflict data", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
     const plan = buildImportPlan(
