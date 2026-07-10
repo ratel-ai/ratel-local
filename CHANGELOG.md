@@ -5,7 +5,7 @@ All notable changes to this package are documented here. The format is based on 
 ## [Unreleased]
 
 ### Changed
-- Renamed repo-, package-, executable-, and product-facing references to Ratel Local after the repository moved to `ratel-ai/ratel-local`.
+- Renamed Ratel MCP to Ratel Local: the repository moved from `ratel-ai/ratel-mcp` to `ratel-ai/ratel-local`, the npm package changed from `@ratel-ai/mcp-server` to `@ratel-ai/ratel-local`, and the CLI changed from `ratel-mcp` to `ratel-local`. This is a breaking package/CLI rename: reinstall the new package and rename `$RATEL_MCP_BIN` to `$RATEL_LOCAL_BIN`. Existing agent gateway entries named `ratel-mcp` remain recognized during import/link migration, while rewritten entries use `ratel-local`.
 
 ## [0.4.0] - 2026-06-30
 
@@ -17,23 +17,23 @@ All notable changes to this package are documented here. The format is based on 
 ## [0.3.1] - 2026-06-18
 
 ### Changed
-- **Skills page (`ratel-local ui`) now emphasizes only Ratel-managed skills.** When no skills are managed it shows an empty state with an "Import skills" action instead of listing Claude Code / Codex skills inline. External skills are brought in through a dedicated, paginated import dialog, each row badged by source. The bulk "Manage all" button is replaced by "Import skills"; "Unmanage all", per-skill "Stop managing", and the "New skill" form are unchanged.
+- **Skills page (`ratel-mcp ui`) now emphasizes only Ratel-managed skills.** When no skills are managed it shows an empty state with an "Import skills" action instead of listing Claude Code / Codex skills inline. External skills are brought in through a dedicated, paginated import dialog, each row badged by source. The bulk "Manage all" button is replaced by "Import skills"; "Unmanage all", per-skill "Stop managing", and the "New skill" form are unchanged.
 
 ### Added
-- **Skill import in Agent Setup (`ratel-local ui`).** Each agent gets a per-agent "Import skills" flow alongside the existing MCP import/link, plus an "N skills not managed by Ratel" hint on its card and detail page, mirroring the native-tools hint.
+- **Skill import in Agent Setup (`ratel-mcp ui`).** Each agent gets a per-agent "Import skills" flow alongside the existing MCP import/link, plus an "N skills not managed by Ratel" hint on its card and detail page, mirroring the native-tools hint.
 
 ## [0.3.0] - 2026-06-17
 
 ### Added
 - **Skills, served through the gateway.** When a skill catalog is configured, `createMcpServer` / `buildGatewayFromConfig` expose `get_skill_content` alongside `search_capabilities` + `invoke_tool`, and `search_capabilities` returns a `skills` bucket beside `tools`.
-- `ratel-local skill` CLI: `activate` / `deactivate` manage Claude Code and Codex skills through Ratel by linking them into `~/.ratel/skills` and applying reversible native metadata edits so the gateway serves them on demand; `list` shows managed skills; `suggest` ranks skills for a prompt.
+- `ratel-mcp skill` CLI: `activate` / `deactivate` manage Claude Code and Codex skills through Ratel by linking them into `~/.ratel/skills` and applying reversible native metadata edits so the gateway serves them on demand; `list` shows managed skills; `suggest` ranks skills for a prompt.
 - Prompt-aware preload hook: `skill preload-hook` is a Claude Code `UserPromptSubmit` entrypoint that ranks skills against the prompt (lexical match, project-stack tie-break, clear-winner gate) and nudges the agent toward the best skill; `skill install-hook` / `uninstall-hook` register it in `settings.json` (`--scope user|project`).
 - **Skills from Claude Code and Codex.** Skills are sourced from both `~/.claude/skills` and `~/.codex/skills`. The manifest records which agent each managed skill came from, so deactivation removes only the Ratel link and reverses metadata edits in that agent's folder. A name present in both agents is listed once per agent and is independently manageable.
-- **Skills in the browser UI (`ratel-local ui`).** The Skills page groups skills into "Managed by Ratel" (served through the gateway) and "Not managed" (available in Claude Code / Codex), each row badged with its source (Claude / Codex / Ratel). Per-skill "Manage with Ratel" / "Stop managing" plus bulk actions and a "New skill" form. Each skill has a full detail page that renders its instructions as Markdown in read mode and edits the raw `description` / `tags` / instructions in place (managed skills only); the page shows the skill's origin agent. Backed by `GET /api/skills`, `GET` / `PATCH /api/skills/{id}`, `POST /api/skills` (create) and `POST /api/skills/{activate,deactivate}`.
-- `ratel-local ui` subcommand — a loopback-only browser UI mirroring the CLI, protected by a per-session bearer token. It can view, add, edit, remove, and OAuth-authorize MCP servers across all three scopes; inspect backups; and run agent setup flows. Flags: `--port N`, `--no-open`.
+- **Skills in the browser UI (`ratel-mcp ui`).** The Skills page groups skills into "Managed by Ratel" (served through the gateway) and "Not managed" (available in Claude Code / Codex), each row badged with its source (Claude / Codex / Ratel). Per-skill "Manage with Ratel" / "Stop managing" plus bulk actions and a "New skill" form. Each skill has a full detail page that renders its instructions as Markdown in read mode and edits the raw `description` / `tags` / instructions in place (managed skills only); the page shows the skill's origin agent. Backed by `GET /api/skills`, `GET` / `PATCH /api/skills/{id}`, `POST /api/skills` (create) and `POST /api/skills/{activate,deactivate}`.
+- `ratel-mcp ui` subcommand — a loopback-only browser UI mirroring the CLI, protected by a per-session bearer token. It can view, add, edit, remove, and OAuth-authorize MCP servers across all three scopes; inspect backups; and run agent setup flows. Flags: `--port N`, `--no-open`.
 - Agent setup support for both Claude Code and Codex, including host detection, per-agent status, import/link previews, and apply endpoints for the UI.
 - Codex MCP config support via `~/.codex/config.toml` and project `.codex/config.toml`.
-- `ratel-local mcp import` and `ratel-local mcp link` now accept `--agent auto|claude-code|codex` so CLI users can target a specific supported agent instead of relying on automatic detection.
+- `ratel-mcp mcp import` and `ratel-mcp mcp link` now accept `--agent auto|claude-code|codex` so CLI users can target a specific supported agent instead of relying on automatic detection.
 - UI assets and navigation for agent links, including Claude Code and Codex branding.
 
 ### Changed
@@ -48,7 +48,7 @@ All notable changes to this package are documented here. The format is based on 
 
 ### Fixed
 - A skill's `SKILL.md` is rewritten in place on edit: frontmatter keys Ratel doesn't manage (`allowed-tools`, `model`, custom keys, comments) are preserved, the write is atomic, and `description` / `tags` containing quotes or backslashes round-trip without accumulating escape characters (the loader now decodes escaped scalars).
-- Agent rewrites consistently install the `ratel-local` gateway command.
+- Agent rewrites consistently install the `ratel-mcp` gateway command.
 
 ### Backward compatibility
 - The gateway still advertises the deprecated `search_tools` (its pre-0.2.0 tools-only `{ groups }` result) alongside `search_capabilities`, so MCP clients that reference `search_tools` by name keep working unchanged. Its description flags it as deprecated; prefer `search_capabilities`.
@@ -56,13 +56,13 @@ All notable changes to this package are documented here. The format is based on 
 ## [0.2.0] - 2026-05-12
 
 ### Added
-- `ratel-local` CLI bin shipped alongside the library. Subcommands: `serve`, `mcp add` / `remove` / `list` / `get` / `edit` / `import` / `link` / `auth`, `backup list`. Run via `npx @ratel-ai/ratel-local <verb>` or a global `pnpm add -g`.
+- `ratel-mcp` CLI bin shipped alongside the library. Subcommands: `serve`, `mcp add` / `remove` / `list` / `get` / `edit` / `import` / `link` / `auth`, `backup list`. Run via `npx @ratel-ai/mcp-server <verb>` or a global `pnpm add -g`.
 - Source split: `src/lib/` (library) + `src/cli/` (CLI) + `src/index.ts` (library entrypoint) + `src/bin.ts` (CLI entrypoint).
 
 ### Changed
-- Package now hosted in [`ratel-ai/ratel-local`](https://github.com/ratel-ai/ratel-local); previously shipped from the `ratel-ai/ratel` monorepo as one of several workspace packages. Library API surface is unchanged.
-- The Claude Code rewrite (`mcp import` / `link`) plants `command: "ratel-local"` (was `"ratel"` when this lived inside `@ratel-ai/cli`).
-- Bin-locator env var renamed `$RATEL_BIN` → `$RATEL_LOCAL_BIN`.
+- Package now hosted in [`ratel-ai/ratel-mcp`](https://github.com/ratel-ai/ratel-mcp); previously shipped from the `ratel-ai/ratel` monorepo as one of several workspace packages. Library API surface is unchanged.
+- The Claude Code rewrite (`mcp import` / `link`) plants `command: "ratel-mcp"` (was `"ratel"` when this lived inside `@ratel-ai/cli`).
+- Bin-locator env var renamed `$RATEL_BIN` → `$RATEL_MCP_BIN`.
 
 ### Note
-- Extracted from [`ratel-ai/ratel@v0.1.5`](https://github.com/ratel-ai/ratel/tree/v0.1.5). `@ratel-ai/cli` in the source repo still depends on `@ratel-ai/ratel-local@^0.1.5` (library-only, pre-CLI) until its own follow-up refactor lands.
+- Extracted from [`ratel-ai/ratel@v0.1.5`](https://github.com/ratel-ai/ratel/tree/v0.1.5). `@ratel-ai/cli` in the source repo still depends on `@ratel-ai/mcp-server@^0.1.5` (library-only, pre-CLI) until its own follow-up refactor lands.
