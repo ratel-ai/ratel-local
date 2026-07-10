@@ -11,10 +11,10 @@ export default defineConfig({
   },
   server: {
     host: "127.0.0.1",
-    proxy: process.env.RATEL_MCP_API_TARGET
+    proxy: process.env.RATEL_LOCAL_API_TARGET
       ? {
           "/api": {
-            target: process.env.RATEL_MCP_API_TARGET,
+            target: process.env.RATEL_LOCAL_API_TARGET,
             changeOrigin: true,
           },
         }

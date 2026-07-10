@@ -183,7 +183,7 @@ export function buildImportPlan(
       )
     : null;
 
-  // Compute ratel-mcp entry per scope: gated on the Claude-rewrite snapshot.
+  // Compute ratel-local entry per scope: gated on the Claude-rewrite snapshot.
   const ratelEntryArgsByScope: Partial<Record<AgentScope, string[]>> = {};
 
   if (agentRewriteG.length > 0) {

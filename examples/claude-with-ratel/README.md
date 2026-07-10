@@ -1,13 +1,13 @@
 # `examples/claude-with-ratel/`
 
-Run a Claude Code session where the **only** MCP server is `ratel-mcp`, and `ratel-mcp` itself fronts one or more upstream MCPs behind its `search_capabilities` + `invoke_tool` gateway. The session sees two tools instead of N — even though everything in the upstream catalogs remains reachable through `ratel-mcp`.
+Run a Claude Code session where the **only** MCP server is `ratel-local`, and `ratel-local` itself fronts one or more upstream MCPs behind its `search_capabilities` + `invoke_tool` gateway. The session sees two tools instead of N — even though everything in the upstream catalogs remains reachable through `ratel-local`.
 
 This is the headline demo: drop-in replacement for a multi-MCP setup.
 
 ## What's in here
 
 ```
-ratel-config.json                  # ratel-mcp's own config — list of upstream MCPs to aggregate
+ratel-config.json                  # ratel-local's own config — list of upstream MCPs to aggregate
 claude-with-ratel.template.json    # Claude Code meta-config template (committed)
 claude-with-ratel.json             # Resolved meta-config with absolute paths (gitignored, generated)
 gen-config.mjs                     # Substitutes <REPO_ROOT> in the template
@@ -35,14 +35,14 @@ pnpm gen-config && claude --mcp-config ./claude-with-ratel.json --strict-mcp-con
 
 That:
 1. Regenerates `claude-with-ratel.json` from the template (substituting your repo root).
-2. Launches `claude --mcp-config ./claude-with-ratel.json --strict-mcp-config`, which **ignores all your global and project-scoped MCPs** and loads only ratel-mcp.
+2. Launches `claude --mcp-config ./claude-with-ratel.json --strict-mcp-config`, which **ignores all your global and project-scoped MCPs** and loads only ratel-local.
 
 ## What you should see
 
 Inside the Claude Code session:
 
-- `/mcp` lists exactly one connected server (`ratel-mcp`) with two tools.
-- The tool list shows `mcp__ratel-mcp__search_capabilities` and `mcp__ratel-mcp__invoke_tool` — and nothing else.
+- `/mcp` lists exactly one connected server (`ratel-local`) with two tools.
+- The tool list shows `mcp__ratel-local__search_capabilities` and `mcp__ratel-local__invoke_tool` — and nothing else.
 - Asking Claude to do anything tool-shaped triggers a `search_capabilities` call (to find the right upstream tool by id) followed by an `invoke_tool` call (to run it).
 
 Try these to verify it's working end-to-end:
@@ -54,12 +54,12 @@ Try these to verify it's working end-to-end:
 | `List what tools are available behind your search_capabilities gateway.` | Claude calls `search_capabilities` with broad queries and reports ~10 `ev__*` entries |
 | `Invoke a tool called "delete_universe" through your gateway.` | `invoke_tool` returns `{ error: "unknown toolId: delete_universe..." }` and Claude reports there's no such tool |
 
-Critical signal: every tool call you see in the UI is `mcp__ratel-mcp__*`. If you ever see `mcp__ev__*` directly, something is bypassing the gateway.
+Critical signal: every tool call you see in the UI is `mcp__ratel-local__*`. If you ever see `mcp__ev__*` directly, something is bypassing the gateway.
 
 ## Customize
 
-To aggregate your own MCPs, edit `ratel-config.json`. The shape mirrors Claude Code's `mcpServers` field — for migrating your existing setup, copy the relevant entries from `~/.claude.json` here. Stdio and HTTP transports are supported; SSE and unknown types are skipped at runtime with a stderr warning. If one upstream fails to start, ratel-mcp logs it and continues — the session stays up.
+To aggregate your own MCPs, edit `ratel-config.json`. The shape mirrors Claude Code's `mcpServers` field — for migrating your existing setup, copy the relevant entries from `~/.claude.json` here. Stdio and HTTP transports are supported; SSE and unknown types are skipped at runtime with a stderr warning. If one upstream fails to start, ratel-local logs it and continues — the session stays up.
 
-For a non-isolated installation (i.e. you want ratel-mcp to take over your real Claude Code MCP setup, not a sandboxed `--mcp-config` session), use the `ratel-mcp import` wizard instead of this template.
+For a non-isolated installation (i.e. you want ratel-local to take over your real Claude Code MCP setup, not a sandboxed `--mcp-config` session), use the `ratel-local import` wizard instead of this template.
 
 For details on the library API itself (gateway construction, result wrapping, transport boundary adaptations), see the [repo README](../../README.md).

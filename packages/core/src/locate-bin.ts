@@ -38,13 +38,13 @@ export async function locateRatelBin(env: LocateBinEnv): Promise<ResolvedBin> {
     }
   }
   throw new Error(
-    "Could not locate the ratel-mcp binary. Set $RATEL_MCP_BIN or run from inside the ratel-mcp workspace.",
+    "Could not locate the ratel-local binary. Set $RATEL_LOCAL_BIN or run from inside the ratel-local workspace.",
   );
 }
 
 export function whichRatelBin(): string | undefined {
   try {
-    const out = execSync("which ratel-mcp", {
+    const out = execSync("which ratel-local", {
       stdio: ["ignore", "pipe", "ignore"],
     })
       .toString()

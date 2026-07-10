@@ -1,5 +1,5 @@
 {
-  "name": "@ratel-ai/mcp-ui",
+  "name": "@ratel-ai/ratel-local-ui",
   "private": true,
   "version": "0.3.0",
   "type": "module",

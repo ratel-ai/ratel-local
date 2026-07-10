@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { locateRatelBin } from "./locate-bin.js";
 
 describe("locateRatelBin", () => {
-  it("prefers $RATEL_MCP_BIN when set", async () => {
+  it("prefers $RATEL_LOCAL_BIN when set", async () => {
     const r = await locateRatelBin({ envVar: "/custom/bin" });
     expect(r).toEqual({ command: "/custom/bin", args: [], source: "env" });
   });

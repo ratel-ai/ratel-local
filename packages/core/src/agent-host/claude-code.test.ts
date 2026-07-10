@@ -12,7 +12,7 @@ const RATEL_PROJECT = "/r/.ratel/config.json";
 const RATEL_LOCAL = "/r/.ratel/config.local.json";
 
 const BIN = {
-  command: "ratel-mcp",
+  command: "ratel-local",
   args: [],
   source: "path" as const,
 };
@@ -113,7 +113,11 @@ describe("ClaudeCodeAgentHostAdapter", () => {
         mcpServers: {
           fs: FS_ENTRY,
           keep: { type: "stdio", command: "keep" },
-          "ratel-mcp": { type: "stdio", command: "ratel-mcp", args: ["serve", "--config", "old"] },
+          "ratel-local": {
+            type: "stdio",
+            command: "ratel-local",
+            args: ["serve", "--config", "old"],
+          },
         },
         projects: {
           [ROOT]: {
@@ -144,9 +148,9 @@ describe("ClaudeCodeAgentHostAdapter", () => {
     expect(after.version).toBe(7);
     expect(after.mcpServers.fs).toBeUndefined();
     expect(after.mcpServers.keep).toEqual({ type: "stdio", command: "keep" });
-    expect(after.mcpServers["ratel-mcp"]).toEqual({
+    expect(after.mcpServers["ratel-local"]).toEqual({
       type: "stdio",
-      command: "ratel-mcp",
+      command: "ratel-local",
       args: ["serve", "--config", RATEL_USER],
     });
     expect(after.projects[ROOT].mcpServers.local).toBeUndefined();
@@ -154,7 +158,7 @@ describe("ClaudeCodeAgentHostAdapter", () => {
       type: "stdio",
       command: "untouched",
     });
-    expect(after.projects[ROOT].mcpServers["ratel-mcp"].args).toEqual([
+    expect(after.projects[ROOT].mcpServers["ratel-local"].args).toEqual([
       "serve",
       "--config",
       RATEL_USER,
@@ -188,7 +192,7 @@ describe("ClaudeCodeAgentHostAdapter", () => {
     const after = JSON.parse(changes.changes[0].after);
     expect(after.mcpServers.proj).toBeUndefined();
     expect(after.mcpServers.keep).toEqual({ type: "stdio", command: "keep" });
-    expect(after.mcpServers["ratel-mcp"].args).toEqual([
+    expect(after.mcpServers["ratel-local"].args).toEqual([
       "serve",
       "--config",
       RATEL_USER,

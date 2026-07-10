@@ -1,6 +1,6 @@
 <div align="center">
   <h1>Ratel Local</h1>
-  <h4>Local MCP gateway and management CLI, published as @ratel-ai/mcp-server.</h4>
+  <h4>Local MCP gateway and management CLI, published as @ratel-ai/ratel-local.</h4>
 
   <p>
     <a href="https://github.com/ratel-ai/ratel">Ratel core</a> •
@@ -9,17 +9,17 @@
   </p>
 
   <p>
-    <a href="https://www.npmjs.com/package/@ratel-ai/mcp-server"><img src="https://img.shields.io/npm/v/@ratel-ai/mcp-server?label=npm&color=cb3837" alt="npm" /></a>
+    <a href="https://www.npmjs.com/package/@ratel-ai/ratel-local"><img src="https://img.shields.io/npm/v/@ratel-ai/ratel-local?label=npm&color=cb3837" alt="npm" /></a>
     <a href="https://github.com/ratel-ai/ratel-local/stargazers"><img src="https://img.shields.io/github/stars/ratel-ai/ratel-local?style=social" alt="GitHub stars" /></a>
     <a href="https://discord.gg/hdKpx69NR"><img src="https://img.shields.io/discord/1478702964003705015?logo=discord&logoColor=white&color=7289da&label=discord" alt="Discord" /></a>
     <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license" /></a>
   </p>
 </div>
 
-Ratel Local ships as `@ratel-ai/mcp-server` and is two things in one package:
+Ratel Local ships as `@ratel-ai/ratel-local` and is two things in one package:
 
 - a **library** that takes a Ratel [`ToolCatalog`](https://github.com/ratel-ai/ratel) and exposes it as a Model Context Protocol server — the MCP client (Claude Desktop, an agent framework, an `@modelcontextprotocol/sdk` `Client`) sees `search_capabilities` + `invoke_tool` (plus `get_skill_content` when skills are configured) instead of every upstream's full tool list;
-- a **CLI** (`ratel-mcp`) that drops the gateway between an MCP host (Claude Code, Cursor, ChatGPT) and an arbitrary set of upstream MCP servers — with Claude-compatible config UX, three-scope hierarchy, OAuth 2.1 / PKCE for HTTP+SSE upstreams, and a one-shot `import` wizard for migrating an existing agent's MCP setup and skills.
+- a **CLI** (`ratel-local`) that drops the gateway between an MCP host (Claude Code, Cursor, ChatGPT) and an arbitrary set of upstream MCP servers — with Claude-compatible config UX, three-scope hierarchy, OAuth 2.1 / PKCE for HTTP+SSE upstreams, and a one-shot `import` wizard for migrating an existing agent's MCP setup and skills.
 
 This is the inverse of `@ratel-ai/sdk`'s [`registerMcpServer`](https://github.com/ratel-ai/ratel/blob/main/src/sdk/ts/README.md#registermcpserver--index-an-mcp-servers-tools-into-the-catalog), which ingests an upstream MCP server's tools *into* a catalog. `createMcpServer` exposes a catalog *as* an MCP server.
 
@@ -27,22 +27,22 @@ This is the inverse of `@ratel-ai/sdk`'s [`registerMcpServer`](https://github.co
 
 ```bash
 # CLI (global install)
-pnpm add -g @ratel-ai/mcp-server
+pnpm add -g @ratel-ai/ratel-local
 
 # Library (in a TS/Node project)
-pnpm add @ratel-ai/mcp-server @ratel-ai/sdk @modelcontextprotocol/sdk
+pnpm add @ratel-ai/ratel-local @ratel-ai/sdk @modelcontextprotocol/sdk
 ```
 
 Or skip the install and run the CLI on-the-fly:
 
 ```bash
-npx -y @ratel-ai/mcp-server --help
+npx -y @ratel-ai/ratel-local --help
 ```
 
 ### Agent plugin marketplaces
 
 The repo also ships a shared Ratel Local plugin for Codex and Claude Code. It
-starts the gateway over stdio with `npx -y @ratel-ai/mcp-server@latest serve
+starts the gateway over stdio with `npx -y @ratel-ai/ratel-local@latest serve
 --auto-config` and bundles skills for setup, debugging, and tool-usage review.
 
 #### Codex
@@ -66,7 +66,7 @@ Add the remote marketplace and install the plugin:
 
 ```bash
 claude plugin marketplace add ratel-ai/ratel-local
-claude plugin install ratel-mcp@ratel
+claude plugin install ratel-local@ratel
 ```
 
 If Claude Code is already running, restart it or run `/reload-plugins` inside
@@ -76,47 +76,47 @@ For Claude Code local development from a checkout, use `.` as the marketplace:
 
 ```bash
 claude plugin marketplace add .
-claude plugin install ratel-mcp@ratel
+claude plugin install ratel-local@ratel
 ```
 
 Claude Code plugins cannot currently set a top-level `statusLine` default, so
-`ratel-mcp link` and `ratel-mcp import` install the Ratel statusline
+`ratel-local link` and `ratel-local import` install the Ratel statusline
 automatically after wiring up Claude Code (skipped if you already have a
 non-Ratel statusline configured). Install or reinstall it manually with
-`ratel-mcp statusline install` or from the Claude Code agent page in
-`ratel-mcp ui`. See Claude's [statusline docs](https://code.claude.com/docs/en/statusline)
+`ratel-local statusline install` or from the Claude Code agent page in
+`ratel-local ui`. See Claude's [statusline docs](https://code.claude.com/docs/en/statusline)
 and [plugin reference](https://code.claude.com/docs/en/plugins-reference).
 
 ## CLI quickstart
 
-`ratel-mcp` mirrors `claude mcp add`'s flag layout — any invocation that works against Claude Code's CLI works here unchanged.
+`ratel-local` mirrors `claude mcp add`'s flag layout — any invocation that works against Claude Code's CLI works here unchanged.
 
 ```bash
 # Add an upstream (stdio)
-ratel-mcp mcp add --scope user airtable -e API_KEY=xyz -- npx -y airtable-mcp-server
+ratel-local mcp add --scope user airtable -e API_KEY=xyz -- npx -y airtable-mcp-server
 
 # Add an upstream (HTTP, with OAuth)
-ratel-mcp mcp add --scope user stripe https://mcp.stripe.com --transport http
+ratel-local mcp add --scope user stripe https://mcp.stripe.com --transport http
 
 # List what's configured
-ratel-mcp mcp list
+ratel-local mcp list
 
 # Import your existing agent MCP setup into Ratel Local's scopes
-ratel-mcp import
-ratel-mcp import --agent codex
+ratel-local import
+ratel-local import --agent codex
 
 # Point an agent at the Ratel gateway without removing native MCP entries
-ratel-mcp link
-ratel-mcp link --agent claude-code
+ratel-local link
+ratel-local link --agent claude-code
 
 # Install the Claude Code statusline
-ratel-mcp statusline install
+ratel-local statusline install
 
 # Start the gateway over stdio (this is what linked agents spawn)
-ratel-mcp serve --config ~/.ratel/config.json
+ratel-local serve --config ~/.ratel/config.json
 ```
 
-Run `ratel-mcp <group>` for the verbs in a group:
+Run `ratel-local <group>` for the verbs in a group:
 
 | Group | Verbs |
 |---|---|
@@ -125,11 +125,11 @@ Run `ratel-mcp <group>` for the verbs in a group:
 | `statusline` | render from stdin, `install`, `uninstall` |
 | (top-level) | `import`, `link`, `serve`, `ui` |
 
-### `ratel-mcp mcp add` — Claude-compatible
+### `ratel-local mcp add` — Claude-compatible
 
 ```
-ratel-mcp mcp add [flags] <name> -- <command> [args...]      # stdio
-ratel-mcp mcp add [flags] <name> <url>                       # http / sse
+ratel-local mcp add [flags] <name> -- <command> [args...]      # stdio
+ratel-local mcp add [flags] <name> <url>                       # http / sse
 ```
 
 | Flag | Meaning |
@@ -147,7 +147,7 @@ By default, `mcp add` connects to the upstream and stores its server-level `inst
 
 ### Three-scope hierarchy
 
-`ratel-mcp` mirrors Claude Code's MCP scoping with three logical configs:
+`ratel-local` mirrors Claude Code's MCP scoping with three logical configs:
 
 | Scope | Path | Notes |
 |---|---|---|
@@ -155,19 +155,19 @@ By default, `mcp add` connects to the upstream and stores its server-level `inst
 | project | `<root>/.ratel/config.json` | Committed alongside the repo. |
 | local | `<root>/.ratel/config.local.json` | Per-user-per-project; add to your project's `.gitignore`. |
 
-When you run `ratel-mcp serve --config a.json --config b.json --config c.json`, the configs are merged in order — last wins on `mcpServers` key collisions. The `link` command wires the right `--config` chain into Claude Code at each scope. The `import` wizard migrates selected native MCP entries into Ratel and can clean those imported entries out of the agent config as its second stage.
+When you run `ratel-local serve --config a.json --config b.json --config c.json`, the configs are merged in order — last wins on `mcpServers` key collisions. The `link` command wires the right `--config` chain into Claude Code at each scope. The `import` wizard migrates selected native MCP entries into Ratel and can clean those imported entries out of the agent config as its second stage.
 
 ### Claude Code statusline
 
-`ratel-mcp statusline` is a Claude Code statusline command. Claude passes a
+`ratel-local statusline` is a Claude Code statusline command. Claude passes a
 JSON payload on stdin; the command writes two statusline rows to stdout and
 fails open with a loading/no-telemetry line if the payload or telemetry is
 missing.
 
 ```bash
-ratel-mcp statusline install          # write ~/.claude/settings.json
-ratel-mcp statusline install --force  # replace another configured statusLine
-ratel-mcp statusline uninstall        # remove only a Ratel-owned statusLine
+ratel-local statusline install          # write ~/.claude/settings.json
+ratel-local statusline install --force  # replace another configured statusLine
+ratel-local statusline uninstall        # remove only a Ratel-owned statusLine
 ```
 
 Install writes a user-scoped Claude Code setting:
@@ -176,7 +176,7 @@ Install writes a user-scoped Claude Code setting:
 {
   "statusLine": {
     "type": "command",
-    "command": "ratel-mcp statusline",
+    "command": "ratel-local statusline",
     "padding": 0,
     "refreshInterval": 30
   }
@@ -184,23 +184,23 @@ Install writes a user-scoped Claude Code setting:
 ```
 
 The statusline reports Ratel as enabled when Claude Code is configured to start
-Ratel through a linked MCP entry or an enabled `ratel-mcp@...` plugin. It does
+Ratel through a linked MCP entry or an enabled `ratel-local@...` plugin. It does
 not install or enable the plugin itself.
 
 ### OAuth flow
 
-HTTP and SSE upstreams that require OAuth authorization run through `ratel-mcp`'s loopback PKCE flow. From the CLI:
+HTTP and SSE upstreams that require OAuth authorization run through `ratel-local`'s loopback PKCE flow. From the CLI:
 
-1. `ratel-mcp mcp add --scope user my-upstream https://mcp.example/mcp [--client-id <id>] [--callback-port <n>] [--oauth-scope "<s>"]` — records the entry **and** drives the OAuth flow inline.
-2. `ratel-mcp mcp auth my-upstream` — refresh-first. If a `refresh_token` is on disk, rotates silently (no browser). Falls back to PKCE only when refresh fails.
-3. `ratel-mcp mcp auth --check` — read-only status report: tokens present, refresh availability, time-to-expiry.
-4. `ratel-mcp mcp list` — shows a single-line auth column per entry: `ok` / `expired` / `needs auth` / `n/a`.
+1. `ratel-local mcp add --scope user my-upstream https://mcp.example/mcp [--client-id <id>] [--callback-port <n>] [--oauth-scope "<s>"]` — records the entry **and** drives the OAuth flow inline.
+2. `ratel-local mcp auth my-upstream` — refresh-first. If a `refresh_token` is on disk, rotates silently (no browser). Falls back to PKCE only when refresh fails.
+3. `ratel-local mcp auth --check` — read-only status report: tokens present, refresh availability, time-to-expiry.
+4. `ratel-local mcp list` — shows a single-line auth column per entry: `ok` / `expired` / `needs auth` / `n/a`.
 
 When the gateway boots, every HTTP/SSE upstream with stored tokens runs through a proactive refresh. A 401 during a live `invoke_tool` returns `{ error: "needs_auth", upstream }` so the agent can branch and call the `auth` MCP tool to recover.
 
 ### Telemetry
 
-`ratel-mcp serve` writes one JSON line per event to `~/.ratel/telemetry/<project-slug>/<ISO-ts>-<short>.jsonl` by default — every search, invoke, gateway call, upstream MCP call, OAuth event, and Ratel's upstream tool-payload token estimate flows through the same JSONL ([ADR 0009](https://github.com/ratel-ai/ratel/blob/main/docs/adr/0009-trace-events-core-owned-schema.md)). Best-effort, sampleable, lossy on backpressure — query-log shaped, not oplog.
+`ratel-local serve` writes one JSON line per event to `~/.ratel/telemetry/<project-slug>/<ISO-ts>-<short>.jsonl` by default — every search, invoke, gateway call, upstream MCP call, OAuth event, and Ratel's upstream tool-payload token estimate flows through the same JSONL ([ADR 0009](https://github.com/ratel-ai/ratel/blob/main/docs/adr/0009-trace-events-core-owned-schema.md)). Best-effort, sampleable, lossy on backpressure — query-log shaped, not oplog.
 
 | Flag | Env | Purpose |
 |---|---|---|
@@ -212,14 +212,14 @@ For summarizing the resulting JSONL stream, see [`@ratel-ai/cli`'s `ratel inspec
 
 ### Backups
 
-Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-mcp backup list` shows what's available.
+Every `import`, `link`, `add`, `edit`, and `remove` snapshots the files it touches into `~/.ratel/backups/<ISO>/` with a `manifest.json`. `ratel-local backup list` shows what's available.
 
 ### Browser UI
 
 ```bash
-ratel-mcp ui              # starts a local UI on an ephemeral 127.0.0.1 port, opens your browser
-ratel-mcp ui --port 5731  # bind a specific port
-ratel-mcp ui --no-open    # print the URL without launching a browser
+ratel-local ui              # starts a local UI on an ephemeral 127.0.0.1 port, opens your browser
+ratel-local ui --port 5731  # bind a specific port
+ratel-local ui --no-open    # print the URL without launching a browser
 ```
 
 The UI mirrors the CLI verbs across all three scopes: view/add/edit/remove servers, drive OAuth, import/link from Claude Code, and inspect backups. The server binds to `127.0.0.1` only and gates every request on a single-use session token printed in the launch URL. Stop it with `Ctrl-C`.
@@ -228,7 +228,7 @@ The UI mirrors the CLI verbs across all three scopes: view/add/edit/remove serve
 
 ```ts
 import { ToolCatalog } from "@ratel-ai/sdk";
-import { createMcpServer } from "@ratel-ai/mcp-server";
+import { createMcpServer } from "@ratel-ai/ratel-local";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 const catalog = new ToolCatalog();
@@ -258,7 +258,7 @@ The MCP client connected to the other end will see `search_capabilities` and `in
 Higher-level entrypoint that takes a parsed Ratel config (an `mcpServers` map mirroring Claude Code's shape) and spins up an upstream MCP `Client` per entry, registers each upstream's tools into a fresh catalog, and returns the catalog plus per-upstream metadata.
 
 ```ts
-import { buildGatewayFromConfig, parseConfig } from "@ratel-ai/mcp-server";
+import { buildGatewayFromConfig, parseConfig } from "@ratel-ai/ratel-local";
 
 const config = parseConfig(JSON.parse(await fs.readFile("./ratel-config.json", "utf8")));
 const gateway = await buildGatewayFromConfig(config, {
@@ -315,7 +315,7 @@ When `invoke_tool` drives a tool that was itself registered via `registerMcpServ
 
 ## Examples
 
-- [`examples/claude-with-ratel/`](examples/claude-with-ratel/README.md) — Claude Code session fronted by `ratel-mcp` as the only MCP server.
+- [`examples/claude-with-ratel/`](examples/claude-with-ratel/README.md) — Claude Code session fronted by `ratel-local` as the only MCP server.
 
 ## Build & test
 

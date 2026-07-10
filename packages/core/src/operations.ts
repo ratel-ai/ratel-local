@@ -809,7 +809,7 @@ async function buildAgentPlanInputs(
 
 async function resolveBin(opts: AgentInteropOptions): Promise<ResolvedBin> {
   return locateRatelBin({
-    envVar: opts.envVar ?? process.env.RATEL_MCP_BIN,
+    envVar: opts.envVar ?? process.env.RATEL_LOCAL_BIN,
     whichResult: opts.whichResult ?? whichRatelBin(),
     workspaceRoot: opts.workspaceRoot,
     exists: opts.exists,

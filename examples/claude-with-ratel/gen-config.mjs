@@ -9,11 +9,11 @@ function findRepoRoot(start) {
   while (dir !== "/") {
     if (existsSync(resolve(dir, "package.json"))) {
       const pkg = JSON.parse(readFileSync(resolve(dir, "package.json"), "utf8"));
-      if (pkg.name === "@ratel-ai/mcp-server") return dir;
+      if (pkg.name === "@ratel-ai/ratel-local") return dir;
     }
     dir = dirname(dir);
   }
-  throw new Error("could not locate repo root (no @ratel-ai/mcp-server package.json above this folder)");
+  throw new Error("could not locate repo root (no @ratel-ai/ratel-local package.json above this folder)");
 }
 
 const repoRoot = findRepoRoot(here);

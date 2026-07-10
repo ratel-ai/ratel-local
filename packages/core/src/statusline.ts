@@ -362,7 +362,7 @@ function pluginListHasRatel(value: unknown): boolean {
 }
 
 function isRatelPluginName(value: string): boolean {
-  return value === "ratel-mcp" || value.startsWith("ratel-mcp@");
+  return value === "ratel-local" || value.startsWith("ratel-local@");
 }
 
 function claudeSettingsPaths(env: HierarchyEnv): Array<{ scope: AgentScope; path: string }> {

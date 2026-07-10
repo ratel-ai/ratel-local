@@ -1,4 +1,4 @@
-# Releasing `@ratel-ai/mcp-server`
+# Releasing `@ratel-ai/ratel-local`
 
 How a new version is published to npm. Read end-to-end before cutting a release.
 
@@ -6,7 +6,7 @@ How a new version is published to npm. Read end-to-end before cutting a release.
 
 - **`release.yml`** fires on every `v*` tag push (and supports `workflow_dispatch` with `dry_run: true` for rehearsal). Job graph: `tag-version-check` (asserts `package.json.version` matches the tag and that `CHANGELOG.md` has a `## [<version>]` heading) → `publish-npm` (pnpm install → build → `pnpm pack` → `npm publish --provenance --access public --tag <rc|latest>`) → `github-release`. Authentication is via Trusted Publishers (OIDC) — no `NPM_TOKEN` secret stored in the repo. `*-rc.*` tags publish under the `rc` dist-tag; un-suffixed tags become `latest`.
 - **`ts.yml`** runs build / typecheck / lint / test on every PR and on push to `main`.
-- **`verify-install.yml`** runs daily and on-demand: `npx -y @ratel-ai/mcp-server@latest --help` on Ubuntu.
+- **`verify-install.yml`** runs daily and on-demand: `npx -y @ratel-ai/ratel-local@latest --help` on Ubuntu.
 
 ## Cutting a release
 
@@ -26,7 +26,7 @@ How a new version is published to npm. Read end-to-end before cutting a release.
    git push origin main vX.Y.Z
    ```
 6. **Watch `release.yml`** to completion. Inspect the GitHub Release on success.
-7. **For RCs**: validate the package on a real machine (`npx -y @ratel-ai/mcp-server@rc --help` from a terminal without the package globally installed). Iterate (`-rc.2`, `-rc.3`, …) until happy, then bump to the un-suffixed version and tag again to promote to `latest`.
+7. **For RCs**: validate the package on a real machine (`npx -y @ratel-ai/ratel-local@rc --help` from a terminal without the package globally installed). Iterate (`-rc.2`, `-rc.3`, …) until happy, then bump to the un-suffixed version and tag again to promote to `latest`.
 
 ## Sharp edges
 
@@ -36,6 +36,6 @@ How a new version is published to npm. Read end-to-end before cutting a release.
 
 ## First-time bootstrap
 
-Already done. Trusted Publishers for `@ratel-ai/mcp-server` are configured on npm pointing at this repo's `release.yml` and the `release` environment.
+Already done. Trusted Publishers for `@ratel-ai/ratel-local` are configured on npm pointing at this repo's `release.yml` and the `release` environment.
 
 If a new package ever needs adding (e.g. a future split), follow npm's "Trusted Publishers" docs: an `npm publish --access public` from any machine boots the package once, then the npm UI gates further publishes behind the OIDC trust relationship.

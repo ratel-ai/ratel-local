@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Comprehensive end-to-end check of the skills feature, exercising REAL processes
-# (a real upstream MCP server + the real `ratel-mcp serve` driven by a real MCP
+# (a real upstream MCP server + the real `ratel-local serve` driven by a real MCP
 # client over stdio) — not unit mocks. Covers all three layers:
 #
 #   A. GATEWAY (pull path) — tool surface, the two reserved buckets (skills not
@@ -31,7 +31,7 @@ skill_md() { # dir name desc triggers stacks marker
     "$2" "$3" "$4" "$5" "$6" > "$1/$2/SKILL.md"
 }
 
-echo "═══ PART A — GATEWAY (real \`ratel-mcp serve\` driven by a real MCP client) ═══"
+echo "═══ PART A — GATEWAY (real \`ratel-local serve\` driven by a real MCP client) ═══"
 HGW="$(mktemp -d)"
 skill_md "$HGW/.ratel/skills" supabase-auth "Set up Supabase authentication: RLS policies, auth helpers, sessions." "login,signup,authentication,rls" "supabase,next,react" "BODY-MARKER-SUPABASE-AUTH"
 skill_md "$HGW/.ratel/skills" frontend-react "React/Next UI component patterns and layout." "dashboard,page,form" "react,next" "BODY-MARKER-FRONTEND"

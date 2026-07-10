@@ -9,8 +9,10 @@ const HOST = "127.0.0.1";
 type ChildName = "api" | "vite";
 
 async function main() {
-  const apiPort = await pickPort(Number(process.env.RATEL_MCP_UI_API_PORT) || DEFAULT_API_PORT);
-  const vitePort = await pickPort(Number(process.env.RATEL_MCP_UI_VITE_PORT) || DEFAULT_VITE_PORT);
+  const apiPort = await pickPort(Number(process.env.RATEL_LOCAL_UI_API_PORT) || DEFAULT_API_PORT);
+  const vitePort = await pickPort(
+    Number(process.env.RATEL_LOCAL_UI_VITE_PORT) || DEFAULT_VITE_PORT,
+  );
 
   const children = new Set<ChildProcessWithoutNullStreams>();
   let shuttingDown = false;
@@ -31,7 +33,7 @@ async function main() {
       "pnpm",
       [
         "--filter",
-        "@ratel-ai/mcp-server",
+        "@ratel-ai/ratel-local",
         "exec",
         "tsx",
         "src/bin.ts",
@@ -55,7 +57,7 @@ async function main() {
       "pnpm",
       [
         "--filter",
-        "@ratel-ai/mcp-ui",
+        "@ratel-ai/ratel-local-ui",
         "exec",
         "vite",
         "--host",
@@ -67,7 +69,7 @@ async function main() {
     ],
     children,
     shutdown,
-    { RATEL_MCP_API_TARGET: apiTarget },
+    { RATEL_LOCAL_API_TARGET: apiTarget },
   );
 
   console.error("");
@@ -80,7 +82,7 @@ async function main() {
       await waitForPort(vitePort);
       openBrowser(viteUrl);
       console.error(
-        "[ratel] Opened the tokenized UI in your browser (set RATEL_MCP_UI_OPEN=0 to disable).",
+        "[ratel] Opened the tokenized UI in your browser (set RATEL_LOCAL_UI_OPEN=0 to disable).",
       );
     } catch (err) {
       console.error(`[ratel] Auto-open skipped: ${(err as Error).message}`);
@@ -91,7 +93,7 @@ async function main() {
 
 function shouldOpenBrowser(): boolean {
   if (process.env.CI) return false;
-  const flag = process.env.RATEL_MCP_UI_OPEN;
+  const flag = process.env.RATEL_LOCAL_UI_OPEN;
   return flag !== "0" && flag !== "false";
 }
 
@@ -166,7 +168,7 @@ function waitForUiToken(child: ChildProcessWithoutNullStreams, port: number): Pr
 
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      reject(new Error("timed out waiting for ratel-mcp ui to print its session URL"));
+      reject(new Error("timed out waiting for ratel-local ui to print its session URL"));
     }, 15_000);
 
     const onData = (chunk: Buffer) => {
@@ -183,7 +185,7 @@ function waitForUiToken(child: ChildProcessWithoutNullStreams, port: number): Pr
     child.stdout.on("data", onData);
     child.once("exit", (code, signal) => {
       clearTimeout(timeout);
-      reject(new Error(`ratel-mcp ui exited before printing a URL: ${code ?? signal}`));
+      reject(new Error(`ratel-local ui exited before printing a URL: ${code ?? signal}`));
     });
   });
 }
