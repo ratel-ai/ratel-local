@@ -1,4 +1,4 @@
-// End-to-end driver: spawns the REAL `ratel-mcp serve` over stdio (exactly how
+// End-to-end driver: spawns the REAL `ratel-local serve` over stdio (exactly how
 // Claude Code connects) and drives the gateway through real MCP calls.
 // Asserts the full pull-path surface: tool list, the two reserved buckets
 // (no-starvation), invoke round-trip to the real upstream, and skill dispatch.

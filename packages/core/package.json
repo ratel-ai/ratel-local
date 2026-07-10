@@ -1,5 +1,5 @@
 {
-  "name": "@ratel-ai/mcp-core",
+  "name": "@ratel-ai/ratel-local-core",
   "version": "0.3.0",
   "private": true,
   "type": "module",

@@ -7,17 +7,17 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
-      "@ratel-ai/mcp-core/agent-import-workflow": fileURLToPath(
+      "@ratel-ai/ratel-local-core/agent-import-workflow": fileURLToPath(
         new URL("../core/src/agent-import-workflow.ts", import.meta.url),
       ),
     },
   },
   server: {
     host: "127.0.0.1",
-    proxy: process.env.RATEL_MCP_API_TARGET
+    proxy: process.env.RATEL_LOCAL_API_TARGET
       ? {
           "/api": {
-            target: process.env.RATEL_MCP_API_TARGET,
+            target: process.env.RATEL_LOCAL_API_TARGET,
             changeOrigin: true,
           },
         }

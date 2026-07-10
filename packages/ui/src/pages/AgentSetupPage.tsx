@@ -3,7 +3,7 @@ import {
   advanceAgentImportWorkflow,
   beginAgentImportWorkflow,
   unlinkedAgentImportWarning,
-} from "@ratel-ai/mcp-core/agent-import-workflow";
+} from "@ratel-ai/ratel-local-core/agent-import-workflow";
 import { useNavigate } from "@tanstack/react-router";
 import { type StructuredPatchHunk, structuredPatch } from "diff";
 import {

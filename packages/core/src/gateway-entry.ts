@@ -1,8 +1,8 @@
 import type { ServerEntry } from "./lib/index.js";
 import type { ResolvedBin } from "./locate-bin.js";
 
-const GATEWAY_ENTRY_NAMES = new Set(["ratel", "ratel-mcp"]);
-const DEFAULT_GATEWAY_ENTRY_NAME = "ratel-mcp";
+const GATEWAY_ENTRY_NAMES = new Set(["ratel", "ratel-local"]);
+const DEFAULT_GATEWAY_ENTRY_NAME = "ratel-local";
 
 export interface RatelGatewayEntry {
   name: typeof DEFAULT_GATEWAY_ENTRY_NAME;

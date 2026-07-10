@@ -1,4 +1,4 @@
-# Contributing to `@ratel-ai/mcp-server`
+# Contributing to `@ratel-ai/ratel-local`
 
 This package is the MCP-server half of [Ratel](https://github.com/ratel-ai/ratel). Issues and PRs are welcome; the library API tracks the MCP spec evolution closely, so spec-aligned changes are easiest to land.
 

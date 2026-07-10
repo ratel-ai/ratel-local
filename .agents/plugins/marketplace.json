@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "ratel-mcp",
+      "name": "ratel-local",
       "source": {
         "source": "local",
-        "path": "./apps/ratel-mcp/plugin"
+        "path": "./apps/ratel-local/plugin"
       },
       "policy": {
         "installation": "AVAILABLE",

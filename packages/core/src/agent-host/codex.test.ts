@@ -7,7 +7,7 @@ function envRef(name: string): string {
 }
 
 function gatewayEntry(entry: ServerEntry) {
-  return { name: "ratel-mcp" as const, entry };
+  return { name: "ratel-local" as const, entry };
 }
 
 describe("Codex agent host helpers", () => {
@@ -43,11 +43,11 @@ enabled = false
 TOKEN = "secret"
 REGION = "eu"
 
-[mcp_servers.ratel-mcp]
-command = "ratel-mcp"
+[mcp_servers.ratel-local]
+command = "ratel-local"
 args = ["serve", "--config", "/home/u/.ratel/config.json"]
 
-[mcp_servers.ratel-mcp.tools.search_capabilities]
+[mcp_servers.ratel-local.tools.search_capabilities]
 enabled = true
 `);
 
@@ -58,8 +58,12 @@ enabled = true
       env: { TOKEN: "secret", REGION: "eu" },
     });
     expect(entries["fs.env"]).toBeUndefined();
-    expect(entries["ratel-mcp.tools.search_capabilities"]).toBeUndefined();
-    expect(entries["ratel-mcp"]?.args).toEqual(["serve", "--config", "/home/u/.ratel/config.json"]);
+    expect(entries["ratel-local.tools.search_capabilities"]).toBeUndefined();
+    expect(entries["ratel-local"]?.args).toEqual([
+      "serve",
+      "--config",
+      "/home/u/.ratel/config.json",
+    ]);
   });
 
   it("reads full TOML syntax for stdio args, env, and cwd", () => {
@@ -115,10 +119,10 @@ client_id = "client-123"
     });
   });
 
-  it("removes covered native entries and installs ratel-mcp", () => {
+  it("removes covered native entries and installs ratel-local", () => {
     const gateway: ServerEntry = {
       type: "stdio",
-      command: "ratel-mcp",
+      command: "ratel-local",
       args: ["serve", "--config", "/home/u/.ratel/config.json"],
     };
     const next = rewriteCodexConfig(
@@ -139,14 +143,14 @@ args = ["keep.js"]
 
     expect(next).not.toContain("[mcp_servers.fs]");
     expect(next).toContain("[mcp_servers.keep]");
-    expect(next).toContain("[mcp_servers.ratel-mcp]");
+    expect(next).toContain("[mcp_servers.ratel-local]");
     expect(next).toContain('args = ["serve","--config","/home/u/.ratel/config.json"]');
   });
 
   it("removes nested tables for replaced entries while preserving unrelated tables", () => {
     const gateway: ServerEntry = {
       type: "stdio",
-      command: "ratel-mcp",
+      command: "ratel-local",
       args: ["serve", "--config", "/home/u/.ratel/config.json"],
     };
     const next = rewriteCodexConfig(
@@ -177,19 +181,19 @@ TOKEN = "keep"
     expect(next).toContain("[mcp_servers.keep.env]");
   });
 
-  it("removes nested tool tables when replacing an existing ratel-mcp entry", () => {
+  it("removes nested tool tables when replacing an existing ratel-local entry", () => {
     const gateway: ServerEntry = {
       type: "stdio",
-      command: "ratel-mcp",
+      command: "ratel-local",
       args: ["serve", "--config", "/home/u/.ratel/config.json"],
     };
     const next = rewriteCodexConfig(
       `
-[mcp_servers.ratel-mcp]
-command = "ratel-mcp"
+[mcp_servers.ratel-local]
+command = "ratel-local"
 args = ["serve", "--config", "/old.json"]
 
-[mcp_servers.ratel-mcp.tools.search_capabilities]
+[mcp_servers.ratel-local.tools.search_capabilities]
 enabled = true
 `,
       new Set(["fs"]),
@@ -197,14 +201,14 @@ enabled = true
     );
 
     expect(next).not.toContain("/old.json");
-    expect(next).not.toContain("[mcp_servers.ratel-mcp.tools.search_capabilities]");
-    expect(next.match(/\[mcp_servers\.ratel-mcp\]/g)).toHaveLength(1);
+    expect(next).not.toContain("[mcp_servers.ratel-local.tools.search_capabilities]");
+    expect(next.match(/\[mcp_servers\.ratel-local\]/g)).toHaveLength(1);
   });
 
   it("rewrites valid inline TOML server definitions with a structured fallback", () => {
     const gateway: ServerEntry = {
       type: "stdio",
-      command: "ratel-mcp",
+      command: "ratel-local",
       args: ["serve", "--config", "/home/u/.ratel/config.json"],
     };
     const next = rewriteCodexConfig(
@@ -219,6 +223,10 @@ mcp_servers = { fs = { command = "node", args = ["fs.js"] }, keep = { command = 
     const entries = parseCodexMcpServers(next);
     expect(entries.fs).toBeUndefined();
     expect(entries.keep).toEqual({ type: "stdio", command: "node", args: ["keep.js"] });
-    expect(entries["ratel-mcp"]?.args).toEqual(["serve", "--config", "/home/u/.ratel/config.json"]);
+    expect(entries["ratel-local"]?.args).toEqual([
+      "serve",
+      "--config",
+      "/home/u/.ratel/config.json",
+    ]);
   });
 });

@@ -9,7 +9,7 @@ output schema).
 
 | Part | Layer | What it proves |
 |------|-------|----------------|
-| **A** | Gateway (pull) | `ratel-mcp serve` exposes exactly `search_capabilities` / `invoke_tool` / `get_skill_content` / `auth`; the two reserved buckets mean a matching **skill is never starved by matching tools**; `invoke_tool` round-trips to a real upstream MCP; `get_skill_content` returns the body and a clean `{ error }` (not a protocol crash) for an unknown id. |
+| **A** | Gateway (pull) | `ratel-local serve` exposes exactly `search_capabilities` / `invoke_tool` / `get_skill_content` / `auth`; the two reserved buckets mean a matching **skill is never starved by matching tools**; `invoke_tool` round-trips to a real upstream MCP; `get_skill_content` returns the body and a clean `{ error }` (not a protocol crash) for an unknown id. |
 | **B** | Lifecycle | `skill activate → list → deactivate` moves skills into the Ratel folder and back, reversibly and non-destructively, with an accurate manifest. |
 | **C** | Push | The `UserPromptSubmit` preload hook + **real** project-signal detection: the *same* prompt surfaces the React skill in a React repo and the Django skill in a Django repo, and the clear-winner gate stays **silent** when nothing clearly fits. |
 

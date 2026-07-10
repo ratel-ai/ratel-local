@@ -22,7 +22,7 @@ const RATEL_PROJECT = "/r/.ratel/config.json";
 const RATEL_LOCAL = "/r/.ratel/config.local.json";
 
 const BIN: ResolvedBin = {
-  command: "ratel-mcp",
+  command: "ratel-local",
   args: [],
   source: "path",
 };
@@ -179,15 +179,15 @@ describe("buildImportPlan", () => {
   it("skips Ratel gateway entries at every scope", () => {
     const ratelStub: ServerEntry = {
       type: "stdio",
-      command: "ratel-mcp",
+      command: "ratel-local",
       args: ["serve", "--config", RATEL_USER],
     };
     const plan = buildImportPlan(
       emptyInputs({
         agentState: agentState({
-          user: { "ratel-mcp": ratelStub },
-          project: { "ratel-mcp": ratelStub },
-          local: { "ratel-mcp": ratelStub },
+          user: { "ratel-local": ratelStub },
+          project: { "ratel-local": ratelStub },
+          local: { "ratel-local": ratelStub },
         }),
       }),
     );
