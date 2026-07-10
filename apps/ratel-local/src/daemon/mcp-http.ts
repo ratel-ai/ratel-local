@@ -2,16 +2,20 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import type { GatewayHandle, McpServerHandle } from "@ratel-ai/ratel-local-core";
+import type { McpServerHandle } from "@ratel-ai/ratel-local-core";
 import { createMcpServer } from "@ratel-ai/ratel-local-core";
+import { authorizeDaemonRequest, DaemonAccessError, resolveDaemonRequestScope } from "./access.js";
 import {
   type InMemoryMcpClientRegistry,
   pendingRegistrationFromInitialize,
 } from "./client-registry.js";
+import type { GatewayLease, ScopedGatewayPool } from "./scoped-gateway-pool.js";
 
 interface McpHttpSession {
   handle: McpServerHandle;
   transport: StreamableHTTPServerTransport;
+  lease: GatewayLease;
+  dispose: () => Promise<void>;
 }
 
 export interface McpHttpRoute {
@@ -21,7 +25,8 @@ export interface McpHttpRoute {
 }
 
 export interface CreateMcpHttpRouteOptions {
-  gateway: GatewayHandle;
+  gatewayPool: ScopedGatewayPool;
+  daemonToken: string;
   registry: InMemoryMcpClientRegistry;
   serverName: string;
   serverVersion: string;
@@ -47,12 +52,17 @@ export function createMcpHttpRoute(opts: CreateMcpHttpRouteOptions): McpHttpRout
     } catch (err) {
       log(`[ratel] MCP HTTP error: ${(err as Error).message}`);
       if (!res.headersSent) {
-        writeJsonRpcError(res, 500, -32603, "Internal server error");
+        if (err instanceof DaemonAccessError) {
+          writeJsonRpcError(res, err.status, -32003, err.message);
+        } else {
+          writeJsonRpcError(res, 500, -32603, "Internal server error");
+        }
       }
     }
   }
 
   async function handlePost(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    authorizeDaemonRequest(req.headers, opts.daemonToken);
     const sessionId = sessionIdFromRequest(req);
     const body = await readJsonBody(req);
 
@@ -72,7 +82,13 @@ export function createMcpHttpRoute(opts: CreateMcpHttpRouteOptions): McpHttpRout
       return;
     }
 
-    const registration = pendingRegistrationFromInitialize(req, body);
+    const scope = await resolveDaemonRequestScope(req.headers, opts.daemonToken);
+    const lease = await opts.gatewayPool.acquire(scope);
+    const registration = pendingRegistrationFromInitialize(req, body, {
+      scope: scope.kind,
+      scopeKey: lease.scopeKey,
+      ...(scope.kind === "project" ? { projectRoot: scope.projectRoot } : {}),
+    });
     let transport: StreamableHTTPServerTransport;
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
@@ -88,25 +104,47 @@ export function createMcpHttpRoute(opts: CreateMcpHttpRouteOptions): McpHttpRout
 
     transport.onclose = () => {
       const closedSessionId = transport.sessionId;
-      if (!closedSessionId) return;
-      sessions.delete(closedSessionId);
-      opts.registry.close(closedSessionId);
-      log(`[ratel] MCP client disconnected: ${closedSessionId}`);
+      const session = closedSessionId
+        ? sessions.get(closedSessionId)
+        : pendingSessions.get(transport);
+      if (!session) return;
+      if (closedSessionId) {
+        sessions.delete(closedSessionId);
+        opts.registry.close(closedSessionId);
+        log(`[ratel] MCP client disconnected: ${closedSessionId}`);
+      } else {
+        pendingSessions.delete(transport);
+      }
+      void session.dispose();
     };
 
-    const handle = await createMcpServer(opts.gateway.catalog, {
-      name: opts.serverName,
-      version: opts.serverVersion,
-      transport,
-      upstreamServers: opts.gateway.upstreamServers,
-      runAuthFlow: opts.gateway.runAuthFlow,
-      skillCatalog: opts.gateway.skillCatalog,
-    });
-    pendingSessions.set(transport, { handle, transport });
-    await transport.handleRequest(req, res, body);
+    try {
+      const handle = await createMcpServer(lease.gateway.catalog, {
+        name: opts.serverName,
+        version: opts.serverVersion,
+        transport,
+        upstreamServers: lease.gateway.upstreamServers,
+        runAuthFlow: lease.gateway.runAuthFlow,
+        skillCatalog: lease.gateway.skillCatalog,
+      });
+      let disposed = false;
+      const unsubscribe = lease.subscribeListChanged(handle.notifyToolListChanged);
+      const dispose = async () => {
+        if (disposed) return;
+        disposed = true;
+        unsubscribe();
+        await lease.release();
+      };
+      pendingSessions.set(transport, { handle, transport, lease, dispose });
+      await transport.handleRequest(req, res, body);
+    } catch (err) {
+      await lease.release();
+      throw err;
+    }
   }
 
   async function handleSessionRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    authorizeDaemonRequest(req.headers, opts.daemonToken);
     const sessionId = sessionIdFromRequest(req);
     if (!sessionId) {
       writePlain(res, 400, "Missing MCP session ID.");
@@ -144,7 +182,10 @@ export function createMcpHttpRoute(opts: CreateMcpHttpRouteOptions): McpHttpRout
       sessions.clear();
       pendingSessions.clear();
       const results = await Promise.allSettled(
-        allSessions.map((session) => session.handle.close()),
+        allSessions.map(async (session) => {
+          await session.handle.close();
+          await session.dispose();
+        }),
       );
       for (const result of results) {
         if (result.status === "rejected") {
