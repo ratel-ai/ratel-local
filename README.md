@@ -13,7 +13,7 @@
     <a href="https://www.npmjs.com/package/@ratel-ai/mcp-server"><img src="https://img.shields.io/npm/v/@ratel-ai/mcp-server?label=npm&color=cb3837" alt="npm" /></a>
     <a href="https://github.com/ratel-ai/ratel-local"><img src="https://img.shields.io/github/stars/ratel-ai/ratel-local?style=social" alt="GitHub stars" /></a>
     <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license" /></a>
-    <a href="https://discord.gg/75vAPdjYqT"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Discord" /></a>
+    <a href="https://discord.gg/75vAPdjYqT"><img src="https://img.shields.io/discord/1478702964003705015?logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Discord" /></a>
   </p>
 </div>
 
