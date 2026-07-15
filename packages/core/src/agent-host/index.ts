@@ -10,7 +10,7 @@ export type AgentScope = "user" | "project" | "local";
 export interface AgentHostAdapter {
   detect(ctx: AgentHostContext): Promise<AgentHostDetection>;
   read(ctx: AgentHostContext): Promise<AgentHostState>;
-  link(input: GatewayLinkInput): Promise<AgentHostChangeSet>;
+  planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet>;
 }
 
 export interface AgentHostContext {
@@ -45,12 +45,12 @@ export interface AgentScopeState {
   rawText?: string;
 }
 
-export interface GatewayLinkInput {
+export interface AgentHostPlanInput {
   state: AgentHostState;
   bin: ResolvedBin;
   ratelConfigPaths: RatelConfigPaths;
   installGatewayScopes?: Set<AgentScope>;
-  replacedEntriesByScope: Map<AgentScope, Set<string>>;
+  removeEntriesByScope: Map<AgentScope, Set<string>>;
 }
 
 export interface RatelConfigPaths {
@@ -120,8 +120,8 @@ export class NamedAgentHostAdapter implements AgentHostAdapter {
     return (await this.ensureAdapter()).read(ctx);
   }
 
-  async link(input: GatewayLinkInput): Promise<AgentHostChangeSet> {
-    return (await this.ensureAdapter()).link(input);
+  async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
+    return (await this.ensureAdapter()).planChanges(input);
   }
 
   private async ensureAdapter(): Promise<AgentHostAdapter> {
@@ -167,10 +167,10 @@ export class AutomaticAgentHostAdapter implements AgentHostAdapter {
     return adapter.read(ctx);
   }
 
-  async link(input: GatewayLinkInput): Promise<AgentHostChangeSet> {
+  async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
     const adapter = this.selected;
     if (!adapter) throw new Error("Automatic agent host has not selected an adapter.");
-    return adapter.link(input);
+    return adapter.planChanges(input);
   }
 
   private async ensureSelected(ctx: AgentHostContext): Promise<AgentHostAdapter> {

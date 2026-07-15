@@ -246,7 +246,7 @@ export async function buildAgentImportPlan(
   options: BuildImportPlanOptions = {},
 ): Promise<ImportPlan> {
   const base = buildImportPlan(inputs, options);
-  const replacedEntriesByScope = new Map<AgentScope, Set<string>>();
+  const removeEntriesByScope = new Map<AgentScope, Set<string>>();
   for (const scope of ["user", "project", "local"] as const) {
     const moved =
       scope === "user"
@@ -254,9 +254,9 @@ export async function buildAgentImportPlan(
         : scope === "project"
           ? base.summary.replacedFromProject
           : base.summary.replacedFromLocal;
-    if (moved.length > 0) replacedEntriesByScope.set(scope, new Set(moved));
+    if (moved.length > 0) removeEntriesByScope.set(scope, new Set(moved));
   }
-  const agentHostChanges = await inputs.agentHost.link({
+  const agentHostChanges = await inputs.agentHost.planChanges({
     state: inputs.agentState,
     bin: inputs.bin,
     ratelConfigPaths: {
@@ -264,7 +264,7 @@ export async function buildAgentImportPlan(
       project: inputs.ratelProjectPath,
       local: inputs.ratelLocalPath,
     },
-    replacedEntriesByScope,
+    removeEntriesByScope,
   });
   return {
     ...base,
@@ -276,8 +276,8 @@ export async function buildAgentImportPlan(
 export async function buildAgentLinkPlan(
   inputs: ImportInputs & { agentHost: AgentHostAdapter; agentState: AgentHostState },
 ): Promise<ImportPlan> {
-  const installGatewayScopes = collectRatelScopesWithEntries(inputs);
-  const agentHostChanges = await inputs.agentHost.link({
+  const installGatewayScopes = collectLinkableAgentScopes(inputs.agentState);
+  const agentHostChanges = await inputs.agentHost.planChanges({
     state: inputs.agentState,
     bin: inputs.bin,
     ratelConfigPaths: {
@@ -286,7 +286,7 @@ export async function buildAgentLinkPlan(
       local: inputs.ratelLocalPath,
     },
     installGatewayScopes,
-    replacedEntriesByScope: new Map(),
+    removeEntriesByScope: new Map(),
   });
   return {
     ratelChanges: [],
@@ -296,15 +296,9 @@ export async function buildAgentLinkPlan(
   };
 }
 
-function collectRatelScopesWithEntries(inputs: ImportInputs): Set<AgentScope> {
+function collectLinkableAgentScopes(state: AgentHostState): Set<AgentScope> {
   const out = new Set<AgentScope>();
-  if (Object.keys(inputs.ratelUser?.mcpServers ?? {}).length > 0) out.add("user");
-  if (inputs.ratelProjectPath && Object.keys(inputs.ratelProject?.mcpServers ?? {}).length > 0) {
-    out.add("project");
-  }
-  if (inputs.ratelLocalPath && Object.keys(inputs.ratelLocal?.mcpServers ?? {}).length > 0) {
-    out.add("local");
-  }
+  for (const scope of state.scopes) if (scope.available) out.add(scope.scope);
   return out;
 }
 
