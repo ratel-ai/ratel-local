@@ -6,8 +6,12 @@ All notable changes to this package are documented here. The format is based on 
 
 ### Changed
 - **Agent setup commands now live at the top level as `ratel-mcp import` and `ratel-mcp link`.** Import now spans both MCP entries and native skills, so neither command is nested under the MCP-only command group.
-- **`ratel-mcp link` and `ratel-mcp import` now install the Claude Code statusline automatically** once they finish wiring up Claude Code, instead of requiring a separate `ratel-mcp statusline install` step. A pre-existing non-Ratel statusline is left untouched (reported as a note, not an error).
+- **CLI and UI now consume the same explicit import workflow.** An unlinked source agent first offers link, continue without linking, or cancel; the confirmed import owns Ratel writes, repeatable source MCP cleanup, and native skill invalidation; Claude Code then offers the standalone statusline flow.
+- **Linking now owns only the Ratel gateway installation.** It no longer removes native entries or installs the statusline as a side effect.
 - **Skill activation now links native Claude Code / Codex skill folders into Ratel instead of moving them.** Deactivation removes Ratel's managed link and reverses Ratel-owned metadata edits while leaving the native skill folder in its agent's directory.
+
+### Fixed
+- Skill-only Claude Code imports now reach the statusline step, and one invalid selected skill no longer aborts other successful skill imports.
 
 ## [0.3.1] - 2026-06-18
 

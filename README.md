@@ -60,7 +60,9 @@ ratel-mcp import --agent claude-code
 ratel-mcp import --agent codex
 ```
 
-Select the upstreams to migrate, approve the Ratel Local configuration, then approve replacing their native entries with one Ratel Local entry. The wizard preserves scopes and backs up every changed file.
+The CLI and UI use the same import sequence. If the source agent is not linked, the first step offers to link and continue, continue without linking, or cancel. The confirmed import writes selected entries to Ratel, removes those MCP entries from the source agent, and marks selected native skills invoke-only. Skipping the link is useful when importing for another linked agent, but the imported MCPs and skills are no longer directly usable from the unlinked source agent. The wizard preserves scopes and backs up every changed file.
+
+Claude Code then offers a separate, skippable Ratel statusline step. Linking itself only installs the Ratel gateway entry; install or reinstall the statusline manually with `ratel-mcp statusline install`.
 
 If your upstreams are already in Ratel Local configuration, `link` adds Ratel Local to the agent without importing or removing native entries:
 
