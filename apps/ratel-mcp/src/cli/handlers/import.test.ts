@@ -13,6 +13,7 @@ const ROOT = "/r";
 const BIN: ResolvedBin = { command: "ratel-mcp", args: [], source: "path" };
 
 const HOME_CLAUDE = "/home/u/.claude.json";
+const CLAUDE_SETTINGS = "/home/u/.claude/settings.json";
 const HOME_CODEX = "/home/u/.codex/config.toml";
 const PROJECT_MCP = "/r/.mcp.json";
 const RATEL_USER = "/home/u/.ratel/config.json";
@@ -190,6 +191,17 @@ function decliningStageB(): PromptAdapter {
     async confirm() {
       stage += 1;
       return stage === 1; // accept Ratel config changes, decline Claude Code config changes
+    },
+  };
+}
+
+function decliningStageBAndAcceptingSkills(): PromptAdapter {
+  let stage = 0;
+  return {
+    ...autoConfirm(),
+    async confirm() {
+      stage += 1;
+      return stage !== 2; // accept Ratel + skill changes, decline Claude Code config changes
     },
   };
 }
@@ -484,6 +496,60 @@ command = "codex"
         mode: "linked",
         source: "claude",
       });
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("still manages selected skills after declining Claude Code config changes", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "echo" } },
+      }),
+    );
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliClaudeSkill(skillPaths, "api-design");
+      const { ctx } = ctxOf(fs, decliningStageBAndAcceptingSkills(), false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        agentKind: "claude-code",
+        skillPaths,
+        probe: async () => undefined,
+      });
+
+      expect(
+        JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-mcp"],
+      ).toBeUndefined();
+      expect((await lstat(join(skillPaths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
+      expect(
+        await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8"),
+      ).toContain("disable-model-invocation: true");
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("installs the Claude statusline after a skill-only import", async () => {
+    const fs = new MemFs();
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliClaudeSkill(skillPaths, "api-design");
+      const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        yes: true,
+        agentKind: "claude-code",
+        skillPaths,
+      });
+
+      expect(JSON.parse(fs.files.get(CLAUDE_SETTINGS) as string).statusLine.command).toContain(
+        "ratel-mcp statusline",
+      );
     } finally {
       await rm(skillPaths.root, { recursive: true, force: true });
     }

@@ -218,10 +218,8 @@ export async function runImport(
   }
 
   let latestManifest = stageAManifest;
-
-  if (agentState && plan.agentChanges.length === 0 && bin) {
-    await maybeAutoInstallStatusline(ctx, agentState.host.kind, bin);
-  }
+  let agentChangesApplied = false;
+  let agentChangesSkipped = false;
 
   if (agentState && plan.agentChanges.length > 0 && bin) {
     ctx.prompts.note(
@@ -239,14 +237,13 @@ export async function runImport(
         ctx.log(
           `${agentState.host.displayName} config changes skipped. Run \`ratel-mcp link\` (or re-run \`ratel-mcp import\`) to point ${agentState.host.displayName} at Ratel later.`,
         );
-        ctx.prompts.outro(
-          `Ratel config changes applied · ${agentState.host.displayName} config changes skipped`,
-        );
-        return stageAManifest;
+        agentChangesSkipped = true;
       }
     }
-    latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
-    await maybeAutoInstallStatusline(ctx, agentState.host.kind, bin);
+    if (!agentChangesSkipped) {
+      latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
+      agentChangesApplied = true;
+    }
   }
 
   if (selectedSkills.length > 0) {
@@ -266,10 +263,20 @@ export async function runImport(
     await activateSelectedSkills(ctx, skillPaths, selectedSkills, opts);
   }
 
+  const statuslineHostKind = agentState?.host.kind ?? opts.agentKind;
+  const shouldInstallStatusline =
+    statuslineHostKind === "claude-code" &&
+    (selectedSkills.length > 0 || agentChangesApplied || plan.agentChanges.length === 0) &&
+    !agentChangesSkipped;
+  if (shouldInstallStatusline) {
+    bin ??= opts.bin ?? (await resolveBin(ctx, opts));
+    await maybeAutoInstallStatusline(ctx, statuslineHostKind, bin);
+  }
+
   if (latestManifest) {
     ctx.prompts.note(`Backup created. Run \`ratel-mcp backup list\` to inspect backups.`, "Done");
   }
-  ctx.prompts.outro(renderCompletion(agentState, plan, selectedSkills));
+  ctx.prompts.outro(renderCompletion(agentState, plan, selectedSkills, agentChangesSkipped));
   return latestManifest;
 }
 
@@ -776,9 +783,12 @@ function renderCompletion(
   agentState: AgentHostState | null,
   plan: ImportPlan,
   selectedSkills: readonly SkillCandidate[],
+  agentChangesSkipped = false,
 ): string {
   const parts: string[] = ["import complete"];
-  if (agentState && plan.agentChanges.length > 0) {
+  if (agentState && agentChangesSkipped) {
+    parts.push(`${agentState.host.displayName} config changes skipped`);
+  } else if (agentState && plan.agentChanges.length > 0) {
     parts.push(`restart ${agentState.host.displayName} to pick up the new MCP entry`);
   } else if (agentState && plan.ratelChanges.length > 0) {
     parts.push(`no ${agentState.host.displayName} changes needed`);
