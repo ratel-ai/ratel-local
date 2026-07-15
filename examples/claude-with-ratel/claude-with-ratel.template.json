@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "ratel-mcp": {
+    "ratel-local": {
       "command": "node",
       "args": [
         "<REPO_ROOT>/dist/bin.js",

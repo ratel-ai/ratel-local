@@ -22,4 +22,4 @@ jobs:
           VERSION: ${{ inputs.version || 'latest' }}
         run: |
           set -e
-          npx -y "@ratel-ai/mcp-server@${VERSION}" --help
+          npx -y "@ratel-ai/ratel-local@${VERSION}" --help

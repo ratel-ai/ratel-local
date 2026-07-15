@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { ClaudeCodeAgentHostAdapter } from "./agent-host/claude-code.js";
+import { CodexAgentHostAdapter, parseCodexMcpServers } from "./agent-host/codex.js";
 import type {
   AgentHostAdapter,
   AgentHostChangeSet,
@@ -22,7 +24,7 @@ const RATEL_PROJECT = "/r/.ratel/config.json";
 const RATEL_LOCAL = "/r/.ratel/config.local.json";
 
 const BIN: ResolvedBin = {
-  command: "ratel-mcp",
+  command: "ratel-local",
   args: [],
   source: "path",
 };
@@ -179,15 +181,15 @@ describe("buildImportPlan", () => {
   it("skips Ratel gateway entries at every scope", () => {
     const ratelStub: ServerEntry = {
       type: "stdio",
-      command: "ratel-mcp",
+      command: "ratel-local",
       args: ["serve", "--config", RATEL_USER],
     };
     const plan = buildImportPlan(
       emptyInputs({
         agentState: agentState({
-          user: { "ratel-mcp": ratelStub },
-          project: { "ratel-mcp": ratelStub },
-          local: { "ratel-mcp": ratelStub },
+          user: { "ratel-local": ratelStub },
+          project: { "ratel-local": ratelStub },
+          local: { "ratel-local": ratelStub },
         }),
       }),
     );
@@ -195,6 +197,22 @@ describe("buildImportPlan", () => {
     expect(plan.summary.movedFromUser).toEqual([]);
     expect(plan.summary.movedFromProject).toEqual([]);
     expect(plan.summary.movedFromLocal).toEqual([]);
+    expect(findWrite(plan, RATEL_USER)).toBeUndefined();
+  });
+
+  it("skips legacy ratel-mcp gateway entries during migration", () => {
+    const legacyGateway: ServerEntry = {
+      type: "stdio",
+      command: "ratel-mcp",
+      args: ["serve", "--config", RATEL_USER],
+    };
+    const plan = buildImportPlan(
+      emptyInputs({
+        agentState: agentState({ user: { "ratel-mcp": legacyGateway } }),
+      }),
+    );
+
+    expect(plan.summary.movedFromUser).toEqual([]);
     expect(findWrite(plan, RATEL_USER)).toBeUndefined();
   });
 
@@ -308,5 +326,98 @@ describe("buildImportPlan", () => {
     expect(plan.agentChanges).toEqual([
       { kind: "write", path: "/agent/user.json", before: "{}\n", after: '{"replaced":["fs"]}' },
     ]);
+  });
+
+  it("migrates a legacy Claude gateway when importing a native entry", async () => {
+    const legacyGateway: ServerEntry = {
+      type: "stdio",
+      command: "ratel-mcp",
+      args: ["serve", "--config", RATEL_USER],
+    };
+    const raw = { mcpServers: { "ratel-mcp": legacyGateway, fs: FS_ENTRY } };
+    const state: AgentHostState = {
+      host: { kind: "claude-code", displayName: "Claude Code" },
+      scopes: [
+        {
+          scope: "user",
+          displayName: "User",
+          path: "/home/u/.claude.json",
+          available: true,
+          mcpServers: raw.mcpServers,
+          raw,
+        },
+      ],
+    };
+
+    const plan = await buildAgentImportPlan(
+      {
+        ...emptyInputs({ agentState: state }),
+        agentHost: new ClaudeCodeAgentHostAdapter(),
+        agentState: state,
+      },
+      { selection: new Set(["fs"]) },
+    );
+
+    expect(plan.agentChanges).toHaveLength(1);
+    const change = plan.agentChanges[0];
+    if (change.kind !== "write") throw new Error("expected a Claude config write");
+    const after = JSON.parse(change.after);
+    expect(after.mcpServers).toEqual({
+      "ratel-local": {
+        type: "stdio",
+        command: "ratel-local",
+        args: ["serve", "--config", RATEL_USER],
+      },
+    });
+  });
+
+  it("migrates a legacy Codex gateway when importing a native entry", async () => {
+    const legacyGateway: ServerEntry = {
+      type: "stdio",
+      command: "ratel-mcp",
+      args: ["serve", "--config", RATEL_USER],
+    };
+    const rawText = `[mcp_servers.ratel-mcp]
+command = "ratel-mcp"
+args = ["serve", "--config", "${RATEL_USER}"]
+
+[mcp_servers.fs]
+command = "echo"
+args = ["fs"]
+`;
+    const state: AgentHostState = {
+      host: { kind: "codex", displayName: "Codex" },
+      scopes: [
+        {
+          scope: "user",
+          displayName: "User",
+          path: "/home/u/.codex/config.toml",
+          available: true,
+          mcpServers: { "ratel-mcp": legacyGateway, fs: FS_ENTRY },
+          rawText,
+        },
+      ],
+    };
+
+    const plan = await buildAgentImportPlan(
+      {
+        ...emptyInputs({ agentState: state }),
+        agentHost: new CodexAgentHostAdapter(),
+        agentState: state,
+      },
+      { selection: new Set(["fs"]) },
+    );
+
+    expect(plan.agentChanges).toHaveLength(1);
+    const change = plan.agentChanges[0];
+    if (change.kind !== "write") throw new Error("expected a Codex config write");
+    expect(parseCodexMcpServers(change.after)).toEqual({
+      "ratel-local": {
+        type: "stdio",
+        command: "ratel-local",
+        args: ["serve", "--config", RATEL_USER],
+        env: undefined,
+      },
+    });
   });
 });

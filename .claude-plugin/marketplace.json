@@ -7,16 +7,16 @@
   "description": "Ratel plugins for MCP gateway setup, usage, and debugging.",
   "plugins": [
     {
-      "name": "ratel-mcp",
-      "displayName": "Ratel MCP",
-      "source": "./apps/ratel-mcp/plugin",
-      "description": "Expose upstream MCP servers through a searchable Ratel gateway.",
+      "name": "ratel-local",
+      "displayName": "Ratel Local",
+      "source": "./apps/ratel-local/plugin",
+      "description": "Expose upstream MCP servers through the local Ratel gateway.",
       "author": {
         "name": "Agentified",
         "email": "support@agentified.com"
       },
-      "homepage": "https://github.com/ratel-ai/ratel-mcp",
-      "repository": "https://github.com/ratel-ai/ratel-mcp",
+      "homepage": "https://github.com/ratel-ai/ratel-local",
+      "repository": "https://github.com/ratel-ai/ratel-local",
       "license": "MIT",
       "category": "Developer Tools",
       "tags": [

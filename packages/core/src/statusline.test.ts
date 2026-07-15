@@ -59,7 +59,7 @@ function ctx(fs = new MemFs()) {
   return { env: { homeDir: HOME, projectRoot: ROOT }, fs, log: () => {} };
 }
 
-const bin = { command: "ratel-mcp", args: [], source: "path" as const };
+const bin = { command: "ratel-local", args: [], source: "path" as const };
 
 function stripAnsi(text: string): string {
   return text.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
@@ -91,7 +91,7 @@ describe("Claude Code statusline settings", () => {
     expect(stored.theme).toBe("dark");
     expect(stored.statusLine).toEqual({
       type: "command",
-      command: "ratel-mcp statusline",
+      command: "ratel-local statusline",
       padding: 0,
       refreshInterval: 30,
     });
@@ -114,7 +114,7 @@ describe("Claude Code statusline settings", () => {
     const forced = await installClaudeCodeStatusline(ctx(fs), { bin, force: true });
     expect(forced.changed).toBe(true);
     expect(JSON.parse(fs.files.get(SETTINGS) as string).statusLine.command).toBe(
-      "ratel-mcp statusline",
+      "ratel-local statusline",
     );
   });
 
@@ -145,11 +145,11 @@ describe("Claude Code statusline settings", () => {
 });
 
 describe("Claude Ratel-on detection", () => {
-  it("detects a linked Ratel MCP entry", async () => {
+  it("detects a linked Ratel Local entry", async () => {
     const fs = new MemFs();
     fs.files.set(
       CLAUDE_CONFIG,
-      JSON.stringify({ mcpServers: { "ratel-mcp": { type: "stdio", command: "ratel-mcp" } } }),
+      JSON.stringify({ mcpServers: { "ratel-local": { type: "stdio", command: "ratel-local" } } }),
     );
     const state = await getClaudeCodeStatuslineState(ctx(fs));
     expect(state.ratelEnabled).toBe(true);
@@ -158,10 +158,13 @@ describe("Claude Ratel-on detection", () => {
 
   it("detects enabled and explicitly disabled Ratel plugins", async () => {
     const fs = new MemFs();
-    fs.files.set(SETTINGS, JSON.stringify({ enabledPlugins: ["ratel-mcp@0.3.0"] }));
+    fs.files.set(SETTINGS, JSON.stringify({ enabledPlugins: ["ratel-local@0.3.0"] }));
     expect((await getClaudeCodeStatuslineState(ctx(fs))).ratelEnabledSources).toContain("plugin");
 
-    fs.files.set(PROJECT_LOCAL_SETTINGS, JSON.stringify({ disabledPlugins: ["ratel-mcp@0.3.0"] }));
+    fs.files.set(
+      PROJECT_LOCAL_SETTINGS,
+      JSON.stringify({ disabledPlugins: ["ratel-local@0.3.0"] }),
+    );
     const disabled = await getClaudeCodeStatuslineState(ctx(fs));
     expect(disabled.ratelEnabled).toBe(false);
   });
@@ -175,11 +178,11 @@ describe("Claude statusline renderer", () => {
       JSON.stringify({
         statusLine: {
           type: "command",
-          command: "ratel-mcp statusline",
+          command: "ratel-local statusline",
           padding: 0,
           refreshInterval: 30,
         },
-        enabledPlugins: ["ratel-mcp@0.3.0"],
+        enabledPlugins: ["ratel-local@0.3.0"],
       }),
     );
     const bucket = projectBucketDir(defaultTelemetryDir({ homeDir: HOME }), ROOT);

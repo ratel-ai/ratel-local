@@ -183,7 +183,7 @@ export function buildImportPlan(
       )
     : null;
 
-  // Compute ratel-mcp entry per scope: gated on the Claude-rewrite snapshot.
+  // Compute ratel-local entry per scope: gated on the Claude-rewrite snapshot.
   const ratelEntryArgsByScope: Partial<Record<AgentScope, string[]>> = {};
 
   if (agentRewriteG.length > 0) {
@@ -256,6 +256,14 @@ export async function buildAgentImportPlan(
           : base.summary.replacedFromLocal;
     if (moved.length > 0) removeEntriesByScope.set(scope, new Set(moved));
   }
+  const installGatewayScopes = new Set<AgentScope>();
+  for (const scopeState of inputs.agentState.scopes) {
+    if (!removeEntriesByScope.has(scopeState.scope)) continue;
+    const hasLegacyGateway = Object.entries(scopeState.mcpServers).some(
+      ([name, entry]) => name !== "ratel-local" && isRatelGatewayEntry(name, entry),
+    );
+    if (hasLegacyGateway) installGatewayScopes.add(scopeState.scope);
+  }
   const agentHostChanges = await inputs.agentHost.planChanges({
     state: inputs.agentState,
     bin: inputs.bin,
@@ -264,6 +272,7 @@ export async function buildAgentImportPlan(
       project: inputs.ratelProjectPath,
       local: inputs.ratelLocalPath,
     },
+    installGatewayScopes,
     removeEntriesByScope,
   });
   return {

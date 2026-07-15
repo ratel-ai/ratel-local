@@ -13,7 +13,7 @@ import type { ClearScope, RatelOAuthStore } from "./store.js";
 
 export interface RatelOAuthProviderOptions {
   store: RatelOAuthStore;
-  /** Human-readable client name used during DCR. Default: `Ratel MCP gateway`. */
+  /** Human-readable client name used during DCR. Default: `Ratel Local gateway`. */
   clientName?: string;
   /** Pre-registered client_id to use when DCR isn't supported by the auth server. */
   staticClientId?: string;
@@ -31,7 +31,7 @@ export interface RatelOAuthProviderOptions {
   onRedirect?: (url: URL) => void | Promise<void>;
 }
 
-const DEFAULT_CLIENT_NAME = "Ratel MCP gateway";
+const DEFAULT_CLIENT_NAME = "Ratel Local gateway";
 const STATE_BYTES = 16;
 
 export class RatelOAuthProvider implements OAuthClientProvider {

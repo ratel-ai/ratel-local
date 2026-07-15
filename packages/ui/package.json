@@ -1,5 +1,5 @@
 {
-  "name": "@ratel-ai/mcp-ui",
+  "name": "@ratel-ai/ratel-local-ui",
   "private": true,
   "version": "0.3.0",
   "type": "module",
@@ -17,7 +17,7 @@
     "@fontsource-variable/inter-tight": "^5.2.7",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@radix-ui/react-slot": "^1.2.4",
-    "@ratel-ai/mcp-core": "workspace:*",
+    "@ratel-ai/ratel-local-core": "workspace:*",
     "@tanstack/react-form": "^1.33.0",
     "@tanstack/react-hotkeys": "^0.10.0",
     "@tanstack/react-router": "^1.170.9",

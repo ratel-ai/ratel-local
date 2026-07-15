@@ -10,7 +10,7 @@
   </p>
 
   <p>
-    <a href="https://www.npmjs.com/package/@ratel-ai/mcp-server"><img src="https://img.shields.io/npm/v/@ratel-ai/mcp-server?label=npm&color=cb3837" alt="npm" /></a>
+    <a href="https://www.npmjs.com/package/@ratel-ai/ratel-local"><img src="https://img.shields.io/npm/v/@ratel-ai/ratel-local?label=npm&color=cb3837" alt="npm" /></a>
     <a href="https://github.com/ratel-ai/ratel-local"><img src="https://img.shields.io/github/stars/ratel-ai/ratel-local?style=social" alt="GitHub stars" /></a>
     <a href="./LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license" /></a>
     <a href="https://discord.gg/75vAPdjYqT"><img src="https://img.shields.io/discord/1478702964003705015?logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Discord" /></a>
@@ -19,7 +19,7 @@
 
 Ratel Local gives coding agents one searchable catalog instead of every tool schema from every upstream MCP server. Tools and skill instructions enter context only when the agent needs them, with no agent-code changes.
 
-It ships as the npm package `@ratel-ai/mcp-server` and the `ratel-mcp` CLI. The package also exposes library APIs for serving a Ratel `ToolCatalog` over MCP.
+It ships as the npm package `@ratel-ai/ratel-local` and the `ratel-local` CLI. The package also exposes library APIs for serving a Ratel `ToolCatalog` over MCP.
 
 ## Why Ratel Local
 
@@ -44,8 +44,8 @@ Use one path per agent. Installing the plugin and then accepting the import rewr
 Node.js 20 or newer is required.
 
 ```bash
-npm install --global @ratel-ai/mcp-server
-ratel-mcp --version
+npm install --global @ratel-ai/ratel-local
+ratel-local --version
 ```
 
 #### 2. Import the agent's MCP servers
@@ -54,21 +54,21 @@ Run the command for your agent from the project where you use those servers:
 
 ```bash
 # Claude Code
-ratel-mcp import --agent claude-code
+ratel-local import --agent claude-code
 
 # Codex
-ratel-mcp import --agent codex
+ratel-local import --agent codex
 ```
 
-The CLI and UI use the same import sequence. If the source agent is not linked, the first step offers to link and continue, continue without linking, or cancel. The confirmed import writes selected entries to Ratel, removes those MCP entries from the source agent, and marks selected native skills invoke-only. Skipping the link is useful when importing for another linked agent, but the imported MCPs and skills are no longer directly usable from the unlinked source agent. The wizard preserves MCP scopes and backs up every changed MCP or agent config file. Skill management is reversible: use **Stop managing** in the UI or `ratel-mcp skill deactivate` to remove Ratel's link and restore its metadata changes.
+The CLI and UI use the same import sequence. If the source agent is not linked, the first step offers to link and continue, continue without linking, or cancel. The confirmed import writes selected entries to Ratel, removes those MCP entries from the source agent, and marks selected native skills invoke-only. Skipping the link is useful when importing for another linked agent, but the imported MCPs and skills are no longer directly usable from the unlinked source agent. The wizard preserves MCP scopes and backs up every changed MCP or agent config file. Skill management is reversible: use **Stop managing** in the UI or `ratel-local skill deactivate` to remove Ratel's link and restore its metadata changes.
 
-Claude Code then offers a separate, skippable Ratel statusline step. Linking itself only installs the Ratel gateway entry; install or reinstall the statusline manually with `ratel-mcp statusline install`.
+Claude Code then offers a separate, skippable Ratel statusline step. Linking itself only installs the Ratel gateway entry; install or reinstall the statusline manually with `ratel-local statusline install`.
 
 If your upstreams are already in Ratel Local configuration, `link` adds Ratel Local to the agent without importing or removing native entries:
 
 ```bash
-ratel-mcp link --agent claude-code
-ratel-mcp link --agent codex
+ratel-local link --agent claude-code
+ratel-local link --agent codex
 ```
 
 Native entries remain directly exposed, so their schemas still enter the agent's context without capability search.
@@ -77,13 +77,13 @@ Native entries remain directly exposed, so their schemas still enter the agent's
 
 ```bash
 # Claude Code
-claude mcp get ratel-mcp
+claude mcp get ratel-local
 
 # Codex
-codex mcp get ratel-mcp --json
+codex mcp get ratel-local --json
 ```
 
-Confirm that `ratel-mcp` is connected or enabled, then restart Claude Code or start a new Codex session.
+Confirm that `ratel-local` is connected or enabled, then restart Claude Code or start a new Codex session.
 
 ### Start fresh with the plugin
 
@@ -92,11 +92,11 @@ Confirm that `ratel-mcp` is connected or enabled, then restart Claude Code or st
 ```bash
 # Claude Code
 claude plugin marketplace add ratel-ai/ratel-local
-claude plugin install ratel-mcp@ratel
+claude plugin install ratel-local@ratel
 
 # Codex
 codex plugin marketplace add ratel-ai/ratel-local
-codex plugin add ratel-mcp@ratel
+codex plugin add ratel-local@ratel
 ```
 
 Reload or restart Claude Code, then start a new Codex session.
@@ -106,10 +106,10 @@ Reload or restart Claude Code, then start a new Codex session.
 The plugin does not install the global CLI, so use `npx`:
 
 ```bash
-npx -y @ratel-ai/mcp-server@latest mcp add \
+npx -y @ratel-ai/ratel-local@latest mcp add \
   --scope user context7 -- npx -y @upstash/context7-mcp
 
-npx -y @ratel-ai/mcp-server@latest mcp list
+npx -y @ratel-ai/ratel-local@latest mcp list
 ```
 
 Restart the agent after changing the configuration.

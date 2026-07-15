@@ -316,7 +316,7 @@ export function AppShell() {
   useHotkey("Mod+R", () => void refresh(), {
     meta: {
       name: "Refresh configuration",
-      description: "Reload the current Ratel MCP configuration.",
+      description: "Reload the current Ratel Local configuration.",
     },
     preventDefault: true,
   });
@@ -343,7 +343,7 @@ export function AppShell() {
             <main className="w-full px-4 py-6 sm:px-6">
               <Alert>
                 <AlertTitle>Missing session token</AlertTitle>
-                <AlertDescription>Open the URL printed by ratel-mcp ui.</AlertDescription>
+                <AlertDescription>Open the URL printed by ratel-local ui.</AlertDescription>
               </Alert>
             </main>
           ) : (

@@ -1,17 +1,17 @@
 {
-  "name": "ratel-mcp-workspace",
+  "name": "ratel-local-workspace",
   "version": "0.3.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "build": "pnpm --filter @ratel-ai/mcp-core build && pnpm --filter @ratel-ai/mcp-ui build && pnpm --filter @ratel-ai/mcp-server build",
-    "typecheck": "pnpm --filter @ratel-ai/mcp-core typecheck && pnpm --filter @ratel-ai/mcp-ui typecheck && pnpm --filter @ratel-ai/mcp-server typecheck",
+    "build": "pnpm --filter @ratel-ai/ratel-local-core build && pnpm --filter @ratel-ai/ratel-local-ui build && pnpm --filter @ratel-ai/ratel-local build",
+    "typecheck": "pnpm --filter @ratel-ai/ratel-local-core typecheck && pnpm --filter @ratel-ai/ratel-local-ui typecheck && pnpm --filter @ratel-ai/ratel-local typecheck",
     "lint": "biome check .",
-    "test": "pnpm --filter @ratel-ai/mcp-core test && pnpm --filter @ratel-ai/mcp-ui test && pnpm --filter @ratel-ai/mcp-server test",
+    "test": "pnpm --filter @ratel-ai/ratel-local-core test && pnpm --filter @ratel-ai/ratel-local-ui test && pnpm --filter @ratel-ai/ratel-local test",
     "dev:ui": "tsx scripts/dev-ui.ts",
-    "pack:server": "pnpm --filter @ratel-ai/mcp-server pack",
-    "check:pack": "pnpm --filter @ratel-ai/mcp-server check:pack"
+    "pack:server": "pnpm --filter @ratel-ai/ratel-local pack",
+    "check:pack": "pnpm --filter @ratel-ai/ratel-local check:pack"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
