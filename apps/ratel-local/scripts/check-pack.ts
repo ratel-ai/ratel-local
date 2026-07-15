@@ -5,6 +5,19 @@ import { fileURLToPath } from "node:url";
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = resolve(appRoot, "dist");
 
+const packageJson = await readJson(resolve(appRoot, "package.json"));
+for (const manifestPath of [
+  "plugin/.codex-plugin/plugin.json",
+  "plugin/.claude-plugin/plugin.json",
+]) {
+  const manifest = await readJson(resolve(appRoot, manifestPath));
+  if (manifest.version !== packageJson.version) {
+    throw new Error(
+      `${manifestPath} version ${String(manifest.version)} does not match package version ${String(packageJson.version)}`,
+    );
+  }
+}
+
 await mustExist(resolve(dist, "bin.js"));
 await mustExist(resolve(dist, "index.js"));
 await mustExist(resolve(dist, "index.d.ts"));
@@ -34,6 +47,10 @@ async function mustExist(path: string): Promise<void> {
   } catch {
     throw new Error(`Missing required package artifact: ${path}`);
   }
+}
+
+async function readJson(path: string): Promise<{ version?: unknown }> {
+  return JSON.parse(await readFile(path, "utf8")) as { version?: unknown };
 }
 
 async function listFiles(dir: string): Promise<string[]> {
