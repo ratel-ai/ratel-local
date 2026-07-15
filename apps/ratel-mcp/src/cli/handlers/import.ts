@@ -32,7 +32,7 @@ import {
   type SkillSource,
 } from "../skills/manage.js";
 import { runLink } from "./link.js";
-import { maybeAutoInstallStatusline } from "./statusline.js";
+import { runStatuslineInstallStep } from "./statusline.js";
 import type { HandlerCtx } from "./types.js";
 
 export type ProbeFn = (name: string, entry: ServerEntry) => Promise<string | undefined>;
@@ -141,7 +141,6 @@ export async function runImport(
         workspaceRoot: opts.workspaceRoot,
         agentKind: workflowHostKind ?? undefined,
         exists: opts.exists,
-        installStatusline: false,
       });
       if (agentState) {
         agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
@@ -275,7 +274,7 @@ export async function runImport(
   }
   if (workflow?.step === "statusline") {
     bin ??= opts.bin ?? (await resolveBin(ctx, opts));
-    await maybeAutoInstallStatusline(ctx, workflow.hostKind, bin);
+    await runStatuslineInstallStep(ctx, { bin, yes: opts.yes });
     workflow = advanceAgentImportWorkflow(workflow, { type: "statusline-completed" });
   }
 

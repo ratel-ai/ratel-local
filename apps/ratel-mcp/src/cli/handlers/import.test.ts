@@ -551,6 +551,37 @@ command = "codex"
     }
   });
 
+  it("offers the standalone statusline step after import and lets the user skip it", async () => {
+    const fs = new MemFs();
+    const skillPaths = await makeSkillPaths();
+    let statuslinePrompted = false;
+    try {
+      await writeCliClaudeSkill(skillPaths, "api-design");
+      const prompts: PromptAdapter = {
+        ...autoConfirm(),
+        async confirm(opts) {
+          if (opts.message.includes("statusline")) {
+            statuslinePrompted = true;
+            return false;
+          }
+          return true;
+        },
+      };
+      const { ctx } = ctxOf(fs, prompts, false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        agentKind: "claude-code",
+        skillPaths,
+      });
+
+      expect(statuslinePrompted).toBe(true);
+      expect(fs.files.has(CLAUDE_SETTINGS)).toBe(false);
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps valid skill imports and warns when another selected skill is skipped", async () => {
     const fs = new MemFs();
     const skillPaths = await makeSkillPaths();
