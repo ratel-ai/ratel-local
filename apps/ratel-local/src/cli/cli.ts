@@ -12,6 +12,7 @@ import {
   type SupportedAgentHostKind,
   type TransportFactory,
 } from "@ratel-ai/ratel-local-core";
+import { type AgentPluginInstaller, installRatelAgentPlugin } from "../agent-plugin.js";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
 import { IMPORT_USAGE, runImport } from "./handlers/import.js";
@@ -36,6 +37,7 @@ export interface RunCliOptions {
   env?: HierarchyEnv;
   now?: () => Date;
   cliVersion?: string;
+  installAgentPlugin?: AgentPluginInstaller;
   stdin?: () => Promise<string>;
   stdout?: (message: string) => void;
 }
@@ -50,7 +52,7 @@ Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
            or --auto-config to load user/project/local Ratel configs)
   import   migrate agent MCP configs and native skills into Ratel
-  link     point an agent at Ratel while preserving native MCP entries
+  link     install the agent plugin, falling back to MCP config when needed
   mcp      manage MCP servers (add, remove, list, get, edit, auth)
   backup   manage backup snapshots (list)
   skill    manage Claude Code/Codex skills through Ratel (activate, deactivate, list)
@@ -116,6 +118,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     fs: options.fs ?? nodeFs,
     log,
     prompts: options.prompts ?? silentPromptAdapter(),
+    installAgentPlugin: options.installAgentPlugin ?? installRatelAgentPlugin,
     stdin: options.stdin,
     stdout: options.stdout,
   };

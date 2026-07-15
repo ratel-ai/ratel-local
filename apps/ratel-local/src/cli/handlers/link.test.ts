@@ -61,6 +61,10 @@ function ctxOf(
       fs,
       log: (m) => logs.push(m),
       prompts,
+      installAgentPlugin: async () => ({
+        installed: false,
+        message: "test plugin installation failed",
+      }),
     },
   };
 }
@@ -75,6 +79,98 @@ function autoConfirm(): PromptAdapter {
 }
 
 describe("runLink", () => {
+  it("prefers installing the agent plugin and leaves MCP config unchanged on success", async () => {
+    const fs = new MemFs();
+    const claudeBefore = JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } });
+    fs.files.set(HOME_CLAUDE, claudeBefore);
+    const messages: string[] = [];
+    const prompts: PromptAdapter = {
+      ...autoConfirm(),
+      note(message) {
+        messages.push(message);
+      },
+      outro(message) {
+        messages.push(message);
+      },
+    };
+    const { ctx } = ctxOf(fs, prompts, false);
+
+    const manifest = await runLink(ctx, {
+      bin: BIN,
+      yes: true,
+      agentKind: "claude-code",
+      installPlugin: async () => ({
+        installed: true,
+        message: "Ratel Local plugin installed for Claude Code.",
+      }),
+    });
+
+    expect(manifest).toBeNull();
+    expect(fs.files.get(HOME_CLAUDE)).toBe(claudeBefore);
+    expect(messages.join("\n")).toMatch(/plugin installed/i);
+    expect(messages.join("\n")).toMatch(/reload|restart/i);
+  });
+
+  it("explains the plugin failure before applying the MCP fallback", async () => {
+    const fs = new MemFs();
+    fs.files.set(HOME_CODEX, '[mcp_servers.fs]\ncommand = "echo"\n');
+    const messages: string[] = [];
+    const prompts: PromptAdapter = {
+      ...autoConfirm(),
+      note(message) {
+        messages.push(message);
+      },
+      outro(message) {
+        messages.push(message);
+      },
+    };
+    const { ctx } = ctxOf(fs, prompts, false);
+
+    const manifest = await runLink(ctx, {
+      bin: BIN,
+      yes: true,
+      agentKind: "codex",
+      installPlugin: async () => ({
+        installed: false,
+        message: "codex plugin installation failed: marketplace unavailable",
+      }),
+    });
+
+    expect(manifest).not.toBeNull();
+    expect(fs.files.get(HOME_CODEX)).toContain("[mcp_servers.ratel-local]");
+    expect(messages.join("\n")).toMatch(/plugin installation failed/i);
+    expect(messages.join("\n")).toMatch(/explicit MCP gateway/i);
+    expect(messages.join("\n")).toMatch(/MCP fallback link complete/i);
+  });
+
+  it("falls back to MCP config when the plugin installer throws unexpectedly", async () => {
+    const fs = new MemFs();
+    fs.files.set(HOME_CLAUDE, JSON.stringify({ mcpServers: {} }));
+    const messages: string[] = [];
+    const prompts: PromptAdapter = {
+      ...autoConfirm(),
+      note(message) {
+        messages.push(message);
+      },
+    };
+    const { ctx } = ctxOf(fs, prompts, false);
+
+    const manifest = await runLink(ctx, {
+      bin: BIN,
+      yes: true,
+      agentKind: "claude-code",
+      installPlugin: async () => {
+        throw new Error("unexpected installer crash");
+      },
+    });
+
+    expect(manifest).not.toBeNull();
+    const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
+    expect(claude.mcpServers["ratel-local"]).toBeDefined();
+    expect(messages.join("\n")).toMatch(/unexpected installer crash/i);
+    expect(messages.join("\n")).toMatch(/falling back/i);
+  });
+
   it("does nothing when Claude is already linked through the plugin", async () => {
     const fs = new MemFs();
     fs.files.set(

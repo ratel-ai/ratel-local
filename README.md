@@ -35,7 +35,7 @@ Choose the setup that matches where you are starting:
 - **Migrate existing MCP servers:** install the CLI and import the servers already configured in Claude Code or Codex.
 - **Start fresh with the plugin:** let the plugin start Ratel Local, then add upstreams directly to Ratel Local configuration.
 
-The CLI and UI recognize an enabled `ratel-local` plugin as an existing Ratel connection. Importing from a plugin-linked agent moves the selected native MCP entries into Ratel without adding a second explicit gateway, and `link` becomes a no-op. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server instead of adding an explicit gateway. If both the plugin and an explicit Ratel MCP entry are present, Ratel Local reports the duplicate connection and leaves both installation paths unchanged.
+The CLI and UI prefer the `ratel-local` plugin when linking because it bundles the gateway and agent skills. If plugin installation fails, Ratel Local reports the failure and applies the reviewed explicit MCP gateway fallback instead. An enabled plugin is recognized as an existing Ratel connection, so importing does not add a second gateway and `link` becomes a no-op. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server. If both the plugin and an explicit Ratel MCP entry are present, Ratel Local reports the duplicate connection and leaves both installation paths unchanged.
 
 ### Migrate an existing MCP setup
 
@@ -62,9 +62,9 @@ ratel-local import --agent codex
 
 The CLI and UI use the same import sequence. If the source agent is not linked, the first step offers to link and continue, continue without linking, or cancel. The confirmed import writes selected entries to Ratel, removes those MCP entries from the source agent, and marks selected native skills invoke-only. Skipping the link is useful when importing for another linked agent, but the imported MCPs and skills are no longer directly usable from the unlinked source agent. The wizard preserves MCP scopes and backs up every changed MCP or agent config file. Skill management is reversible: use **Stop managing** in the UI or `ratel-local skill deactivate` to remove Ratel's link and restore its metadata changes.
 
-Claude Code then offers a separate, skippable Ratel statusline step. Linking itself only installs the Ratel gateway entry; install or reinstall the statusline manually with `ratel-local statusline install`.
+Claude Code then offers a separate, skippable Ratel statusline step. Linking installs the agent plugin when possible and otherwise writes the explicit Ratel gateway fallback. Install or reinstall the statusline manually with `ratel-local statusline install`.
 
-If your upstreams are already in Ratel Local configuration, `link` adds Ratel Local to the agent without importing or removing native entries:
+If your upstreams are already in Ratel Local configuration, `link` installs the Ratel plugin without importing or removing native entries. If plugin installation fails, it clearly reports the failure before writing the reviewed MCP fallback:
 
 ```bash
 ratel-local link --agent claude-code

@@ -18,7 +18,6 @@ import {
   importAgentServers,
   installClaudeCodeStatusline,
   isDirectoryEntry,
-  linkAgentToRatel,
   loadSkills,
   parseSkillMd,
   previewAgentImport,
@@ -29,6 +28,11 @@ import {
   type SupportedAgentHostKind,
   uninstallClaudeCodeStatusline,
 } from "@ratel-ai/ratel-local-core";
+import {
+  attemptRatelAgentPluginInstall,
+  unavailableAgentPluginInstaller,
+} from "../agent-plugin.js";
+import { runLink } from "../cli/handlers/link.js";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import {
   activateSkills,
@@ -542,9 +546,25 @@ export async function doImport(ctx: HandlerCtx): Promise<ApiResponse> {
 }
 
 export async function doLink(ctx: HandlerCtx): Promise<ApiResponse> {
-  const { log } = await withCapture(ctx, (c) =>
-    linkAgentToRatel(c, { envVar: resolveRatelBin() }).then(() => undefined),
-  );
+  const log: string[] = [];
+  const captureCtx: HandlerCtx = {
+    ...ctx,
+    log: (message) => log.push(message),
+    prompts: {
+      ...ctx.prompts,
+      intro() {},
+      note(message, title) {
+        log.push(title ? `${title}: ${message}` : message);
+      },
+      outro(message) {
+        log.push(message);
+      },
+      cancel(message) {
+        if (message) log.push(message);
+      },
+    },
+  };
+  await runLink(captureCtx, { yes: true, envVar: resolveRatelBin() });
   return ok({ log });
 }
 
@@ -590,11 +610,37 @@ export async function applyLink(
   ctx: HandlerCtx,
   body: Record<string, unknown>,
 ): Promise<ApiResponse> {
-  const { result, log } = await withCapture(ctx, (c) =>
-    applyAgentLink(c, normalizeApplyLinkBody(body), { envVar: resolveRatelBin() }),
-  );
+  const input = normalizeApplyLinkBody(body);
+  const interop = { envVar: resolveRatelBin() };
+  const preview = await previewAgentLink(ctx, input, interop);
+  if (input.planHash !== preview.stageHashes.agent) {
+    throw new Error("preview is stale; scan again and review the latest changes before applying");
+  }
+  const shouldInstallPlugin =
+    preview.host.connection.kind === "none" && preview.plan.agentChanges.length > 0;
+  if (shouldInstallPlugin) {
+    const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+    const pluginResult = await attemptRatelAgentPluginInstall(input.hostKind, installPlugin);
+    if (pluginResult.installed) {
+      return ok({
+        mode: "plugin",
+        log: [
+          pluginResult.message,
+          `Reload or restart ${preview.host.displayName} to load the plugin.`,
+        ],
+      });
+    }
+    const { result, log } = await withCapture(ctx, (c) => applyAgentLink(c, input, interop));
+    log.unshift(
+      pluginResult.message,
+      "Plugin installation failed; applied the reviewed explicit MCP gateway fallback instead.",
+    );
+    if (!result) log.push("nothing to apply");
+    return ok({ mode: "mcp-fallback", log });
+  }
+  const { result, log } = await withCapture(ctx, (c) => applyAgentLink(c, input, interop));
   if (!result) log.push("nothing to apply");
-  return ok({ log });
+  return ok({ mode: "config", log });
 }
 
 export async function installClaudeStatuslineRoute(

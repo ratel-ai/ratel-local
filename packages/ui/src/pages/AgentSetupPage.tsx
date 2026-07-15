@@ -657,8 +657,8 @@ function AgentOperationPanel(props: {
       ) : null}
       {canLink ? (
         <SetupActionSection
-          description="Add the Ratel gateway entry when this agent is not routed through Ratel yet."
-          title="Link Ratel gateway"
+          description="Install the Ratel plugin with its bundled skills, with a reviewed explicit MCP fallback if installation fails."
+          title="Link Ratel integration"
         >
           <PreviewFlow
             availableSkills={[]}
@@ -1133,12 +1133,12 @@ function SetupRecap(props: {
         <p className="font-medium text-sm">
           {props.flow === "import"
             ? importAvailabilityLabel(mcpCount, skillCount)
-            : "One agent config change will be reviewed before writing."}
+            : "Ratel will install the agent plugin, including its bundled skills."}
         </p>
         <p className="mt-1 text-muted-foreground text-xs">
           {props.flow === "import"
             ? "Skills are selected first; MCP conflict handling follows only when needed."
-            : "Native MCP entries are preserved."}
+            : "If plugin installation fails, the reviewed MCP fallback is applied and reported. Native MCP entries are preserved."}
         </p>
       </div>
       <Button
@@ -1650,14 +1650,21 @@ function LinkSceneDialog(props: {
           </>
         }
         kicker="Review"
-        title="Review config changes"
+        title="Review link and fallback"
         wide
       >
-        <SceneScrollSection className="max-h-[65vh]">
+        <SceneScrollSection className="grid max-h-[65vh] gap-4">
+          <Alert>
+            <AlertTitle>Plugin first</AlertTitle>
+            <AlertDescription>
+              Ratel will install the {props.preview.host.displayName} plugin first. If that fails,
+              it will report the failure and apply only the explicit MCP changes reviewed below.
+            </AlertDescription>
+          </Alert>
           <ChangeList
             changes={props.preview.plan.agentChanges}
             defaultOpen
-            title={`${props.preview.host.displayName} changes`}
+            title={`${props.preview.host.displayName} MCP fallback`}
           />
         </SceneScrollSection>
       </ScenePanel>

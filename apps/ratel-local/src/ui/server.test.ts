@@ -62,6 +62,10 @@ function makeCtx(fs: MemFs, env?: HierarchyEnv): HandlerCtx {
     fs,
     log: () => {},
     prompts: silentPromptAdapter(),
+    installAgentPlugin: async () => ({
+      installed: false,
+      message: "test plugin installation failed",
+    }),
   };
 }
 
@@ -69,6 +73,7 @@ interface ServerSession {
   handle: UiServerHandle;
   token: string;
   fs: MemFs;
+  ctx: HandlerCtx;
   assetDir: string;
 }
 
@@ -78,7 +83,7 @@ async function spin(env?: HierarchyEnv): Promise<ServerSession> {
   const token = newSessionToken();
   const assetDir = await makeAssetDir();
   const handle = await startUiServer({ ctx, token, assetDir });
-  return { handle, token, fs, assetDir };
+  return { handle, token, fs, ctx, assetDir };
 }
 
 let session: ServerSession;
@@ -306,6 +311,25 @@ describe("UI server — /api/config", () => {
 });
 
 describe("UI server — agent previews", () => {
+  it("uses plugin-first linking through the legacy /api/link endpoint", async () => {
+    const claudeBefore = JSON.stringify({ mcpServers: {} });
+    session.fs.files.set(CLAUDE_PATH, claudeBefore);
+    session.ctx.installAgentPlugin = async () => ({
+      installed: true,
+      message: "Ratel Local plugin installed for Claude Code.",
+    });
+
+    const res = await fetch(apiUrl("/api/link"), {
+      method: "POST",
+      headers: authHeaders(),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { log: string[] };
+    expect(body.log.join("\n")).toMatch(/plugin installed/i);
+    expect(session.fs.files.get(CLAUDE_PATH)).toBe(claudeBefore);
+  });
+
   it("detects supported hosts without writing files", async () => {
     session.fs.files.set(
       CLAUDE_PATH,
@@ -539,10 +563,79 @@ command = "echo"
       }),
     });
     expect(res.status).toBe(200);
+    const body = (await res.json()) as { mode: string; log: string[] };
+    expect(body.mode).toBe("mcp-fallback");
+    expect(body.log.join("\n")).toMatch(/plugin installation failed/i);
+    expect(body.log.join("\n")).toMatch(/explicit MCP gateway fallback/i);
     expect(session.fs.files.has(USER_PATH)).toBe(false);
     const claude = JSON.parse(session.fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers["ratel-local"].args).toContain(USER_PATH);
+  });
+
+  it("installs the plugin first and skips the MCP fallback when installation succeeds", async () => {
+    const claudeBefore = JSON.stringify({
+      mcpServers: { fs: { type: "stdio", command: "echo" } },
+    });
+    session.fs.files.set(CLAUDE_PATH, claudeBefore);
+    session.ctx.installAgentPlugin = async () => ({
+      installed: true,
+      message: "Ratel Local plugin installed for Claude Code.",
+    });
+    const preview = (await (
+      await fetch(apiUrl("/api/agent-preview/link"), {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ hostKind: "claude-code" }),
+      })
+    ).json()) as { stageHashes: { agent: string } };
+
+    const res = await fetch(apiUrl("/api/agent-apply/link"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        hostKind: "claude-code",
+        planHash: preview.stageHashes.agent,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { mode: string; log: string[] };
+    expect(body.mode).toBe("plugin");
+    expect(body.log.join("\n")).toMatch(/plugin installed/i);
+    expect(session.fs.files.get(CLAUDE_PATH)).toBe(claudeBefore);
+  });
+
+  it("does not run plugin installation when the reviewed link preview is stale", async () => {
+    session.fs.files.set(CLAUDE_PATH, JSON.stringify({ mcpServers: {} }));
+    let installCalls = 0;
+    session.ctx.installAgentPlugin = async () => {
+      installCalls += 1;
+      return { installed: true, message: "installed" };
+    };
+    const preview = (await (
+      await fetch(apiUrl("/api/agent-preview/link"), {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ hostKind: "claude-code" }),
+      })
+    ).json()) as { stageHashes: { agent: string } };
+    session.fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { changed: { type: "stdio", command: "echo" } } }),
+    );
+
+    const res = await fetch(apiUrl("/api/agent-apply/link"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        hostKind: "claude-code",
+        planHash: preview.stageHashes.agent,
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(installCalls).toBe(0);
   });
 });
 

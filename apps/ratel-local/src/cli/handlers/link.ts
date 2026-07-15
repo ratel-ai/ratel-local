@@ -14,6 +14,11 @@ import {
   readJson,
   type SupportedAgentHostKind,
 } from "@ratel-ai/ratel-local-core";
+import {
+  type AgentPluginInstaller,
+  attemptRatelAgentPluginInstall,
+  unavailableAgentPluginInstaller,
+} from "../../agent-plugin.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -24,6 +29,7 @@ export interface LinkOptions {
   whichResult?: string;
   workspaceRoot?: string;
   agentKind?: SupportedAgentHostKind;
+  installPlugin?: AgentPluginInstaller;
   exists?: (path: string) => Promise<boolean>;
 }
 
@@ -112,15 +118,32 @@ export async function runLink(
     const ok = await ctx.prompts.confirm({
       message: enablingPlugin
         ? `Re-enable the Ratel Local plugin MCP server in ${agentState.host.displayName}?`
-        : `Write the ratel-local gateway into ${plan.agentChanges.length} ${
-            agentState.host.displayName
-          } config file${plan.agentChanges.length === 1 ? "" : "s"}?`,
+        : `Install the Ratel Local plugin for ${agentState.host.displayName}? If plugin installation fails, Ratel will write the reviewed MCP gateway fallback.`,
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
       ctx.prompts.cancel("link cancelled");
       return null;
     }
+  }
+
+  let usedMcpFallback = false;
+  if (!enablingPlugin) {
+    const installPlugin =
+      opts.installPlugin ?? ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+    const pluginResult = await attemptRatelAgentPluginInstall(hostKind, installPlugin);
+    if (pluginResult.installed) {
+      ctx.prompts.note(pluginResult.message, "Plugin installed");
+      ctx.prompts.outro(
+        `plugin link complete · reload or restart ${agentState.host.displayName} to load Ratel Local`,
+      );
+      return null;
+    }
+    usedMcpFallback = true;
+    ctx.prompts.note(
+      `${pluginResult.message}\nFalling back to the reviewed explicit MCP gateway configuration.`,
+      "Plugin installation failed",
+    );
   }
 
   const manifest = await executePlan(plan.agentChanges, {
@@ -130,7 +153,9 @@ export async function runLink(
   });
   ctx.prompts.note(`Backup created. Run \`ratel-local backup list\` to inspect backups.`, "Done");
   ctx.prompts.outro(
-    `link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
+    usedMcpFallback
+      ? `MCP fallback link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`
+      : `link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
   );
   return manifest;
 }
@@ -161,7 +186,7 @@ function renderAgentStage(plan: Pick<ImportPlan, "agentChanges">, enablingPlugin
   lines.push(
     enablingPlugin
       ? "The disabled Ratel Local plugin MCP server will be re-enabled. No explicit gateway will be added."
-      : "The ratel-local gateway entry will be written for the available Ratel scopes. Native agent MCP entries are preserved.",
+      : "Ratel will install the agent plugin first. If installation fails, the ratel-local gateway changes above will be written as an explicit MCP fallback. Native agent MCP entries are preserved.",
   );
   return lines.join("\n");
 }
