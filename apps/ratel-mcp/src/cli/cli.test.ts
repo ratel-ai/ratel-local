@@ -217,12 +217,30 @@ describe("runCli — serve", () => {
 });
 
 describe("runCli — help and routing", () => {
-  it("--help logs a top-level usage that names the mcp and backup groups", async () => {
+  it("--help advertises import and link as top-level commands", async () => {
     const logs: string[] = [];
     await runCli(["--help"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
     expect(out).toMatch(/mcp/);
     expect(out).toMatch(/backup/);
+    expect(out).toMatch(/^\s*import\s/m);
+    expect(out).toMatch(/^\s*link\s/m);
+  });
+
+  it("prints command-specific help for import and link without running either workflow", async () => {
+    for (const command of ["import", "link"] as const) {
+      const fs = new MemFs();
+      const logs: string[] = [];
+
+      await runCli([command, "--help", "--yes"], {
+        env: { homeDir: HOME, projectRoot: ROOT },
+        fs,
+        logger: (message) => logs.push(message),
+      });
+
+      expect(logs.join("\n")).toContain(`usage: ratel-mcp ${command}`);
+      expect(fs.files.size).toBe(0);
+    }
   });
 
   it("--version logs the injected package version", async () => {
@@ -236,7 +254,8 @@ describe("runCli — help and routing", () => {
     await runCli(["mcp"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
     expect(out).toMatch(/add/);
-    expect(out).toMatch(/import/);
+    expect(out).not.toMatch(/^\s*import\s/m);
+    expect(out).not.toMatch(/^\s*link\s/m);
   });
 
   it("`ratel-mcp backup` (no verb) logs the backup group usage", async () => {

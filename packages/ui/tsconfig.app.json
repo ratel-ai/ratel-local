@@ -23,7 +23,8 @@
       "noFallthroughCasesInSwitch": true,
 
       "paths": {
-         "@/*": ["./src/*"]
+         "@/*": ["./src/*"],
+         "@ratel-ai/mcp-core/agent-import-workflow": ["../core/src/agent-import-workflow.ts"]
       }
    },
    "include": ["src"],

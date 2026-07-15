@@ -221,7 +221,7 @@ describe("core operations — agent interop", () => {
     );
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs).toBeUndefined();
-    expect(claude.mcpServers["ratel-mcp"].command).toBe("/usr/local/bin/ratel-mcp");
+    expect(claude.mcpServers["ratel-mcp"]).toBeUndefined();
   });
 
   it("rejects stale import plan hashes before applying", async () => {
@@ -362,7 +362,7 @@ describe("core operations — agent interop", () => {
     expect(JSON.parse(fs.files.get(USER_PATH) as string).mcpServers.fs.command).toBe("echo");
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs).toBeUndefined();
-    expect(claude.mcpServers["ratel-mcp"].command).toBe("/usr/local/bin/ratel-mcp");
+    expect(claude.mcpServers["ratel-mcp"]).toBeUndefined();
   });
 
   it("links Claude Code non-interactively without removing native entries", async () => {

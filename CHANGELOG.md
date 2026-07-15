@@ -6,7 +6,6 @@ All notable changes to this package are documented here. The format is based on 
 
 ### Changed
 - **`ratel-mcp mcp link` and `ratel-mcp mcp import` now install the Claude Code statusline automatically** once they finish wiring up Claude Code, instead of requiring a separate `ratel-mcp statusline install` step. A pre-existing non-Ratel statusline is left untouched (reported as a note, not an error).
-- **Skill activation now links native Claude Code / Codex skill folders into Ratel instead of moving them.** Deactivation removes Ratel's managed link and reverses Ratel-owned metadata edits while leaving the native skill folder in its agent's directory.
 
 ## [0.3.1] - 2026-06-18
 

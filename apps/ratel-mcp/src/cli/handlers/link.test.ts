@@ -55,7 +55,7 @@ function ctxOf(
   return {
     logs,
     ctx: {
-      argv: { group: "mcp", verb: "link", configPaths: [], rest: [], extras: [], flags: {} },
+      argv: { group: "link", configPaths: [], rest: [], extras: [], flags: {} },
       env: { homeDir: HOME, projectRoot: withProjectRoot ? ROOT : undefined },
       fs,
       log: (m) => logs.push(m),
@@ -104,7 +104,7 @@ describe("runLink", () => {
     expect(claude.mcpServers.other).toEqual({ type: "stdio", command: "elsewhere" });
   });
 
-  it("auto-installs the Claude Code statusline after linking", async () => {
+  it("does not install the Claude Code statusline as part of linking", async () => {
     const fs = new MemFs();
     fs.files.set(
       RATEL_USER,
@@ -114,16 +114,10 @@ describe("runLink", () => {
     const { ctx } = ctxOf(fs, autoConfirm(), false);
     await runLink(ctx, { bin: BIN, yes: true });
 
-    const settings = JSON.parse(fs.files.get("/home/u/.claude/settings.json") as string);
-    expect(settings.statusLine).toEqual({
-      type: "command",
-      command: "ratel-mcp statusline",
-      padding: 0,
-      refreshInterval: 30,
-    });
+    expect(fs.files.has("/home/u/.claude/settings.json")).toBe(false);
   });
 
-  it("leaves an existing non-Ratel statusline alone", async () => {
+  it("leaves an existing statusline untouched", async () => {
     const fs = new MemFs();
     fs.files.set(
       RATEL_USER,

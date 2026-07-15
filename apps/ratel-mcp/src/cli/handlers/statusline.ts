@@ -1,5 +1,5 @@
 import {
-  ClaudeStatuslineConflictError,
+  getClaudeCodeStatuslineState,
   installClaudeCodeStatusline,
   type ResolvedBin,
   renderRatelStatusline,
@@ -10,33 +10,44 @@ import { resolveCliRatelBin } from "../ratel-bin.js";
 import { readStdin } from "../stdin.js";
 import type { HandlerCtx } from "./types.js";
 
-/**
- * Best-effort statusline install invoked after `link`/`import` wire up Claude
- * Code, so users get it without a separate `statusline install` step. Never
- * blocks or fails the caller: a pre-existing non-Ratel statusLine is left
- * alone (reported as a note) rather than treated as a conflict to resolve.
- */
-export async function maybeAutoInstallStatusline(
+export async function runStatuslineInstallStep(
   ctx: HandlerCtx,
-  agentHostKind: string,
-  bin: ResolvedBin,
-): Promise<void> {
-  if (agentHostKind !== "claude-code") return;
-  try {
-    const result = await installClaudeCodeStatusline(ctx, { bin });
-    if (result.changed) {
-      ctx.prompts.note(`Installed the Ratel statusline into ${result.path}`, "Statusline");
-    }
-  } catch (err) {
-    if (err instanceof ClaudeStatuslineConflictError) {
-      ctx.prompts.note(
-        "Skipped statusline install: a non-Ratel statusLine is already configured. Run `ratel-mcp statusline install --force` to replace it.",
-        "Statusline",
-      );
-      return;
-    }
-    throw err;
+  opts: { bin: ResolvedBin; yes?: boolean },
+): Promise<"installed" | "already-installed" | "skipped"> {
+  const state = await getClaudeCodeStatuslineState(ctx);
+  if (state.status === "installed") return "already-installed";
+
+  if (opts.yes && state.status === "other") {
+    ctx.prompts.note(
+      "Skipped statusline install: a non-Ratel statusLine is already configured. Run `ratel-mcp statusline install --force` to replace it.",
+      "Statusline",
+    );
+    return "skipped";
   }
+
+  if (!opts.yes) {
+    const answer = await ctx.prompts.confirm({
+      message:
+        state.status === "other"
+          ? "Replace the existing non-Ratel statusline with the Ratel statusline?"
+          : "Install the standalone Ratel statusline now?",
+      initialValue: true,
+    });
+    if (ctx.prompts.isCancel(answer) || answer === false) {
+      ctx.prompts.note("Skipped the standalone statusline install.", "Statusline");
+      return "skipped";
+    }
+  }
+
+  const result = await installClaudeCodeStatusline(ctx, {
+    bin: opts.bin,
+    force: state.status === "other",
+  });
+  if (result.changed) {
+    ctx.prompts.note(`Installed the Ratel statusline into ${result.path}`, "Statusline");
+    return "installed";
+  }
+  return "already-installed";
 }
 
 export const STATUSLINE_USAGE = `usage: ratel-mcp statusline [install|uninstall]

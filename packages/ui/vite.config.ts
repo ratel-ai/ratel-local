@@ -7,6 +7,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@ratel-ai/mcp-core/agent-import-workflow": fileURLToPath(
+        new URL("../core/src/agent-import-workflow.ts", import.meta.url),
+      ),
     },
   },
   server: {

@@ -1,6 +1,16 @@
-export type Group = "mcp" | "backup" | "skill" | "statusline" | "serve" | "ui" | "help" | "version";
+export type Group =
+  | "mcp"
+  | "backup"
+  | "skill"
+  | "import"
+  | "link"
+  | "statusline"
+  | "serve"
+  | "ui"
+  | "help"
+  | "version";
 
-export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "import" | "link" | "auth";
+export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "auth";
 
 export type BackupVerb = "list";
 
@@ -15,16 +25,7 @@ export type SkillVerb =
   | "install-hook"
   | "uninstall-hook";
 
-const MCP_VERBS: ReadonlySet<string> = new Set([
-  "add",
-  "remove",
-  "list",
-  "get",
-  "edit",
-  "import",
-  "link",
-  "auth",
-]);
+const MCP_VERBS: ReadonlySet<string> = new Set(["add", "remove", "list", "get", "edit", "auth"]);
 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
 
@@ -134,6 +135,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
+  } else if (first === "import" || first === "link") {
+    group = first;
+    i = 1;
   } else if (first === "statusline") {
     group = "statusline";
     i = 1;

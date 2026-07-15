@@ -413,7 +413,7 @@ describe("UI server — agent previews", () => {
     expect(agentRes.status).toBe(200);
     const claude = JSON.parse(session.fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs).toBeUndefined();
-    expect(claude.mcpServers["ratel-mcp"].command).toBe(process.argv[1]);
+    expect(claude.mcpServers["ratel-mcp"]).toBeUndefined();
   });
 
   it("rejects stale apply hashes", async () => {
@@ -449,10 +449,6 @@ describe("UI server — agent previews", () => {
 
   it("applies link to agent files only", async () => {
     session.fs.files.set(
-      USER_PATH,
-      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
-    );
-    session.fs.files.set(
       CLAUDE_PATH,
       JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
     );
@@ -464,7 +460,7 @@ describe("UI server — agent previews", () => {
       })
     ).json()) as { selected: string[]; stageHashes: { agent: string } };
     expect(preview.selected).toEqual([]);
-    const beforeRatel = session.fs.files.get(USER_PATH);
+    expect(session.fs.files.has(USER_PATH)).toBe(false);
 
     const res = await fetch(apiUrl("/api/agent-apply/link"), {
       method: "POST",
@@ -475,7 +471,7 @@ describe("UI server — agent previews", () => {
       }),
     });
     expect(res.status).toBe(200);
-    expect(session.fs.files.get(USER_PATH)).toBe(beforeRatel);
+    expect(session.fs.files.has(USER_PATH)).toBe(false);
     const claude = JSON.parse(session.fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers["ratel-mcp"].args).toContain(USER_PATH);

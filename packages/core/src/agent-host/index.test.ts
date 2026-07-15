@@ -35,7 +35,7 @@ function adapter(input: {
         ],
       };
     },
-    async link() {
+    async planChanges() {
       return {
         changes: [],
         summary: {

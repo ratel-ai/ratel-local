@@ -4,9 +4,9 @@ import type {
   AgentHostChangeSet,
   AgentHostContext,
   AgentHostDetection,
+  AgentHostPlanInput,
   AgentHostState,
   AgentScope,
-  GatewayLinkInput,
 } from "./agent-host/index.js";
 import {
   buildAgentImportPlan,
@@ -76,7 +76,7 @@ function parseAfter(plan: ReturnType<typeof buildImportPlan>, path: string) {
 }
 
 class RecordingAgentHost implements AgentHostAdapter {
-  input: GatewayLinkInput | null = null;
+  input: AgentHostPlanInput | null = null;
 
   async detect(_ctx: AgentHostContext): Promise<AgentHostDetection> {
     return { displayName: "Test Agent", present: true, reasons: [], warnings: [] };
@@ -86,10 +86,10 @@ class RecordingAgentHost implements AgentHostAdapter {
     return agentState({});
   }
 
-  async link(input: GatewayLinkInput): Promise<AgentHostChangeSet> {
+  async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
     this.input = input;
     const changes: FileChange[] = [];
-    for (const [scope, names] of input.replacedEntriesByScope) {
+    for (const [scope, names] of input.removeEntriesByScope) {
       changes.push({
         kind: "write",
         path: `/agent/${scope}.json`,
@@ -101,7 +101,7 @@ class RecordingAgentHost implements AgentHostAdapter {
       changes,
       summary: {
         host: input.state.host,
-        installedGatewayScopes: [...input.replacedEntriesByScope.keys()],
+        installedGatewayScopes: [...input.removeEntriesByScope.keys()],
         removedNativeEntries: [],
         warnings: [],
       },
@@ -251,7 +251,7 @@ describe("buildImportPlan", () => {
       }),
       agentHost,
     });
-    expect(agentHost.input?.replacedEntriesByScope.get("user")).toEqual(new Set(["fs"]));
+    expect(agentHost.input?.removeEntriesByScope.get("user")).toEqual(new Set(["fs"]));
     expect(agentPlan.agentChanges).toHaveLength(1);
   });
 
@@ -304,7 +304,7 @@ describe("buildImportPlan", () => {
       { selection: new Set(["fs"]) },
     );
 
-    expect(agentHost.input?.replacedEntriesByScope.get("user")).toEqual(new Set(["fs"]));
+    expect(agentHost.input?.removeEntriesByScope.get("user")).toEqual(new Set(["fs"]));
     expect(plan.agentChanges).toEqual([
       { kind: "write", path: "/agent/user.json", before: "{}\n", after: '{"replaced":["fs"]}' },
     ]);

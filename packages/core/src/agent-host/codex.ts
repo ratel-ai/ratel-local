@@ -16,11 +16,11 @@ import type {
   AgentHostChangeSet,
   AgentHostContext,
   AgentHostDetection,
+  AgentHostPlanInput,
   AgentHostRemovedEntry,
   AgentHostState,
   AgentScope,
   AgentScopeState,
-  GatewayLinkInput,
   RatelConfigPaths,
 } from "./index.js";
 
@@ -55,18 +55,21 @@ export class CodexAgentHostAdapter implements AgentHostAdapter {
     return { host: { kind: "codex", displayName: "Codex" }, scopes };
   }
 
-  async link(input: GatewayLinkInput): Promise<AgentHostChangeSet> {
+  async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
     const changes: FileChange[] = [];
     const installedGatewayScopes: AgentScope[] = [];
     const removedNativeEntries: AgentHostRemovedEntry[] = [];
     const byScope = scopesByName(input.state);
     for (const scope of ["user", "project", "local"] as const) {
-      const names = input.replacedEntriesByScope.get(scope);
+      const names = input.removeEntriesByScope.get(scope);
       const state = byScope[scope];
       const configPaths = configChainForScope(scope, input.ratelConfigPaths);
-      const shouldInstall = Boolean(names?.size || input.installGatewayScopes?.has(scope));
-      if (!state || !shouldInstall || configPaths.length === 0) continue;
-      const gateway = makeRatelGatewayEntry({ bin: input.bin, configPaths });
+      const shouldInstall = input.installGatewayScopes?.has(scope) ?? false;
+      const shouldWrite = Boolean(names?.size || shouldInstall);
+      if (!state || !shouldWrite || configPaths.length === 0) continue;
+      const gateway = shouldInstall
+        ? makeRatelGatewayEntry({ bin: input.bin, configPaths })
+        : undefined;
       const next = rewriteCodexConfig(state.rawText ?? "", names ?? new Set(), gateway);
       if (next !== state.rawText) {
         changes.push({
@@ -76,7 +79,7 @@ export class CodexAgentHostAdapter implements AgentHostAdapter {
           after: next,
         });
       }
-      installedGatewayScopes.push(scope);
+      if (shouldInstall) installedGatewayScopes.push(scope);
       for (const name of names ?? []) removedNativeEntries.push({ scope, name });
     }
     return {
@@ -139,7 +142,7 @@ export function parseCodexMcpServers(text: string): Record<string, ServerEntry> 
 export function rewriteCodexConfig(
   text: string,
   remove: ReadonlySet<string>,
-  gateway: RatelGatewayEntry,
+  gateway: RatelGatewayEntry | undefined,
 ): string {
   const sections = findTomlTableSections(text);
   const entries = parseCodexMcpServers(text);
@@ -147,7 +150,9 @@ export function rewriteCodexConfig(
   for (const section of sections) {
     if (!isCodexServerRoot(section.path)) continue;
     const entry = entries[section.name];
-    if (entry && isRatelGatewayEntry(section.name, entry)) removeNames.add(section.name);
+    if (gateway && entry && isRatelGatewayEntry(section.name, entry)) {
+      removeNames.add(section.name);
+    }
   }
   const rootSectionNames = new Set(
     sections.filter((section) => isCodexServerRoot(section.path)).map((section) => section.name),
@@ -166,20 +171,21 @@ export function rewriteCodexConfig(
   }
   out += text.slice(cursor);
   const trimmed = out.trimEnd();
+  if (!gateway) return `${trimmed}${trimmed.length > 0 ? "\n" : ""}`;
   return `${trimmed}${trimmed.length > 0 ? "\n\n" : ""}${renderCodexServer(gateway.name, gateway.entry)}\n`;
 }
 
 function rewriteCodexConfigStructured(
   text: string,
   removeNames: ReadonlySet<string>,
-  gateway: RatelGatewayEntry,
+  gateway: RatelGatewayEntry | undefined,
 ): string {
   const root = parseToml(text) as Record<string, unknown>;
   const servers = isPlainObject(root.mcp_servers)
     ? { ...(root.mcp_servers as Record<string, unknown>) }
     : {};
   for (const name of removeNames) delete servers[name];
-  servers[gateway.name] = codexServerObject(gateway.entry);
+  if (gateway) servers[gateway.name] = codexServerObject(gateway.entry);
   root.mcp_servers = servers;
   return stringifyToml(root);
 }

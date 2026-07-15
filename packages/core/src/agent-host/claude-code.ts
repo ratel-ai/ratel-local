@@ -14,11 +14,11 @@ import type {
   AgentHostChangeSet,
   AgentHostContext,
   AgentHostDetection,
+  AgentHostPlanInput,
   AgentHostRemovedEntry,
   AgentHostState,
   AgentScope,
   AgentScopeState,
-  GatewayLinkInput,
   RatelConfigPaths,
 } from "./index.js";
 
@@ -65,7 +65,7 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     return { host: { kind: "claude-code", displayName: "Claude Code" }, scopes };
   }
 
-  async link(input: GatewayLinkInput): Promise<AgentHostChangeSet> {
+  async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
     const changes: FileChange[] = [];
     const installedGatewayScopes: AgentScope[] = [];
     const removedNativeEntries: AgentHostRemovedEntry[] = [];
@@ -73,14 +73,15 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     const user = byScope.user;
     const project = byScope.project;
     const local = byScope.local;
-    const userRemove = input.replacedEntriesByScope.get("user");
-    const projectRemove = input.replacedEntriesByScope.get("project");
-    const localRemove = input.replacedEntriesByScope.get("local");
-    const userInstall = Boolean(userRemove?.size || input.installGatewayScopes?.has("user"));
-    const projectInstall = Boolean(
-      projectRemove?.size || input.installGatewayScopes?.has("project"),
-    );
-    const localInstall = Boolean(localRemove?.size || input.installGatewayScopes?.has("local"));
+    const userRemove = input.removeEntriesByScope.get("user");
+    const projectRemove = input.removeEntriesByScope.get("project");
+    const localRemove = input.removeEntriesByScope.get("local");
+    const userInstall = input.installGatewayScopes?.has("user") ?? false;
+    const projectInstall = input.installGatewayScopes?.has("project") ?? false;
+    const localInstall = input.installGatewayScopes?.has("local") ?? false;
+    const userWrite = Boolean(userRemove?.size || userInstall);
+    const projectWrite = Boolean(projectRemove?.size || projectInstall);
+    const localWrite = Boolean(localRemove?.size || localInstall);
     const userGateway = userInstall
       ? makeRatelGatewayEntry({ bin: input.bin, configPaths: [input.ratelConfigPaths.user] })
       : undefined;
@@ -104,25 +105,24 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
         : undefined;
 
     const home = user ?? local;
-    if (home?.raw && (userInstall || localInstall)) {
+    if (home?.raw && (userWrite || localWrite)) {
       const next = rewriteHomeClaude(
         home.raw,
         userGateway,
         localGateway,
-        userInstall ? (userRemove ?? new Set()) : null,
-        localInstall ? (localRemove ?? new Set()) : null,
+        userWrite ? (userRemove ?? new Set()) : null,
+        localWrite ? (localRemove ?? new Set()) : null,
         deriveProjectRoot(input.ratelConfigPaths),
       );
       pushJsonWrite(changes, home.path, home.raw, next);
     }
-    if (project?.raw && projectInstall && projectGateway) {
+    if (project?.raw && projectWrite) {
       const next = rewriteProjectClaude(project.raw, projectGateway, projectRemove ?? new Set());
       pushJsonWrite(changes, project.path, project.raw, next);
     }
 
-    for (const [scope, names] of input.replacedEntriesByScope) {
+    for (const [scope, names] of input.removeEntriesByScope) {
       if (names.size === 0) continue;
-      installedGatewayScopes.push(scope);
       for (const name of names) removedNativeEntries.push({ scope, name });
     }
     for (const scope of input.installGatewayScopes ?? []) {
@@ -209,11 +209,11 @@ function rewriteHomeClaude(
   projectRoot: string | undefined,
 ): Record<string, unknown> {
   const out = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
-  if (removeUser && userRatelEntry) {
+  if (removeUser) {
     const before = isPlainObject(out.mcpServers) ? (out.mcpServers as Record<string, unknown>) : {};
     out.mcpServers = mergeWithRatel(before, removeUser, userRatelEntry);
   }
-  if (removeLocal && localRatelEntry && projectRoot) {
+  if (removeLocal && projectRoot) {
     const absRoot = resolve(projectRoot);
     const projects = isPlainObject(out.projects) ? (out.projects as Record<string, unknown>) : {};
     const entry = isPlainObject(projects[absRoot])
@@ -231,7 +231,7 @@ function rewriteHomeClaude(
 
 function rewriteProjectClaude(
   raw: Record<string, unknown>,
-  ratelEntry: RatelGatewayEntry,
+  ratelEntry: RatelGatewayEntry | undefined,
   remove: ReadonlySet<string>,
 ): Record<string, unknown> {
   const out = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
@@ -243,15 +243,15 @@ function rewriteProjectClaude(
 function mergeWithRatel(
   before: Record<string, unknown>,
   remove: ReadonlySet<string>,
-  ratelEntry: RatelGatewayEntry,
+  ratelEntry: RatelGatewayEntry | undefined,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = {};
   for (const [name, entry] of Object.entries(before)) {
-    if (isServerEntry(entry) && isRatelGatewayEntry(name, entry)) continue;
+    if (ratelEntry && isServerEntry(entry) && isRatelGatewayEntry(name, entry)) continue;
     if (remove.has(name)) continue;
     next[name] = entry;
   }
-  next[ratelEntry.name] = ratelEntry.entry;
+  if (ratelEntry) next[ratelEntry.name] = ratelEntry.entry;
   return next;
 }
 

@@ -409,20 +409,6 @@ export async function previewAgentLink(
     collectRatelKnownNames(await readAllRatelConfigs(ctx)),
   );
   const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
-  const ratelKnown = collectRatelKnownNames([
-    inputs.ratelUser,
-    inputs.ratelProject,
-    inputs.ratelLocal,
-  ]);
-
-  if (ratelKnown.size === 0) {
-    const plan = emptyAgentPlan("add-missing-only");
-    return toAgentPlanPreview("link", host, [], [], plan, input, {
-      emptyReason:
-        "No Ratel entries found at any scope. Import entries first, then link the agent.",
-    });
-  }
-
   const plan = await buildAgentLinkPlan(inputs);
   return toAgentPlanPreview("link", host, [], [], plan, input, {
     emptyReason:
@@ -514,15 +500,6 @@ export async function linkAgentToRatel(
   }
   const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
   const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
-
-  const ratelKnown = new Set<string>();
-  for (const cfg of [inputs.ratelUser, inputs.ratelProject, inputs.ratelLocal]) {
-    if (cfg) for (const name of Object.keys(cfg.mcpServers)) ratelKnown.add(name);
-  }
-  if (ratelKnown.size === 0) {
-    ctx.log?.("No Ratel entries found at any scope. Nothing to link.");
-    return null;
-  }
 
   const plan = await buildAgentLinkPlan(inputs);
   if (plan.agentChanges.length === 0) {
