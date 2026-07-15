@@ -274,8 +274,10 @@ export async function runImport(
   }
   if (workflow?.step === "statusline") {
     bin ??= opts.bin ?? (await resolveBin(ctx, opts));
-    await runStatuslineInstallStep(ctx, { bin, yes: opts.yes });
-    workflow = advanceAgentImportWorkflow(workflow, { type: "statusline-completed" });
+    const statuslineResult = await runStatuslineInstallStep(ctx, { bin, yes: opts.yes });
+    workflow = advanceAgentImportWorkflow(workflow, {
+      type: statuslineResult === "skipped" ? "statusline-skipped" : "statusline-installed",
+    });
   }
 
   if (latestManifest) {

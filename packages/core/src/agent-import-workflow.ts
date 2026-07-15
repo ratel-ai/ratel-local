@@ -15,7 +15,8 @@ export type AgentImportWorkflowEvent =
   | { type: "link-completed" }
   | { type: "link-skipped" }
   | { type: "import-completed" }
-  | { type: "statusline-completed" };
+  | { type: "statusline-installed" }
+  | { type: "statusline-skipped" };
 
 export function beginAgentImportWorkflow(input: {
   hostKind: AgentImportHostKind;
@@ -46,8 +47,13 @@ export function advanceAgentImportWorkflow(
     const shouldOfferStatusline = state.hostKind === "claude-code" && !state.statuslineInstalled;
     return { ...state, step: shouldOfferStatusline ? "statusline" : "complete" };
   }
-  if (state.step === "statusline" && event.type === "statusline-completed") {
-    return { ...state, step: "complete", statuslineInstalled: true };
+  if (state.step === "statusline") {
+    if (event.type === "statusline-installed") {
+      return { ...state, step: "complete", statuslineInstalled: true };
+    }
+    if (event.type === "statusline-skipped") {
+      return { ...state, step: "complete" };
+    }
   }
   throw new Error(`invalid agent import workflow transition: ${state.step} + ${event.type}`);
 }

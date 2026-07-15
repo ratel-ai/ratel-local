@@ -1300,11 +1300,17 @@ function ImportSceneDialog(props: {
     setCommitting(true);
     try {
       if (!(await props.onInstallStatusline()) || workflow.step !== "statusline") return;
-      setWorkflow(advanceAgentImportWorkflow(workflow, { type: "statusline-completed" }));
+      setWorkflow(advanceAgentImportWorkflow(workflow, { type: "statusline-installed" }));
       props.onOpenChange(false);
     } finally {
       setCommitting(false);
     }
+  };
+
+  const skipStatusline = () => {
+    if (workflow.step !== "statusline") return;
+    setWorkflow(advanceAgentImportWorkflow(workflow, { type: "statusline-skipped" }));
+    props.onOpenChange(false);
   };
 
   const toggleSkill = (skill: SkillSummary) => {
@@ -1570,7 +1576,7 @@ function ImportSceneDialog(props: {
         <ScenePanel
           footer={
             <>
-              <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
+              <Button onClick={skipStatusline} type="button" variant="outline">
                 Skip
               </Button>
               <Button disabled={committing} onClick={() => void installStatusline()} type="button">

@@ -34,9 +34,13 @@ describe("agent import workflow", () => {
     expect(initial).toMatchObject({ step: "import", linkDecision: "already-linked" });
     const statusline = advanceAgentImportWorkflow(initial, { type: "import-completed" });
     expect(statusline.step).toBe("statusline");
-    expect(advanceAgentImportWorkflow(statusline, { type: "statusline-completed" }).step).toBe(
+    expect(advanceAgentImportWorkflow(statusline, { type: "statusline-installed" }).step).toBe(
       "complete",
     );
+    expect(advanceAgentImportWorkflow(statusline, { type: "statusline-skipped" })).toMatchObject({
+      step: "complete",
+      statuslineInstalled: false,
+    });
   });
 
   it("finishes after import when statusline is irrelevant or already installed", () => {
