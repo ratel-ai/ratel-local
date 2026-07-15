@@ -7,6 +7,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./agent-import-workflow": {
+      "types": "./src/agent-import-workflow.ts",
+      "default": "./src/agent-import-workflow.ts"
     }
   },
   "scripts": {

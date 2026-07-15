@@ -1,9 +1,9 @@
-import type { SupportedAgentHostKind } from "./agent-host/index.js";
+export type AgentImportHostKind = "claude-code" | "codex";
 
 export type AgentImportLinkDecision = "already-linked" | "linked-now" | "skipped";
 
 interface AgentImportWorkflowContext {
-  hostKind: SupportedAgentHostKind;
+  hostKind: AgentImportHostKind;
   linkDecision: AgentImportLinkDecision | null;
   statuslineInstalled: boolean;
 }
@@ -18,7 +18,7 @@ export type AgentImportWorkflowEvent =
   | { type: "statusline-completed" };
 
 export function beginAgentImportWorkflow(input: {
-  hostKind: SupportedAgentHostKind;
+  hostKind: AgentImportHostKind;
   linked: boolean;
   statuslineInstalled: boolean;
 }): AgentImportWorkflowState {

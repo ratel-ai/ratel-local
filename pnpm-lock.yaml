@@ -81,6 +81,9 @@ importers:
       '@fontsource-variable/inter-tight':
         specifier: ^5.2.7
         version: 5.2.7
+      '@ratel-ai/mcp-core':
+        specifier: workspace:*
+        version: link:../core
       '@fontsource/jetbrains-mono':
         specifier: ^5.2.8
         version: 5.2.8

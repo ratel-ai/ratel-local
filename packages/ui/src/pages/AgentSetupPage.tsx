@@ -1,3 +1,9 @@
+import {
+  type AgentImportWorkflowState,
+  advanceAgentImportWorkflow,
+  beginAgentImportWorkflow,
+  unlinkedAgentImportWarning,
+} from "@ratel-ai/mcp-core/agent-import-workflow";
 import { useNavigate } from "@tanstack/react-router";
 import { type StructuredPatchHunk, structuredPatch } from "diff";
 import {
@@ -13,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useMeasure from "react-use-measure";
 import { type BackupManifest, type JsonRequestInit, type ServerEntry, useRatelApp } from "@/App";
 import { SkillImportPicker, skillKey } from "@/components/import-skills-dialog";
@@ -792,6 +798,15 @@ function PreviewFlow(props: {
   const friendlyNoOp = Boolean(
     preview?.emptyReason && linkedAndCovered && props.availableSkills.length === 0,
   );
+  const initialImportWorkflow = useMemo(
+    () =>
+      beginAgentImportWorkflow({
+        hostKind: props.hostKind,
+        linked: props.host.ratelEntryCount > 0,
+        statuslineInstalled: props.host.statusline?.status === "installed",
+      }),
+    [props.host.ratelEntryCount, props.host.statusline?.status, props.hostKind],
+  );
 
   const applyRatel = async (
     importPreview: AgentPlanPreview,
@@ -826,7 +841,7 @@ function PreviewFlow(props: {
     const path =
       props.flow === "import" ? "/api/agent-apply/import/agent" : "/api/agent-apply/link";
     const applied = await runAction(
-      props.flow === "import" ? "Agent config rewritten" : "Link complete",
+      props.flow === "import" ? "Source agent cleanup applied" : "Link complete",
       () =>
         props.request(path, {
           method: "POST",
@@ -842,6 +857,40 @@ function PreviewFlow(props: {
     if (!applied) return false;
     await props.onScanHosts();
     setRefreshNonce((value) => value + 1);
+    return true;
+  };
+
+  const applyLinkFromImport = async () => {
+    const linkPreview = await props.request<AgentPlanPreview>("/api/agent-preview/link", {
+      method: "POST",
+      body: { hostKind: props.hostKind },
+    });
+    if (linkPreview.plan.agentChanges.length > 0) {
+      const linked = await runAction("Link complete", () =>
+        props.request("/api/agent-apply/link", {
+          method: "POST",
+          body: {
+            hostKind: props.hostKind,
+            planHash: linkPreview.stageHashes.agent,
+          },
+        }),
+      );
+      if (!linked) return false;
+    }
+    await props.onScanHosts();
+    setRefreshNonce((value) => value + 1);
+    return true;
+  };
+
+  const installStatuslineFromImport = async () => {
+    const installed = await runAction("Install statusline", () =>
+      props.request("/api/claude-statusline/install", {
+        method: "POST",
+        body: { force: props.host.statusline?.status === "other" },
+      }),
+    );
+    if (!installed) return false;
+    await props.onScanHosts();
     return true;
   };
 
@@ -866,11 +915,14 @@ function PreviewFlow(props: {
       const skillsApplied = await activateSelectedSkills(selectedSkills);
       if (!skillsApplied) return false;
     }
-    setDialogOpen(false);
     return true;
   };
 
   const activateSelectedSkills = async (selectedSkills: SkillSummary[]) => {
+    type ActivateSkillsResponse = {
+      managed: Array<{ id: string; mode: string }>;
+      skipped?: Array<{ id: string; reason: string }>;
+    };
     const idsBySource = new Map<SkillSummary["source"], string[]>();
     for (const skill of selectedSkills) {
       if (skill.source !== "claude" && skill.source !== "codex") continue;
@@ -878,14 +930,24 @@ function PreviewFlow(props: {
       ids.push(skill.id);
       idsBySource.set(skill.source, ids);
     }
-    const applied = await runAction(
-      `Now managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"}`,
-      async () => {
-        for (const [source, ids] of idsBySource) {
-          await props.request("/api/skills/activate", { method: "POST", body: { ids, source } });
-        }
-      },
-    );
+    const managed: ActivateSkillsResponse["managed"] = [];
+    const skipped: NonNullable<ActivateSkillsResponse["skipped"]> = [];
+    const applied = await runAction("Skill management complete", async () => {
+      for (const [source, ids] of idsBySource) {
+        const result = await props.request<ActivateSkillsResponse>("/api/skills/activate", {
+          method: "POST",
+          body: { ids, source },
+        });
+        managed.push(...result.managed);
+        skipped.push(...(result.skipped ?? []));
+      }
+      return {
+        log: [
+          `Now managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
+          ...(skipped.length > 0 ? [skippedSkillsMessage(skipped)] : []),
+        ],
+      };
+    });
     if (!applied) return false;
     await props.onSkillsImported();
     setRefreshNonce((value) => value + 1);
@@ -931,11 +993,14 @@ function PreviewFlow(props: {
           {!friendlyNoOp && props.flow === "import" ? (
             <ImportSceneDialog
               onCommit={commitImport}
+              onInstallStatusline={installStatuslineFromImport}
+              onLink={applyLinkFromImport}
               onOpenChange={setDialogOpen}
               open={dialogOpen}
               preview={preview}
               request={props.request}
               hostKind={props.hostKind}
+              workflow={initialImportWorkflow}
               skills={props.availableSkills}
             />
           ) : null}
@@ -1085,7 +1150,19 @@ function importAvailabilityLabel(mcpCount: number, skillCount: number) {
   return `${parts.join(" and ")} available.`;
 }
 
-type ImportScene = "skills" | "entries" | "strategy" | "pick-conflicts" | "review";
+function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>) {
+  const details = skipped.map((skill) => `${skill.id}: ${skill.reason}`).join("; ");
+  return `Could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
+}
+
+type ImportScene =
+  | "link"
+  | "skills"
+  | "entries"
+  | "strategy"
+  | "pick-conflicts"
+  | "review"
+  | "statusline";
 
 function ImportSceneDialog(props: {
   hostKind: AgentHostKind;
@@ -1095,13 +1172,19 @@ function ImportSceneDialog(props: {
     replaceConflicts: string[],
     selectedSkills: SkillSummary[],
   ) => Promise<boolean>;
+  onInstallStatusline: () => Promise<boolean>;
+  onLink: () => Promise<boolean>;
   onOpenChange: (open: boolean) => void;
   open: boolean;
   preview: AgentPlanPreview;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   skills: SkillSummary[];
+  workflow: AgentImportWorkflowState;
 }) {
-  const [scene, setScene] = useState<ImportScene>("skills");
+  const [scene, setScene] = useState<ImportScene>(
+    props.workflow.step === "link" ? "link" : "skills",
+  );
+  const [workflow, setWorkflow] = useState(props.workflow);
   const [committing, setCommitting] = useState(false);
   const [draftPreview, setDraftPreview] = useState<AgentPlanPreview>(props.preview);
   const [draftSelection, setDraftSelection] = useState<string[]>(props.preview.selected);
@@ -1137,12 +1220,14 @@ function ImportSceneDialog(props: {
 
   useEffect(() => {
     if (!props.open) return;
+    setScene(props.workflow.step === "link" ? "link" : "skills");
+    setWorkflow(props.workflow);
     setDraftPreview(props.preview);
     setDraftSelection(props.preview.selected);
     setDraftSkillSelection(new Set());
     setConflictStrategy("add-missing-only");
     setReplaceConflicts([]);
-  }, [props.open, props.preview]);
+  }, [props.open, props.preview, props.workflow]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -1175,7 +1260,45 @@ function ImportSceneDialog(props: {
   const commit = async () => {
     setCommitting(true);
     try {
-      await props.onCommit(draftPreview, conflictStrategy, replaceConflicts, selectedSkills);
+      const committed = await props.onCommit(
+        draftPreview,
+        conflictStrategy,
+        replaceConflicts,
+        selectedSkills,
+      );
+      if (!committed || workflow.step !== "import") return;
+      const next = advanceAgentImportWorkflow(workflow, { type: "import-completed" });
+      setWorkflow(next);
+      if (next.step === "statusline") setScene("statusline");
+      else props.onOpenChange(false);
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const linkAndContinue = async () => {
+    setCommitting(true);
+    try {
+      if (!(await props.onLink()) || workflow.step !== "link") return;
+      setWorkflow(advanceAgentImportWorkflow(workflow, { type: "link-completed" }));
+      setScene("skills");
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const skipLink = () => {
+    if (workflow.step !== "link") return;
+    setWorkflow(advanceAgentImportWorkflow(workflow, { type: "link-skipped" }));
+    setScene("skills");
+  };
+
+  const installStatusline = async () => {
+    setCommitting(true);
+    try {
+      if (!(await props.onInstallStatusline()) || workflow.step !== "statusline") return;
+      setWorkflow(advanceAgentImportWorkflow(workflow, { type: "statusline-completed" }));
+      props.onOpenChange(false);
     } finally {
       setCommitting(false);
     }
@@ -1208,11 +1331,38 @@ function ImportSceneDialog(props: {
       open={props.open}
       onOpenChange={(open) => {
         props.onOpenChange(open);
-        if (open) setScene("skills");
+        if (open) setScene(props.workflow.step === "link" ? "link" : "skills");
       }}
       scene={scene}
       title="Import"
     >
+      {scene === "link" ? (
+        <ScenePanel
+          footer={
+            <>
+              <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
+                Cancel import
+              </Button>
+              <Button disabled={committing} onClick={skipLink} type="button" variant="outline">
+                Continue without linking
+              </Button>
+              <Button disabled={committing} onClick={() => void linkAndContinue()} type="button">
+                <LinkIcon />
+                Link Ratel and continue
+              </Button>
+            </>
+          }
+          kicker="Link"
+          title="Link Ratel first?"
+        >
+          <Alert>
+            <AlertTitle>{props.preview.host.displayName} is not linked</AlertTitle>
+            <AlertDescription>
+              {unlinkedAgentImportWarning(props.preview.host.displayName)}
+            </AlertDescription>
+          </Alert>
+        </ScenePanel>
+      ) : null}
       {scene === "skills" ? (
         <ScenePanel
           flushFooter
@@ -1407,10 +1557,32 @@ function ImportSceneDialog(props: {
             <ChangeList
               changes={draftPreview.plan.agentChanges}
               defaultOpen
-              title={`${props.preview.host.displayName} config`}
+              title={`${props.preview.host.displayName} source cleanup`}
             />
             <SkillActivationReview skills={selectedSkills} />
           </SceneScrollSection>
+        </ScenePanel>
+      ) : null}
+      {scene === "statusline" ? (
+        <ScenePanel
+          footer={
+            <>
+              <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
+                Skip
+              </Button>
+              <Button disabled={committing} onClick={() => void installStatusline()} type="button">
+                <FileText />
+                Install statusline
+              </Button>
+            </>
+          }
+          kicker="Statusline"
+          title="Install the Ratel statusline?"
+        >
+          <p className="text-sm text-muted-foreground">
+            Import is complete. Install the standalone Claude Code statusline to show context usage
+            and Ratel telemetry.
+          </p>
         </ScenePanel>
       ) : null}
     </SceneDialog>
