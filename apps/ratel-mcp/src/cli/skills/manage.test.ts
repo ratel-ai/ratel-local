@@ -421,6 +421,25 @@ describe("deactivateSkills", () => {
     );
   });
 
+  it("ignores manual-only examples in the body when deactivating a Claude skill", async () => {
+    await writeNativeSkill("api-design", "# Example\n```yaml\ndisable-model-invocation: true\n```");
+    await activateSkills(paths);
+    await writeFile(
+      join(paths.nativeDir, "api-design", "SKILL.md"),
+      "---\nname: api-design\ndescription: changed\n---\n# Example\n```yaml\ndisable-model-invocation: true\n```",
+    );
+
+    const result = await deactivateSkills(paths);
+
+    expect(result.unmanaged.map((entry) => entry.id)).toEqual(["api-design"]);
+    expect(result.skipped).toEqual([]);
+    expect(await exists(join(paths.managedDir, "api-design"))).toBe(false);
+    expect(await listManaged(paths)).toEqual([]);
+    expect(await readFile(join(paths.nativeDir, "api-design", "SKILL.md"), "utf8")).toContain(
+      "```yaml\ndisable-model-invocation: true\n```",
+    );
+  });
+
   it("only stops managing manifest entries, leaving manually-added managed skills in place", async () => {
     await writeNativeSkill("linked");
     await activateSkills(paths);

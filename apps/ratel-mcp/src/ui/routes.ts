@@ -248,21 +248,7 @@ export async function activateSkillsRoute(
     managed: result.managed.map((m) => ({ id: m.id, mode: m.mode ?? "moved" })),
     skipped: result.skipped,
   };
-  if (ids !== undefined && result.skipped.length > 0) {
-    return {
-      status: 409,
-      body: {
-        ...responseBody,
-        error: skippedSkillsMessage(result.skipped),
-      },
-    };
-  }
   return ok(responseBody);
-}
-
-function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>): string {
-  const details = skipped.map((s) => `${s.id}: ${s.reason}`).join("; ");
-  return `could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
 }
 
 /** Stop managing skills through Ratel. `ids` omitted = all. */

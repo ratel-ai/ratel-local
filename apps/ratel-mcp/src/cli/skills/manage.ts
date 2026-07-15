@@ -625,7 +625,8 @@ function hasManualOnlyMarker(current: string | undefined, source: SkillSource): 
   if (source === "codex") {
     return /allow_implicit_invocation\s*:\s*(?:"false"|'false'|false)\b/.test(current);
   }
-  return /^\s*disable-model-invocation\s*:\s*(?:"true"|'true'|true)\s*(?:#.*)?$/m.test(current);
+  const line = getYamlScalarLineFromFrontmatter(current, "disable-model-invocation");
+  return line !== undefined && /:\s*(?:"true"|'true'|true)\s*(?:#.*)?$/.test(line);
 }
 
 function setYamlScalarInFrontmatter(raw: string, key: string, value: string): string {

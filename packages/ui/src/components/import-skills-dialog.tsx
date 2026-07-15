@@ -34,6 +34,7 @@ function skillKey(skill: SkillSummary): string {
 const PAGE_SIZE = 6;
 
 interface ActivateSkillsResponse {
+  managed: Array<{ id: string; mode: string }>;
   skipped?: Array<{ id: string; reason: string }>;
 }
 
@@ -90,17 +91,25 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
       ids.push(skill.id);
       idsBySource.set(skill.source, ids);
     }
-    const label = `Now managing ${chosen.length} skill${chosen.length === 1 ? "" : "s"}`;
-    const ok = await runAction(label, async () => {
+    const managed: ActivateSkillsResponse["managed"] = [];
+    const skipped: NonNullable<ActivateSkillsResponse["skipped"]> = [];
+    const ok = await runAction("Skill management complete", async () => {
       for (const [source, ids] of idsBySource) {
         const result = await request<ActivateSkillsResponse>("/api/skills/activate", {
           method: "POST",
           body: { ids, source },
         });
-        if (result.skipped && result.skipped.length > 0) {
-          throw new Error(skippedSkillsMessage(result.skipped));
-        }
+        managed.push(...result.managed);
+        skipped.push(...(result.skipped ?? []));
       }
+      if (managed.length === 0 && skipped.length > 0)
+        throw new Error(skippedSkillsMessage(skipped));
+      return {
+        log: [
+          `Now managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
+          ...(skipped.length > 0 ? [skippedSkillsMessage(skipped)] : []),
+        ],
+      };
     });
     if (ok) {
       props.onOpenChange(false);

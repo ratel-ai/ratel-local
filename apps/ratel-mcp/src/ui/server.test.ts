@@ -1076,7 +1076,8 @@ describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
     ).toContain('description: "updated"');
   });
 
-  it("returns 409 when selected skill activation is skipped", async () => {
+  it("returns partial skill activation results without hiding successful writes", async () => {
+    await writeSkill(".codex/skills", "valid-policy");
     await writeSkill(".codex/skills", "flow-policy");
     const policyDir = join(home, ".codex", "skills", "flow-policy", "agents");
     await mkdir(policyDir, { recursive: true });
@@ -1088,18 +1089,21 @@ describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
     const activate = await fetch(url("/api/skills/activate"), {
       method: "POST",
       headers: headers(),
-      body: JSON.stringify({ ids: ["flow-policy"], source: "codex" }),
+      body: JSON.stringify({ ids: ["valid-policy", "flow-policy"], source: "codex" }),
     });
 
-    expect(activate.status).toBe(409);
+    expect(activate.status).toBe(200);
     const body = (await activate.json()) as {
-      error: string;
+      managed: Array<{ id: string; mode: string }>;
       skipped: Array<{ id: string; reason: string }>;
     };
-    expect(body.error).toMatch(/could not manage selected skill/i);
+    expect(body.managed).toEqual([{ id: "valid-policy", mode: "linked" }]);
     expect(body.skipped[0]).toMatchObject({
       id: "flow-policy",
       reason: expect.stringMatching(/unsupported/i),
     });
+    expect((await lstat(join(home, ".ratel", "skills", "valid-policy"))).isSymbolicLink()).toBe(
+      true,
+    );
   });
 });
