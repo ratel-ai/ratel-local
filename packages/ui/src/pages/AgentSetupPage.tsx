@@ -50,6 +50,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
 import { availableSkillsForKind, fetchSkills, type SkillSummary } from "@/lib/skills";
 import { cn } from "@/lib/utils";
 
@@ -1192,6 +1193,7 @@ function ImportSceneDialog(props: {
   const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("add-missing-only");
   const [replaceConflicts, setReplaceConflicts] = useState<string[]>([]);
   const wasOpenRef = useRef(false);
+  const previewRequestIdRef = useRef(0);
   const selected = new Set(draftSelection);
   const selectedSkills = props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill)));
   const conflicts = draftPreview.plan.summary.conflicts;
@@ -1232,33 +1234,32 @@ function ImportSceneDialog(props: {
     setReplaceConflicts([]);
   }, [props.open, props.preview, props.workflow]);
 
+  const loadDraftPreview = useCallback(async () => {
+    const requestId = ++previewRequestIdRef.current;
+    const body = await props.request<AgentPlanPreview>("/api/agent-preview/import", {
+      method: "POST",
+      body: {
+        hostKind: props.hostKind,
+        selection: draftSelection,
+        conflictStrategy,
+        replaceConflicts,
+      },
+    });
+    return requestId === previewRequestIdRef.current ? body : null;
+  }, [conflictStrategy, draftSelection, props.hostKind, props.request, replaceConflicts]);
+
   useEffect(() => {
     if (!props.open) return;
     let cancelled = false;
-    const loadDraftPreview = async () => {
-      const body = await props.request<AgentPlanPreview>("/api/agent-preview/import", {
-        method: "POST",
-        body: {
-          hostKind: props.hostKind,
-          selection: draftSelection,
-          conflictStrategy,
-          replaceConflicts,
-        },
-      });
-      if (!cancelled) setDraftPreview(body);
+    const refreshDraftPreview = async () => {
+      const body = await loadDraftPreview();
+      if (!cancelled && body) setDraftPreview(body);
     };
-    void loadDraftPreview();
+    void refreshDraftPreview();
     return () => {
       cancelled = true;
     };
-  }, [
-    conflictStrategy,
-    draftSelection,
-    props.hostKind,
-    props.open,
-    props.request,
-    replaceConflicts,
-  ]);
+  }, [loadDraftPreview, props.open]);
 
   const commit = async () => {
     setCommitting(true);
@@ -1282,7 +1283,13 @@ function ImportSceneDialog(props: {
   const linkAndContinue = async () => {
     setCommitting(true);
     try {
-      if (!(await props.onLink()) || workflow.step !== "link") return;
+      const refreshedPreview = await linkThenRefreshImportPreview(props.onLink, async () => {
+        const preview = await loadDraftPreview();
+        if (!preview) throw new Error("import preview refresh was superseded");
+        return preview;
+      });
+      if (!refreshedPreview || workflow.step !== "link") return;
+      setDraftPreview(refreshedPreview);
       setWorkflow(advanceAgentImportWorkflow(workflow, { type: "link-completed" }));
       setScene("skills");
     } finally {

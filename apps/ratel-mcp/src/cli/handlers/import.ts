@@ -121,6 +121,7 @@ export async function runImport(
   }
 
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
+  let linkCommitted = false;
   let workflow = workflowHostKind
     ? await beginCliImportWorkflow(ctx, workflowHostKind, agentState)
     : null;
@@ -136,7 +137,7 @@ export async function runImport(
       if (opts.dryRun) {
         ctx.log(`would link ${detection.displayName} to Ratel before importing`);
       } else {
-        await runLink(ctx, {
+        const linkManifest = await runLink(ctx, {
           yes: true,
           bin: opts.bin,
           envVar: opts.envVar,
@@ -145,6 +146,7 @@ export async function runImport(
           agentKind: workflowHostKind ?? undefined,
           exists: opts.exists,
         });
+        linkCommitted = linkManifest !== null;
         if (agentState) {
           agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
           candidates = collectCandidates(agentState);
@@ -213,7 +215,7 @@ export async function runImport(
       agentState.host.displayName,
     );
     if (conflictResolution.kind === "cancelled") {
-      ctx.prompts.cancel("import cancelled (no writes)");
+      ctx.prompts.cancel(importCancellationMessage(linkCommitted));
       return null;
     }
 
@@ -255,7 +257,7 @@ export async function runImport(
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
-      ctx.prompts.cancel("import cancelled (no writes)");
+      ctx.prompts.cancel(importCancellationMessage(linkCommitted));
       return null;
     }
   }
@@ -558,6 +560,10 @@ async function activateSelectedSkills(
 function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>): string {
   const details = skipped.map((s) => `${s.id}: ${s.reason}`).join("; ");
   return `could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
+}
+
+function importCancellationMessage(linkCommitted: boolean): string {
+  return linkCommitted ? "import cancelled · link retained" : "import cancelled (no writes)";
 }
 
 function skillTagOf(skill: SkillCandidate): string {

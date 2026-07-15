@@ -400,6 +400,34 @@ command = "codex"
     expect(fs.files.has(RATEL_USER)).toBe(false);
   });
 
+  it("reports that a completed link is retained when the import is later cancelled", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "echo" } },
+      }),
+    );
+    const cancellations: string[] = [];
+    const prompts: PromptAdapter = {
+      ...autoConfirm(),
+      cancel(message) {
+        cancellations.push(message);
+      },
+      async confirm() {
+        return false;
+      },
+    };
+    const { ctx } = ctxOf(fs, prompts, false);
+
+    await runImport(ctx, { bin: BIN });
+
+    expect(cancellations).toEqual(["import cancelled · link retained"]);
+    const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
+    expect(claude.mcpServers["ratel-mcp"]).toBeDefined();
+    expect(claude.mcpServers.fs).toBeDefined();
+  });
+
   it("--dry-run skips execution and logs what would be written", async () => {
     const fs = new MemFs();
     const originalClaudeConfig = JSON.stringify({
