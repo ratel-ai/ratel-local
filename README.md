@@ -60,7 +60,7 @@ ratel-mcp import --agent claude-code
 ratel-mcp import --agent codex
 ```
 
-The CLI and UI use the same import sequence. If the source agent is not linked, the first step offers to link and continue, continue without linking, or cancel. The confirmed import writes selected entries to Ratel, removes those MCP entries from the source agent, and marks selected native skills invoke-only. Skipping the link is useful when importing for another linked agent, but the imported MCPs and skills are no longer directly usable from the unlinked source agent. The wizard preserves scopes and backs up every changed file.
+The CLI and UI use the same import sequence. If the source agent is not linked, the first step offers to link and continue, continue without linking, or cancel. The confirmed import writes selected entries to Ratel, removes those MCP entries from the source agent, and marks selected native skills invoke-only. Skipping the link is useful when importing for another linked agent, but the imported MCPs and skills are no longer directly usable from the unlinked source agent. The wizard preserves MCP scopes and backs up every changed MCP or agent config file. Skill management is reversible: use **Stop managing** in the UI or `ratel-mcp skill deactivate` to remove Ratel's link and restore its metadata changes.
 
 Claude Code then offers a separate, skippable Ratel statusline step. Linking itself only installs the Ratel gateway entry; install or reinstall the statusline manually with `ratel-mcp statusline install`.
 

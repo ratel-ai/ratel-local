@@ -82,6 +82,17 @@ type ConflictResolutionResult =
   | { kind: "resolved"; resolution: ConflictResolution }
   | { kind: "cancelled" };
 
+export const IMPORT_USAGE = `usage: ratel-mcp import [flags]
+
+Flags:
+  --agent auto|claude-code|codex
+                              choose the source agent (default: auto)
+  --conflict-strategy add-missing-only|replace-selected|replace-from-agent
+                              choose how matching Ratel definitions are handled
+  --dry-run                   preview changes without writing files
+  --yes                       accept non-interactive defaults
+  --help                      show this help`;
+
 export async function runImport(
   ctx: HandlerCtx,
   opts: ImportFlowOptions = {},

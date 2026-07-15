@@ -14,8 +14,8 @@ import {
 } from "@ratel-ai/mcp-core";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
-import { runImport } from "./handlers/import.js";
-import { runLink } from "./handlers/link.js";
+import { IMPORT_USAGE, runImport } from "./handlers/import.js";
+import { LINK_USAGE, runLink } from "./handlers/link.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { runServe } from "./handlers/serve.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
@@ -93,6 +93,16 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "skill" && parsed.verb === undefined) {
     log(SKILL_USAGE);
+    return {};
+  }
+
+  if (parsed.group === "import" && parsed.flags.help === true) {
+    log(IMPORT_USAGE);
+    return {};
+  }
+
+  if (parsed.group === "link" && parsed.flags.help === true) {
+    log(LINK_USAGE);
     return {};
   }
 

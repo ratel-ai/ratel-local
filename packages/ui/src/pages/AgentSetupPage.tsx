@@ -50,7 +50,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
+import { importStatuslineAction, linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
 import { availableSkillsForKind, fetchSkills, type SkillSummary } from "@/lib/skills";
 import { cn } from "@/lib/utils";
 
@@ -883,11 +883,11 @@ function PreviewFlow(props: {
     return true;
   };
 
-  const installStatuslineFromImport = async () => {
-    const installed = await runAction("Install statusline", () =>
+  const installStatuslineFromImport = async (force: boolean) => {
+    const installed = await runAction(force ? "Replace statusline" : "Install statusline", () =>
       props.request("/api/claude-statusline/install", {
         method: "POST",
-        body: { force: props.host.statusline?.status === "other" },
+        body: { force },
       }),
     );
     if (!installed) return false;
@@ -1001,6 +1001,7 @@ function PreviewFlow(props: {
               preview={preview}
               request={props.request}
               hostKind={props.hostKind}
+              statuslineStatus={props.host.statusline?.status}
               workflow={initialImportWorkflow}
               skills={props.availableSkills}
             />
@@ -1173,13 +1174,14 @@ function ImportSceneDialog(props: {
     replaceConflicts: string[],
     selectedSkills: SkillSummary[],
   ) => Promise<boolean>;
-  onInstallStatusline: () => Promise<boolean>;
+  onInstallStatusline: (force: boolean) => Promise<boolean>;
   onLink: () => Promise<boolean>;
   onOpenChange: (open: boolean) => void;
   open: boolean;
   preview: AgentPlanPreview;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   skills: SkillSummary[];
+  statuslineStatus: ClaudeStatuslineState["status"] | undefined;
   workflow: AgentImportWorkflowState;
 }) {
   const [scene, setScene] = useState<ImportScene>(
@@ -1192,6 +1194,7 @@ function ImportSceneDialog(props: {
   const [draftSkillSelection, setDraftSkillSelection] = useState<Set<string>>(new Set());
   const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("add-missing-only");
   const [replaceConflicts, setReplaceConflicts] = useState<string[]>([]);
+  const statuslineAction = importStatuslineAction(props.statuslineStatus);
   const wasOpenRef = useRef(false);
   const previewRequestIdRef = useRef(0);
   const selected = new Set(draftSelection);
@@ -1306,7 +1309,11 @@ function ImportSceneDialog(props: {
   const installStatusline = async () => {
     setCommitting(true);
     try {
-      if (!(await props.onInstallStatusline()) || workflow.step !== "statusline") return;
+      if (
+        !(await props.onInstallStatusline(statuslineAction.force)) ||
+        workflow.step !== "statusline"
+      )
+        return;
       setWorkflow(advanceAgentImportWorkflow(workflow, { type: "statusline-installed" }));
       props.onOpenChange(false);
     } finally {
@@ -1588,17 +1595,14 @@ function ImportSceneDialog(props: {
               </Button>
               <Button disabled={committing} onClick={() => void installStatusline()} type="button">
                 <FileText />
-                Install statusline
+                {statuslineAction.actionLabel}
               </Button>
             </>
           }
           kicker="Statusline"
-          title="Install the Ratel statusline?"
+          title={statuslineAction.title}
         >
-          <p className="text-sm text-muted-foreground">
-            Import is complete. Install the standalone Claude Code statusline to show context usage
-            and Ratel telemetry.
-          </p>
+          <p className="text-sm text-muted-foreground">{statuslineAction.description}</p>
         </ScenePanel>
       ) : null}
     </SceneDialog>

@@ -23,6 +23,14 @@ export interface LinkOptions {
   exists?: (path: string) => Promise<boolean>;
 }
 
+export const LINK_USAGE = `usage: ratel-mcp link [flags]
+
+Flags:
+  --agent auto|claude-code|codex
+                              choose the agent to link (default: auto)
+  --yes                       skip the confirmation prompt
+  --help                      show this help`;
+
 export async function runLink(
   ctx: HandlerCtx,
   opts: LinkOptions = {},

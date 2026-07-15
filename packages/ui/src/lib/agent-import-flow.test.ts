@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { linkThenRefreshImportPreview } from "./agent-import-flow";
+import { importStatuslineAction, linkThenRefreshImportPreview } from "./agent-import-flow";
 
 describe("linkThenRefreshImportPreview", () => {
   it("loads a fresh import preview after linking succeeds", async () => {
@@ -26,5 +26,17 @@ describe("linkThenRefreshImportPreview", () => {
       linkThenRefreshImportPreview(async () => false, loadImportPreview),
     ).resolves.toBeNull();
     expect(loadImportPreview).not.toHaveBeenCalled();
+  });
+});
+
+describe("importStatuslineAction", () => {
+  it("makes replacing a non-Ratel statusline explicit", () => {
+    expect(importStatuslineAction("other")).toEqual({
+      actionLabel: "Replace statusline",
+      description:
+        "Import is complete. Replace the existing non-Ratel Claude Code statusline with the standalone Ratel statusline?",
+      force: true,
+      title: "Replace the existing statusline?",
+    });
   });
 });

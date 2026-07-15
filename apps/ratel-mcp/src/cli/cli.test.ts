@@ -227,6 +227,22 @@ describe("runCli — help and routing", () => {
     expect(out).toMatch(/^\s*link\s/m);
   });
 
+  it("prints command-specific help for import and link without running either workflow", async () => {
+    for (const command of ["import", "link"] as const) {
+      const fs = new MemFs();
+      const logs: string[] = [];
+
+      await runCli([command, "--help", "--yes"], {
+        env: { homeDir: HOME, projectRoot: ROOT },
+        fs,
+        logger: (message) => logs.push(message),
+      });
+
+      expect(logs.join("\n")).toContain(`usage: ratel-mcp ${command}`);
+      expect(fs.files.size).toBe(0);
+    }
+  });
+
   it("--version logs the injected package version", async () => {
     const logs: string[] = [];
     await runCli(["--version"], { cliVersion: "1.2.3", logger: (m) => logs.push(m) });
