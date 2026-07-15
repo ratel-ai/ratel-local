@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { ClaudeCodeAgentHostAdapter } from "./agent-host/claude-code.js";
-import type { AgentScope } from "./agent-host/index.js";
+import type { AgentHostState } from "./agent-host/index.js";
+import { getAgentHostRatelConnection } from "./agent-host/ratel-connection.js";
 import { type BackupFs, type BackupManifest, startBackup } from "./backup.js";
-import { isRatelGatewayEntry } from "./gateway-entry.js";
 import type { HierarchyEnv } from "./hierarchy.js";
 import type { JsonFs } from "./io.js";
 import { writeJson } from "./io.js";
@@ -309,73 +309,18 @@ async function detectClaudeRatelEnabled(
   ctx: StatuslineContext,
   warnings: string[],
 ): Promise<{ enabled: boolean; sources: string[] }> {
-  const sources: string[] = [];
+  let state: AgentHostState | null = null;
   try {
-    const state = await new ClaudeCodeAgentHostAdapter().read({ env: ctx.env, fs: ctx.fs });
-    if (
-      state.scopes.some((scope) =>
-        Object.entries(scope.mcpServers).some(([name, entry]) => isRatelGatewayEntry(name, entry)),
-      )
-    ) {
-      sources.push("mcp-config");
-    }
+    state = await new ClaudeCodeAgentHostAdapter().read({ env: ctx.env, fs: ctx.fs });
   } catch (err) {
     warnings.push(`Failed to read Claude MCP config: ${(err as Error).message}`);
   }
-
-  let pluginEnabled = false;
-  for (const { scope, path } of claudeSettingsPaths(ctx.env)) {
-    const settings = await readSettingsLenient(ctx, path, warnings, scope);
-    const decision = settings ? ratelPluginDecision(settings) : undefined;
-    if (decision === "disabled") {
-      pluginEnabled = false;
-    } else if (decision === "enabled") {
-      pluginEnabled = true;
-    }
-  }
-  if (pluginEnabled) sources.push("plugin");
-  return { enabled: sources.length > 0, sources };
-}
-
-function ratelPluginDecision(
-  settings: Record<string, unknown>,
-): "enabled" | "disabled" | undefined {
-  if (pluginListHasRatel(settings.disabledPlugins)) return "disabled";
-  const enabled = settings.enabledPlugins;
-  if (Array.isArray(enabled)) return pluginListHasRatel(enabled) ? "enabled" : undefined;
-  if (isPlainObject(enabled)) {
-    let decision: "enabled" | "disabled" | undefined;
-    for (const [name, value] of Object.entries(enabled)) {
-      if (!isRatelPluginName(name)) continue;
-      decision = value === false ? "disabled" : "enabled";
-    }
-    return decision;
-  }
-  return undefined;
-}
-
-function pluginListHasRatel(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((item) => typeof item === "string" && isRatelPluginName(item))
-  );
-}
-
-function isRatelPluginName(value: string): boolean {
-  return value === "ratel-local" || value.startsWith("ratel-local@");
-}
-
-function claudeSettingsPaths(env: HierarchyEnv): Array<{ scope: AgentScope; path: string }> {
-  const paths: Array<{ scope: AgentScope; path: string }> = [
-    { scope: "user", path: claudeCodeUserSettingsPath(env) },
+  const connection = await getAgentHostRatelConnection("claude-code", state, ctx, warnings);
+  const sources = [
+    ...(connection.explicit ? ["mcp-config"] : []),
+    ...(connection.plugin ? ["plugin"] : []),
   ];
-  if (env.projectRoot) {
-    paths.push(
-      { scope: "project", path: join(env.projectRoot, ".claude", "settings.json") },
-      { scope: "local", path: join(env.projectRoot, ".claude", "settings.local.json") },
-    );
-  }
-  return paths;
+  return { enabled: connection.linked, sources };
 }
 
 async function readSettingsStrict(
@@ -398,13 +343,11 @@ async function readSettingsLenient(
   ctx: StatuslineContext,
   path: string,
   warnings: string[],
-  scope?: AgentScope,
 ): Promise<Record<string, unknown> | null> {
   try {
     return await readSettingsStrict(ctx, path);
   } catch (err) {
-    const prefix = scope ? `${scope} settings` : path;
-    warnings.push(`Failed to read ${prefix}: ${(err as Error).message}`);
+    warnings.push(`Failed to read ${path}: ${(err as Error).message}`);
     return null;
   }
 }

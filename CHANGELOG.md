@@ -5,6 +5,7 @@ All notable changes to this package are documented here. The format is based on 
 ## [Unreleased]
 
 ### Changed
+- Made Claude Code and Codex linking plugin-aware: enabled `ratel-local` plugins now count as host-level Ratel connections in CLI/UI import and link flows, avoiding a second explicit gateway; linking re-enables a disabled Codex plugin MCP server; explicit-plus-plugin duplicates are reported without automatic cleanup.
 - Renamed Ratel MCP to Ratel Local: the repository moved from `ratel-ai/ratel-mcp` to `ratel-ai/ratel-local`, the npm package changed from `@ratel-ai/mcp-server` to `@ratel-ai/ratel-local`, and the CLI changed from `ratel-mcp` to `ratel-local`. This is a breaking package/CLI rename: reinstall the new package and rename `$RATEL_MCP_BIN` to `$RATEL_LOCAL_BIN`. Existing agent gateway entries named `ratel-mcp` remain recognized during import/link migration, while rewritten entries use `ratel-local`.
 
 ## [0.4.0] - 2026-06-30

@@ -57,6 +57,7 @@ import { cn } from "@/lib/utils";
 type AgentHostKind = "claude-code" | "codex";
 type AgentScope = "user" | "project" | "local";
 type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mixed";
+type RatelConnectionKind = "none" | "explicit" | "plugin" | "duplicate";
 type ConflictStrategy = "add-missing-only" | "replace-from-agent" | "replace-selected";
 type SetupFlow = "import" | "link";
 
@@ -91,10 +92,18 @@ interface ClaudeStatuslineState {
   warnings: string[];
 }
 
+interface RatelConnectionState {
+  kind: RatelConnectionKind;
+  linked: boolean;
+  explicit: boolean;
+  plugin: boolean;
+}
+
 interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
   detection: AgentHostDetection;
+  connection: RatelConnectionState;
   posture: AgentPosture;
   nativeEntryCount: number;
   ratelEntryCount: number;
@@ -188,12 +197,12 @@ const POSTURE_COPY: Record<
   "ratel-only": {
     label: "Ratel only",
     tone: "secondary",
-    description: "Only Ratel gateway entries are configured.",
+    description: "Ratel is connected with no native MCP entries.",
   },
   mixed: {
     label: "Mixed",
     tone: "default",
-    description: "Native and Ratel entries are both present.",
+    description: "Native MCP entries exist alongside a Ratel connection.",
   },
 };
 
@@ -618,7 +627,7 @@ function AgentOperationPanel(props: {
 }) {
   const canImport =
     missingRatelEntryNames(props.host).length > 0 || props.availableSkills.length > 0;
-  const canLink = props.host.posture !== "unavailable" && props.host.ratelEntryCount === 0;
+  const canLink = props.host.posture !== "unavailable" && !props.host.connection.linked;
   const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
     <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
@@ -795,7 +804,7 @@ function PreviewFlow(props: {
 
   const agentChanges = preview?.plan.agentChanges ?? [];
   const linkedAndCovered =
-    props.host.ratelEntryCount > 0 && missingRatelEntryNames(props.host).length === 0;
+    props.host.connection.linked && missingRatelEntryNames(props.host).length === 0;
   const friendlyNoOp = Boolean(
     preview?.emptyReason && linkedAndCovered && props.availableSkills.length === 0,
   );
@@ -803,10 +812,10 @@ function PreviewFlow(props: {
     () =>
       beginAgentImportWorkflow({
         hostKind: props.hostKind,
-        linked: props.host.ratelEntryCount > 0,
+        linked: props.host.connection.linked,
         statuslineInstalled: props.host.statusline?.status === "installed",
       }),
-    [props.host.ratelEntryCount, props.host.statusline?.status, props.hostKind],
+    [props.host.connection.linked, props.host.statusline?.status, props.hostKind],
   );
 
   const applyRatel = async (
@@ -2166,7 +2175,13 @@ function LinkStatusBadge(props: { host: DetectedAgentHostSummary }) {
   if (props.host.posture === "unavailable") {
     return <StatusBadge tone="muted">Unavailable</StatusBadge>;
   }
-  if (props.host.ratelEntryCount > 0) {
+  if (props.host.connection.kind === "duplicate") {
+    return <StatusBadge tone="warning">Duplicate connection</StatusBadge>;
+  }
+  if (props.host.connection.kind === "plugin") {
+    return <StatusBadge tone="success">Linked via plugin</StatusBadge>;
+  }
+  if (props.host.connection.linked) {
     return <StatusBadge tone="success">Linked</StatusBadge>;
   }
   return <StatusBadge tone="muted">Not linked</StatusBadge>;

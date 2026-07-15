@@ -9,6 +9,7 @@ const ROOT = "/r";
 const BIN: ResolvedBin = { command: "ratel-local", args: [], source: "path" };
 
 const HOME_CLAUDE = "/home/u/.claude.json";
+const CLAUDE_SETTINGS = "/home/u/.claude/settings.json";
 const HOME_CODEX = "/home/u/.codex/config.toml";
 const PROJECT_MCP = "/r/.mcp.json";
 const RATEL_USER = "/home/u/.ratel/config.json";
@@ -74,6 +75,51 @@ function autoConfirm(): PromptAdapter {
 }
 
 describe("runLink", () => {
+  it("does nothing when Claude is already linked through the plugin", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_SETTINGS,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+    const messages: string[] = [];
+    const prompts: PromptAdapter = {
+      ...silentPromptAdapter(),
+      outro(message) {
+        messages.push(message);
+      },
+    };
+    const { ctx } = ctxOf(fs, prompts, false);
+
+    const manifest = await runLink(ctx, { yes: true, agentKind: "claude-code" });
+
+    expect(manifest).toBeNull();
+    expect(fs.files.has(HOME_CLAUDE)).toBe(false);
+    expect(messages.join("\n")).toMatch(/linked through the Ratel Local plugin/i);
+  });
+
+  it("re-enables a disabled Codex plugin MCP instead of adding an explicit gateway", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CODEX,
+      `[plugins."ratel-local@ratel"]
+enabled = true
+
+[plugins."ratel-local@ratel".mcp_servers.ratel-local]
+enabled = false
+`,
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    const manifest = await runLink(ctx, { yes: true, agentKind: "codex" });
+
+    expect(manifest).not.toBeNull();
+    const codex = fs.files.get(HOME_CODEX) as string;
+    expect(codex).toContain(
+      `[plugins."ratel-local@ratel".mcp_servers.ratel-local]\nenabled = true`,
+    );
+    expect(codex).not.toContain("[mcp_servers.ratel-local]");
+  });
+
   it("writes the Ratel gateway without removing Claude native entries", async () => {
     const fs = new MemFs();
     fs.files.set(

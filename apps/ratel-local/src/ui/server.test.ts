@@ -21,6 +21,7 @@ const PROJECT_PATH = "/r/.ratel/config.json";
 const LOCAL_PATH = "/r/.ratel/config.local.json";
 const CLAUDE_PATH = "/home/u/.claude.json";
 const CLAUDE_SETTINGS_PATH = "/home/u/.claude/settings.json";
+const CODEX_PATH = "/home/u/.codex/config.toml";
 
 class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
@@ -346,6 +347,73 @@ describe("UI server — agent previews", () => {
     expect(body.hosts.find((host) => host.kind === "claude-code")?.statusline?.ratelEnabled).toBe(
       true,
     );
+  });
+
+  it("surfaces Claude plugin linkage through host and import preview responses", async () => {
+    session.fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    session.fs.files.set(
+      CLAUDE_SETTINGS_PATH,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+
+    const hostsRes = await fetch(apiUrl("/api/agent-hosts"), { headers: authHeaders() });
+    const hostsBody = (await hostsRes.json()) as {
+      hosts: Array<{ kind: string; connection: { kind: string; linked: boolean } }>;
+    };
+    expect(hostsBody.hosts.find((host) => host.kind === "claude-code")?.connection).toEqual(
+      expect.objectContaining({ kind: "plugin", linked: true }),
+    );
+
+    const previewRes = await fetch(apiUrl("/api/agent-preview/import"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ hostKind: "claude-code" }),
+    });
+    const preview = (await previewRes.json()) as {
+      host: { connection: { kind: string; linked: boolean } };
+      plan: { agentChanges: unknown[] };
+    };
+    expect(preview.host.connection).toEqual(
+      expect.objectContaining({ kind: "plugin", linked: true }),
+    );
+    expect(preview.plan.agentChanges).toHaveLength(1);
+  });
+
+  it("surfaces Codex plugin linkage through host and import preview responses", async () => {
+    session.fs.files.set(
+      CODEX_PATH,
+      `[plugins."ratel-local@ratel"]
+enabled = true
+
+[mcp_servers.fs]
+command = "echo"
+`,
+    );
+
+    const hostsRes = await fetch(apiUrl("/api/agent-hosts"), { headers: authHeaders() });
+    const hostsBody = (await hostsRes.json()) as {
+      hosts: Array<{ kind: string; connection: { kind: string; linked: boolean } }>;
+    };
+    expect(hostsBody.hosts.find((host) => host.kind === "codex")?.connection).toEqual(
+      expect.objectContaining({ kind: "plugin", linked: true }),
+    );
+
+    const previewRes = await fetch(apiUrl("/api/agent-preview/import"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ hostKind: "codex" }),
+    });
+    const preview = (await previewRes.json()) as {
+      host: { connection: { kind: string; linked: boolean } };
+      plan: { agentChanges: unknown[] };
+    };
+    expect(preview.host.connection).toEqual(
+      expect.objectContaining({ kind: "plugin", linked: true }),
+    );
+    expect(preview.plan.agentChanges).toHaveLength(1);
   });
 
   it("previews import without writing files", async () => {

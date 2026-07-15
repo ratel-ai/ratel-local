@@ -1,4 +1,5 @@
 export * from "./agent-host/index.js";
+export * from "./agent-host/ratel-connection.js";
 export * from "./agent-import-workflow.js";
 export * from "./backup.js";
 export * from "./gateway-entry.js";

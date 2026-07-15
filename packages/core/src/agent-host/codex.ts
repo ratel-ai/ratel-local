@@ -175,6 +175,41 @@ export function rewriteCodexConfig(
   return `${trimmed}${trimmed.length > 0 ? "\n\n" : ""}${renderCodexServer(gateway.name, gateway.entry)}\n`;
 }
 
+export function rewriteCodexPluginMcpServerEnabled(
+  text: string,
+  pluginName: string,
+  serverName: string,
+): string {
+  const root = parseToml(text) as Record<string, unknown>;
+  const plugins = isPlainObject(root.plugins) ? root.plugins : null;
+  const plugin = plugins && isPlainObject(plugins[pluginName]) ? plugins[pluginName] : null;
+  const servers = plugin && isPlainObject(plugin.mcp_servers) ? plugin.mcp_servers : null;
+  const server = servers && isPlainObject(servers[serverName]) ? servers[serverName] : null;
+  if (!server || server.enabled !== false) return text;
+
+  const section = findTomlTableSections(text).find(
+    ({ path }) =>
+      path.length === 4 &&
+      path[0] === "plugins" &&
+      path[1] === pluginName &&
+      path[2] === "mcp_servers" &&
+      path[3] === serverName,
+  );
+  if (section) {
+    const body = text.slice(section.headerEnd, section.end);
+    const nextBody = body.replace(
+      /^(\s*(?:enabled|"enabled"|'enabled')\s*=\s*)false(\s*(?:#.*)?)(\r?\n|$)/m,
+      "$1true$2$3",
+    );
+    if (nextBody !== body) {
+      return `${text.slice(0, section.headerEnd)}${nextBody}${text.slice(section.end)}`;
+    }
+  }
+
+  server.enabled = true;
+  return stringifyToml(root);
+}
+
 function rewriteCodexConfigStructured(
   text: string,
   removeNames: ReadonlySet<string>,
