@@ -12,6 +12,7 @@ import type {
 } from "./agent-host/index.js";
 import {
   buildAgentImportPlan,
+  buildAgentLinkPlan,
   buildImportPlan,
   type FileChange,
   type ImportInputs,
@@ -80,6 +81,8 @@ function parseAfter(plan: ReturnType<typeof buildImportPlan>, path: string) {
 class RecordingAgentHost implements AgentHostAdapter {
   input: AgentHostPlanInput | null = null;
 
+  constructor(readonly supportedScopes: readonly AgentScope[] = ["user", "project", "local"]) {}
+
   async detect(_ctx: AgentHostContext): Promise<AgentHostDetection> {
     return { displayName: "Test Agent", present: true, reasons: [], warnings: [] };
   }
@@ -128,6 +131,23 @@ describe("buildImportPlan", () => {
     expect(ratelUser.mcpServers.fs).toEqual(FS_ENTRY);
     expect(ratelUser.mcpServers.remote).toEqual(REMOTE_ENTRY);
     expect(plan.agentChanges).toEqual([]);
+  });
+
+  it("preserves skills while importing MCP entries into the same scope", () => {
+    const plan = buildImportPlan(
+      emptyInputs({
+        agentState: agentState({ user: { fs: FS_ENTRY } }),
+        ratelUser: {
+          mcpServers: {},
+          skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+        },
+      }),
+    );
+
+    expect(parseAfter(plan, RATEL_USER)).toEqual({
+      mcpServers: { fs: FS_ENTRY },
+      skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+    });
   });
 
   it("project entries use the user+project config chain", () => {
@@ -288,17 +308,19 @@ describe("buildImportPlan", () => {
     expect(ratelUser.mcpServers.other).toEqual(REMOTE_ENTRY);
   });
 
-  it("dedups across scopes: most-specific wins", () => {
+  it("preserves same-name registrations at user and project scopes", () => {
     const plan = buildImportPlan(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY }, project: { fs: PROJ_ENTRY } }),
       }),
     );
+    const ratelUser = parseAfter(plan, RATEL_USER);
     const ratelProject = parseAfter(plan, RATEL_PROJECT);
+    expect(ratelUser.mcpServers.fs).toEqual(FS_ENTRY);
     expect(ratelProject.mcpServers.fs).toEqual(PROJ_ENTRY);
-    expect(findWrite(plan, RATEL_USER)).toBeUndefined();
     expect(plan.summary.movedFromProject).toEqual(["fs"]);
-    expect(plan.summary.movedFromUser).toEqual([]);
+    expect(plan.summary.movedFromUser).toEqual(["fs"]);
+    expect(plan.summary.skipped).toEqual([]);
   });
 
   it("filters movable entries by selection", () => {
@@ -366,7 +388,7 @@ describe("buildImportPlan", () => {
       "ratel-local": {
         type: "stdio",
         command: "ratel-local",
-        args: ["serve", "--config", RATEL_USER],
+        args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
       },
     });
   });
@@ -415,9 +437,40 @@ args = ["fs"]
       "ratel-local": {
         type: "stdio",
         command: "ratel-local",
-        args: ["serve", "--config", RATEL_USER],
+        args: ["connect", "--agent-host", "codex", "--link-scope", "user"],
         env: undefined,
       },
     });
+  });
+
+  it("links only scopes declared by the selected agent adapter", async () => {
+    const agentHost = new RecordingAgentHost(["user", "project"]);
+
+    await buildAgentLinkPlan({
+      ...emptyInputs({
+        ratelUser: { mcpServers: { user: FS_ENTRY } },
+        ratelProject: { mcpServers: { project: PROJ_ENTRY } },
+        ratelLocal: { mcpServers: { local: LOCAL_ENTRY } },
+      }),
+      agentHost,
+    });
+
+    expect(agentHost.input?.installGatewayScopes).toEqual(new Set(["user", "project"]));
+  });
+
+  it("links a scope whose Ratel document contains only skills", async () => {
+    const agentHost = new RecordingAgentHost();
+
+    await buildAgentLinkPlan({
+      ...emptyInputs({
+        ratelUser: {
+          mcpServers: {},
+          skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+        },
+      }),
+      agentHost,
+    });
+
+    expect(agentHost.input?.installGatewayScopes).toEqual(new Set(["user"]));
   });
 });

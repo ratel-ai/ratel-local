@@ -1,12 +1,43 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { readJson, writeJson } from "@ratel-ai/ratel-local-core";
-import { type DaemonRequestScope, ensureDaemonToken } from "../../daemon/access.js";
+import {
+  buildGatewayFromConfig,
+  type ConfigControlPlane,
+  type ContextSnapshotResolver,
+  createConfigControlPlane,
+  createContextSnapshotResolver,
+  createLocalGitExcludeManager,
+  createMutationEngine,
+  createProjectAdmissionLock,
+  createProjectRegistry,
+  createSkillDiscovery,
+  createSkillImportControlPlane,
+  createSkillRegistrationControlPlane,
+  migrateLegacyOAuthStores,
+  type ProjectRegistry,
+  type RuntimeContextRef,
+  readJson,
+  type SkillDiscovery,
+  type SkillImportControlPlane,
+  type SkillRegistrationControlPlane,
+  writeJson,
+} from "@ratel-ai/ratel-local-core";
+import {
+  authorizeDaemonRequest,
+  DaemonAccessError,
+  type DaemonRequestScope,
+  ensureDaemonToken,
+  readDaemonToken,
+} from "../../daemon/access.js";
 import { InMemoryMcpClientRegistry } from "../../daemon/client-registry.js";
 import { createMcpHttpRoute } from "../../daemon/mcp-http.js";
-import { InMemoryScopedGatewayPool } from "../../daemon/scoped-gateway-pool.js";
+import { ReconciledGatewayPool } from "../../daemon/reconciled-gateway-pool.js";
+import {
+  InMemoryScopedGatewayPool,
+  type ResolvedGatewaySnapshot,
+} from "../../daemon/scoped-gateway-pool.js";
 import { openBrowser } from "../../ui/open-browser.js";
-import { newSessionToken } from "../../ui/security.js";
+import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
 import { startUiServer } from "../../ui/server.js";
 import type { ParsedArgs } from "../args.js";
 import { buildConfiguredGateway, type ServeOptions } from "./serve.js";
@@ -26,6 +57,7 @@ Verbs:
   start      start the installed login service
   stop       stop the installed login service
   restart    restart the installed login service
+  open       open a fresh authenticated daemon UI session
 
 Options:
   --port N     daemon port (defaults to 5731)
@@ -74,6 +106,14 @@ interface DaemonHandlerDeps {
   platform?: NodeJS.Platform;
   probe?: ProbeDaemon;
   ensureToken?: (homeDir: string) => Promise<string>;
+  projectRegistry?: ProjectRegistry;
+  snapshotResolver?: ContextSnapshotResolver;
+  readToken?: (homeDir: string) => Promise<string | null>;
+  fetch?: typeof fetch;
+  configControlPlane?: ConfigControlPlane;
+  skillDiscovery?: SkillDiscovery;
+  skillImportControlPlane?: SkillImportControlPlane;
+  skillRegistrationControlPlane?: SkillRegistrationControlPlane;
 }
 
 export interface DaemonServiceStatus {
@@ -123,6 +163,10 @@ export async function runDaemon(
     await startDaemon(parsed, ctx, log, opts);
     return {};
   }
+  if (verb === "open") {
+    await openDaemonUi(parsed, ctx, opts);
+    return {};
+  }
   throw new Error(`unknown daemon verb: ${verb}`);
 }
 
@@ -169,14 +213,99 @@ export async function runDaemonServer(
   const port = parseDaemonPort(parsed.flags.port);
   const noOpen = parsed.flags.open === false;
   const token = newSessionToken();
+  const uiSessions = new InMemoryUiSessionTokens([token]);
   const startedAt = (opts.now ?? (() => new Date()))();
   const registry = new InMemoryMcpClientRegistry();
+  const projectRegistry =
+    opts.projectRegistry ?? createProjectRegistry({ homeDir: ctx.env.homeDir });
+  const projectAdmissionLock = createProjectAdmissionLock({
+    controlDir: join(ctx.env.homeDir, ".ratel"),
+  });
+  const snapshotResolver =
+    opts.snapshotResolver ??
+    createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry });
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
-  const gatewayPool = new InMemoryScopedGatewayPool(async (scope) => {
+  const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
+    if (scope.resolvedContext) {
+      return buildGatewayFromConfig(
+        { mcpServers: {} },
+        {
+          transportFactory: options.transportFactory,
+          logger: log,
+          resolvedMcpEntries: scope.resolvedContext.mcpEntries,
+          resolvedSkills: scope.resolvedContext.skills.effectiveSkills,
+        },
+      );
+    }
     const scoped = scopeBuildInputs(parsed, ctx, options, scope);
     return (await buildConfiguredGateway(scoped.parsed, scoped.options, log)).gateway;
   }, log);
+  const useResolvedControlPlane =
+    options.readConfig === undefined && (isAutoConfig(parsed) || parsed.configPaths.length === 0);
+  const mutationEngine = useResolvedControlPlane
+    ? await createMutationEngine({ controlDir: join(ctx.env.homeDir, ".ratel") })
+    : undefined;
+  // Recover any interrupted config ownership change before snapshots drive OAuth
+  // migration; otherwise a transient half-transaction could mis-scope credentials.
+  if (useResolvedControlPlane) {
+    await migrateDaemonOAuthStores(ctx.env.homeDir, projectRegistry, snapshotResolver, log);
+  }
+  const localGitExcludeManager = useResolvedControlPlane
+    ? createLocalGitExcludeManager()
+    : undefined;
+  const configControlPlane = useResolvedControlPlane
+    ? (opts.configControlPlane ??
+      (await createConfigControlPlane({
+        homeDir: ctx.env.homeDir,
+        projectRegistry,
+        mutationEngine,
+        localGitExcludeManager,
+      })))
+    : undefined;
+  const skillDiscovery = useResolvedControlPlane
+    ? (opts.skillDiscovery ??
+      createSkillDiscovery({
+        homeDir: ctx.env.homeDir,
+        registeredProjectRoots: async () =>
+          (await projectRegistry.list()).map(({ canonicalRoot }) => canonicalRoot),
+      }))
+    : undefined;
+  const skillImportControlPlane =
+    useResolvedControlPlane && mutationEngine && skillDiscovery
+      ? (opts.skillImportControlPlane ??
+        createSkillImportControlPlane({
+          homeDir: ctx.env.homeDir,
+          projectRegistry,
+          discovery: skillDiscovery,
+          mutationEngine,
+          localGitExcludeManager,
+        }))
+      : undefined;
+  const skillRegistrationControlPlane =
+    useResolvedControlPlane && mutationEngine && configControlPlane
+      ? (opts.skillRegistrationControlPlane ??
+        createSkillRegistrationControlPlane({
+          homeDir: ctx.env.homeDir,
+          projectRegistry,
+          configControlPlane,
+          snapshotResolver,
+          mutationEngine,
+          localGitExcludeManager,
+        }))
+      : undefined;
+  const reconciledGatewayPool = useResolvedControlPlane
+    ? new ReconciledGatewayPool({
+        generations: generationPool,
+        registry: projectRegistry,
+        resolver: snapshotResolver,
+        admissionLock: projectAdmissionLock,
+        onRevision: (context, revision) => registry.setCurrentRevision(context, revision),
+        onInvalidSnapshot: (context, error) => registry.setInvalidContext(context, error.message),
+        log,
+      })
+    : undefined;
+  const gatewayPool = reconciledGatewayPool ?? generationPool;
   const mcp = createMcpHttpRoute({
     gatewayPool,
     daemonToken,
@@ -200,6 +329,64 @@ export async function runDaemonServer(
     token,
     port,
     activeMcpClients: registry,
+    projectRegistry,
+    projectAdmissionLock,
+    canForgetProject: (project) =>
+      !registry
+        .listActiveClients()
+        .some(
+          (client) =>
+            (client.context.kind === "project" && client.context.projectId === project.id) ||
+            client.projectRoot === project.canonicalRoot,
+        ) &&
+      !gatewayPool
+        .stats()
+        .generations.some(
+          (generation) =>
+            generation.context.kind === "project" &&
+            generation.context.projectId === project.id &&
+            generation.activeLeaseCount > 0,
+        ),
+    configControlPlane,
+    snapshotResolver,
+    skillDiscovery,
+    skillImportControlPlane,
+    skillRegistrationControlPlane,
+    onScopedMutationCommitted: reconciledGatewayPool
+      ? async (targets) => {
+          const contexts = new Map<string, RuntimeContextRef>();
+          for (const target of targets) {
+            if (target.scope === "user") {
+              contexts.set("global", { kind: "global" });
+              for (const client of registry.listActiveClients()) {
+                const key =
+                  client.context.kind === "global"
+                    ? "global"
+                    : `project:${client.context.projectId}`;
+                contexts.set(key, client.context);
+              }
+            } else {
+              contexts.set(`project:${target.projectId}`, {
+                kind: "project",
+                projectId: target.projectId,
+              });
+            }
+          }
+          for (const context of contexts.values()) {
+            try {
+              await reconciledGatewayPool.reconcileContext(context);
+            } catch (error) {
+              log(
+                `[ratel] post-commit snapshot is invalid for ${
+                  context.kind === "global" ? "global" : context.projectId
+                }: ${(error as Error).message}`,
+              );
+            }
+          }
+        }
+      : undefined,
+    daemonToken,
+    sessionTokens: uiSessions,
     publicRoute: async (req, res, path) => {
       if (req.method === "GET" && path === "/healthz") {
         writePlain(res, 200, "ok\n");
@@ -219,6 +406,23 @@ export async function runDaemonServer(
         });
         return true;
       }
+      if (req.method === "POST" && path === "/api/ui/sessions") {
+        try {
+          authorizeDaemonRequest(req.headers, daemonToken);
+        } catch (error) {
+          if (error instanceof DaemonAccessError) {
+            writeJsonResponse(res, error.status, { error: error.message });
+            return true;
+          }
+          throw error;
+        }
+        const requestPort = (req.socket.localPort as number | undefined) ?? port;
+        const sessionToken = uiSessions.issue();
+        writeJsonResponse(res, 201, {
+          url: `http://127.0.0.1:${requestPort}/global/?t=${sessionToken}`,
+        });
+        return true;
+      }
       if (path !== "/mcp") return false;
       await mcp.handleRequest(req, res);
       return true;
@@ -228,7 +432,9 @@ export async function runDaemonServer(
   const state = stateForPort(ui.port);
   await writeDaemonState(ctx, state);
 
-  log(`[ratel] daemon running at ${ui.url}`);
+  // Never persist the bearer-bearing UI URL in service logs. `daemon open`
+  // obtains a fresh in-memory session through the daemon-token exchange.
+  log(`[ratel] daemon running at ${state.uiUrl}`);
   log(`[ratel] daemon UI: ${state.uiUrl}`);
   log(`[ratel] MCP HTTP endpoint: ${state.mcpUrl}`);
   log("[ratel] ready for scoped MCP clients");
@@ -247,11 +453,71 @@ export async function runDaemonServer(
   };
 }
 
+async function migrateDaemonOAuthStores(
+  homeDir: string,
+  registry: ProjectRegistry,
+  resolver: ContextSnapshotResolver,
+  log: (message: string) => void,
+): Promise<void> {
+  const contexts = [
+    { kind: "global" as const },
+    ...(await registry.list())
+      .filter(({ status }) => status === "available")
+      .map(({ id }) => ({ kind: "project" as const, projectId: id })),
+  ];
+  const entries = [];
+  for (const context of contexts) {
+    try {
+      entries.push(...(await resolver.resolve(context)).mcpEntries);
+    } catch (error) {
+      log(
+        `[ratel] skipped OAuth migration because a context is invalid: ${(error as Error).message}`,
+      );
+      return;
+    }
+  }
+  try {
+    const report = await migrateLegacyOAuthStores({ homeDir, entries });
+    for (const item of report.migrated) {
+      log(`[ratel] migrated legacy OAuth state for ${item.serverName}`);
+    }
+    for (const diagnostic of report.diagnostics) {
+      log(`[ratel] ${diagnostic.message}`);
+    }
+  } catch (error) {
+    log(`[ratel] OAuth migration failed safely: ${(error as Error).message}`);
+  }
+}
+
+async function openDaemonUi(
+  parsed: ParsedArgs,
+  ctx: HandlerCtx,
+  opts: DaemonHandlerDeps,
+): Promise<void> {
+  const port = await daemonPort(parsed, ctx);
+  const daemonToken = await (opts.readToken ?? readDaemonToken)(ctx.env.homeDir);
+  if (!daemonToken) throw new Error('daemon token is missing; run "ratel-local daemon install"');
+  const response = await (opts.fetch ?? fetch)(`http://127.0.0.1:${port}/api/ui/sessions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(`daemon refused UI session: HTTP ${response.status}`);
+  }
+  const body = (await response.json()) as { url?: unknown };
+  if (typeof body.url !== "string") throw new Error("daemon returned an invalid UI session");
+  await (opts.open ?? openBrowser)(body.url);
+}
+
+function isAutoConfig(parsed: ParsedArgs): boolean {
+  return parsed.flags["auto-config"] === true || parsed.flags["auto-config"] === "true";
+}
+
 function scopeBuildInputs(
   parsed: ParsedArgs,
   ctx: HandlerCtx,
   options: ServeOptions,
-  scope: DaemonRequestScope,
+  scope: DaemonRequestScope | ResolvedGatewaySnapshot,
 ): { parsed: ParsedArgs; options: ServeOptions } {
   const autoConfig = parsed.flags["auto-config"];
   if (autoConfig !== true && autoConfig !== "true") {
@@ -270,7 +536,7 @@ function scopeBuildInputs(
       env: { homeDir: ctx.env.homeDir },
       processEnv,
       cwd: scope.kind === "project" ? scope.projectRoot : ctx.env.homeDir,
-      ...(scope.kind === "user" ? { existsSync: () => false } : {}),
+      ...(scope.kind !== "project" ? { existsSync: () => false } : {}),
     },
   };
 }
@@ -720,7 +986,7 @@ function parseDaemonPort(raw: unknown): number {
 function configMode(parsed: ParsedArgs): DaemonState["configMode"] {
   if (parsed.flags["auto-config"] === true) return "auto";
   if (parsed.configPaths.length > 0) return "explicit";
-  return "default";
+  return "auto";
 }
 
 function escapePlist(value: string): string {

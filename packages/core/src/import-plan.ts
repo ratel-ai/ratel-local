@@ -66,6 +66,7 @@ export interface BuildImportPlanOptions {
   selection?: ReadonlySet<string> | readonly string[];
   conflictStrategy?: ImportConflictStrategy;
   replaceConflicts?: ReadonlySet<string> | readonly string[];
+  installGateway?: boolean;
 }
 
 interface ScopeBundle {
@@ -109,23 +110,6 @@ export function buildImportPlan(
     filterBundle(g, selection);
     filterBundle(p, selection);
     filterBundle(l, selection);
-  }
-
-  // Cross-scope dedup: most specific wins.
-  for (const name of g.movableNames.slice()) {
-    if (l.movableEntries[name]) {
-      removeFromBundle(g, name);
-      skipped.push({ name, scope: "user", reason: "shadowed by local scope" });
-    } else if (p.movableEntries[name]) {
-      removeFromBundle(g, name);
-      skipped.push({ name, scope: "user", reason: "shadowed by project scope" });
-    }
-  }
-  for (const name of p.movableNames.slice()) {
-    if (l.movableEntries[name]) {
-      removeFromBundle(p, name);
-      skipped.push({ name, scope: "project", reason: "shadowed by local scope" });
-    }
   }
 
   // Drop project/local scopes entirely if their paths are not configured.
@@ -257,12 +241,13 @@ export async function buildAgentImportPlan(
     if (moved.length > 0) removeEntriesByScope.set(scope, new Set(moved));
   }
   const installGatewayScopes = new Set<AgentScope>();
-  for (const scopeState of inputs.agentState.scopes) {
-    if (!removeEntriesByScope.has(scopeState.scope)) continue;
-    const hasLegacyGateway = Object.entries(scopeState.mcpServers).some(
-      ([name, entry]) => name !== "ratel-local" && isRatelGatewayEntry(name, entry),
-    );
-    if (hasLegacyGateway) installGatewayScopes.add(scopeState.scope);
+  const hasExplicitGateway = inputs.agentState.scopes.some((scopeState) =>
+    Object.entries(scopeState.mcpServers).some(([name, entry]) =>
+      isRatelGatewayEntry(name, entry),
+    ),
+  );
+  if (options.installGateway ?? hasExplicitGateway) {
+    for (const scope of removeEntriesByScope.keys()) installGatewayScopes.add(scope);
   }
   const agentHostChanges = await inputs.agentHost.planChanges({
     state: inputs.agentState,
@@ -285,7 +270,18 @@ export async function buildAgentImportPlan(
 export async function buildAgentLinkPlan(
   inputs: ImportInputs & { agentHost: AgentHostAdapter; agentState: AgentHostState },
 ): Promise<ImportPlan> {
-  const installGatewayScopes = collectLinkableAgentScopes(inputs.agentState);
+  const installGatewayScopes = collectRatelScopesWithEntries(
+    inputs,
+    new Set(inputs.agentHost.supportedScopes),
+  );
+  if (installGatewayScopes.size === 0) {
+    const userScope = inputs.agentState.scopes.find(
+      (scope) => scope.scope === "user" && scope.available,
+    );
+    if (userScope && inputs.agentHost.supportedScopes.includes("user")) {
+      installGatewayScopes.add("user");
+    }
+  }
   const agentHostChanges = await inputs.agentHost.planChanges({
     state: inputs.agentState,
     bin: inputs.bin,
@@ -305,10 +301,36 @@ export async function buildAgentLinkPlan(
   };
 }
 
-function collectLinkableAgentScopes(state: AgentHostState): Set<AgentScope> {
+function collectRatelScopesWithEntries(
+  inputs: ImportInputs,
+  supportedScopes: ReadonlySet<AgentScope>,
+): Set<AgentScope> {
   const out = new Set<AgentScope>();
-  for (const scope of state.scopes) if (scope.available) out.add(scope.scope);
+  if (supportedScopes.has("user") && hasRuntimeContent(inputs.ratelUser)) {
+    out.add("user");
+  }
+  if (
+    supportedScopes.has("project") &&
+    inputs.ratelProjectPath &&
+    hasRuntimeContent(inputs.ratelProject)
+  ) {
+    out.add("project");
+  }
+  if (
+    supportedScopes.has("local") &&
+    inputs.ratelLocalPath &&
+    hasRuntimeContent(inputs.ratelLocal)
+  ) {
+    out.add("local");
+  }
   return out;
+}
+
+function hasRuntimeContent(config: RatelConfig | null): boolean {
+  if (!config) return false;
+  if (Object.keys(config.mcpServers).length > 0) return true;
+  if (Object.keys(config.skills?.entries ?? {}).length > 0) return true;
+  return (config.skills?.dirs?.length ?? 0) > 0;
 }
 
 function emptyImportSummary(conflictStrategy: ImportConflictStrategy): ImportPlan["summary"] {
@@ -379,7 +401,7 @@ function applyConflictStrategy(
     out[name] = bundle.movableEntries[name];
   }
   if (!ratel && Object.keys(out).length === 0) return null;
-  return { mcpServers: out };
+  return ratel ? { ...ratel, mcpServers: out } : { mcpServers: out };
 }
 
 export function conflictKey(scope: AgentScope, name: string): string {

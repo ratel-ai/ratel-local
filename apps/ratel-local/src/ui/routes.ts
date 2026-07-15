@@ -1,14 +1,15 @@
 import { type SpawnOptions, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { type Dirent, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   type AuthFlowResult,
   addServerEntry,
   applyAgentImportAgent,
   applyAgentImportRatel,
   applyAgentLink,
+  applyCombinedAgentImport,
   assertRatelScope,
   authorizeServer,
   editServerEntry,
@@ -24,6 +25,8 @@ import {
   previewAgentLink,
   type ResolvedBin,
   removeAgentRatelMcpFallback,
+  type RuntimeContextRef,
+  type RuntimeRevision,
   removeServerEntry,
   type ServerEntry,
   type SupportedAgentHostKind,
@@ -60,13 +63,21 @@ export interface ActiveMcpClientSummary {
   userAgent?: string;
   remoteAddress?: string;
   capabilities: string[];
+  context: RuntimeContextRef;
+  runtimeRevision: RuntimeRevision;
+  stale: boolean;
   scope: "user" | "project";
   scopeKey: string;
   projectRoot?: string;
+  connectorProtocolVersion?: string;
+  agentHost?: "claude-code" | "codex";
+  linkScope?: "user" | "project" | "local";
+  connectorVersion?: string;
 }
 
 export interface ActiveMcpClientReader {
   listActiveClients(): ActiveMcpClientSummary[];
+  currentRevision?(context: RuntimeContextRef): RuntimeRevision | undefined;
 }
 
 function ok(body: unknown): ApiResponse {
@@ -93,8 +104,21 @@ export async function getAgentHosts(ctx: HandlerCtx): Promise<ApiResponse> {
   return ok(await getAgentHostsState(ctx));
 }
 
-export function getMcpClients(registry?: ActiveMcpClientReader): ApiResponse {
-  return ok({ clients: registry?.listActiveClients() ?? [] });
+export function getMcpClients(
+  registry?: ActiveMcpClientReader,
+  context: RuntimeContextRef = { kind: "global" },
+): ApiResponse {
+  const clients = (registry?.listActiveClients() ?? []).filter((client) =>
+    sameRuntimeContext(client.context, context),
+  );
+  return ok({ clients });
+}
+
+function sameRuntimeContext(a: RuntimeContextRef, b: RuntimeContextRef): boolean {
+  return (
+    a.kind === b.kind &&
+    (a.kind === "global" || (b.kind === "project" && a.projectId === b.projectId))
+  );
 }
 
 /** Where a skill sits: an unmanaged skill's agent, or "ratel" for managed ones. */
@@ -258,6 +282,7 @@ export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse
     body: parsed.body,
     state: kind === "managed" ? "active" : "available",
     source,
+    editable: kind === "managed" && (await isOwnedEditableSkill(found.filePath, id)),
   });
 }
 
@@ -321,6 +346,11 @@ export async function createSkillRoute(
   const contents = buildSkillMd({ name, description, tags, body: skillBody });
   await mkdir(skillDir, { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), contents, "utf8");
+  await writeFile(
+    join(skillDir, ".ratel-skill.json"),
+    `${JSON.stringify({ version: 1, id: name }, null, 2)}\n`,
+    "utf8",
+  );
   return ok({ created: name });
 }
 
@@ -351,6 +381,15 @@ export async function updateSkillRoute(
       body: { error: "manage the skill with Ratel before editing it", isError: true },
     };
   }
+  if (!(await isOwnedEditableSkill(found.filePath, id))) {
+    return {
+      status: 409,
+      body: {
+        error: "only a real Ratel-owned copy with a matching marker can be edited",
+        isError: true,
+      },
+    };
+  }
   const description = requiredString(body.description, "description");
   const tags = optionalStringArray(body.tags, "tags") ?? [];
   // Distinguish "omitted" (a malformed request) from an intentionally empty
@@ -360,6 +399,21 @@ export async function updateSkillRoute(
   const contents = rewriteSkillMd(found.raw, { description, tags, body: nextBody });
   await writeFileAtomic(found.filePath, contents);
   return ok({ updated: id });
+}
+
+async function isOwnedEditableSkill(filePath: string, id: string): Promise<boolean> {
+  const skillDir = dirname(filePath);
+  try {
+    const info = await lstat(skillDir);
+    if (!info.isDirectory() || info.isSymbolicLink()) return false;
+    const marker = JSON.parse(await readFile(join(skillDir, ".ratel-skill.json"), "utf8")) as {
+      version?: unknown;
+      id?: unknown;
+    };
+    return marker.version === 1 && marker.id === id;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -632,6 +686,19 @@ export async function applyImportAgent(
   return ok({ log });
 }
 
+export async function applyCombinedImport(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  const { result, log } = await withCapture(ctx, (c) =>
+    applyCombinedAgentImport(c, normalizeCombinedApplyImportBody(body), {
+      envVar: resolveRatelBin(),
+    }),
+  );
+  if (!result) log.push("nothing to apply");
+  return ok({ log });
+}
+
 export async function applyLink(
   ctx: HandlerCtx,
   body: Record<string, unknown>,
@@ -762,6 +829,21 @@ function normalizeApplyImportBody(body: Record<string, unknown>) {
   return {
     ...normalizeImportBody(body),
     planHash: requiredString(body.planHash, "planHash"),
+  };
+}
+
+function normalizeCombinedApplyImportBody(body: Record<string, unknown>) {
+  const stageHashes = body.stageHashes;
+  if (typeof stageHashes !== "object" || stageHashes === null || Array.isArray(stageHashes)) {
+    throw new Error("stageHashes must contain ratel and agent hashes");
+  }
+  const hashes = stageHashes as Record<string, unknown>;
+  return {
+    ...normalizeImportBody(body),
+    stageHashes: {
+      ratel: requiredString(hashes.ratel, "stageHashes.ratel"),
+      agent: requiredString(hashes.agent, "stageHashes.agent"),
+    },
   };
 }
 

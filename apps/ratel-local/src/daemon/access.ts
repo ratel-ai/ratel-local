@@ -3,9 +3,23 @@ import { chmod, mkdir, open, readFile, realpath, stat } from "node:fs/promises";
 import type { IncomingHttpHeaders } from "node:http";
 import { join } from "node:path";
 
-export const CONNECTOR_PROTOCOL_VERSION = "1";
+export const CONNECTOR_PROTOCOL_VERSION = "2";
 export const CONNECTOR_PROTOCOL_HEADER = "x-ratel-connector-protocol";
 export const PROJECT_ROOT_HEADER = "x-ratel-project-root";
+export const AGENT_HOST_HEADER = "x-ratel-agent-host";
+export const LINK_SCOPE_HEADER = "x-ratel-link-scope";
+export const CONNECTOR_VERSION_HEADER = "x-ratel-connector-version";
+const LEGACY_CONNECTOR_PROTOCOL_VERSION = "1";
+
+export type DeclaredAgentHost = "claude-code" | "codex";
+export type AgentLinkScope = "user" | "project" | "local";
+
+export interface ConnectorMetadata {
+  connectorProtocolVersion?: string;
+  agentHost?: DeclaredAgentHost;
+  linkScope?: AgentLinkScope;
+  connectorVersion?: string;
+}
 
 export type DaemonRequestScope = { kind: "user" } | { kind: "project"; projectRoot: string };
 
@@ -64,13 +78,56 @@ export async function readDaemonToken(homeDir: string): Promise<string | null> {
   }
 }
 
-export function connectorHeaders(token: string, projectRoot?: string): Record<string, string> {
+export function connectorHeaders(
+  token: string,
+  projectRoot?: string,
+  metadata: Omit<ConnectorMetadata, "connectorProtocolVersion"> = {},
+): Record<string, string> {
   return {
     authorization: `Bearer ${token}`,
     [CONNECTOR_PROTOCOL_HEADER]: CONNECTOR_PROTOCOL_VERSION,
     ...(projectRoot
       ? { [PROJECT_ROOT_HEADER]: Buffer.from(projectRoot, "utf8").toString("base64url") }
       : {}),
+    ...(metadata.agentHost ? { [AGENT_HOST_HEADER]: metadata.agentHost } : {}),
+    ...(metadata.linkScope ? { [LINK_SCOPE_HEADER]: metadata.linkScope } : {}),
+    ...(metadata.connectorVersion ? { [CONNECTOR_VERSION_HEADER]: metadata.connectorVersion } : {}),
+  };
+}
+
+export function connectorMetadataFromHeaders(
+  headers: IncomingHttpHeaders | Record<string, string | string[] | undefined>,
+): ConnectorMetadata {
+  const connectorProtocolVersion = firstHeader(headers[CONNECTOR_PROTOCOL_HEADER]);
+  if (connectorProtocolVersion !== CONNECTOR_PROTOCOL_VERSION) {
+    return connectorProtocolVersion ? { connectorProtocolVersion } : {};
+  }
+
+  const agentHost = firstHeader(headers[AGENT_HOST_HEADER]);
+  const linkScope = firstHeader(headers[LINK_SCOPE_HEADER]);
+  const connectorVersion = firstHeader(headers[CONNECTOR_VERSION_HEADER]);
+  if (agentHost !== undefined && agentHost !== "claude-code" && agentHost !== "codex") {
+    throw new DaemonAccessError(`invalid connector agent host: ${agentHost}`, 400);
+  }
+  if (
+    linkScope !== undefined &&
+    linkScope !== "user" &&
+    linkScope !== "project" &&
+    linkScope !== "local"
+  ) {
+    throw new DaemonAccessError(`invalid connector link scope: ${linkScope}`, 400);
+  }
+  if (
+    connectorVersion !== undefined &&
+    (!connectorVersion || connectorVersion.length > 256 || connectorVersion.includes("\0"))
+  ) {
+    throw new DaemonAccessError("invalid connector version", 400);
+  }
+  return {
+    connectorProtocolVersion,
+    ...(agentHost ? { agentHost } : {}),
+    ...(linkScope ? { linkScope } : {}),
+    ...(connectorVersion ? { connectorVersion } : {}),
   };
 }
 
@@ -80,15 +137,15 @@ export async function resolveDaemonRequestScope(
 ): Promise<DaemonRequestScope> {
   authorizeDaemonRequest(headers, expectedToken);
   const encodedRoot = firstHeader(headers[PROJECT_ROOT_HEADER]);
-  const protocol = firstHeader(headers[CONNECTOR_PROTOCOL_HEADER]);
-  if (protocol !== undefined && protocol !== CONNECTOR_PROTOCOL_VERSION) {
+  const protocol = connectorMetadataFromHeaders(headers).connectorProtocolVersion;
+  if (protocol !== undefined && !isSupportedConnectorProtocol(protocol)) {
     throw new DaemonAccessError(
-      `unsupported connector protocol ${protocol}; expected ${CONNECTOR_PROTOCOL_VERSION}`,
+      `unsupported connector protocol ${protocol}; expected ${LEGACY_CONNECTOR_PROTOCOL_VERSION} or ${CONNECTOR_PROTOCOL_VERSION}`,
       426,
     );
   }
   if (!encodedRoot) return { kind: "user" };
-  if (protocol !== CONNECTOR_PROTOCOL_VERSION) {
+  if (!protocol || !isSupportedConnectorProtocol(protocol)) {
     throw new DaemonAccessError(
       "project-scoped connections require a compatible connector protocol",
       426,
@@ -116,6 +173,10 @@ export async function resolveDaemonRequestScope(
   } catch (err) {
     throw new DaemonAccessError(`project root is unavailable: ${(err as Error).message}`, 400);
   }
+}
+
+function isSupportedConnectorProtocol(protocol: string): boolean {
+  return protocol === LEGACY_CONNECTOR_PROTOCOL_VERSION || protocol === CONNECTOR_PROTOCOL_VERSION;
 }
 
 export function authorizeDaemonRequest(

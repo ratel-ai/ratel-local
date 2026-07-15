@@ -5,6 +5,7 @@ import {
   Download,
   FolderOpen,
   House,
+  LayoutGrid,
   LinkIcon,
   Plus,
   RadioTower,
@@ -13,9 +14,18 @@ import {
   Sparkles,
   UserCircle,
 } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand-logo";
+import { ContextSwitcher } from "@/components/context-switcher";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -56,6 +66,16 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { type ProjectView, projectsFromResponse } from "@/lib/projects";
+import {
+  contextPagePath,
+  contextualizeApiPath,
+  legacyGlobalPath,
+  pageSuffixFromPathname,
+  type RuntimeUiContext,
+  runtimeContextFromPathname,
+  safeRememberedRoute,
+} from "@/lib/runtime-context";
 import { cn } from "@/lib/utils";
 import "./App.css";
 
@@ -106,6 +126,12 @@ export interface ConfigResponse {
   scopes: Record<RatelScope, ScopeState>;
   backups: BackupManifest[];
   toolTokenEstimatesByServer: Record<string, ServerToolTokenEstimate>;
+  documents?: Array<{
+    ref: { scope: RatelScope; projectId?: string };
+    documentRevision: string;
+    path: string;
+  }>;
+  runtimeRevision?: string;
 }
 
 export interface ServerToolTokenEstimate {
@@ -179,8 +205,14 @@ type SetupIntent = { id: number; kind: "import" | "link" };
 interface RatelAppContextValue {
   busy: boolean;
   config: ConfigResponse | null;
+  context: RuntimeUiContext;
+  pagePath: (page: string) => string;
+  projects: ProjectView[];
+  projectsError: string | null;
+  projectsLoading: boolean;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   refresh: () => Promise<void>;
+  refreshProjects: () => Promise<void>;
   runAction: (
     label: string,
     action: () => Promise<{ log?: string[] } | unknown>,
@@ -195,13 +227,38 @@ interface RatelAppContextValue {
 const RatelAppContext = createContext<RatelAppContextValue | null>(null);
 
 export const SCOPES: RatelScope[] = ["user", "project", "local"];
+const LAST_ROUTE_STORAGE_KEY = "ratel:last-route:v1";
 
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const token = tokenFromSearch(location.searchStr);
-  const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const [agentHosts, setAgentHosts] = useState<DetectedAgentHostSummary[]>([]);
+  const parsedRuntimeContext = runtimeContextFromPathname(location.pathname);
+  const runtimeContextKind = parsedRuntimeContext.kind;
+  const runtimeProjectId =
+    parsedRuntimeContext.kind === "project" ? parsedRuntimeContext.projectId : null;
+  const runtimeContext = useMemo<RuntimeUiContext>(
+    () =>
+      runtimeContextKind === "project"
+        ? { kind: "project", projectId: runtimeProjectId ?? "" }
+        : { kind: runtimeContextKind },
+    [runtimeContextKind, runtimeProjectId],
+  );
+  const runtimeContextKey =
+    runtimeContext.kind === "project" ? `project:${runtimeContext.projectId}` : runtimeContext.kind;
+  const [configState, setConfigState] = useState<{
+    contextKey: string;
+    value: ConfigResponse | null;
+  }>({ contextKey: "", value: null });
+  const [agentHostsState, setAgentHostsState] = useState<{
+    contextKey: string;
+    value: DetectedAgentHostSummary[];
+  }>({ contextKey: "", value: [] });
+  const config = configState.contextKey === runtimeContextKey ? configState.value : null;
+  const agentHosts = agentHostsState.contextKey === runtimeContextKey ? agentHostsState.value : [];
+  const [projects, setProjects] = useState<ProjectView[]>([]);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [setupIntent, setSetupIntent] = useState<SetupIntent | null>(null);
@@ -229,7 +286,8 @@ export function AppShell() {
       if (body !== undefined && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
-      const res = await fetch(path, { ...init, headers, body });
+      const requestPath = contextualizeApiPath(path, runtimeContext, init.method ?? "GET");
+      const res = await fetch(requestPath, { ...init, headers, body });
       const payload = await readJson(res);
       if (!res.ok) {
         const message =
@@ -240,38 +298,74 @@ export function AppShell() {
       }
       return payload as T;
     },
-    [token],
+    [runtimeContext, token],
   );
 
   const refresh = useCallback(async () => {
+    if (runtimeContext.kind === "all") {
+      setConfigState({ contextKey: runtimeContextKey, value: null });
+      return;
+    }
     try {
-      setConfig(await request<ConfigResponse>("/api/config"));
+      const value = await request<ConfigResponse>("/api/config");
+      setConfigState({ contextKey: runtimeContextKey, value });
     } catch (err) {
       notify((err as Error).message, "error");
     }
-  }, [notify, request]);
+  }, [notify, request, runtimeContext.kind, runtimeContextKey]);
 
   useEffect(() => {
-    if (token) void refresh();
-  }, [refresh, token]);
+    if (token && runtimeContext.kind !== "all") void refresh();
+  }, [refresh, runtimeContext.kind, token]);
 
   const refreshAgentHosts = useCallback(async () => {
-    if (!token) return;
+    if (!token || runtimeContext.kind === "all") return;
     try {
       const body = await request<AgentHostsResponse>("/api/agent-hosts");
-      setAgentHosts(body.hosts);
+      setAgentHostsState({ contextKey: runtimeContextKey, value: body.hosts });
     } catch (err) {
       notify((err as Error).message, "error");
     }
-  }, [notify, request, token]);
+  }, [notify, request, runtimeContext.kind, runtimeContextKey, token]);
 
   useEffect(() => {
-    if (token) void refreshAgentHosts();
-  }, [refreshAgentHosts, token]);
+    if (token && runtimeContext.kind !== "all") void refreshAgentHosts();
+  }, [refreshAgentHosts, runtimeContext.kind, token]);
 
   useEffect(() => {
     if (commandOpen && token) void refreshAgentHosts();
   }, [commandOpen, refreshAgentHosts, token]);
+
+  const refreshProjects = useCallback(async () => {
+    if (!token) return;
+    setProjectsLoading(true);
+    try {
+      const body = await request<unknown>("/api/projects");
+      setProjects(projectsFromResponse(body));
+      setProjectsError(null);
+    } catch (err) {
+      setProjectsError(err instanceof Error ? err.message : "Failed to load projects");
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, [request, token]);
+
+  useEffect(() => {
+    if (token) void refreshProjects();
+  }, [refreshProjects, token]);
+
+  useEffect(() => {
+    const rememberedPath =
+      location.pathname === "/"
+        ? safeRememberedRoute(window.localStorage.getItem(LAST_ROUTE_STORAGE_KEY))
+        : null;
+    const redirectPath = rememberedPath ?? legacyGlobalPath(location.pathname);
+    if (redirectPath) {
+      void navigate({ replace: true, to: `${redirectPath}${location.searchStr}` } as never);
+      return;
+    }
+    window.localStorage.setItem(LAST_ROUTE_STORAGE_KEY, location.pathname);
+  }, [location.pathname, location.searchStr, navigate]);
 
   const runAction = useCallback(
     async (label: string, action: () => Promise<{ log?: string[] } | unknown>) => {
@@ -293,28 +387,45 @@ export function AppShell() {
     [notify, refresh],
   );
 
+  const pagePath = useCallback(
+    (page: string) => withToken(contextPagePath(runtimeContext, page), token),
+    [runtimeContext, token],
+  );
+
   const goTo = useCallback(
     (to: "/" | "/agent-setup" | "/skills" | "/clients") => {
-      const tokenizedPath = token ? `${to}?t=${encodeURIComponent(token)}` : to;
-      void navigate({ to: tokenizedPath } as never);
+      void navigate({ to: pagePath(to) } as never);
     },
-    [navigate, token],
+    [navigate, pagePath],
   );
 
   const goToToolSource = useCallback(
     (scope: RatelScope, name: string) => {
-      const path = toolSourcePath(scope, name, token);
+      const path = toolSourcePath(scope, name, token, runtimeContext);
       void navigate({ to: path } as never);
     },
-    [navigate, token],
+    [navigate, runtimeContext, token],
   );
 
   const goToAgent = useCallback(
     (kind: AgentHostKind) => {
-      const path = agentSetupHostPath(kind, token);
+      const path = agentSetupHostPath(kind, token, runtimeContext);
       void navigate({ to: path } as never);
     },
-    [navigate, token],
+    [navigate, runtimeContext, token],
+  );
+
+  const selectContext = useCallback(
+    (nextContext: RuntimeUiContext) => {
+      const suffix = runtimeContextKind === "all" ? "/" : pageSuffixFromPathname(location.pathname);
+      const path = contextPagePath(nextContext, suffix);
+      void navigate({ to: withToken(path, token) } as never);
+    },
+    [location.pathname, navigate, runtimeContextKind, token],
+  );
+  const refreshCurrentContext = useCallback(
+    () => (runtimeContext.kind === "all" ? refreshProjects() : refresh()),
+    [refresh, refreshProjects, runtimeContext.kind],
   );
 
   useHotkey("Mod+K", () => setCommandOpen((open) => !open), {
@@ -323,10 +434,10 @@ export function AppShell() {
       description: "Toggle the Ratel command menu.",
     },
   });
-  useHotkey("Mod+R", () => void refresh(), {
+  useHotkey("Mod+R", () => void refreshCurrentContext(), {
     meta: {
-      name: "Refresh configuration",
-      description: "Reload the current Ratel Local configuration.",
+      name: "Refresh current view",
+      description: "Reload the selected Ratel Local context.",
     },
     preventDefault: true,
   });
@@ -334,8 +445,14 @@ export function AppShell() {
   const context: RatelAppContextValue = {
     busy,
     config,
+    context: runtimeContext,
+    pagePath,
+    projects,
+    projectsError,
+    projectsLoading,
     request,
     refresh,
+    refreshProjects,
     runAction,
     setupIntent,
     token,
@@ -347,7 +464,14 @@ export function AppShell() {
   return (
     <RatelAppContext.Provider value={context}>
       <SidebarProvider>
-        <ProductSidebar config={config} onNavigate={goTo} pathname={location.pathname} />
+        <ProductSidebar
+          config={config}
+          context={runtimeContext}
+          onNavigate={goTo}
+          onSelectContext={selectContext}
+          pathname={location.pathname}
+          projects={projects}
+        />
         <SidebarInset>
           {!token ? (
             <main className="w-full px-4 py-6 sm:px-6">
@@ -367,7 +491,7 @@ export function AppShell() {
         config={config}
         onAddToolSource={() => {
           setCommandOpen(false);
-          void navigate({ to: toolSourceCreatePath("user", token) } as never);
+          void navigate({ to: toolSourceCreatePath("user", token, runtimeContext) } as never);
         }}
         onImport={() => {
           setCommandOpen(false);
@@ -392,6 +516,7 @@ export function AppShell() {
           goToAgent(kind);
         }}
         open={commandOpen}
+        readOnly={runtimeContext.kind === "all"}
         setOpen={setCommandOpen}
       />
       <Toaster />
@@ -401,9 +526,13 @@ export function AppShell() {
 
 function ProductSidebar(props: {
   config: ConfigResponse | null;
+  context: RuntimeUiContext;
   onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/clients") => void;
+  onSelectContext: (context: RuntimeUiContext) => void;
   pathname: string;
+  projects: readonly ProjectView[];
 }) {
+  const pageSuffix = pageSuffixFromPathname(props.pathname);
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
@@ -414,35 +543,51 @@ function ProductSidebar(props: {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        <ContextSwitcher
+          context={props.context}
+          onSelect={props.onSelectContext}
+          projects={props.projects}
+        />
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1.5">
-              <ProductSidebarItem
-                active={props.pathname === "/" || props.pathname.startsWith("/tools/")}
-                icon={<Server />}
-                label="Tools"
-                onClick={() => props.onNavigate("/")}
-              />
-              <ProductSidebarItem
-                active={props.pathname === "/agent-setup"}
-                icon={<Settings2 />}
-                label="Agent Setup"
-                onClick={() => props.onNavigate("/agent-setup")}
-              />
-              <ProductSidebarItem
-                active={props.pathname === "/clients"}
-                icon={<RadioTower />}
-                label="Clients"
-                onClick={() => props.onNavigate("/clients")}
-              />
-              <ProductSidebarItem
-                active={props.pathname === "/skills"}
-                icon={<Sparkles />}
-                label="Skills"
-                onClick={() => props.onNavigate("/skills")}
-              />
+              {props.context.kind === "all" ? (
+                <ProductSidebarItem
+                  active
+                  icon={<LayoutGrid />}
+                  label="Overview"
+                  onClick={() => props.onNavigate("/")}
+                />
+              ) : (
+                <>
+                  <ProductSidebarItem
+                    active={pageSuffix === "/" || pageSuffix.startsWith("/tools/")}
+                    icon={<Server />}
+                    label="Tools"
+                    onClick={() => props.onNavigate("/")}
+                  />
+                  <ProductSidebarItem
+                    active={pageSuffix.startsWith("/agent-setup")}
+                    icon={<Settings2 />}
+                    label="Agent Setup"
+                    onClick={() => props.onNavigate("/agent-setup")}
+                  />
+                  <ProductSidebarItem
+                    active={pageSuffix === "/clients"}
+                    icon={<RadioTower />}
+                    label="Clients"
+                    onClick={() => props.onNavigate("/clients")}
+                  />
+                  <ProductSidebarItem
+                    active={pageSuffix.startsWith("/skills")}
+                    icon={<Sparkles />}
+                    label="Skills"
+                    onClick={() => props.onNavigate("/skills")}
+                  />
+                </>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -576,6 +721,7 @@ function CommandMenu(props: {
   onSelectAgent: (kind: AgentHostKind) => void;
   onSelectToolSource: (scope: RatelScope, name: string) => void;
   open: boolean;
+  readOnly: boolean;
   setOpen: (open: boolean) => void;
 }) {
   const agentItems = commandAgentItems(props.agentHosts);
@@ -673,21 +819,25 @@ function CommandMenu(props: {
                 </CommandGroup>
               </>
             )}
-            <CommandSeparator />
-            <CommandGroup heading="Actions">
-              <CommandItem onSelect={props.onAddToolSource}>
-                <Plus />
-                Add tool source
-              </CommandItem>
-              <CommandItem onSelect={props.onImport}>
-                <Download />
-                Import from agent
-              </CommandItem>
-              <CommandItem onSelect={props.onLink}>
-                <LinkIcon />
-                Link agent to Ratel
-              </CommandItem>
-            </CommandGroup>
+            {!props.readOnly && (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading="Actions">
+                  <CommandItem onSelect={props.onAddToolSource}>
+                    <Plus />
+                    Add tool source
+                  </CommandItem>
+                  <CommandItem onSelect={props.onImport}>
+                    <Download />
+                    Import from agent
+                  </CommandItem>
+                  <CommandItem onSelect={props.onLink}>
+                    <LinkIcon />
+                    Link agent to Ratel
+                  </CommandItem>
+                </CommandGroup>
+              </>
+            )}
           </CommandList>
         </Command>
       </DialogContent>
@@ -799,25 +949,50 @@ export function authBadgeVariant(status?: AuthStatus) {
   return "outline" as const;
 }
 
-export function toolSourcePath(scope: RatelScope, name: string, token?: string) {
-  const path = `/tools/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`;
-  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+export function toolSourcePath(
+  scope: RatelScope,
+  name: string,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
+  const path = contextPagePath(
+    context,
+    `/tools/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`,
+  );
+  return withToken(path, token);
 }
 
-export function skillPath(id: string, token?: string) {
-  const path = `/skills/${encodeURIComponent(id)}`;
-  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+export function skillPath(
+  id: string,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
+  const path = contextPagePath(context, `/skills/${encodeURIComponent(id)}`);
+  return withToken(path, token);
 }
 
-export function toolSourceCreatePath(scope: RatelScope, token?: string) {
+export function toolSourceCreatePath(
+  scope: RatelScope,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
   const search = new URLSearchParams({ scope });
   if (token) search.set("t", token);
-  return `/tools/new?${search.toString()}`;
+  return `${contextPagePath(context, "/tools/new")}?${search.toString()}`;
 }
 
-function agentSetupHostPath(kind: AgentHostKind, token?: string) {
-  const path = `/agent-setup/${kind}`;
-  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+function agentSetupHostPath(
+  kind: AgentHostKind,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
+  return withToken(contextPagePath(context, `/agent-setup/${kind}`), token);
+}
+
+function withToken(path: string, token?: string): string {
+  if (!token) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}t=${encodeURIComponent(token)}`;
 }
 
 export function summaryOf(entry: ServerEntry): string {

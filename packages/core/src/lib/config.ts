@@ -1,4 +1,5 @@
 import { isPlainObject } from "../json.js";
+import { isSafeSkillId } from "../skill-id.js";
 
 export interface ServerEntry {
   type: string;
@@ -22,9 +23,31 @@ export interface ServerEntry {
 
 const HTTP_ONLY_FIELDS = ["callbackPort", "clientId", "clientSecret", "scope"] as const;
 
-/** Ratel-managed skills: directories scanned for `<name>/SKILL.md`. */
+export type SkillSource = "claude" | "codex" | "ratel" | "unknown";
+
+export type SkillEntry =
+  | {
+      mode: "reference";
+      path: string;
+      source?: SkillSource;
+    }
+  | {
+      mode: "copy";
+      source?: SkillSource;
+      copiedFrom?: { source: string; id: string };
+    };
+
+/** Ratel-managed skills: explicit registrations plus legacy directories. */
 export interface SkillsConfig {
+  entries?: Record<string, SkillEntry>;
   dirs?: string[];
+}
+
+/** Lossless on-disk shape. Mutations retain unknown top-level fields. */
+export interface RatelConfigDocument {
+  mcpServers?: Record<string, ServerEntry>;
+  skills?: SkillsConfig;
+  [key: string]: unknown;
 }
 
 export interface RatelConfig {
@@ -36,7 +59,7 @@ export function parseConfig(input: unknown): RatelConfig {
   if (!isPlainObject(input)) {
     throw new ConfigError("root must be a JSON object");
   }
-  const mcpServers = (input as Record<string, unknown>).mcpServers;
+  const mcpServers = (input as Record<string, unknown>).mcpServers ?? {};
   if (!isPlainObject(mcpServers)) {
     throw new ConfigError("`mcpServers` must be a JSON object");
   }
@@ -59,6 +82,21 @@ function parseSkills(raw: unknown): SkillsConfig {
     throw new ConfigError("`skills` must be a JSON object");
   }
   const skills: SkillsConfig = {};
+  if (raw.entries !== undefined) {
+    if (!isPlainObject(raw.entries)) {
+      throw new ConfigError("`skills.entries` must be a JSON object");
+    }
+    const entries: Record<string, SkillEntry> = {};
+    for (const [id, entry] of Object.entries(raw.entries)) {
+      if (!isSafeSkillId(id)) {
+        throw new ConfigError(
+          `\`skills.entries\` contains an unsafe skill id: ${JSON.stringify(id)}`,
+        );
+      }
+      entries[id] = parseSkillEntry(`skills.entries.${id}`, entry);
+    }
+    skills.entries = entries;
+  }
   if (raw.dirs !== undefined) {
     if (!Array.isArray(raw.dirs) || raw.dirs.some((d) => typeof d !== "string")) {
       throw new ConfigError("`skills.dirs` must be an array of strings");
@@ -66,6 +104,42 @@ function parseSkills(raw: unknown): SkillsConfig {
     skills.dirs = raw.dirs as string[];
   }
   return skills;
+}
+
+function parseSkillEntry(path: string, raw: unknown): SkillEntry {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError(`\`${path}\` must be a JSON object`);
+  }
+  const source = parseSkillSource(`${path}.source`, raw.source);
+  if (raw.mode === "reference") {
+    if (typeof raw.path !== "string" || raw.path.length === 0) {
+      throw new ConfigError(`\`${path}.path\` must be a non-empty string`);
+    }
+    return { mode: "reference", path: raw.path, ...(source ? { source } : {}) };
+  }
+  if (raw.mode === "copy") {
+    let copiedFrom: { source: string; id: string } | undefined;
+    if (raw.copiedFrom !== undefined) {
+      if (
+        !isPlainObject(raw.copiedFrom) ||
+        typeof raw.copiedFrom.source !== "string" ||
+        typeof raw.copiedFrom.id !== "string" ||
+        raw.copiedFrom.source.length === 0 ||
+        raw.copiedFrom.id.length === 0
+      ) {
+        throw new ConfigError(`\`${path}.copiedFrom\` must contain string source and id`);
+      }
+      copiedFrom = { source: raw.copiedFrom.source, id: raw.copiedFrom.id };
+    }
+    return { mode: "copy", ...(source ? { source } : {}), ...(copiedFrom ? { copiedFrom } : {}) };
+  }
+  throw new ConfigError(`\`${path}.mode\` must be one of reference|copy`);
+}
+
+function parseSkillSource(path: string, raw: unknown): SkillSource | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "claude" || raw === "codex" || raw === "ratel" || raw === "unknown") return raw;
+  throw new ConfigError(`\`${path}\` must be one of claude|codex|ratel|unknown`);
 }
 
 function parseEntry(path: string, raw: unknown): ServerEntry {

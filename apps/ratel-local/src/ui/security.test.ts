@@ -3,6 +3,7 @@ import {
   constantTimeEqual,
   extractBearer,
   extractTokenFromUrl,
+  InMemoryUiSessionTokens,
   isLoopbackHost,
   newSessionToken,
 } from "./security.js";
@@ -14,6 +15,17 @@ describe("newSessionToken", () => {
   });
   it("returns a distinct token each call", () => {
     expect(newSessionToken()).not.toBe(newSessionToken());
+  });
+});
+
+describe("InMemoryUiSessionTokens", () => {
+  it("issues session tokens that live only in memory", () => {
+    const sessions = new InMemoryUiSessionTokens();
+    const token = sessions.issue();
+    expect(sessions.isValid(token)).toBe(true);
+    expect(sessions.isValid("wrong")).toBe(false);
+    sessions.revoke(token);
+    expect(sessions.isValid(token)).toBe(false);
   });
 });
 

@@ -3,16 +3,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type BackupFs,
+  createConfigControlPlane,
+  createContextSnapshotResolver,
+  createProjectRegistry as createFilesystemProjectRegistry,
+  createMutationEngine,
+  createSkillDiscovery,
+  createSkillImportControlPlane,
+  createSkillRegistrationControlPlane,
   defaultTelemetryDir,
+  executePlan,
   type HierarchyEnv,
   type JsonFs,
+  type ProjectId,
+  type ProjectRegistry,
   projectBucketDir,
+  type RuntimeRevision,
 } from "@ratel-ai/ratel-local-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import { silentPromptAdapter } from "../cli/prompts.js";
 import { newSessionToken } from "./security.js";
-import { startUiServer, type UiServerHandle } from "./server.js";
+import { type StartUiServerOptions, startUiServer, type UiServerHandle } from "./server.js";
 
 const HOME = "/home/u";
 const ROOT = "/r";
@@ -61,6 +72,7 @@ function makeCtx(fs: MemFs, env?: HierarchyEnv): HandlerCtx {
     env: env ?? { homeDir: HOME, projectRoot: ROOT },
     fs,
     log: () => {},
+    planExecutor: executePlan,
     prompts: silentPromptAdapter(),
     installAgentPlugin: async () => ({
       installed: false,
@@ -77,13 +89,45 @@ interface ServerSession {
   assetDir: string;
 }
 
-async function spin(env?: HierarchyEnv): Promise<ServerSession> {
+async function spin(
+  env?: HierarchyEnv,
+  options: Pick<
+    StartUiServerOptions,
+    | "projectRegistry"
+    | "canForgetProject"
+    | "activeMcpClients"
+    | "configControlPlane"
+    | "snapshotResolver"
+    | "skillDiscovery"
+    | "skillImportControlPlane"
+    | "skillRegistrationControlPlane"
+    | "daemonToken"
+    | "projectAdmissionLock"
+  > = {},
+): Promise<ServerSession> {
   const fs = new MemFs();
   const ctx = makeCtx(fs, env);
   const token = newSessionToken();
   const assetDir = await makeAssetDir();
-  const handle = await startUiServer({ ctx, token, assetDir });
+  const handle = await startUiServer({ ctx, token, assetDir, ...options });
   return { handle, token, fs, ctx, assetDir };
+}
+
+function projectRegistry(overrides: Partial<ProjectRegistry> = {}): ProjectRegistry {
+  return {
+    registerRoot: async () => {
+      throw new Error("unexpected registerRoot");
+    },
+    resolve: async () => {
+      throw new Error("unexpected resolve");
+    },
+    list: async () => [],
+    touch: async () => {},
+    forget: async () => {
+      throw new Error("unexpected forget");
+    },
+    ...overrides,
+  };
 }
 
 let session: ServerSession;
@@ -119,6 +163,308 @@ async function makeAssetDir(): Promise<string> {
 }
 
 describe("UI server — auth", () => {
+  it("lists registered projects using projectId in the response", async () => {
+    const projectId = "prj_registered" as ProjectId;
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({
+        list: async () => [
+          {
+            id: projectId,
+            canonicalRoot: "/repo",
+            displayName: "Ratel",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "available",
+          },
+        ],
+      }),
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${projectSession.handle.port}/api/projects`, {
+        headers: { Authorization: `Bearer ${projectSession.token}` },
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        projects: [
+          {
+            projectId: "prj_registered",
+            canonicalRoot: "/repo",
+            displayName: "Ratel",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "available",
+            connected: false,
+            clientCount: 0,
+            staleClientCount: 0,
+          },
+        ],
+      });
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("registers a project through the authenticated API", async () => {
+    const registrations: Array<{ path: string; displayName?: string }> = [];
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({
+        registerRoot: async (path, displayName) => {
+          registrations.push({ path, displayName });
+          return {
+            id: "prj_added" as ProjectId,
+            canonicalRoot: "/canonical/repo",
+            displayName: displayName ?? "repo",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+          };
+        },
+      }),
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${projectSession.handle.port}/api/projects`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${projectSession.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path: "/repo", displayName: "Ratel Project" }),
+      });
+
+      expect(response.status).toBe(201);
+      expect(registrations).toEqual([{ path: "/repo", displayName: "Ratel Project" }]);
+      expect(await response.json()).toEqual({
+        project: {
+          projectId: "prj_added",
+          canonicalRoot: "/canonical/repo",
+          displayName: "Ratel Project",
+          lastSeenAt: "2026-07-15T12:00:00.000Z",
+        },
+      });
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("forgets an available inactive project without deleting its files", async () => {
+    const projectId = "prj_removable" as ProjectId;
+    const forgotten: ProjectId[] = [];
+    const admissions: string[] = [];
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({
+        list: async () => [
+          {
+            id: projectId,
+            canonicalRoot: "/repo",
+            displayName: "Ratel",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "available",
+          },
+        ],
+        forget: async (id) => {
+          forgotten.push(id);
+        },
+      }),
+      canForgetProject: async () => true,
+      projectAdmissionLock: {
+        async run(operation) {
+          admissions.push("admitted");
+          return operation();
+        },
+      },
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${projectSession.handle.port}/api/projects/prj_removable`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${projectSession.token}` },
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ projectId: "prj_removable" });
+      expect(forgotten).toEqual([projectId]);
+      expect(admissions).toEqual(["admitted"]);
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 409 instead of forgetting an active project", async () => {
+    const projectId = "prj_active" as ProjectId;
+    let forgetCalled = false;
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({
+        list: async () => [
+          {
+            id: projectId,
+            canonicalRoot: "/active-repo",
+            displayName: "Active",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "available",
+          },
+        ],
+        forget: async () => {
+          forgetCalled = true;
+        },
+      }),
+      canForgetProject: async (project) => project.canonicalRoot !== "/active-repo",
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${projectSession.handle.port}/api/projects/prj_active`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${projectSession.token}` },
+        },
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "project is active: prj_active" });
+      expect(forgetCalled).toBe(false);
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the active MCP client reader as the default forget admission check", async () => {
+    const projectId = "prj_connected" as ProjectId;
+    let forgetCalled = false;
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({
+        list: async () => [
+          {
+            id: projectId,
+            canonicalRoot: "/connected-repo",
+            displayName: "Connected",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "available",
+          },
+        ],
+        forget: async () => {
+          forgetCalled = true;
+        },
+      }),
+      activeMcpClients: {
+        listActiveClients: () => [
+          {
+            sessionId: "session-1",
+            name: "codex",
+            version: "1.0.0",
+            protocolVersion: "2025-06-18",
+            connectedAt: "2026-07-15T12:00:00.000Z",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            requestCount: 1,
+            capabilities: [],
+            context: { kind: "project", projectId },
+            runtimeRevision: "rev_connected" as RuntimeRevision,
+            stale: false,
+            scope: "project",
+            scopeKey: "/connected-repo",
+            projectRoot: "/connected-repo",
+          },
+        ],
+      },
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${projectSession.handle.port}/api/projects/prj_connected`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${projectSession.token}` },
+        },
+      );
+
+      expect(response.status).toBe(409);
+      expect(forgetCalled).toBe(false);
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 409 instead of forgetting a project whose root is missing", async () => {
+    const projectId = "prj_missing" as ProjectId;
+    let forgetCalled = false;
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({
+        list: async () => [
+          {
+            id: projectId,
+            canonicalRoot: "/missing-repo",
+            displayName: "Missing",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "missing",
+          },
+        ],
+        forget: async () => {
+          forgetCalled = true;
+        },
+      }),
+      canForgetProject: async () => true,
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${projectSession.handle.port}/api/projects/prj_missing`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${projectSession.token}` },
+        },
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "project root is missing: prj_missing" });
+      expect(forgetCalled).toBe(false);
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 404 when deleting an unknown projectId", async () => {
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({ list: async () => [] }),
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${projectSession.handle.port}/api/projects/prj_unknown`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${projectSession.token}` },
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "unknown project: prj_unknown" });
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires the UI session token for project mutations", async () => {
+    const [add, remove] = await Promise.all([
+      fetch(apiUrl("/api/projects"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "/repo" }),
+      }),
+      fetch(apiUrl("/api/projects/prj_registered"), { method: "DELETE" }),
+    ]);
+
+    expect(add.status).toBe(401);
+    expect(remove.status).toBe(401);
+  });
+
   it("returns 401 on /api/config without a bearer token", async () => {
     const res = await fetch(apiUrl("/api/config"));
     expect(res.status).toBe(401);
@@ -252,6 +598,84 @@ describe("UI server — auth", () => {
 });
 
 describe("UI server — /api/config", () => {
+  it("creates an immutable project context per request without leaking between tabs", async () => {
+    const projectA = "prj_a" as ProjectId;
+    const projectB = "prj_b" as ProjectId;
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({
+        list: async () => [
+          {
+            id: projectA,
+            canonicalRoot: "/a",
+            displayName: "A",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "available",
+          },
+          {
+            id: projectB,
+            canonicalRoot: "/b",
+            displayName: "B",
+            lastSeenAt: "2026-07-15T12:00:00.000Z",
+            status: "available",
+          },
+        ],
+      }),
+    });
+    projectSession.fs.files.set(
+      "/a/.ratel/config.json",
+      JSON.stringify({ mcpServers: { a: { type: "stdio", command: "a" } } }),
+    );
+    projectSession.fs.files.set(
+      "/b/.ratel/config.json",
+      JSON.stringify({ mcpServers: { b: { type: "stdio", command: "b" } } }),
+    );
+    const base = `http://127.0.0.1:${projectSession.handle.port}`;
+    const headers = { Authorization: `Bearer ${projectSession.token}` };
+
+    try {
+      const [globalResponse, aResponse, bResponse] = await Promise.all([
+        fetch(`${base}/api/config`, { headers }),
+        fetch(`${base}/api/config?projectId=${projectA}`, { headers }),
+        fetch(`${base}/api/config?projectId=${projectB}`, { headers }),
+      ]);
+      const global = (await globalResponse.json()) as {
+        projectRoot: string | null;
+        scopes: Record<string, { available: boolean }>;
+      };
+      const a = (await aResponse.json()) as {
+        projectRoot: string;
+        scopes: Record<string, { config: { mcpServers: Record<string, unknown> } }>;
+      };
+      const b = (await bResponse.json()) as typeof a;
+
+      expect(global.projectRoot).toBeNull();
+      expect(global.scopes.project.available).toBe(false);
+      expect(a.projectRoot).toBe("/a");
+      expect(Object.keys(a.scopes.project.config.mcpServers)).toEqual(["a"]);
+      expect(b.projectRoot).toBe("/b");
+      expect(Object.keys(b.scopes.project.config.mcpServers)).toEqual(["b"]);
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 404 for an unknown request projectId", async () => {
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({ list: async () => [] }),
+    });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${projectSession.handle.port}/api/config?projectId=prj_unknown`,
+        { headers: { Authorization: `Bearer ${projectSession.token}` } },
+      );
+      expect(response.status).toBe(404);
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports all three scopes with empty configs by default", async () => {
     const res = await fetch(apiUrl("/api/config"), { headers: authHeaders() });
     const body = (await res.json()) as {
@@ -367,7 +791,13 @@ describe("UI server — agent previews", () => {
     session.fs.files.set(
       CLAUDE_PATH,
       JSON.stringify({
-        mcpServers: { "ratel-local": { type: "stdio", command: "ratel-local" } },
+        mcpServers: {
+          "ratel-local": {
+            type: "stdio",
+            command: "ratel-local",
+            args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
+          },
+        },
       }),
     );
 
@@ -470,7 +900,7 @@ command = "echo"
     expect(session.fs.files.has(USER_PATH)).toBe(false);
   });
 
-  it("applies import stages to Ratel and agent files separately", async () => {
+  it("applies Ratel and agent import stages through one combined endpoint", async () => {
     session.fs.files.set(
       CLAUDE_PATH,
       JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
@@ -483,33 +913,19 @@ command = "echo"
       })
     ).json()) as { selected: string[]; stageHashes: { ratel: string; agent: string } };
 
-    const ratelRes = await fetch(apiUrl("/api/agent-apply/import/ratel"), {
+    const combined = await fetch(apiUrl("/api/agent-apply/import"), {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({
         hostKind: "claude-code",
         selection: preview.selected,
-        planHash: preview.stageHashes.ratel,
+        stageHashes: preview.stageHashes,
       }),
     });
-    expect(ratelRes.status).toBe(200);
+    expect(combined.status).toBe(200);
     expect(JSON.parse(session.fs.files.get(USER_PATH) as string).mcpServers.fs.command).toBe(
       "echo",
     );
-    expect(JSON.parse(session.fs.files.get(CLAUDE_PATH) as string).mcpServers.fs.command).toBe(
-      "echo",
-    );
-
-    const agentRes = await fetch(apiUrl("/api/agent-apply/import/agent"), {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({
-        hostKind: "claude-code",
-        selection: preview.selected,
-        planHash: preview.stageHashes.agent,
-      }),
-    });
-    expect(agentRes.status).toBe(200);
     const claude = JSON.parse(session.fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs).toBeUndefined();
     expect(claude.mcpServers["ratel-local"]).toBeUndefined();
@@ -541,7 +957,7 @@ command = "echo"
         planHash: preview.stageHashes.ratel,
       }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("preview is stale");
   });
@@ -577,7 +993,13 @@ command = "echo"
     expect(session.fs.files.has(USER_PATH)).toBe(false);
     const claude = JSON.parse(session.fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
-    expect(claude.mcpServers["ratel-local"].args).toContain(USER_PATH);
+    expect(claude.mcpServers["ratel-local"].args).toEqual([
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "user",
+    ]);
   });
 
   it("installs the plugin first and skips the MCP fallback when installation succeeds", async () => {
@@ -781,6 +1203,265 @@ describe("UI server — Claude statusline", () => {
 });
 
 describe("UI server — add / edit / remove", () => {
+  it("maps unexpected scoped resolver failures to HTTP 500", async () => {
+    const scoped = await spin(undefined, {
+      snapshotResolver: {
+        async resolve() {
+          throw new Error("simulated scoped I/O failure");
+        },
+      },
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${scoped.handle.port}/api/config`, {
+        headers: { Authorization: `Bearer ${scoped.token}` },
+      });
+      expect(response.status).toBe(500);
+    } finally {
+      await scoped.handle.shutdown();
+      await rm(scoped.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the scoped transactional control plane and accepts the daemon token", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ratel-ui-control-"));
+    const homeDir = join(root, "home");
+    const projectRoot = join(root, "project");
+    const assetDir = await makeAssetDir();
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await mkdir(join(projectRoot, ".ratel"), { recursive: true });
+    const discoveredSkillDir = join(projectRoot, ".agents", "skills", "demo");
+    await mkdir(discoveredSkillDir, { recursive: true });
+    await writeFile(
+      join(discoveredSkillDir, "SKILL.md"),
+      "---\nname: demo\ndescription: Demo skill\n---\n\nUse demo.\n",
+    );
+    const localPath = join(projectRoot, ".ratel", "config.local.json");
+    await writeFile(
+      localPath,
+      `${JSON.stringify({ custom: { keep: true }, skills: { dirs: [] } }, null, 2)}\n`,
+    );
+    const registry = createFilesystemProjectRegistry({ homeDir });
+    const project = await registry.registerRoot(projectRoot);
+    const control = await createConfigControlPlane({ homeDir, projectRegistry: registry });
+    const snapshotResolver = createContextSnapshotResolver({ homeDir, projectRegistry: registry });
+    const skillDiscovery = createSkillDiscovery({ homeDir });
+    const mutationEngine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
+    const skillImportControlPlane = createSkillImportControlPlane({
+      homeDir,
+      projectRegistry: registry,
+      discovery: skillDiscovery,
+      mutationEngine,
+    });
+    const skillRegistrationControlPlane = createSkillRegistrationControlPlane({
+      homeDir,
+      projectRegistry: registry,
+      configControlPlane: control,
+      snapshotResolver,
+      mutationEngine,
+    });
+    const token = newSessionToken();
+    const daemonToken = "daemon-control-token";
+    const committedTargets: Array<{ scope: string; projectId?: string }> = [];
+    const handle = await startUiServer({
+      ctx: makeCtx(new MemFs(), { homeDir }),
+      token,
+      daemonToken,
+      assetDir,
+      projectRegistry: registry,
+      configControlPlane: control,
+      snapshotResolver,
+      skillDiscovery,
+      skillImportControlPlane,
+      skillRegistrationControlPlane,
+      onScopedMutationCommitted: (targets) => {
+        committedTargets.push(...targets);
+      },
+    });
+
+    try {
+      const base = `http://127.0.0.1:${handle.port}`;
+      const headers = {
+        Authorization: `Bearer ${daemonToken}`,
+        "Content-Type": "application/json",
+      };
+      const added = await fetch(`${base}/api/servers?projectId=${project.id}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          target: { scope: "local", projectId: project.id },
+          name: "filesystem",
+          entry: { type: "stdio", command: "node" },
+        }),
+      });
+      expect(added.status).toBe(200);
+      expect(JSON.parse(await readFile(localPath, "utf8"))).toEqual({
+        custom: { keep: true },
+        skills: { dirs: [] },
+        mcpServers: { filesystem: { type: "stdio", command: "node" } },
+      });
+      const config = (await (
+        await fetch(`${base}/api/config?projectId=${project.id}`, { headers })
+      ).json()) as {
+        runtimeRevision: string;
+        documents: Array<{ ref: { scope: string }; documentRevision: string }>;
+        resolvedMcpEntries: Array<{ name: string; status: string }>;
+      };
+      expect(config.runtimeRevision).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(config.documents.map((document) => document.ref.scope)).toEqual(["local"]);
+      expect(config.documents[0]?.documentRevision).toMatch(/^rev_/);
+      expect(config.resolvedMcpEntries).toContainEqual(
+        expect.objectContaining({ name: "filesystem", status: "effective" }),
+      );
+
+      const skills = (await (
+        await fetch(`${base}/api/skills?projectId=${project.id}`, { headers })
+      ).json()) as { discovered: Array<{ id: string; candidateId: string }> };
+      expect(skills.discovered).toContainEqual(
+        expect.objectContaining({ id: "demo", candidateId: expect.stringMatching(/^cand_/) }),
+      );
+      const candidate = skills.discovered.find(({ id }) => id === "demo");
+      if (!candidate) throw new Error("expected discovered demo skill");
+      const previewResponse = await fetch(
+        `${base}/api/skills/import/preview?projectId=${project.id}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            selections: [
+              {
+                candidateId: candidate.candidateId,
+                targets: [
+                  {
+                    scopeRef: { scope: "project", projectId: project.id },
+                    mode: "reference",
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      );
+      expect(previewResponse.status).toBe(200);
+      const plan = (await previewResponse.json()) as { digest: string };
+      const applyResponse = await fetch(`${base}/api/skills/import/apply?projectId=${project.id}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ plan, digest: plan.digest }),
+      });
+      expect(applyResponse.status).toBe(200);
+      expect(
+        JSON.parse(await readFile(join(projectRoot, ".ratel", "config.json"), "utf8")),
+      ).toMatchObject({
+        skills: {
+          entries: {
+            demo: { mode: "reference", path: ".agents/skills/demo", source: "codex" },
+          },
+        },
+      });
+      const addScopePreviewResponse = await fetch(
+        `${base}/api/skills/add-scope/preview?projectId=${project.id}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            target: { scope: "local", projectId: project.id },
+            id: "demo",
+            mode: "copy",
+          }),
+        },
+      );
+      expect(addScopePreviewResponse.status).toBe(200);
+      const addScopePlan = (await addScopePreviewResponse.json()) as { digest: string };
+      const addScopeApplyResponse = await fetch(
+        `${base}/api/skills/add-scope/apply?projectId=${project.id}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            target: { scope: "local", projectId: project.id },
+            plan: addScopePlan,
+            digest: addScopePlan.digest,
+          }),
+        },
+      );
+      expect(addScopeApplyResponse.status).toBe(200);
+      const replayedAddScope = await fetch(
+        `${base}/api/skills/add-scope/apply?projectId=${project.id}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            target: { scope: "user" },
+            plan: addScopePlan,
+            digest: addScopePlan.digest,
+          }),
+        },
+      );
+      expect(replayedAddScope.status).toBe(409);
+      expect(
+        JSON.parse(await readFile(join(projectRoot, ".ratel", "config.local.json"), "utf8")),
+      ).toMatchObject({ skills: { entries: { demo: { mode: "copy" } } } });
+      expect(
+        JSON.parse(
+          await readFile(
+            join(projectRoot, ".ratel", "skills.local", "demo", ".ratel-skill.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual({ version: 1, id: "demo" });
+      const removedLocalCopy = await fetch(`${base}/api/skills/demo?projectId=${project.id}`, {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({
+          target: { scope: "local", projectId: project.id },
+          deleteOwnedCopy: true,
+        }),
+      });
+      expect(removedLocalCopy.status).toBe(200);
+      const removedScope = await fetch(`${base}/api/skills/demo?projectId=${project.id}`, {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({
+          target: { scope: "project", projectId: project.id },
+          deleteOwnedCopy: false,
+        }),
+      });
+      expect(removedScope.status).toBe(200);
+      expect(
+        JSON.parse(await readFile(join(projectRoot, ".ratel", "config.json"), "utf8")).skills
+          .entries,
+      ).toEqual({});
+
+      const beforeManualEdit = await control.read({ scope: "local", projectId: project.id });
+      await writeFile(
+        localPath,
+        `${JSON.stringify({ mcpServers: { manual: { type: "stdio", command: "x" } } })}\n`,
+      );
+      const stale = await fetch(`${base}/api/servers?projectId=${project.id}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          target: { scope: "local", projectId: project.id },
+          expectedRevision: beforeManualEdit.documentRevision,
+          name: "other",
+          entry: { type: "stdio", command: "node" },
+        }),
+      });
+      expect(stale.status).toBe(409);
+      expect(committedTargets).toEqual([
+        { scope: "local", projectId: project.id },
+        { scope: "project", projectId: project.id },
+        { scope: "local", projectId: project.id },
+        { scope: "local", projectId: project.id },
+        { scope: "project", projectId: project.id },
+      ]);
+    } finally {
+      await handle.shutdown();
+      await rm(root, { recursive: true, force: true });
+      await rm(assetDir, { recursive: true, force: true });
+    }
+  });
+
   it("adds a stdio entry to the user scope", async () => {
     const res = await fetch(apiUrl("/api/servers"), {
       method: "POST",
@@ -1016,6 +1697,7 @@ describe("UI server — skill detail & edit", () => {
         "",
       ].join("\n"),
     );
+    await writeFile(join(skillDir, ".ratel-skill.json"), '{"version":1,"id":"demo"}\n');
     // A sibling reference file makes loadSkills append an absolute-path
     // "Bundled resources" index; the detail endpoint must not echo it back.
     await writeFile(join(skillDir, "reference.md"), "# Reference\n");
@@ -1108,6 +1790,7 @@ describe("UI server — skill detail & edit", () => {
         "",
       ].join("\n"),
     );
+    await writeFile(join(richDir, ".ratel-skill.json"), '{"version":1,"id":"rich"}\n');
 
     const res = await fetch(url("/api/skills/rich"), {
       method: "PATCH",
@@ -1287,7 +1970,7 @@ describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
     expect(patch.status).toBe(409);
   });
 
-  it("activates a native skill as a linked managed skill and edits through the link", async () => {
+  it("never edits a native source through a legacy managed symlink", async () => {
     const activate = await fetch(url("/api/skills/activate"), {
       method: "POST",
       headers: headers(),
@@ -1309,15 +1992,19 @@ describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
     });
     expect(body.available.some((s) => s.id === "from-claude" && s.source === "claude")).toBe(false);
 
+    const nativeBefore = await readFile(
+      join(home, ".claude", "skills", "from-claude", "SKILL.md"),
+      "utf8",
+    );
     const patch = await fetch(url("/api/skills/from-claude"), {
       method: "PATCH",
       headers: headers(),
       body: JSON.stringify({ description: "updated", tags: ["x"], body: "# Updated" }),
     });
-    expect(patch.status).toBe(200);
-    expect(
-      await readFile(join(home, ".claude", "skills", "from-claude", "SKILL.md"), "utf8"),
-    ).toContain('description: "updated"');
+    expect(patch.status).toBe(409);
+    expect(await readFile(join(home, ".claude", "skills", "from-claude", "SKILL.md"), "utf8")).toBe(
+      nativeBefore,
+    );
   });
 
   it("returns partial skill activation results without hiding successful writes", async () => {

@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import type { McpServerHandle } from "@ratel-ai/ratel-local-core";
-import { createMcpServer } from "@ratel-ai/ratel-local-core";
+import type { McpServerHandle, RuntimeRevision } from "@ratel-ai/ratel-local-core";
+import { createMcpServer, InvalidContextSnapshotError } from "@ratel-ai/ratel-local-core";
 import { authorizeDaemonRequest, DaemonAccessError, resolveDaemonRequestScope } from "./access.js";
 import {
   type InMemoryMcpClientRegistry,
@@ -54,6 +54,8 @@ export function createMcpHttpRoute(opts: CreateMcpHttpRouteOptions): McpHttpRout
       if (!res.headersSent) {
         if (err instanceof DaemonAccessError) {
           writeJsonRpcError(res, err.status, -32003, err.message);
+        } else if (err instanceof InvalidContextSnapshotError) {
+          writeJsonRpcError(res, 422, -32002, err.message, { diagnostics: err.diagnostics });
         } else {
           writeJsonRpcError(res, 500, -32603, "Internal server error");
         }
@@ -85,9 +87,9 @@ export function createMcpHttpRoute(opts: CreateMcpHttpRouteOptions): McpHttpRout
     const scope = await resolveDaemonRequestScope(req.headers, opts.daemonToken);
     const lease = await opts.gatewayPool.acquire(scope);
     const registration = pendingRegistrationFromInitialize(req, body, {
-      scope: scope.kind,
-      scopeKey: lease.scopeKey,
-      ...(scope.kind === "project" ? { projectRoot: scope.projectRoot } : {}),
+      context: lease.context,
+      runtimeRevision: lease.runtimeRevision as RuntimeRevision,
+      ...(lease.projectRoot ? { projectRoot: lease.projectRoot } : {}),
     });
     let transport: StreamableHTTPServerTransport;
     transport = new StreamableHTTPServerTransport({
@@ -223,9 +225,16 @@ function writeJsonRpcError(
   status: number,
   code: number,
   message: string,
+  data?: unknown,
 ): void {
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
+  res.end(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      error: { code, message, ...(data === undefined ? {} : { data }) },
+      id: null,
+    }),
+  );
 }
 
 function writePlain(res: ServerResponse, status: number, message: string): void {

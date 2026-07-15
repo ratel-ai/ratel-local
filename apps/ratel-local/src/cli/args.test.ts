@@ -35,6 +35,37 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it.each(["list", "add", "remove"] as const)("recognizes project %s", (verb) => {
+    const result = parseArgs(["project", verb, "/repo"]);
+
+    expect(result.group).toBe("project");
+    expect(result.verb).toBe(verb);
+    expect(result.rest).toEqual(["/repo"]);
+  });
+
+  it("parses project-aware skill list view flags", () => {
+    const result = parseArgs(["skill", "list", "--project", "/repo", "--configured"]);
+
+    expect(result.group).toBe("skill");
+    expect(result.verb).toBe("list");
+    expect(result.flags).toEqual({ project: "/repo", configured: true });
+  });
+
+  it.each([
+    "import",
+    "add-scope",
+    "remove-scope",
+    "remove",
+  ] as const)("recognizes skill %s", (verb) => {
+    const result = parseArgs(["skill", verb, "demo", "--scope", "project"]);
+    expect(result).toMatchObject({
+      group: "skill",
+      verb,
+      rest: ["demo"],
+      flags: { scope: "project" },
+    });
+  });
+
   it("recognizes the statusline group and install verbs", () => {
     expect(parseArgs(["statusline"]).group).toBe("statusline");
     expect(parseArgs(["statusline"]).verb).toBeUndefined();
@@ -64,6 +95,12 @@ describe("parseArgs — group/verb routing", () => {
     const result = parseArgs(["connect", "--project-root", "/repo"]);
     expect(result.group).toBe("connect");
     expect(result.flags["project-root"]).toBe("/repo");
+  });
+
+  it("recognizes the top-level doctor command", () => {
+    const result = parseArgs(["doctor"]);
+
+    expect(result).toMatchObject({ group: "doctor", verb: undefined });
   });
 
   it.each(["import", "link"] as const)("does not expose %s as an mcp verb", (verb) => {

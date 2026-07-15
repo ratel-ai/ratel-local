@@ -4,7 +4,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { readJson } from "@ratel-ai/ratel-local-core";
 import { type ConnectorDaemonStatus, runConnectorProxy } from "../../connector/proxy.js";
-import { connectorHeaders, readDaemonToken } from "../../daemon/access.js";
+import {
+  type AgentLinkScope,
+  connectorHeaders,
+  type DeclaredAgentHost,
+  readDaemonToken,
+} from "../../daemon/access.js";
 import type { ParsedArgs } from "../args.js";
 import {
   type DaemonState,
@@ -21,6 +26,8 @@ export interface ConnectBackendInput {
   token: string;
   projectRoot?: string;
   clientVersion: string;
+  agentHost?: DeclaredAgentHost;
+  linkScope?: AgentLinkScope;
 }
 
 export interface ConnectOptions extends ServeOptions {
@@ -43,6 +50,15 @@ export async function runConnect(
   const daemonUrl = await resolveDaemonUrl(parsed, ctx);
   const version = options.cliVersion ?? options.serverVersion ?? "0.0.0";
   const connectBackend = options.connectBackend ?? defaultConnectBackend;
+  const agentHost = enumFlag(parsed.flags["agent-host"], "--agent-host", [
+    "claude-code",
+    "codex",
+  ] as const);
+  const linkScope = enumFlag(parsed.flags["link-scope"], "--link-scope", [
+    "user",
+    "project",
+    "local",
+  ] as const);
 
   log(
     projectRoot
@@ -57,7 +73,14 @@ export async function runConnect(
         `daemon is not installed; run \`npx -y @ratel-ai/ratel-local@${version} setup\``,
       );
     }
-    return connectBackend({ daemonUrl, token, projectRoot, clientVersion: version });
+    return connectBackend({
+      daemonUrl,
+      token,
+      projectRoot,
+      clientVersion: version,
+      ...(agentHost ? { agentHost } : {}),
+      ...(linkScope ? { linkScope } : {}),
+    });
   };
 
   const start =
@@ -98,7 +121,11 @@ async function defaultConnectBackend(input: ConnectBackendInput): Promise<Client
   });
   const transport = new StreamableHTTPClientTransport(input.daemonUrl, {
     requestInit: {
-      headers: connectorHeaders(input.token, input.projectRoot),
+      headers: connectorHeaders(input.token, input.projectRoot, {
+        agentHost: input.agentHost,
+        linkScope: input.linkScope,
+        connectorVersion: input.clientVersion,
+      }),
     },
   });
   try {
@@ -144,4 +171,16 @@ function assertLoopbackMcpUrl(url: URL): URL {
     throw new Error("connector daemon URL must be an HTTP loopback address");
   }
   return url;
+}
+
+function enumFlag<const T extends readonly string[]>(
+  value: unknown,
+  name: string,
+  allowed: T,
+): T[number] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    throw new Error(`${name} must be one of: ${allowed.join(", ")}`);
+  }
+  return value;
 }

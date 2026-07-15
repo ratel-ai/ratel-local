@@ -14,6 +14,7 @@ import {
 } from "@/components/page-header";
 import { ResponsiveToolbar, ResponsiveToolbarButton } from "@/components/responsive-toolbar";
 import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,8 +28,16 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import type { SkillSummary, SkillsResponse } from "@/lib/skills";
+import {
+  configuredSkillRegistrationGroups,
+  discoveredSkillSummaries,
+  effectiveSkillSummaries,
+  type SkillRegistrationView,
+  type SkillSummary,
+  type SkillsResponse,
+} from "@/lib/skills";
 
 type LoadState =
   | { status: "loading" }
@@ -36,13 +45,14 @@ type LoadState =
   | { status: "ready"; data: SkillsResponse };
 
 export function SkillsPage() {
-  const { openCommandMenu, request, runAction, busy, token } = useRatelApp();
+  const { busy, context, openCommandMenu, request, runAction, token } = useRatelApp();
   const navigate = useNavigate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [importOpen, setImportOpen] = useState(false);
+  const [configuredScope, setConfiguredScope] = useState<"user" | "project" | "local">("user");
 
   const openSkill = (id: string) => {
-    void navigate({ to: skillPath(id, token) } as never);
+    void navigate({ to: skillPath(id, token, context) } as never);
   };
 
   const load = useCallback(async () => {
@@ -76,12 +86,31 @@ export function SkillsPage() {
   const ready = state.status === "ready" ? state.data : null;
   // Default the buckets defensively: if the API ever returns an unexpected shape
   // (e.g. a stale server mid-deploy), render an empty page instead of crashing.
-  const managed = ready?.managed ?? [];
-  const available = ready?.available ?? [];
+  const managed = ready ? effectiveSkillSummaries(ready) : [];
+  const available = ready ? discoveredSkillSummaries(ready) : [];
   const problems = ready?.problems ?? [];
   const canImport = available.length > 0;
-  const canDeactivateAll = managed.length > 0;
+  const usesScopedResolver = ready?.effectiveSkills !== undefined;
+  const registrationGroups = ready ? configuredSkillRegistrationGroups(ready, context) : [];
   const loading = state.status === "loading";
+
+  useEffect(() => {
+    if (!registrationGroups.some(({ scope }) => scope === configuredScope)) {
+      setConfiguredScope(registrationGroups[0]?.scope ?? "user");
+    }
+  }, [configuredScope, registrationGroups]);
+
+  const removeRegistration = async (registration: SkillRegistrationView) => {
+    const removed = await runAction(
+      `Removed ${registration.id} from ${registration.scopeRef.scope}`,
+      () =>
+        request(`/api/skills/${encodeURIComponent(registration.id)}`, {
+          method: "DELETE",
+          body: { target: registration.scopeRef, deleteOwnedCopy: false },
+        }),
+    );
+    if (removed) await load();
+  };
 
   return (
     <main className="flex w-full flex-1 flex-col gap-4 px-4 py-5 sm:px-6">
@@ -109,7 +138,7 @@ export function SkillsPage() {
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="hidden items-center sm:flex">
-          <NewSkillDialog onCreated={load} />
+          {!usesScopedResolver && <NewSkillDialog onCreated={load} />}
           <Button
             className="h-10"
             disabled={loading || !canImport}
@@ -120,22 +149,6 @@ export function SkillsPage() {
             <LinkIcon />
             Manage skills
           </Button>
-          {canDeactivateAll && (
-            <Button
-              className="h-10"
-              disabled={busy}
-              onClick={() =>
-                void mutate(
-                  `Stopped managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
-                  "/api/skills/deactivate",
-                )
-              }
-              size="sm"
-              variant="outline"
-            >
-              Unmanage all
-            </Button>
-          )}
           <ResponsiveToolbar>
             <ResponsiveToolbarButton
               icon={<SearchIcon />}
@@ -206,9 +219,31 @@ export function SkillsPage() {
           iconSource="ratel"
           onView={openSkill}
           skills={managed}
-          renderAction={(skill) =>
-            skill.source === "ratel" ? (
-              <span className="px-1 text-muted-foreground text-xs">Created in Ratel</span>
+          renderAction={(skill) => {
+            const registration = skill.registration;
+            if (registration?.ref.kind === "entry") {
+              return (
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void runAction(`Removed ${skill.name} from this scope`, () =>
+                      request(`/api/skills/${encodeURIComponent(skill.id)}`, {
+                        method: "DELETE",
+                        body: { target: registration.scopeRef, deleteOwnedCopy: false },
+                      }),
+                    ).then((ok) => (ok ? load() : undefined))
+                  }
+                  size="sm"
+                  variant="outline"
+                >
+                  Remove scope
+                </Button>
+              );
+            }
+            return skill.source === "ratel" ? (
+              <span className="px-1 text-muted-foreground text-xs">Ratel skill</span>
+            ) : usesScopedResolver ? (
+              <span className="px-1 text-muted-foreground text-xs">Legacy registration</span>
             ) : (
               <Button
                 disabled={busy}
@@ -222,9 +257,44 @@ export function SkillsPage() {
               >
                 Stop managing
               </Button>
-            )
-          }
+            );
+          }}
         />
+      )}
+
+      {ready && usesScopedResolver && registrationGroups.length > 0 && (
+        <section className="grid gap-3 border-border border-t pt-4">
+          <div className="px-1">
+            <h2 className="font-medium text-sm">Configured registrations</h2>
+            <p className="text-muted-foreground text-xs">
+              Inspect effective, shadowed, duplicate, and invalid registrations without changing the
+              runtime precedence view above.
+            </p>
+          </div>
+          <Tabs
+            onValueChange={(value) => setConfiguredScope(value as "user" | "project" | "local")}
+            value={configuredScope}
+          >
+            <TabsList variant="line">
+              {registrationGroups.map((group) => (
+                <TabsTrigger key={group.scope} value={group.scope}>
+                  {scopeLabel(group.scope)}
+                  <span className="text-muted-foreground">{group.registrations.length}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {registrationGroups.map((group) => (
+              <TabsContent key={group.scope} value={group.scope}>
+                <ConfiguredRegistrationList
+                  busy={busy}
+                  onRemove={removeRegistration}
+                  registrations={group.registrations}
+                  scope={group.scope}
+                />
+              </TabsContent>
+            ))}
+          </Tabs>
+        </section>
       )}
 
       <ImportSkillsDialog
@@ -235,6 +305,76 @@ export function SkillsPage() {
       />
     </main>
   );
+}
+
+function ConfiguredRegistrationList(props: {
+  busy: boolean;
+  onRemove: (registration: SkillRegistrationView) => void | Promise<void>;
+  registrations: SkillRegistrationView[];
+  scope: "user" | "project" | "local";
+}) {
+  if (props.registrations.length === 0) {
+    return (
+      <p className="rounded-md border border-border px-3 py-6 text-center text-muted-foreground text-sm">
+        No {props.scope} registrations configured.
+      </p>
+    );
+  }
+  return (
+    <ul className="grid gap-2">
+      {props.registrations.map((registration) => (
+        <li
+          className="grid gap-3 rounded-md border border-border bg-card p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          key={`${registration.id}:${registration.ref.kind}:${registration.configuredPath ?? ""}`}
+        >
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <strong className="truncate font-medium">{registration.id}</strong>
+              <Badge variant={registrationStateVariant(registration.state)}>
+                {registration.state}
+              </Badge>
+              <Badge variant="outline">{registration.mode}</Badge>
+              {registration.ref.kind === "legacy" && <Badge variant="muted">legacy</Badge>}
+            </div>
+            {registration.configuredPath && (
+              <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                {registration.configuredPath}
+              </p>
+            )}
+            {(registration.diagnostics ?? []).map((diagnostic) => (
+              <p className="mt-1 text-amber-700 text-xs dark:text-amber-400" key={diagnostic.code}>
+                {diagnostic.message}
+              </p>
+            ))}
+          </div>
+          {registration.ref.kind === "entry" ? (
+            <Button
+              disabled={props.busy}
+              onClick={() => void props.onRemove(registration)}
+              size="sm"
+              variant="outline"
+            >
+              Remove scope
+            </Button>
+          ) : (
+            <span className="text-muted-foreground text-xs">Configured by legacy directory</span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function scopeLabel(scope: "user" | "project" | "local"): string {
+  return scope[0].toUpperCase() + scope.slice(1);
+}
+
+function registrationStateVariant(
+  state: SkillRegistrationView["state"],
+): "secondary" | "warning" | "destructive" {
+  if (state === "effective") return "secondary";
+  if (state === "invalid") return "destructive";
+  return "warning";
 }
 
 const PAGE_SIZE = 8;

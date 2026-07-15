@@ -20,6 +20,7 @@ import * as z from "zod";
 import {
   type AuthStatus,
   authBadgeVariant,
+  type ConfigResponse,
   keyValsToText,
   parseKeyValueLines,
   type RatelScope,
@@ -82,6 +83,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { scopeTarget } from "@/lib/runtime-context";
 import {
   AUTH_STATUS_LABELS,
   authStatusLabel as getAuthStatusLabel,
@@ -219,11 +221,22 @@ const entrySubmitSchema = entryFormSchema.transform((value, context) => {
 
 export function ToolsPage() {
   const navigate = useNavigate();
-  const { busy, config, openCommandMenu, refresh, request, runAction, token, triggerSetupIntent } =
-    useRatelApp();
+  const {
+    busy,
+    config,
+    context,
+    openCommandMenu,
+    pagePath,
+    refresh,
+    request,
+    runAction,
+    token,
+    triggerSetupIntent,
+  } = useRatelApp();
   const [scope, setScope] = useState<RatelScope>("user");
   const [authFilter, setAuthFilter] = useState<AuthFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const visibleScopes = context.kind === "project" ? SCOPES : SCOPES.slice(0, 1);
 
   const scopeData = config?.scopes[scope];
   const servers = scopeData?.available ? scopeData.config.mcpServers : {};
@@ -249,7 +262,7 @@ export function ToolsPage() {
     .sort((a, b) => a.name.localeCompare(b.name));
   const hasActiveFilters = typeFilter !== "all" || authFilter !== "all";
   const goToCreateSource = (targetScope: RatelScope = scope) => {
-    void navigate({ to: toolSourceCreatePath(targetScope, token) } as never);
+    void navigate({ to: toolSourceCreatePath(targetScope, token, context) } as never);
   };
 
   return (
@@ -330,7 +343,7 @@ export function ToolsPage() {
         <div className="min-w-0">
           <Tabs value={scope} onValueChange={(value) => setScope(value as RatelScope)}>
             <TabsList variant="line" className="justify-start">
-              {SCOPES.map((item) => (
+              {visibleScopes.map((item) => (
                 <TabsTrigger
                   className="font-mono text-[11px] tracking-[0.14em] uppercase data-active:text-brand-green"
                   key={item}
@@ -420,10 +433,7 @@ export function ToolsPage() {
                 <Button
                   onClick={() => {
                     triggerSetupIntent("import");
-                    const path = token
-                      ? `/agent-setup?t=${encodeURIComponent(token)}`
-                      : "/agent-setup";
-                    void navigate({ to: path } as never);
+                    void navigate({ to: pagePath("/agent-setup") } as never);
                   }}
                   size="sm"
                   variant="outline"
@@ -472,7 +482,7 @@ export function ToolsPage() {
                   );
                 }}
                 onOpen={() => {
-                  void navigate({ to: toolSourcePath(scope, name, token) } as never);
+                  void navigate({ to: toolSourcePath(scope, name, token, context) } as never);
                 }}
               />
             ))}
@@ -601,6 +611,10 @@ function trimCompactNumber(value: number): string {
   return value >= 10 ? value.toFixed(0) : value.toFixed(1).replace(/\.0$/, "");
 }
 
+function expectedRevision(config: ConfigResponse, scope: RatelScope): string | undefined {
+  return config.documents?.find(({ ref }) => ref.scope === scope)?.documentRevision;
+}
+
 function ToolSourceFilterSelect(props: {
   children: ReactNode;
   label: string;
@@ -623,24 +637,32 @@ function ToolSourceFilterSelect(props: {
 
 export function ToolSourceCreatePage(props: { scope: string }) {
   const navigate = useNavigate();
-  const { config, request, runAction, token } = useRatelApp();
-  const scope = isRatelScope(props.scope) ? props.scope : "user";
+  const { config, context, pagePath, request, runAction, token } = useRatelApp();
+  const requestedScope = isRatelScope(props.scope) ? props.scope : "user";
+  const scope = context.kind === "project" ? requestedScope : "user";
   const scopeData = config?.scopes[scope];
-  const backPath = token ? `/?t=${encodeURIComponent(token)}` : "/";
+  const backPath = pagePath("/");
 
   const goBack = () => {
     void navigate({ to: backPath } as never);
   };
 
   const addEntry = async (name: string, entry: ServerEntry) => {
+    if (!config) throw new Error("Ratel configuration is not loaded");
     const saved = await runAction(`Added ${name}`, () =>
       request("/api/servers", {
         method: "POST",
-        body: { scope, name, entry },
+        body: {
+          target: scopeTarget(context, scope),
+          scope,
+          name,
+          entry,
+          expectedRevision: expectedRevision(config, scope),
+        },
       }),
     );
     if (saved) {
-      void navigate({ to: toolSourcePath(scope, name, token) } as never);
+      void navigate({ to: toolSourcePath(scope, name, token, context) } as never);
     }
   };
 
@@ -695,15 +717,16 @@ export function ToolSourceCreatePage(props: { scope: string }) {
 
 export function ToolSourceDetailPage(props: { name: string; scope: string }) {
   const navigate = useNavigate();
-  const { busy, config, request, runAction, token } = useRatelApp();
+  const { busy, config, context, pagePath, request, runAction } = useRatelApp();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [copied, setCopied] = useState(false);
-  const scope = isRatelScope(props.scope) ? props.scope : null;
+  const parsedScope = isRatelScope(props.scope) ? props.scope : null;
+  const scope = context.kind === "project" || parsedScope === "user" ? parsedScope : null;
   const scopeData = scope ? config?.scopes[scope] : undefined;
   const entry = scopeData?.available ? scopeData.config.mcpServers[props.name] : undefined;
   const authStatus = scopeData?.available ? scopeData.authStatus[props.name] : undefined;
-  const backPath = token ? `/?t=${encodeURIComponent(token)}` : "/";
+  const backPath = pagePath("/");
 
   const goBack = () => {
     void navigate({ to: backPath } as never);
@@ -747,7 +770,12 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
     await runAction(`Updated ${props.name}`, () =>
       request(`/api/servers/${encodeURIComponent(props.name)}`, {
         method: "PATCH",
-        body: { entry: nextEntry, scope },
+        body: {
+          entry: nextEntry,
+          target: scopeTarget(context, scope),
+          scope,
+          expectedRevision: expectedRevision(config, scope),
+        },
       }),
     );
     setIsEditing(false);
@@ -757,7 +785,11 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
     await runAction(`Removed ${props.name}`, () =>
       request(`/api/servers/${encodeURIComponent(props.name)}`, {
         method: "DELETE",
-        body: { scope },
+        body: {
+          target: scopeTarget(context, scope),
+          scope,
+          expectedRevision: expectedRevision(config, scope),
+        },
       }),
     );
     setDeleteOpen(false);

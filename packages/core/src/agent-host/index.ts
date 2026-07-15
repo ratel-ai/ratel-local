@@ -8,6 +8,7 @@ import type { ResolvedBin } from "../locate-bin.js";
 export type AgentScope = "user" | "project" | "local";
 
 export interface AgentHostAdapter {
+  readonly supportedScopes: readonly AgentScope[];
   detect(ctx: AgentHostContext): Promise<AgentHostDetection>;
   read(ctx: AgentHostContext): Promise<AgentHostState>;
   planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet>;
@@ -16,6 +17,8 @@ export interface AgentHostAdapter {
 export interface AgentHostContext {
   env: HierarchyEnv;
   fs: JsonFs;
+  /** Native control-plane guard for project-scoped config paths. */
+  assertProjectPath?: (projectRoot: string, path: string) => Promise<void>;
 }
 
 export interface AgentHostDetection {
@@ -81,11 +84,16 @@ export type SupportedAgentHostKind = "claude-code" | "codex";
 export interface SupportedAgentHost {
   kind: SupportedAgentHostKind;
   displayName: string;
+  supportedScopes: readonly AgentScope[];
 }
 
 export const SUPPORTED_AGENT_HOSTS: readonly SupportedAgentHost[] = [
-  { kind: "claude-code", displayName: "Claude Code" },
-  { kind: "codex", displayName: "Codex" },
+  {
+    kind: "claude-code",
+    displayName: "Claude Code",
+    supportedScopes: ["user", "project", "local"],
+  },
+  { kind: "codex", displayName: "Codex", supportedScopes: ["user", "project"] },
 ];
 
 export function isSupportedAgentHostKind(value: unknown): value is SupportedAgentHostKind {
@@ -109,8 +117,11 @@ export async function createSupportedAgentHostAdapter(
 
 export class NamedAgentHostAdapter implements AgentHostAdapter {
   private adapter: AgentHostAdapter | null = null;
+  readonly supportedScopes: readonly AgentScope[];
 
-  constructor(readonly kind: SupportedAgentHostKind) {}
+  constructor(readonly kind: SupportedAgentHostKind) {
+    this.supportedScopes = supportedHost(kind).supportedScopes;
+  }
 
   async detect(ctx: AgentHostContext): Promise<AgentHostDetection> {
     return (await this.ensureAdapter()).detect(ctx);
@@ -132,6 +143,7 @@ export class NamedAgentHostAdapter implements AgentHostAdapter {
 
 export class AutomaticAgentHostAdapter implements AgentHostAdapter {
   private selected: AgentHostAdapter | null = null;
+  readonly supportedScopes: readonly AgentScope[] = ["user", "project", "local"];
 
   constructor(private readonly adapters?: AgentHostAdapter[]) {}
 
@@ -188,6 +200,12 @@ export class AutomaticAgentHostAdapter implements AgentHostAdapter {
       SUPPORTED_AGENT_HOSTS.map((host) => createSupportedAgentHostAdapter(host.kind)),
     );
   }
+}
+
+function supportedHost(kind: SupportedAgentHostKind): SupportedAgentHost {
+  const host = SUPPORTED_AGENT_HOSTS.find((candidate) => candidate.kind === kind);
+  if (!host) throw new Error(`unsupported agent host: ${kind}`);
+  return host;
 }
 
 function hasNativeMcpEntries(state: AgentHostState): boolean {

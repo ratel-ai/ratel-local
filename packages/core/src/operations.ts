@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type {
   AgentHostAdapter,
+  AgentHostContext,
   AgentHostDetection,
   AgentHostState,
   AgentScope,
@@ -31,7 +32,7 @@ import {
   type ImportConflictStrategy,
   type ImportPlan,
 } from "./import-plan.js";
-import { type JsonFs, readJson, writeJson } from "./io.js";
+import { type JsonFs, nodeFs, readJson, writeJson } from "./io.js";
 import {
   type AuthFlowOptions,
   type AuthFlowResult,
@@ -39,10 +40,14 @@ import {
   mergeConfigs,
   parseConfig,
   type RatelConfig,
+  type RatelConfigDocument,
   type ServerEntry,
 } from "./lib/index.js";
+import { createLocalGitExcludeManager, type LocalGitExcludeManager } from "./local-git-exclude.js";
 import { locateRatelBin, type ResolvedBin, whichRatelBin } from "./locate-bin.js";
-import { executePlan } from "./plan-exec.js";
+import type { MutationEngine } from "./mutation-engine.js";
+import { executePlanTransactionally, type PlanExecutor } from "./plan-exec.js";
+import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import { type ClaudeCodeStatuslineState, getClaudeCodeStatuslineState } from "./statusline.js";
 import { readLatestToolTokenEstimates, type ServerToolTokenEstimate } from "./telemetry.js";
 
@@ -55,6 +60,8 @@ export interface CoreContext {
   };
   fs: CoreFs;
   log?: (message: string) => void;
+  /** Explicit compatibility seam for embedders using a non-native filesystem. */
+  planExecutor?: PlanExecutor;
 }
 
 export type AuthStatus = "n/a" | "needs auth" | "expired" | "ok" | "unsupported";
@@ -130,7 +137,7 @@ export async function getConfigState(ctx: CoreContext): Promise<ConfigState> {
       }
       throw err;
     }
-    const cfg = (await readJson<RatelConfig>(ctx.fs, path)) ?? { mcpServers: {} };
+    const cfg = parseConfig((await readJson<RatelConfigDocument>(ctx.fs, path)) ?? {});
     const authStatus: Record<string, AuthStatus> = {};
     for (const [name, entry] of Object.entries(cfg.mcpServers)) {
       authStatus[name] = await resolveAuthStatus(ctx, name, entry);
@@ -153,8 +160,11 @@ export async function addServerEntry(
   parseConfig({ mcpServers: { [input.name]: input.entry } });
 
   const path = ratelConfigPath(input.scope, ctx.env);
-  const current = (await readJson<RatelConfig>(ctx.fs, path)) ?? { mcpServers: {} };
-  if (current.mcpServers[input.name] && !input.overwrite) {
+  const current = (await readJson<RatelConfigDocument>(ctx.fs, path)) ?? {};
+  parseConfig(current);
+  current.mcpServers ??= {};
+  const mcpServers = current.mcpServers;
+  if (mcpServers[input.name] && !input.overwrite) {
     throw new Error(`entry "${input.name}" already exists at scope ${input.scope}`);
   }
 
@@ -162,7 +172,7 @@ export async function addServerEntry(
   await session.capture(path);
   const manifest = await session.finalize("add");
 
-  current.mcpServers[input.name] = input.entry;
+  mcpServers[input.name] = input.entry;
   await writeJson(ctx.fs, path, current);
   return { name: input.name, scope: input.scope, path, manifest };
 }
@@ -174,8 +184,12 @@ export async function editServerEntry(
   parseConfig({ mcpServers: { [input.name]: input.entry } });
 
   const path = ratelConfigPath(input.scope, ctx.env);
-  const current = await readJson<RatelConfig>(ctx.fs, path);
-  if (!current?.mcpServers[input.name]) {
+  const current = await readJson<RatelConfigDocument>(ctx.fs, path);
+  if (!current) throw new Error(`entry "${input.name}" not found at scope ${input.scope}`);
+  parseConfig(current);
+  current.mcpServers ??= {};
+  const mcpServers = current.mcpServers;
+  if (!mcpServers[input.name]) {
     throw new Error(`entry "${input.name}" not found at scope ${input.scope}`);
   }
 
@@ -183,7 +197,7 @@ export async function editServerEntry(
   await session.capture(path);
   const manifest = await session.finalize("edit");
 
-  current.mcpServers[input.name] = input.entry;
+  mcpServers[input.name] = input.entry;
   await writeJson(ctx.fs, path, current);
   return { name: input.name, scope: input.scope, path, manifest };
 }
@@ -193,8 +207,12 @@ export async function removeServerEntry(
   input: { scope: RatelScope; name: string },
 ): Promise<EntryMutationResult> {
   const path = ratelConfigPath(input.scope, ctx.env);
-  const current = await readJson<RatelConfig>(ctx.fs, path);
-  if (!current?.mcpServers[input.name]) {
+  const current = await readJson<RatelConfigDocument>(ctx.fs, path);
+  if (!current) throw new Error(`entry "${input.name}" not found at scope ${input.scope}`);
+  parseConfig(current);
+  current.mcpServers ??= {};
+  const mcpServers = current.mcpServers;
+  if (!mcpServers[input.name]) {
     throw new Error(`entry "${input.name}" not found at scope ${input.scope}`);
   }
 
@@ -202,7 +220,7 @@ export async function removeServerEntry(
   await session.capture(path);
   const manifest = await session.finalize("remove");
 
-  delete current.mcpServers[input.name];
+  delete mcpServers[input.name];
   await writeJson(ctx.fs, path, current);
   return { name: input.name, scope: input.scope, path, manifest };
 }
@@ -217,8 +235,8 @@ export async function loadMergedConfig(ctx: CoreContext): Promise<RatelConfig | 
       if (err instanceof ProjectRootNotFoundError) continue;
       throw err;
     }
-    const cfg = await readJson<RatelConfig>(ctx.fs, path);
-    if (cfg) parts.push(cfg);
+    const cfg = await readJson<RatelConfigDocument>(ctx.fs, path);
+    if (cfg) parts.push(parseConfig(cfg));
   }
   if (parts.length === 0) return undefined;
   return mergeConfigs(parts);
@@ -248,6 +266,8 @@ export interface AgentInteropOptions {
   whichResult?: string;
   workspaceRoot?: string;
   exists?: (path: string) => Promise<boolean>;
+  mutationEngine?: MutationEngine;
+  localGitExcludeManager?: LocalGitExcludeManager;
 }
 
 export interface ImportAgentServersOptions extends AgentInteropOptions {
@@ -325,6 +345,10 @@ export interface ApplyAgentImportInput extends PreviewAgentImportInput {
   planHash: string;
 }
 
+export interface ApplyCombinedAgentImportInput extends PreviewAgentImportInput {
+  stageHashes: AgentPlanStageHashes;
+}
+
 export interface ApplyAgentLinkInput extends PreviewAgentLinkInput {
   planHash: string;
 }
@@ -333,15 +357,25 @@ export interface RemoveAgentRatelMcpFallbackInput {
   hostKind: SupportedAgentHostKind;
 }
 
+export class AgentPlanConflictError extends Error {
+  readonly statusCode = 409;
+  readonly code = "AGENT_PLAN_STALE";
+
+  constructor() {
+    super("preview is stale; scan again and review the latest changes before applying");
+    this.name = "AgentPlanConflictError";
+  }
+}
+
 export async function getAgentHostsState(ctx: CoreContext): Promise<AgentHostsState> {
   const hosts: DetectedAgentHostSummary[] = [];
   const ratelKnownNames = collectRatelKnownNames(await readAllRatelConfigs(ctx));
   for (const host of SUPPORTED_AGENT_HOSTS) {
     const adapter = new NamedAgentHostAdapter(host.kind);
-    const detection = await adapter.detect({ env: ctx.env, fs: ctx.fs });
+    const detection = await adapter.detect(agentHostContext(ctx));
     let state: AgentHostState | null = null;
     try {
-      state = await adapter.read({ env: ctx.env, fs: ctx.fs });
+      state = await adapter.read(agentHostContext(ctx));
     } catch (err) {
       detection.warnings.push(`Failed to read ${host.displayName}: ${(err as Error).message}`);
     }
@@ -374,8 +408,8 @@ export async function previewAgentImport(
 ): Promise<AgentPlanPreview> {
   const hostKind = assertSupportedAgentHostKind(input.hostKind);
   const agentHost = new NamedAgentHostAdapter(hostKind);
-  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
-  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const detection = await agentHost.detect(agentHostContext(ctx));
+  const agentState = await agentHost.read(agentHostContext(ctx));
   const host = await summarizeDetectedAgentHost(
     hostKind,
     agentState.host.displayName,
@@ -398,11 +432,16 @@ export async function previewAgentImport(
   }
 
   const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
-  const plan = await buildAgentImportPlan(inputs, {
-    selection: new Set(selected),
-    conflictStrategy: input.conflictStrategy ?? "add-missing-only",
-    replaceConflicts: input.replaceConflicts ?? [],
-  });
+  const plan = await withLocalGitExcludeChange(
+    ctx,
+    await buildAgentImportPlan(inputs, {
+      selection: new Set(selected),
+      conflictStrategy: input.conflictStrategy ?? "add-missing-only",
+      replaceConflicts: input.replaceConflicts ?? [],
+      installGateway: host.connection.explicit,
+    }),
+    opts,
+  );
   return toAgentPlanPreview("import", host, candidates, selected, plan, input);
 }
 
@@ -413,8 +452,8 @@ export async function previewAgentLink(
 ): Promise<AgentPlanPreview> {
   const hostKind = assertSupportedAgentHostKind(input.hostKind);
   const agentHost = new NamedAgentHostAdapter(hostKind);
-  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
-  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const detection = await agentHost.detect(agentHostContext(ctx));
+  const agentState = await agentHost.read(agentHostContext(ctx));
   const host = await summarizeDetectedAgentHost(
     hostKind,
     agentState.host.displayName,
@@ -452,7 +491,7 @@ export async function applyAgentImportRatel(
   const preview = await previewAgentImport(ctx, input, opts);
   assertPlanHash(input.planHash, preview.stageHashes.ratel);
   if (preview.plan.ratelChanges.length === 0) return null;
-  return executePlan(preview.plan.ratelChanges, { fs: ctx.fs, env: ctx.env, action: "import" });
+  return executeAgentFileChanges(ctx, preview.plan.ratelChanges, "import", opts.mutationEngine);
 }
 
 export async function applyAgentImportAgent(
@@ -463,7 +502,21 @@ export async function applyAgentImportAgent(
   const preview = await previewAgentImport(ctx, input, opts);
   assertPlanHash(input.planHash, preview.stageHashes.agent);
   if (preview.plan.agentChanges.length === 0) return null;
-  return executePlan(preview.plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "import" });
+  return executeAgentFileChanges(ctx, preview.plan.agentChanges, "import", opts.mutationEngine);
+}
+
+/** Apply the Ratel document changes and native-agent rewrite as one recoverable transaction. */
+export async function applyCombinedAgentImport(
+  ctx: CoreContext,
+  input: ApplyCombinedAgentImportInput,
+  opts: AgentInteropOptions = {},
+): Promise<BackupManifest | null> {
+  const preview = await previewAgentImport(ctx, input, opts);
+  assertPlanHash(input.stageHashes.ratel, preview.stageHashes.ratel);
+  assertPlanHash(input.stageHashes.agent, preview.stageHashes.agent);
+  const changes = [...preview.plan.ratelChanges, ...preview.plan.agentChanges];
+  if (changes.length === 0) return null;
+  return executeAgentFileChanges(ctx, changes, "import", opts.mutationEngine);
 }
 
 export async function applyAgentLink(
@@ -474,7 +527,7 @@ export async function applyAgentLink(
   const preview = await previewAgentLink(ctx, input, opts);
   assertPlanHash(input.planHash, preview.stageHashes.agent);
   if (preview.plan.agentChanges.length === 0) return null;
-  return executePlan(preview.plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "link" });
+  return executeAgentFileChanges(ctx, preview.plan.agentChanges, "link", opts.mutationEngine);
 }
 
 export async function importAgentServers(
@@ -482,12 +535,12 @@ export async function importAgentServers(
   opts: ImportAgentServersOptions = {},
 ): Promise<BackupManifest | null> {
   const agentHost = new AutomaticAgentHostAdapter();
-  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
+  const detection = await agentHost.detect(agentHostContext(ctx));
   if (!detection.present) {
     ctx.log?.("No supported agent MCP servers found at any scope. Nothing to import.");
     return null;
   }
-  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const agentState = await agentHost.read(agentHostContext(ctx));
   const candidates = collectCandidates(agentState);
   if (candidates.length === 0) {
     ctx.log?.(
@@ -497,21 +550,23 @@ export async function importAgentServers(
   }
 
   const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
-  const plan = await buildAgentImportPlan(inputs, {
-    selection: new Set(candidates.map((c) => c.name)),
-    conflictStrategy: opts.conflictStrategy ?? "add-missing-only",
-  });
+  const plan = await withLocalGitExcludeChange(
+    ctx,
+    await buildAgentImportPlan(inputs, {
+      selection: new Set(candidates.map((c) => c.name)),
+      conflictStrategy: opts.conflictStrategy ?? "add-missing-only",
+    }),
+    opts,
+  );
   logPlanSummary(ctx, plan, agentState.host.displayName);
   if (plan.ratelChanges.length === 0 && plan.agentChanges.length === 0) return null;
 
-  let latest: BackupManifest | null = null;
-  if (plan.ratelChanges.length > 0) {
-    latest = await executePlan(plan.ratelChanges, { fs: ctx.fs, env: ctx.env, action: "import" });
-  }
-  if (plan.agentChanges.length > 0) {
-    latest = await executePlan(plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "import" });
-  }
-  return latest;
+  return executeAgentFileChanges(
+    ctx,
+    [...plan.ratelChanges, ...plan.agentChanges],
+    "import",
+    opts.mutationEngine,
+  );
 }
 
 export async function linkAgentToRatel(
@@ -519,7 +574,7 @@ export async function linkAgentToRatel(
   opts: AgentInteropOptions = {},
 ): Promise<BackupManifest | null> {
   const agentHost = new AutomaticAgentHostAdapter();
-  const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
+  const detection = await agentHost.detect(agentHostContext(ctx));
   if (!detection.present) {
     const pluginHost = await findAgentHostRatelPluginConnection(ctx);
     if (pluginHost) {
@@ -529,7 +584,7 @@ export async function linkAgentToRatel(
     ctx.log?.("No supported agent config found. Nothing to link.");
     return null;
   }
-  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const agentState = await agentHost.read(agentHostContext(ctx));
   const hostKind = assertSupportedAgentHostKind(agentState.host.kind);
   const connection = await getAgentHostRatelConnection(hostKind, agentState, ctx);
   if (connection.plugin) {
@@ -539,7 +594,7 @@ export async function linkAgentToRatel(
   const pluginChanges = buildAgentHostRatelPluginLinkChanges(hostKind, agentState, connection);
   if (pluginChanges.length > 0) {
     ctx.log?.(`Re-enabling the Ratel Local plugin MCP server in ${agentState.host.displayName}.`);
-    return executePlan(pluginChanges, { fs: ctx.fs, env: ctx.env, action: "link" });
+    return executeAgentFileChanges(ctx, pluginChanges, "link", opts.mutationEngine);
   }
   const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
 
@@ -550,7 +605,21 @@ export async function linkAgentToRatel(
   }
 
   ctx.log?.(`Rewriting ${plan.agentChanges.length} ${agentState.host.displayName} config file(s).`);
-  return executePlan(plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "link" });
+  return executeAgentFileChanges(ctx, plan.agentChanges, "link", opts.mutationEngine);
+}
+
+function executeAgentFileChanges(
+  ctx: CoreContext,
+  changes: readonly FileChange[],
+  action: BackupManifest["action"],
+  mutationEngine?: MutationEngine,
+): Promise<BackupManifest> {
+  return (ctx.planExecutor ?? executePlanTransactionally)(changes, {
+    fs: ctx.fs,
+    env: ctx.env,
+    action,
+    ...(mutationEngine ? { mutationEngine } : {}),
+  });
 }
 
 export async function removeAgentRatelMcpFallback(
@@ -593,7 +662,7 @@ export async function removeAgentRatelMcpFallback(
       hostChanges.summary.removedNativeEntries.length === 1 ? "y" : "ies"
     } from ${agentState.host.displayName}.`,
   );
-  return executePlan(hostChanges.changes, { fs: ctx.fs, env: ctx.env, action: "link" });
+  return executeAgentFileChanges(ctx, hostChanges.changes, "link", opts.mutationEngine);
 }
 
 async function defaultAuthRunner(config: RatelConfig, ctx: CoreContext) {
@@ -739,11 +808,41 @@ function collectRatelKnownNames(configs: readonly (RatelConfig | null)[]): Set<s
   return out;
 }
 
+async function withLocalGitExcludeChange(
+  ctx: CoreContext,
+  plan: ImportPlan,
+  opts: AgentInteropOptions,
+): Promise<ImportPlan> {
+  if (!ctx.env.projectRoot) return plan;
+  const localConfigPath = ratelConfigPath("local", ctx.env);
+  if (!plan.ratelChanges.some(({ path }) => path === localConfigPath)) return plan;
+  const manager =
+    opts.localGitExcludeManager ?? (ctx.fs === nodeFs ? createLocalGitExcludeManager() : undefined);
+  if (!manager) return plan;
+  const preview = await manager.preview(ctx.env.projectRoot);
+  if (!preview.changed) return plan;
+  if (plan.ratelChanges.some(({ path }) => path === preview.excludePath)) {
+    throw new Error(`import plan already writes Git exclude file ${preview.excludePath}`);
+  }
+  return {
+    ...plan,
+    ratelChanges: [
+      ...plan.ratelChanges,
+      {
+        kind: "write",
+        path: preview.excludePath,
+        before: preview.currentContents,
+        after: preview.contents,
+      },
+    ],
+  };
+}
+
 async function readAllRatelConfigs(ctx: CoreContext): Promise<(RatelConfig | null)[]> {
   const configs: (RatelConfig | null)[] = [];
   for (const scope of SCOPES) {
     try {
-      configs.push(await readJson<RatelConfig>(ctx.fs, ratelConfigPath(scope, ctx.env)));
+      configs.push(await readRatelConfig(ctx, ratelConfigPath(scope, ctx.env), scope !== "user"));
     } catch (err) {
       if (err instanceof ProjectRootNotFoundError) {
         configs.push(null);
@@ -852,7 +951,7 @@ function hashPlanStage(
 
 function assertPlanHash(received: string, expected: string): void {
   if (received !== expected) {
-    throw new Error("preview is stale; scan again and review the latest changes before applying");
+    throw new AgentPlanConflictError();
   }
 }
 
@@ -866,18 +965,67 @@ async function buildAgentPlanInputs(
   const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
   const ratelLocalPath = ctx.env.projectRoot ? ratelConfigPath("local", ctx.env) : undefined;
   const bin = opts.bin ?? (await resolveBin(opts));
+  const ratelUser = await withImplicitUserSkillDirectory(
+    ctx,
+    await readRatelConfig(ctx, ratelUserPath),
+  );
 
   return {
     agentHost,
     agentState,
-    ratelUser: await readJson<RatelConfig>(ctx.fs, ratelUserPath),
-    ratelProject: ratelProjectPath ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath) : null,
-    ratelLocal: ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null,
+    ratelUser,
+    ratelProject: ratelProjectPath ? await readRatelConfig(ctx, ratelProjectPath, true) : null,
+    ratelLocal: ratelLocalPath ? await readRatelConfig(ctx, ratelLocalPath, true) : null,
     bin,
     ratelUserPath,
     ratelProjectPath,
     ratelLocalPath,
     projectRoot: ctx.env.projectRoot,
+  };
+}
+
+async function withImplicitUserSkillDirectory(
+  ctx: CoreContext,
+  config: RatelConfig | null,
+): Promise<RatelConfig | null> {
+  if (config?.skills?.dirs !== undefined) return config;
+  const defaultDir = join(ctx.env.homeDir, ".ratel", "skills");
+  const entries = await ctx.fs.list(defaultDir);
+  const hasSkill = (
+    await Promise.all(entries.map((entry) => ctx.fs.exists(join(defaultDir, entry, "SKILL.md"))))
+  ).some(Boolean);
+  if (!hasSkill) return config;
+  return {
+    ...(config ?? parseConfig({})),
+    skills: { ...(config?.skills ?? {}), dirs: [defaultDir] },
+  };
+}
+
+async function readRatelConfig(
+  ctx: CoreContext,
+  path: string,
+  projectScoped = false,
+): Promise<RatelConfig | null> {
+  if (projectScoped && ctx.env.projectRoot && ctx.fs === nodeFs) {
+    await assertSafeProjectControlPath(ctx.env.projectRoot, path);
+  }
+  const document = await readJson<RatelConfigDocument>(ctx.fs, path);
+  if (!document) return null;
+  const normalized = parseConfig(document);
+  return {
+    ...document,
+    mcpServers: normalized.mcpServers,
+    ...(document.skills !== undefined ? { skills: document.skills } : {}),
+  };
+}
+
+function agentHostContext(ctx: CoreContext): AgentHostContext {
+  return {
+    env: ctx.env,
+    fs: ctx.fs,
+    ...(ctx.env.projectRoot && ctx.fs === nodeFs
+      ? { assertProjectPath: assertSafeProjectControlPath }
+      : {}),
   };
 }
 

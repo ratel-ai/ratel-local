@@ -12,8 +12,10 @@ import {
   type TraceSinkConfig,
   type UpstreamServerInfo,
 } from "@ratel-ai/sdk";
+import type { ResolvedMcpEntry } from "../resolved-mcp.js";
 import { recordToolTokenEstimate } from "../telemetry.js";
 import type { RatelConfig, ServerEntry } from "./config.js";
+import { expandEnvPlaceholders } from "./env-placeholders.js";
 import {
   type AuthFlowOptions,
   type AuthFlowResult,
@@ -24,12 +26,26 @@ import {
 } from "./oauth/flow.js";
 import { RatelOAuthProvider } from "./oauth/provider.js";
 import { refreshIfNeeded } from "./oauth/refresh.js";
-import { RatelOAuthStore } from "./oauth/store.js";
+import {
+  OAuthFingerprintMismatchError,
+  type OAuthStoreState,
+  RatelOAuthStore,
+} from "./oauth/store.js";
 import { wrapTransportWithSendMutex } from "./oauth/transport-mutex.js";
 import { defaultSkillDirs, loadSkills } from "./skills/load.js";
 import { estimateToolPayloadTokens } from "./usage.js";
 
-export type TransportFactory = (name: string, entry: ServerEntry) => Transport | undefined;
+export interface TransportRuntimeInputs {
+  cwd: string;
+  oauthStorePath: string;
+  oauthStoreFingerprint?: string;
+}
+
+export type TransportFactory = (
+  name: string,
+  entry: ServerEntry,
+  runtime?: TransportRuntimeInputs,
+) => Transport | undefined;
 
 /**
  * Optional injection point for token refresh during gateway boot. The default is
@@ -40,6 +56,8 @@ export type RefreshTokensFn = (store: RatelOAuthStore, name: string) => Promise<
 
 export interface BuildGatewayOptions {
   transportFactory?: TransportFactory;
+  /** Effective, provenance-preserving runtime entries. Shadowed and invalid entries are ignored. */
+  resolvedMcpEntries?: ResolvedMcpEntry[];
   logger?: (message: string) => void;
   /** Override the per-upstream OAuth state path. Defaults to `~/.ratel/oauth/<name>.json`. */
   oauthStorePath?: (serverName: string) => string;
@@ -53,6 +71,8 @@ export interface BuildGatewayOptions {
   skillDirs?: string[];
   /** Override skill discovery (mainly for tests / DI). Default: scan {@link skillDirs}. */
   loadSkills?: (dirs: string[], opts: { logger?: (message: string) => void }) => Promise<Skill[]>;
+  /** Pre-resolved effective skills. When supplied, the gateway performs no discovery of its own. */
+  resolvedSkills?: Skill[];
 }
 
 const PLACEHOLDER_REDIRECT_URL = "http://127.0.0.1:0/cb";
@@ -107,21 +127,61 @@ export async function buildGatewayFromConfig(
 ): Promise<GatewayHandle> {
   const factory = options.transportFactory ?? defaultTransportFactory;
   const log = options.logger ?? ((m) => console.error(m));
-  const storePath = options.oauthStorePath ?? defaultOAuthStorePath;
-  const step = options.authStep ?? defaultAuthStep({ logger: log, storePath });
+  const effectiveEntries = options.resolvedMcpEntries
+    ? options.resolvedMcpEntries.filter((candidate) => candidate.status === "effective")
+    : Object.entries(config.mcpServers).map(([name, entry]) => ({
+        name,
+        entry,
+        runtimeCwd: entry.cwd ?? process.cwd(),
+        oauthKey: {
+          path: options.oauthStorePath?.(name) ?? defaultOAuthStorePath(name),
+          fingerprint: "legacy",
+        },
+      }));
+  const entryByName = new Map(effectiveEntries.map((candidate) => [candidate.name, candidate]));
+  const storePath = (serverName: string): string =>
+    entryByName.get(serverName)?.oauthKey.path ??
+    options.oauthStorePath?.(serverName) ??
+    defaultOAuthStorePath(serverName);
+  const storeFingerprint = (serverName: string): string | undefined =>
+    entryByName.get(serverName)?.oauthKey.fingerprint;
+  const step = options.authStep ?? defaultAuthStep({ logger: log, storePath, storeFingerprint });
   const refreshTokens = options.refreshTokens ?? defaultRefreshTokens;
 
   const catalog = new ToolCatalog(options.trace ? { trace: options.trace } : {});
   const skillCatalog = await buildSkillCatalog(config, options, log);
   const handles = new Map<string, McpServerHandle>();
   const upstreamServers: UpstreamServerInfo[] = [];
-  const configEntries: Record<string, ServerEntry> = { ...config.mcpServers };
+  const configEntries: Record<string, ServerEntry> = Object.fromEntries(
+    effectiveEntries.map(({ name, entry }) => [name, entry]),
+  );
   let listChangedNotifier: (() => void | Promise<void>) | undefined;
 
-  for (const [name, entry] of Object.entries(config.mcpServers)) {
+  for (const candidate of effectiveEntries) {
+    const { name, entry } = candidate;
+    const runtime: TransportRuntimeInputs = {
+      cwd: candidate.runtimeCwd,
+      oauthStorePath: candidate.oauthKey.path,
+      oauthStoreFingerprint: candidate.oauthKey.fingerprint,
+    };
     if (isHttpOrSse(entry)) {
-      const store = new RatelOAuthStore(storePath(name));
-      const hadTokens = (await store.load()).tokens !== undefined;
+      const store = new RatelOAuthStore(storePath(name), candidate.oauthKey.fingerprint);
+      let state: OAuthStoreState;
+      try {
+        state = await store.load();
+      } catch (error) {
+        if (!(error instanceof OAuthFingerprintMismatchError)) throw error;
+        markNeedsAuth(upstreamServers, name, entry);
+        catalog.recordEvent({ type: "auth_needs", upstream: name });
+        log(
+          `[ratel] ${name} OAuth target changed; re-authorization is required — run "ratel-local mcp auth ${name}"`,
+        );
+        continue;
+      }
+      if (!state.resource_fingerprint && candidate.oauthKey.fingerprint !== "legacy") {
+        await store.save({ resource_fingerprint: candidate.oauthKey.fingerprint });
+      }
+      const hadTokens = state.tokens !== undefined;
       if (hadTokens) {
         try {
           await refreshTokens(store, name);
@@ -139,7 +199,7 @@ export async function buildGatewayFromConfig(
     }
 
     try {
-      const transport = factory(name, entry);
+      const transport = factory(name, entry, runtime);
       if (!transport) {
         log(`[ratel] skipping ${name}: unsupported transport type "${entry.type}"`);
         continue;
@@ -207,6 +267,10 @@ async function buildSkillCatalog(
   log: (message: string) => void,
 ): Promise<SkillCatalog> {
   const skillCatalog = new SkillCatalog(options.trace ? { trace: options.trace } : {});
+  if (options.resolvedSkills) {
+    for (const skill of options.resolvedSkills) skillCatalog.register(skill);
+    return skillCatalog;
+  }
   const dirs = options.skillDirs ?? config.skills?.dirs ?? defaultSkillDirs();
   const load = options.loadSkills ?? loadSkills;
   try {
@@ -221,35 +285,45 @@ async function buildSkillCatalog(
   return skillCatalog;
 }
 
-export const defaultTransportFactory: TransportFactory = (name, entry) => {
+export const defaultTransportFactory: TransportFactory = (name, entry, runtime) => {
   switch (entry.type) {
     case "stdio":
       if (!entry.command) return undefined;
       return new StdioClientTransport({
         command: entry.command,
         args: entry.args,
-        env: entry.env,
-        cwd: entry.cwd,
+        env: mergeDaemonAndEntryEnv(entry.env),
+        cwd: runtime?.cwd ?? entry.cwd,
         stderr: "inherit",
       });
     case "http":
     case "sse":
       if (!entry.url) return undefined;
-      return wrapTransportWithSendMutex(buildHttpTransport(name, entry));
+      return wrapTransportWithSendMutex(
+        buildHttpTransport(
+          entry,
+          runtime?.oauthStorePath ?? defaultOAuthStorePath(name),
+          runtime?.oauthStoreFingerprint,
+        ),
+      );
     default:
       return undefined;
   }
 };
 
-function buildHttpTransport(name: string, entry: ServerEntry): Transport {
+function buildHttpTransport(
+  entry: ServerEntry,
+  oauthStorePath: string,
+  oauthStoreFingerprint?: string,
+): Transport {
   const url = new URL(expandEnvPlaceholders(entry.url ?? ""));
   const headers = resolveHttpHeaders(entry);
   const opts: ConstructorParameters<typeof StreamableHTTPClientTransport>[1] = headers
     ? { requestInit: { headers } }
     : {};
-  const path = defaultOAuthStorePath(name);
+  const path = oauthStorePath;
   if (existsSync(path)) {
-    const store = new RatelOAuthStore(path);
+    const store = new RatelOAuthStore(path, oauthStoreFingerprint);
     const provider = new RatelOAuthProvider({
       store,
       // Always set redirectUrl so the SDK takes the refresh-token branch instead of
@@ -262,6 +336,18 @@ function buildHttpTransport(name: string, entry: ServerEntry): Transport {
     return new StreamableHTTPClientTransport(url, { ...opts, authProvider: provider });
   }
   return new StreamableHTTPClientTransport(url, opts);
+}
+
+function mergeDaemonAndEntryEnv(
+  entryEnv: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!entryEnv) return undefined;
+  const daemonEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (value): value is [string, string] => value[1] !== undefined,
+    ),
+  );
+  return { ...daemonEnv, ...entryEnv };
 }
 
 export function resolveHttpHeaders(
@@ -277,11 +363,7 @@ export function resolveHttpHeaders(
   return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
-export function expandEnvPlaceholders(value: string, env: NodeJS.ProcessEnv = process.env): string {
-  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => {
-    return env[name] ?? match;
-  });
-}
+export { expandEnvPlaceholders } from "./env-placeholders.js";
 
 /** Test seam: read `client_information.redirect_uris[0]` from an on-disk OAuth store. */
 export function redirectUrlFromStoredFile(path: string): string | undefined {

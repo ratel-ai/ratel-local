@@ -1,8 +1,11 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
+import type { BackupFs, JsonFs, ProjectRegistry } from "@ratel-ai/ratel-local-core";
 import { AUTH_TOOL_ID } from "@ratel-ai/ratel-local-core";
 import { INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID } from "@ratel-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -220,7 +223,7 @@ describe("runCli — serve", () => {
 });
 
 describe("runCli — help and routing", () => {
-  it("--help advertises setup, import, and link as top-level commands", async () => {
+  it("--help advertises the scoped daemon, project, and skill control plane", async () => {
     const logs: string[] = [];
     await runCli(["--help"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
@@ -229,6 +232,11 @@ describe("runCli — help and routing", () => {
     expect(out).toMatch(/^\s*import\s/m);
     expect(out).toMatch(/^\s*link\s/m);
     expect(out).toMatch(/^\s*setup\s/m);
+    expect(out).toMatch(/^\s*project\s/m);
+    expect(out).toMatch(/^\s*doctor\s/m);
+    expect(out).toMatch(/daemon open/);
+    expect(out).toMatch(/skill import/);
+    expect(out).toMatch(/remove-scope/);
   });
 
   it("prints command-specific help for import and link without running either workflow", async () => {
@@ -268,6 +276,51 @@ describe("runCli — help and routing", () => {
     const out = logs.join("\n");
     expect(out).toMatch(/list/);
     expect(out).not.toMatch(/undo/);
+  });
+
+  it("routes project commands through the injected registry factory", async () => {
+    const logs: string[] = [];
+    const homes: string[] = [];
+    const registry: ProjectRegistry = {
+      registerRoot: async () => {
+        throw new Error("unexpected registerRoot");
+      },
+      resolve: async () => {
+        throw new Error("unexpected resolve");
+      },
+      list: async () => [],
+      touch: async () => {},
+      forget: async () => {
+        throw new Error("unexpected forget");
+      },
+    };
+
+    await runCli(["project", "list"], {
+      env: { homeDir: HOME },
+      logger: (message) => logs.push(message),
+      projectRegistryFactory: (homeDir) => {
+        homes.push(homeDir);
+        return registry;
+      },
+    });
+
+    expect(homes).toEqual([HOME]);
+    expect(logs).toEqual(["no projects registered"]);
+  });
+
+  it("routes doctor through recovery and scoped diagnostics", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-cli-doctor-"));
+    const logs: string[] = [];
+    try {
+      await runCli(["doctor"], {
+        env: { homeDir },
+        logger: (message) => logs.push(message),
+      });
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+
+    expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
   });
 
   it("`ratel-local setup --help` describes interactive and automated setup", async () => {

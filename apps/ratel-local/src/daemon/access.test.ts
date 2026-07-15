@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CONNECTOR_PROTOCOL_VERSION,
   connectorHeaders,
+  connectorMetadataFromHeaders,
   ensureDaemonToken,
   resolveDaemonRequestScope,
 } from "./access.js";
@@ -40,6 +41,56 @@ describe("daemon access", () => {
 
     expect(scope).toEqual({ kind: "project", projectRoot: await realpath(homeDir) });
     expect(headers["x-ratel-connector-protocol"]).toBe(CONNECTOR_PROTOCOL_VERSION);
+  });
+
+  it("emits and parses declared connector v2 metadata", () => {
+    const headers = connectorHeaders("test-token", "/repo", {
+      agentHost: "codex",
+      linkScope: "project",
+      connectorVersion: "1.2.3",
+    });
+
+    expect(headers).toMatchObject({
+      "x-ratel-connector-protocol": "2",
+      "x-ratel-agent-host": "codex",
+      "x-ratel-link-scope": "project",
+      "x-ratel-connector-version": "1.2.3",
+    });
+    expect(connectorMetadataFromHeaders(headers)).toEqual({
+      connectorProtocolVersion: "2",
+      agentHost: "codex",
+      linkScope: "project",
+      connectorVersion: "1.2.3",
+    });
+  });
+
+  it("accepts protocol v1 project connections without declared metadata", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "ratel-project-v1-"));
+    cleanup.push(projectRoot);
+    const headers = {
+      authorization: "Bearer test-token",
+      "x-ratel-connector-protocol": "1",
+      "x-ratel-project-root": Buffer.from(projectRoot).toString("base64url"),
+    };
+
+    await expect(resolveDaemonRequestScope(headers, "test-token")).resolves.toEqual({
+      kind: "project",
+      projectRoot: await realpath(projectRoot),
+    });
+    expect(connectorMetadataFromHeaders(headers)).toEqual({ connectorProtocolVersion: "1" });
+  });
+
+  it("rejects an invalid declared agent host in protocol v2", async () => {
+    await expect(
+      resolveDaemonRequestScope(
+        {
+          authorization: "Bearer test-token",
+          "x-ratel-connector-protocol": "2",
+          "x-ratel-agent-host": "other-agent",
+        },
+        "test-token",
+      ),
+    ).rejects.toThrow(/agent host/i);
   });
 
   it("uses user scope when an authenticated client sends no project root", async () => {

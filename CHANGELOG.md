@@ -4,6 +4,18 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+- Added a versioned canonical-root project registry, project-aware HTTP/CLI/UI flows, URL-scoped daemon pages, connector v2 metadata, and an active-client read model.
+- Added a single provenance-preserving MCP/skill snapshot resolver, scoped OAuth stores, deterministic runtime revisions, and generational gateways that keep existing sessions on their acquired revision.
+- Added recoverable scoped mutations with cross-process locking, CAS previews, journals, rollback/recovery, opaque skill discovery candidates, owned-copy markers, and safe local Git excludes.
+- Added `ratel-local doctor` for transaction recovery plus project, snapshot, and legacy OAuth diagnostics with stable actionable codes.
+
+### Changed
+- New agent links use `ratel-local connect`; `serve --config` remains as the legacy explicit-config runtime.
+- Skills now support explicit user/project/local reference or copy registrations. `skill activate` and `skill deactivate` remain deprecated user-scope compatibility wrappers.
+- The daemon reconciles disk state on every gateway acquire and uses targeted parent/resource watchers for near-immediate invalidation.
+- CLI and UI agent imports apply Ratel and native-agent config rewrites as one recoverable transaction.
+
 ## [0.5.0-rc.0] - 2026-07-10
 
 ### Added

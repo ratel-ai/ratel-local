@@ -1,4 +1,4 @@
-import { RefreshCw, SearchIcon, Unplug } from "lucide-react";
+import { RefreshCw, SearchIcon, TriangleAlert, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useRatelApp } from "@/App";
 import {
@@ -31,16 +31,20 @@ import {
 
 interface ActiveMcpClient {
   sessionId: string;
-  name: string;
-  version: string;
-  protocolVersion: string;
+  name?: string;
+  version?: string;
+  protocolVersion?: string;
   connectedAt: string;
   lastSeenAt: string;
-  requestCount: number;
+  requestCount?: number;
   title?: string;
   userAgent?: string;
   remoteAddress?: string;
-  capabilities: string[];
+  capabilities?: string[];
+  agentHost?: "claude-code" | "codex";
+  linkScope?: "user" | "project" | "local";
+  runtimeRevision?: string;
+  stale?: boolean;
 }
 
 interface ClientsResponse {
@@ -52,6 +56,7 @@ export function McpClientsPage() {
   const [clients, setClients] = useState<ActiveMcpClient[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const staleClients = clients.filter((client) => client.stale);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -135,6 +140,17 @@ export function McpClientsPage() {
         </Alert>
       )}
 
+      {staleClients.length > 0 && (
+        <Alert className="border-amber-500/40 bg-amber-500/10">
+          <TriangleAlert className="text-amber-600" />
+          <AlertTitle>Reconnect required</AlertTitle>
+          <AlertDescription>
+            {staleClients.length} client{staleClients.length === 1 ? " is" : "s are"} still using an
+            older runtime revision. Reconnect those clients to receive the current configuration.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {clients.length === 0 ? (
         <section className="grid min-h-72 place-items-center rounded-lg border border-dashed bg-muted/20 px-6 text-center">
           <div className="grid max-w-sm gap-2">
@@ -163,9 +179,14 @@ export function McpClientsPage() {
                 <TableRow key={client.sessionId}>
                   <TableCell className="min-w-48">
                     <div className="grid gap-0.5">
-                      <span className="font-medium">{client.title ?? client.name}</span>
+                      <span className="flex items-center gap-2 font-medium">
+                        {client.title ?? client.agentHost ?? client.name ?? "MCP client"}
+                        {client.stale && <Badge variant="warning">Stale</Badge>}
+                      </span>
                       <span className="text-xs text-muted-foreground">
-                        {client.name} {client.version}
+                        {[client.name, client.version, client.linkScope]
+                          .filter(Boolean)
+                          .join(" ") || "Connected through Ratel"}
                       </span>
                     </div>
                   </TableCell>
@@ -176,14 +197,14 @@ export function McpClientsPage() {
                     </span>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline">{client.protocolVersion}</Badge>
+                    <Badge variant="outline">{client.protocolVersion ?? "MCP"}</Badge>
                   </TableCell>
                   <TableCell className="max-w-72">
                     <div className="flex flex-wrap gap-1">
-                      {client.capabilities.length === 0 ? (
+                      {(client.capabilities?.length ?? 0) === 0 ? (
                         <span className="text-xs text-muted-foreground">None</span>
                       ) : (
-                        client.capabilities.map((capability) => (
+                        client.capabilities?.map((capability) => (
                           <Badge key={capability} variant="secondary">
                             {capability}
                           </Badge>
@@ -192,7 +213,7 @@ export function McpClientsPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {client.requestCount}
+                    {client.requestCount ?? 0}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {formatRelativeTime(client.lastSeenAt)}

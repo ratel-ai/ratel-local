@@ -1,14 +1,17 @@
-import type { BackupManifest, RatelConfig } from "@ratel-ai/ratel-local-core";
+import { join } from "node:path";
+import type { BackupManifest, RatelConfig, RatelConfigDocument } from "@ratel-ai/ratel-local-core";
 import {
   AutomaticAgentHostAdapter,
   buildAgentHostRatelPluginLinkChanges,
   buildAgentLinkPlan,
-  executePlan,
   findAgentHostRatelPluginConnection,
   getAgentHostRatelConnection,
   type ImportPlan,
   NamedAgentHostAdapter,
   pluginLinkNoOpMessage,
+  executePlanTransactionally,
+  type MutationEngine,
+  parseConfig,
   type ResolvedBin,
   ratelConfigPath,
   readJson,
@@ -31,6 +34,7 @@ export interface LinkOptions {
   agentKind?: SupportedAgentHostKind;
   installPlugin?: AgentPluginInstaller;
   exists?: (path: string) => Promise<boolean>;
+  mutationEngine?: MutationEngine;
 }
 
 export const LINK_USAGE = `usage: ratel-local link [flags]
@@ -71,6 +75,26 @@ export async function runLink(
     return null;
   }
 
+  const ratelUserPath = ratelConfigPath("user", ctx.env);
+  const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
+  const ratelLocalPath = ctx.env.projectRoot ? ratelConfigPath("local", ctx.env) : undefined;
+
+  let ratelUser = await readRatelConfig(ctx, ratelUserPath);
+  const ratelProject = ratelProjectPath ? await readRatelConfig(ctx, ratelProjectPath) : null;
+  const ratelLocal = ratelLocalPath ? await readRatelConfig(ctx, ratelLocalPath) : null;
+
+  const implicitUserSkills =
+    ratelUser?.skills?.dirs === undefined &&
+    (await ctx.fs.list(join(ctx.env.homeDir, ".ratel", "skills"))).length > 0;
+  if (implicitUserSkills) {
+    ratelUser = {
+      ...(ratelUser ?? parseConfig({})),
+      skills: {
+        ...(ratelUser?.skills ?? {}),
+        dirs: [join(ctx.env.homeDir, ".ratel", "skills")],
+      },
+    };
+  }
   const pluginChanges = buildAgentHostRatelPluginLinkChanges(hostKind, agentState, connection);
   const enablingPlugin = pluginChanges.length > 0;
 
@@ -78,16 +102,6 @@ export async function runLink(
   if (enablingPlugin) {
     plan = { agentChanges: pluginChanges };
   } else {
-    const ratelUserPath = ratelConfigPath("user", ctx.env);
-    const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
-    const ratelLocalPath = ctx.env.projectRoot ? ratelConfigPath("local", ctx.env) : undefined;
-
-    const ratelUser = await readJson<RatelConfig>(ctx.fs, ratelUserPath);
-    const ratelProject = ratelProjectPath
-      ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath)
-      : null;
-    const ratelLocal = ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null;
-
     const bin = opts.bin ?? (await resolveBin(ctx, opts));
 
     plan = await buildAgentLinkPlan({
@@ -146,10 +160,11 @@ export async function runLink(
     );
   }
 
-  const manifest = await executePlan(plan.agentChanges, {
+  const manifest = await (ctx.planExecutor ?? executePlanTransactionally)(plan.agentChanges, {
     fs: ctx.fs,
     env: ctx.env,
     action: "link",
+    ...(opts.mutationEngine ? { mutationEngine: opts.mutationEngine } : {}),
   });
   ctx.prompts.note(`Backup created. Run \`ratel-local backup list\` to inspect backups.`, "Done");
   ctx.prompts.outro(
@@ -167,6 +182,11 @@ function resolveHostKind(
   if (requested) return requested;
   if (detected === "claude-code" || detected === "codex") return detected;
   throw new Error(`Unsupported agent host ${JSON.stringify(detected)}`);
+}
+
+async function readRatelConfig(ctx: HandlerCtx, path: string): Promise<RatelConfig | null> {
+  const document = await readJson<RatelConfigDocument>(ctx.fs, path);
+  return document ? parseConfig(document) : null;
 }
 
 async function resolveBin(ctx: HandlerCtx, opts: LinkOptions): Promise<ResolvedBin> {
