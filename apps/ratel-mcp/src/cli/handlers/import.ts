@@ -1,12 +1,16 @@
 import type { BackupManifest, RatelConfig, ServerEntry } from "@ratel-ai/mcp-core";
 import {
   type AgentHostState,
+  type AgentImportWorkflowState,
   type AgentScope,
   AutomaticAgentHostAdapter,
+  advanceAgentImportWorkflow,
+  beginAgentImportWorkflow,
   buildAgentImportPlan,
   conflictKey,
   executePlan,
   type FileChange,
+  getClaudeCodeStatuslineState,
   type ImportConflict,
   type ImportConflictStrategy,
   type ImportPlan,
@@ -17,6 +21,7 @@ import {
   ratelConfigPath,
   readJson,
   type SupportedAgentHostKind,
+  unlinkedAgentImportWarning,
 } from "@ratel-ai/mcp-core";
 import { ArgError } from "../args.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
@@ -26,6 +31,7 @@ import {
   type SkillManagePaths,
   type SkillSource,
 } from "../skills/manage.js";
+import { runLink } from "./link.js";
 import { maybeAutoInstallStatusline } from "./statusline.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -112,6 +118,39 @@ export async function runImport(
     );
     ctx.prompts.outro("done");
     return null;
+  }
+
+  const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
+  let workflow = workflowHostKind
+    ? await beginCliImportWorkflow(ctx, workflowHostKind, agentState)
+    : null;
+  if (workflow?.step === "link") {
+    const decision = opts.yes
+      ? "link"
+      : await selectUnlinkedAgentAction(ctx, detection.displayName);
+    if (decision === "cancel") {
+      ctx.prompts.cancel("import cancelled (no writes)");
+      return null;
+    }
+    if (decision === "link") {
+      await runLink(ctx, {
+        yes: true,
+        bin: opts.bin,
+        envVar: opts.envVar,
+        whichResult: opts.whichResult,
+        workspaceRoot: opts.workspaceRoot,
+        agentKind: workflowHostKind ?? undefined,
+        exists: opts.exists,
+        installStatusline: false,
+      });
+      if (agentState) {
+        agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+        candidates = collectCandidates(agentState);
+      }
+      workflow = advanceAgentImportWorkflow(workflow, { type: "link-completed" });
+    } else {
+      workflow = advanceAgentImportWorkflow(workflow, { type: "link-skipped" });
+    }
   }
 
   if (agentState) {
@@ -206,86 +245,100 @@ export async function runImport(
     return null;
   }
 
-  let stageAManifest: BackupManifest | null = null;
-  if (plan.ratelChanges.length > 0) {
-    ctx.prompts.note(renderDiff(plan.ratelChanges), "Ratel config changes");
-    if (!opts.yes) {
-      const ok = await ctx.prompts.confirm({
-        message: `Apply ${plan.ratelChanges.length} Ratel config change(s)?`,
-        initialValue: true,
-      });
-      if (ctx.prompts.isCancel(ok) || ok === false) {
-        ctx.prompts.cancel("import cancelled (no writes)");
-        return null;
-      }
+  ctx.prompts.note(renderImportCommit(plan, selectedSkills), "Import commit");
+  if (!opts.yes) {
+    const ok = await ctx.prompts.confirm({
+      message: "Commit these import changes?",
+      initialValue: true,
+    });
+    if (ctx.prompts.isCancel(ok) || ok === false) {
+      ctx.prompts.cancel("import cancelled (no writes)");
+      return null;
     }
-    stageAManifest = await tryExecute(ctx, plan.ratelChanges, "import");
   }
 
-  let latestManifest = stageAManifest;
-  let agentChangesApplied = false;
-  let agentChangesSkipped = false;
-
-  if (agentState && plan.agentChanges.length > 0 && bin) {
-    ctx.prompts.note(
-      renderAgentStage(plan, agentState.host.displayName),
-      `${agentState.host.displayName} config changes`,
-    );
-    if (!opts.yes) {
-      const ok = await ctx.prompts.confirm({
-        message: `Replace ${plan.agentChanges.length} ${agentState.host.displayName} entr${
-          plan.agentChanges.length === 1 ? "y" : "ies"
-        } with the ratel-mcp entry?`,
-        initialValue: true,
-      });
-      if (ctx.prompts.isCancel(ok) || ok === false) {
-        ctx.log(
-          `${agentState.host.displayName} config changes skipped. Run \`ratel-mcp link\` (or re-run \`ratel-mcp import\`) to point ${agentState.host.displayName} at Ratel later.`,
-        );
-        agentChangesSkipped = true;
-      }
-    }
-    if (!agentChangesSkipped) {
-      latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
-      agentChangesApplied = true;
-    }
+  let latestManifest: BackupManifest | null = null;
+  if (plan.ratelChanges.length > 0) {
+    latestManifest = await tryExecute(ctx, plan.ratelChanges, "import");
+  }
+  if (plan.agentChanges.length > 0) {
+    latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
   }
 
   let skillImportResult: SkillImportResult = { managed: 0, skipped: [] };
   if (selectedSkills.length > 0) {
-    ctx.prompts.note(renderSkillStage(selectedSkills), "Skill changes");
-    if (!opts.yes) {
-      const ok = await ctx.prompts.confirm({
-        message: `Manage ${selectedSkills.length} native skill${
-          selectedSkills.length === 1 ? "" : "s"
-        } through Ratel as invoke-only?`,
-        initialValue: true,
-      });
-      if (ctx.prompts.isCancel(ok) || ok === false) {
-        ctx.prompts.cancel("import cancelled (skill changes skipped)");
-        return latestManifest;
-      }
-    }
     skillImportResult = await activateSelectedSkills(ctx, skillPaths, selectedSkills, opts);
   }
 
-  const statuslineHostKind = agentState?.host.kind ?? opts.agentKind;
-  const shouldInstallStatusline =
-    statuslineHostKind === "claude-code" &&
-    (selectedSkills.length > 0 || agentChangesApplied || plan.agentChanges.length === 0) &&
-    !agentChangesSkipped;
-  if (shouldInstallStatusline) {
+  if (workflow?.step === "import") {
+    workflow = advanceAgentImportWorkflow(workflow, { type: "import-completed" });
+  }
+  if (workflow?.step === "statusline") {
     bin ??= opts.bin ?? (await resolveBin(ctx, opts));
-    await maybeAutoInstallStatusline(ctx, statuslineHostKind, bin);
+    await maybeAutoInstallStatusline(ctx, workflow.hostKind, bin);
+    workflow = advanceAgentImportWorkflow(workflow, { type: "statusline-completed" });
   }
 
   if (latestManifest) {
     ctx.prompts.note(`Backup created. Run \`ratel-mcp backup list\` to inspect backups.`, "Done");
   }
-  ctx.prompts.outro(
-    renderCompletion(agentState, plan, skillImportResult.managed, agentChangesSkipped),
-  );
+  ctx.prompts.outro(renderCompletion(agentState, plan, skillImportResult.managed));
   return latestManifest;
+}
+
+async function beginCliImportWorkflow(
+  ctx: HandlerCtx,
+  hostKind: SupportedAgentHostKind,
+  agentState: AgentHostState | null,
+): Promise<AgentImportWorkflowState> {
+  const linked = agentState ? isAgentStateLinked(agentState) : true;
+  const statuslineInstalled =
+    hostKind === "claude-code"
+      ? (await getClaudeCodeStatuslineState(ctx)).status === "installed"
+      : false;
+  return beginAgentImportWorkflow({ hostKind, linked, statuslineInstalled });
+}
+
+function resolveWorkflowHostKind(
+  requested: SupportedAgentHostKind | undefined,
+  state: AgentHostState | null,
+): SupportedAgentHostKind | null {
+  if (requested) return requested;
+  return state?.host.kind === "claude-code" || state?.host.kind === "codex"
+    ? state.host.kind
+    : null;
+}
+
+function isAgentStateLinked(state: AgentHostState): boolean {
+  return state.scopes.some((scope) =>
+    Object.entries(scope.mcpServers).some(([name, entry]) => isRatelGatewayEntry(name, entry)),
+  );
+}
+
+async function selectUnlinkedAgentAction(
+  ctx: HandlerCtx,
+  agentDisplayName: string,
+): Promise<"link" | "skip" | "cancel"> {
+  ctx.prompts.note(unlinkedAgentImportWarning(agentDisplayName), "Agent not linked");
+  const answer = await ctx.prompts.select<"link" | "skip" | "cancel">({
+    message: "Link Ratel before importing?",
+    options: [
+      {
+        value: "link" as const,
+        label: "Link Ratel and continue",
+        hint: "Recommended; keeps imported MCPs and skills usable in this agent.",
+      },
+      {
+        value: "skip" as const,
+        label: "Continue without linking",
+        hint: "Import for use through another linked agent.",
+      },
+      { value: "cancel" as const, label: "Cancel import" },
+    ],
+    initialValue: "link",
+  });
+  if (ctx.prompts.isCancel(answer)) return "cancel";
+  return answer as "link" | "skip" | "cancel";
 }
 
 async function resolveConflictStrategy(
@@ -765,21 +818,16 @@ function renderDiff(changes: readonly FileChange[]): string {
     .join("\n");
 }
 
-function renderAgentStage(plan: ImportPlan, hostName = "agent"): string {
-  const lines: string[] = [];
-  lines.push(renderDiff(plan.agentChanges));
-  lines.push("");
-  lines.push(
-    `${hostName} MCP entries now managed by Ratel will be replaced by a single ratel-mcp entry. Other ${hostName} MCP entries are preserved.`,
-  );
-  if (plan.summary.skipped.length > 0) {
-    lines.push("");
-    lines.push("Not copied into Ratel:");
-    for (const s of plan.summary.skipped) {
-      lines.push(`  - ${s.name} (${s.scope})`);
-    }
+function renderImportCommit(plan: ImportPlan, skills: readonly SkillCandidate[]): string {
+  const sections: string[] = [];
+  if (plan.ratelChanges.length > 0) {
+    sections.push(`Ratel config\n${renderDiff(plan.ratelChanges)}`);
   }
-  return lines.join("\n");
+  if (plan.agentChanges.length > 0) {
+    sections.push(`Source agent cleanup\n${renderDiff(plan.agentChanges)}`);
+  }
+  if (skills.length > 0) sections.push(`Skills\n${renderSkillStage(skills)}`);
+  return sections.join("\n\n");
 }
 
 function renderSkillStage(skills: readonly SkillCandidate[]): string {
@@ -792,13 +840,10 @@ function renderCompletion(
   agentState: AgentHostState | null,
   plan: ImportPlan,
   managedSkillCount: number,
-  agentChangesSkipped = false,
 ): string {
   const parts: string[] = ["import complete"];
-  if (agentState && agentChangesSkipped) {
-    parts.push(`${agentState.host.displayName} config changes skipped`);
-  } else if (agentState && plan.agentChanges.length > 0) {
-    parts.push(`restart ${agentState.host.displayName} to pick up the new MCP entry`);
+  if (agentState && plan.agentChanges.length > 0) {
+    parts.push(`${agentState.host.displayName} source entries removed`);
   } else if (agentState && plan.ratelChanges.length > 0) {
     parts.push(`no ${agentState.host.displayName} changes needed`);
   }

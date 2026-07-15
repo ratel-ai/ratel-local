@@ -172,6 +172,7 @@ function conflictStrategyPrompts(
         if (title === "Ratel import conflicts") conflictMessages.push(message);
       },
       async select(opts) {
+        if (opts.message.includes("Link Ratel")) return "link";
         selectOptions.splice(
           0,
           selectOptions.length,
@@ -190,24 +191,12 @@ function conflictStrategyPrompts(
   };
 }
 
-function decliningStageB(): PromptAdapter {
-  let stage = 0;
+function skippingLinkAndConfirmingImport(): PromptAdapter {
   return {
     ...autoConfirm(),
-    async confirm() {
-      stage += 1;
-      return stage === 1; // accept Ratel config changes, decline Claude Code config changes
-    },
-  };
-}
-
-function decliningStageBAndAcceptingSkills(): PromptAdapter {
-  let stage = 0;
-  return {
-    ...autoConfirm(),
-    async confirm() {
-      stage += 1;
-      return stage !== 2; // accept Ratel + skill changes, decline Claude Code config changes
+    async select(opts) {
+      if (opts.message.includes("Link Ratel")) return "skip";
+      return opts.initialValue ?? opts.options[0].value;
     },
   };
 }
@@ -507,7 +496,7 @@ command = "codex"
     }
   });
 
-  it("still manages selected skills after declining Claude Code config changes", async () => {
+  it("still imports MCPs and skills after explicitly skipping the Link preflight", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -518,7 +507,7 @@ command = "codex"
     const skillPaths = await makeSkillPaths();
     try {
       await writeCliClaudeSkill(skillPaths, "api-design");
-      const { ctx } = ctxOf(fs, decliningStageBAndAcceptingSkills(), false);
+      const { ctx } = ctxOf(fs, skippingLinkAndConfirmingImport(), false);
 
       await runImport(ctx, {
         bin: BIN,
@@ -530,6 +519,7 @@ command = "codex"
       expect(
         JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-mcp"],
       ).toBeUndefined();
+      expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers.fs).toBeUndefined();
       expect((await lstat(join(skillPaths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
       expect(
         await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8"),
@@ -718,7 +708,8 @@ command = "codex"
     let selectCalled = false;
     const prompts: PromptAdapter = {
       ...autoConfirm(),
-      async select() {
+      async select(opts) {
+        if (opts.message.includes("Link Ratel")) return "link";
         selectCalled = true;
         return "add-missing-only";
       },
@@ -755,7 +746,8 @@ command = "codex"
     let multiselectCalled = false;
     const prompts: PromptAdapter = {
       ...autoConfirm(),
-      async select() {
+      async select(opts) {
+        if (opts.message.includes("Link Ratel")) return "link";
         selectCalled = true;
         return "add-missing-only";
       },
@@ -819,7 +811,7 @@ command = "codex"
     ).rejects.toThrow(/replace-selected cannot be combined with --yes or --dry-run/);
   });
 
-  it("canceling at the conflict prompt exits before writes or backups", async () => {
+  it("canceling at the conflict prompt preserves the completed Link commit without importing", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -839,11 +831,13 @@ command = "codex"
 
     const ratelUser = JSON.parse(fs.files.get(RATEL_USER) as string);
     expect(ratelUser.mcpServers.fs).toEqual({ type: "stdio", command: "existing" });
-    expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers.fs).toBeDefined();
+    const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
+    expect(claude.mcpServers.fs).toBeDefined();
+    expect(claude.mcpServers["ratel-mcp"]).toBeDefined();
     const backupKeys = Array.from(fs.files.keys()).filter((k) =>
       k.startsWith("/home/u/.ratel/backups/"),
     );
-    expect(backupKeys).toEqual([]);
+    expect(backupKeys.length).toBeGreaterThan(0);
   });
 
   it("logs a backup location if executor fails mid-flight", async () => {
@@ -851,7 +845,14 @@ command = "codex"
     fs.files.set(
       HOME_CLAUDE,
       JSON.stringify({
-        mcpServers: { fs: { type: "stdio", command: "echo" } },
+        mcpServers: {
+          fs: { type: "stdio", command: "echo" },
+          "ratel-mcp": {
+            type: "stdio",
+            command: "ratel-mcp",
+            args: ["serve", "--config", RATEL_USER],
+          },
+        },
       }),
     );
     fs.failNextWriteAt = HOME_CLAUDE;
@@ -859,35 +860,6 @@ command = "codex"
     await expect(runImport(ctx, { bin: BIN, yes: true })).rejects.toThrow();
     expect(logs.join("\n")).toMatch(/partial backup may exist under ~\/\.ratel\/backups\//);
     expect(logs.join("\n")).not.toMatch(/ratel-mcp backup undo/);
-  });
-
-  it("declining Claude Code config changes leaves Ratel configs in place and Claude untouched, with a link hint", async () => {
-    const fs = new MemFs();
-    fs.files.set(
-      HOME_CLAUDE,
-      JSON.stringify({
-        mcpServers: {
-          fs: { type: "stdio", command: "echo" },
-          other: { type: "stdio", command: "echo-other" },
-        },
-      }),
-    );
-    const { ctx, logs } = ctxOf(fs, decliningStageB(), false);
-    await runImport(ctx, { bin: BIN });
-
-    // Ratel config changes applied: Ratel global has the entries.
-    expect(fs.files.has(RATEL_USER)).toBe(true);
-    const ratelUser = JSON.parse(fs.files.get(RATEL_USER) as string);
-    expect(ratelUser.mcpServers.fs).toBeDefined();
-    expect(ratelUser.mcpServers.other).toBeDefined();
-
-    // Claude Code config changes declined: Claude is untouched.
-    const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
-    expect(claude.mcpServers["ratel-mcp"]).toBeUndefined();
-    expect(claude.mcpServers.fs).toBeDefined();
-
-    // Hint mentions link or re-running import.
-    expect(logs.join("\n")).toMatch(/link|import/i);
   });
 
   it("multiselect deselects an entry: only selected ones land in Ratel, deselected ones stay in Claude", async () => {
@@ -913,24 +885,6 @@ command = "codex"
     expect(claude.mcpServers["ratel-mcp"]).toBeDefined();
     expect(claude.mcpServers.other).toEqual({ type: "stdio", command: "echo-other" });
     expect(claude.mcpServers.fs).toBeUndefined();
-  });
-
-  it("after declining Claude Code config changes, re-running offers them again", async () => {
-    const fs = new MemFs();
-    fs.files.set(
-      HOME_CLAUDE,
-      JSON.stringify({
-        mcpServers: { fs: { type: "stdio", command: "echo" } },
-      }),
-    );
-    const { ctx } = ctxOf(fs, decliningStageB(), false);
-    await runImport(ctx, { bin: BIN });
-    expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-mcp"]).toBeUndefined();
-
-    // Re-run: this time accept both change groups.
-    const { ctx: ctx2 } = ctxOf(fs, autoConfirm(), false);
-    await runImport(ctx2, { bin: BIN });
-    expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-mcp"]).toBeDefined();
   });
 
   it("captures and prompts for an optional description on each selected entry without one", async () => {
