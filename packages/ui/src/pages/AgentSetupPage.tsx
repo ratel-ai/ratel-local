@@ -1191,6 +1191,7 @@ function ImportSceneDialog(props: {
   const [draftSkillSelection, setDraftSkillSelection] = useState<Set<string>>(new Set());
   const [conflictStrategy, setConflictStrategy] = useState<ConflictStrategy>("add-missing-only");
   const [replaceConflicts, setReplaceConflicts] = useState<string[]>([]);
+  const wasOpenRef = useRef(false);
   const selected = new Set(draftSelection);
   const selectedSkills = props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill)));
   const conflicts = draftPreview.plan.summary.conflicts;
@@ -1219,7 +1220,9 @@ function ImportSceneDialog(props: {
   };
 
   useEffect(() => {
-    if (!props.open) return;
+    const opening = props.open && !wasOpenRef.current;
+    wasOpenRef.current = props.open;
+    if (!opening) return;
     setScene(props.workflow.step === "link" ? "link" : "skills");
     setWorkflow(props.workflow);
     setDraftPreview(props.preview);
