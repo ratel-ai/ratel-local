@@ -4,6 +4,8 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.5.0-rc.0] - 2026-07-15
+
 ### Changed
 - Made the Ratel Local plugin the preferred link path in both CLI and UI flows so Codex and Claude Code receive the bundled agent skills; when plugin installation fails, linking reports the failure and applies the reviewed, backed-up explicit MCP gateway fallback.
 - Made Claude Code and Codex linking plugin-aware: enabled `ratel-local` plugins now count as host-level Ratel connections in CLI/UI import and link flows, avoiding a second explicit gateway; linking re-enables a disabled Codex plugin MCP server; explicit-plus-plugin duplicates are reported without automatic cleanup.
