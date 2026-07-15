@@ -1,4 +1,14 @@
-import type { BackupFs, JsonFs, ResolvedBin } from "@ratel-ai/ratel-local-core";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  type BackupFs,
+  createMutationEngine,
+  executePlan,
+  type JsonFs,
+  nodeFs,
+  type ResolvedBin,
+} from "@ratel-ai/ratel-local-core";
 import { describe, expect, it } from "vitest";
 import { type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import { runLink } from "./link.js";
@@ -60,6 +70,7 @@ function ctxOf(
       env: { homeDir: HOME, projectRoot: withProjectRoot ? ROOT : undefined },
       fs,
       log: (m) => logs.push(m),
+      planExecutor: executePlan,
       prompts,
       installAgentPlugin: async () => ({
         installed: false,
@@ -216,6 +227,168 @@ enabled = false
     expect(codex).not.toContain("[mcp_servers.ratel-local]");
   });
 
+  it("rolls back every agent config when a later linked scope fails to publish", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-cli-link-transaction-"));
+    try {
+      const projectRoot = join(homeDir, "repo");
+      const claudePath = join(homeDir, ".claude.json");
+      const projectMcpPath = join(projectRoot, ".mcp.json");
+      const originalClaude = JSON.stringify({ mcpServers: {} });
+      const originalProject = JSON.stringify({ mcpServers: {} });
+      await mkdir(join(homeDir, ".ratel"), { recursive: true });
+      await mkdir(join(projectRoot, ".ratel"), { recursive: true });
+      await writeFile(
+        join(homeDir, ".ratel", "config.json"),
+        JSON.stringify({ mcpServers: { user: { type: "stdio", command: "echo" } } }),
+        "utf8",
+      );
+      await writeFile(
+        join(projectRoot, ".ratel", "config.json"),
+        JSON.stringify({ mcpServers: { project: { type: "stdio", command: "echo" } } }),
+        "utf8",
+      );
+      await writeFile(claudePath, originalClaude, "utf8");
+      await writeFile(projectMcpPath, originalProject, "utf8");
+      const mutationEngine = await createMutationEngine({
+        controlDir: join(homeDir, ".ratel"),
+        hooks: {
+          beforeApplyOperation(_operation, index) {
+            if (index === 1) throw new Error("fail-project-link-publication");
+          },
+        },
+      });
+      const ctx: HandlerCtx = {
+        argv: { group: "link", configPaths: [], rest: [], extras: [], flags: {} },
+        env: { homeDir, projectRoot },
+        fs: nodeFs,
+        log: () => {},
+        prompts: autoConfirm(),
+      };
+
+      await expect(
+        runLink(ctx, {
+          bin: BIN,
+          yes: true,
+          agentKind: "claude-code",
+          mutationEngine,
+        }),
+      ).rejects.toThrow("fail-project-link-publication");
+
+      expect(await readFile(claudePath, "utf8")).toBe(originalClaude);
+      expect(await readFile(projectMcpPath, "utf8")).toBe(originalProject);
+      expect(await readdir(join(homeDir, ".ratel", "transactions"))).toEqual([]);
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("links an agent when the Ratel scope contains skills but no MCP servers", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER,
+      JSON.stringify({
+        skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+      }),
+    );
+    fs.files.set(HOME_CLAUDE, JSON.stringify({ mcpServers: {} }));
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await runLink(ctx, { bin: BIN, yes: true });
+
+    const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
+    expect(claude.mcpServers["ratel-local"].args).toEqual([
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "user",
+    ]);
+  });
+
+  it("links when the implicit user skill directory has content and config is absent", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      "/home/u/.ratel/skills/review/SKILL.md",
+      "---\nname: review\ndescription: review\n---\n",
+    );
+    fs.files.set(HOME_CLAUDE, JSON.stringify({ mcpServers: {} }));
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await runLink(ctx, { bin: BIN, yes: true });
+
+    const entry = JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-local"];
+    expect(entry.args).toEqual(["connect", "--agent-host", "claude-code", "--link-scope", "user"]);
+  });
+
+  it("links implicit user skills when an existing config omits skills.dirs", async () => {
+    const fs = new MemFs();
+    fs.files.set(RATEL_USER, JSON.stringify({ custom: true }));
+    fs.files.set(
+      "/home/u/.ratel/skills/review/SKILL.md",
+      "---\nname: review\ndescription: review\n---\n",
+    );
+    fs.files.set(HOME_CLAUDE, JSON.stringify({ mcpServers: {} }));
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await runLink(ctx, { bin: BIN, yes: true });
+
+    expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-local"]).toBeDefined();
+  });
+
+  it("migrates a recognized legacy serve entry to connect", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: {
+          "ratel-local": {
+            type: "stdio",
+            command: "ratel-local",
+            args: ["serve", "--config", RATEL_USER],
+          },
+        },
+      }),
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await runLink(ctx, { bin: BIN, yes: true });
+
+    const entry = JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-local"];
+    expect(entry.args).toEqual(["connect", "--agent-host", "claude-code", "--link-scope", "user"]);
+    expect(entry.args).not.toContain("--config");
+  });
+
+  it("preserves an unrelated entry that is merely named ratel", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: {
+          ratel: { type: "stdio", command: "company-ratel", args: ["serve"] },
+        },
+      }),
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await runLink(ctx, { bin: BIN, yes: true });
+
+    const servers = JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers;
+    expect(servers.ratel).toEqual({
+      type: "stdio",
+      command: "company-ratel",
+      args: ["serve"],
+    });
+    expect(servers["ratel-local"].args[0]).toBe("connect");
+  });
+
   it("writes the Ratel gateway without removing Claude native entries", async () => {
     const fs = new MemFs();
     fs.files.set(
@@ -240,7 +413,7 @@ enabled = false
     expect(claude.mcpServers["ratel-local"]).toEqual({
       type: "stdio",
       command: "ratel-local",
-      args: ["serve", "--config", RATEL_USER],
+      args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
     });
     expect(claude.mcpServers.fs).toEqual({ type: "stdio", command: "echo" });
     expect(claude.mcpServers.other).toEqual({ type: "stdio", command: "elsewhere" });
@@ -312,7 +485,13 @@ enabled = false
     await runLink(ctx, { bin: BIN, yes: true });
     const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
     expect(claude.mcpServers.other).toEqual({ type: "stdio", command: "elsewhere" });
-    expect(claude.mcpServers["ratel-local"].args).toEqual(["serve", "--config", RATEL_USER]);
+    expect(claude.mcpServers["ratel-local"].args).toEqual([
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "user",
+    ]);
   });
 
   it("uses the requested agent instead of the automatic choice", async () => {
@@ -406,11 +585,13 @@ command = "codex"
     await runLink(ctx, { bin: BIN, yes: true });
     const claudeProj = JSON.parse(fs.files.get(PROJECT_MCP) as string);
     expect(claudeProj.mcpServers["ratel-local"].args).toEqual([
-      "serve",
-      "--config",
-      RATEL_USER,
-      "--config",
-      RATEL_PROJECT,
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "project",
+      "--project-root",
+      ROOT,
     ]);
   });
 

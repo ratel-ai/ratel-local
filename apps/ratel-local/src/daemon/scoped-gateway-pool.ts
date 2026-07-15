@@ -1,13 +1,49 @@
-import type { GatewayHandle } from "@ratel-ai/ratel-local-core";
+import {
+  type GatewayHandle,
+  projectIdFromCanonicalRoot,
+  type ResolvedContextSnapshot,
+  type RuntimeContextRef,
+} from "@ratel-ai/ratel-local-core";
 import type { DaemonRequestScope } from "./access.js";
 
 type ListChangedListener = () => void | Promise<void>;
 
+export interface GatewayGenerationIdentity {
+  readonly contextKey: string;
+  readonly runtimeRevision: string;
+}
+
+export type GatewayContext = RuntimeContextRef;
+
+export type ResolvedGatewaySnapshot =
+  | ({
+      readonly kind: "global";
+      readonly resolvedContext?: ResolvedContextSnapshot;
+    } & GatewayGenerationIdentity)
+  | ({
+      readonly kind: "project";
+      readonly projectId: Extract<RuntimeContextRef, { kind: "project" }>["projectId"];
+      readonly projectRoot: string;
+      readonly resolvedContext?: ResolvedContextSnapshot;
+    } & GatewayGenerationIdentity);
+
 export interface GatewayLease {
   gateway: GatewayHandle;
+  context: GatewayContext;
+  projectRoot?: string;
+  contextKey: string;
+  runtimeRevision: string;
+  /** @deprecated Use contextKey. */
   scopeKey: string;
   release(): Promise<void>;
   subscribeListChanged(listener: ListChangedListener): () => void;
+}
+
+export interface GatewayGenerationStats extends GatewayGenerationIdentity {
+  context: GatewayContext;
+  projectRoot?: string;
+  activeLeaseCount: number;
+  upstreamCount: number;
 }
 
 export interface ScopedGatewayPoolStats {
@@ -15,10 +51,11 @@ export interface ScopedGatewayPoolStats {
   activeUserGatewayCount: number;
   activeProjectGatewayCount: number;
   upstreamCount: number;
+  generations: GatewayGenerationStats[];
 }
 
 export interface ScopedGatewayPool {
-  acquire(scope: DaemonRequestScope): Promise<GatewayLease>;
+  acquire(snapshot: ResolvedGatewaySnapshot | DaemonRequestScope): Promise<GatewayLease>;
   stats(): ScopedGatewayPoolStats;
   shutdown(): Promise<void>;
 }
@@ -31,7 +68,7 @@ interface PoolEntry {
 }
 
 interface PoolRecord {
-  scope: DaemonRequestScope;
+  snapshot: ResolvedGatewaySnapshot;
   promise: Promise<PoolEntry>;
   entry?: PoolEntry;
 }
@@ -41,32 +78,47 @@ export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
   private shuttingDown = false;
 
   constructor(
-    private readonly build: (scope: DaemonRequestScope) => Promise<GatewayHandle>,
+    private readonly build: (snapshot: ResolvedGatewaySnapshot) => Promise<GatewayHandle>,
     private readonly log: (message: string) => void = () => {},
   ) {}
 
-  async acquire(scope: DaemonRequestScope): Promise<GatewayLease> {
+  async acquire(input: ResolvedGatewaySnapshot | DaemonRequestScope): Promise<GatewayLease> {
     if (this.shuttingDown) throw new Error("gateway pool is shutting down");
-    const key = gatewayScopeKey(scope);
-    let record = this.records.get(key);
-    if (!record) {
-      const next: PoolRecord = {
-        scope,
-        promise: Promise.resolve(undefined as never),
-      };
-      next.promise = this.buildEntry(scope, key, next);
-      record = next;
-      this.records.set(key, record);
-    }
+    const snapshot = resolvedGatewaySnapshot(input);
+    const key = gatewayGenerationKey(snapshot);
+    let record: PoolRecord;
+    let entry: PoolEntry;
+    for (;;) {
+      const existing = this.records.get(key);
+      if (existing) {
+        record = existing;
+      } else {
+        const next: PoolRecord = {
+          snapshot,
+          promise: Promise.resolve(undefined as never),
+        };
+        next.promise = this.buildEntry(snapshot, key, next);
+        record = next;
+        this.records.set(key, record);
+      }
 
-    const entry = await record.promise;
-    if (entry.closed) throw new Error(`gateway scope ${key} is closed`);
+      entry = await record.promise;
+      if (!entry.closed) break;
+      if (this.shuttingDown) throw new Error("gateway pool is shutting down");
+      if (this.records.get(key) === record) this.records.delete(key);
+      // The previous final lease may have closed the generation while this
+      // acquire was awaiting its promise. Retry against a fresh generation.
+    }
     entry.refs += 1;
     let released = false;
 
     return {
       gateway: entry.gateway,
-      scopeKey: key,
+      context: gatewayContext(snapshot),
+      ...(snapshot.kind === "project" ? { projectRoot: snapshot.projectRoot } : {}),
+      contextKey: snapshot.contextKey,
+      runtimeRevision: snapshot.runtimeRevision,
+      scopeKey: snapshot.contextKey,
       subscribeListChanged: (listener) => {
         entry.listeners.add(listener);
         return () => entry.listeners.delete(listener);
@@ -89,14 +141,23 @@ export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
       (record): record is PoolRecord & { entry: PoolEntry } =>
         record.entry !== undefined && !record.entry.closed,
     );
+    const generations = active.map(
+      (record): GatewayGenerationStats => ({
+        context: gatewayContext(record.snapshot),
+        ...(record.snapshot.kind === "project" ? { projectRoot: record.snapshot.projectRoot } : {}),
+        contextKey: record.snapshot.contextKey,
+        runtimeRevision: record.snapshot.runtimeRevision,
+        activeLeaseCount: record.entry.refs,
+        upstreamCount: record.entry.gateway.upstreamServers.length,
+      }),
+    );
     return {
       activeGatewayCount: active.length,
-      activeUserGatewayCount: active.filter((record) => record.scope.kind === "user").length,
-      activeProjectGatewayCount: active.filter((record) => record.scope.kind === "project").length,
-      upstreamCount: active.reduce(
-        (sum, record) => sum + record.entry.gateway.upstreamServers.length,
-        0,
-      ),
+      activeUserGatewayCount: active.filter((record) => record.snapshot.kind === "global").length,
+      activeProjectGatewayCount: active.filter((record) => record.snapshot.kind === "project")
+        .length,
+      upstreamCount: generations.reduce((sum, generation) => sum + generation.upstreamCount, 0),
+      generations,
     };
   }
 
@@ -117,12 +178,12 @@ export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
   }
 
   private async buildEntry(
-    scope: DaemonRequestScope,
+    snapshot: ResolvedGatewaySnapshot,
     key: string,
     record: PoolRecord,
   ): Promise<PoolEntry> {
     try {
-      const gateway = await this.build(scope);
+      const gateway = await this.build(snapshot);
       const entry: PoolEntry = {
         gateway,
         refs: 0,
@@ -150,6 +211,33 @@ export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
   }
 }
 
-export function gatewayScopeKey(scope: DaemonRequestScope): string {
-  return scope.kind === "user" ? "user" : `project:${scope.projectRoot}`;
+export function gatewayScopeKey(scope: GatewayContext): string {
+  return scope.kind === "global" ? "global" : `project:${scope.projectId}`;
+}
+
+function gatewayGenerationKey(snapshot: ResolvedGatewaySnapshot): string {
+  return JSON.stringify([snapshot.contextKey, snapshot.runtimeRevision]);
+}
+
+function resolvedGatewaySnapshot(
+  input: ResolvedGatewaySnapshot | DaemonRequestScope,
+): ResolvedGatewaySnapshot {
+  if ("contextKey" in input && "runtimeRevision" in input) return input;
+  if (input.kind === "user") {
+    return { kind: "global", contextKey: "global", runtimeRevision: "legacy" };
+  }
+  const projectId = projectIdFromCanonicalRoot(input.projectRoot);
+  return {
+    kind: "project",
+    projectId,
+    projectRoot: input.projectRoot,
+    contextKey: `project:${projectId}`,
+    runtimeRevision: "legacy",
+  };
+}
+
+function gatewayContext(snapshot: ResolvedGatewaySnapshot): GatewayContext {
+  return snapshot.kind === "global"
+    ? { kind: "global" }
+    : { kind: "project", projectId: snapshot.projectId };
 }

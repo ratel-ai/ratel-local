@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
+import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it } from "vitest";
 import { connectorHeaders } from "../../daemon/access.js";
 import type { ParsedArgs } from "../args.js";
@@ -138,7 +139,9 @@ describe("runDaemon", () => {
       (message) => logs.push(message),
       { open: () => {}, ensureToken: async () => "daemon-test-token" },
     );
-    const uiUrl = daemonUrlFromLogs(logs);
+    const daemonUrl = daemonUrlFromLogs(logs);
+    expect(logs.join("\n")).not.toContain("?t=");
+    const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
     const token = new URL(uiUrl).searchParams.get("t");
     expect(token).toBeTruthy();
 
@@ -175,6 +178,24 @@ describe("runDaemon", () => {
     expect(status.upstreamCount).toBe(0);
     expect(status.activeClientCount).toBe(0);
 
+    let openedSessionUrl = "";
+    await runDaemon(daemonArgs({ verb: "open", flags: {} }), makeCtx(fs), {}, () => {}, {
+      readToken: async () => "daemon-test-token",
+      open: (url) => {
+        openedSessionUrl = url;
+      },
+    });
+    expect(openedSessionUrl).toMatch(/\/global\/\?t=/);
+    const openedUrl = new URL(openedSessionUrl);
+    const openedToken = openedUrl.searchParams.get("t");
+    expect(
+      (
+        await fetch(new URL("/api/config", openedUrl), {
+          headers: { Authorization: `Bearer ${openedToken}` },
+        })
+      ).status,
+    ).toBe(200);
+
     const state = JSON.parse(fs.files.get(`${HOME}/.ratel/daemon.json`) ?? "{}") as {
       port?: number;
       uiUrl?: string;
@@ -209,7 +230,9 @@ describe("runDaemon", () => {
         name: "daemon-test-client",
         version: "1.0.0",
         scope: "user",
-        scopeKey: "user",
+        scopeKey: "global",
+        context: { kind: "global" },
+        runtimeRevision: "legacy",
       });
       expect(body.clients[0].requestCount).toBeGreaterThanOrEqual(1);
 
@@ -305,6 +328,132 @@ describe("runDaemon", () => {
       });
     } finally {
       await clientA.close();
+      await clientB.close();
+      await result.shutdown();
+      await Promise.all(upstreams.map((server) => server.close()));
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("reconciles registered projects into concurrent runtime generations", async () => {
+    const fs = new MemFs();
+    const temp = await mkdtemp(join(tmpdir(), "ratel-daemon-control-plane-"));
+    const homeDir = join(temp, "home");
+    const projectA = await realpath(await mkdtemp(join(temp, "a-")));
+    const projectB = await realpath(await mkdtemp(join(temp, "b-")));
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await mkdir(join(projectA, ".ratel"), { recursive: true });
+    await mkdir(join(projectB, ".ratel"), { recursive: true });
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      JSON.stringify({ mcpServers: {}, skills: { dirs: [] } }),
+    );
+    const writeProject = (root: string, command: string) =>
+      writeFile(
+        join(root, ".ratel", "config.json"),
+        JSON.stringify({ mcpServers: { scoped: { type: "stdio", command } } }),
+      );
+    await writeProject(projectA, "project-a-v1");
+    await writeProject(projectB, "project-b-v1");
+
+    const upstreams: Server[] = [];
+    const runtimeInputs: Array<{ command?: string; cwd?: string; oauthStorePath?: string }> = [];
+    const logs: string[] = [];
+    const result = await runDaemon(
+      daemonArgs({
+        configPaths: [],
+        flags: { open: false, telemetry: "off", port: "0", "auto-config": true },
+      }),
+      makeCtx(fs, { homeDir }),
+      {
+        transportFactory: (_name, entry, runtime) => {
+          runtimeInputs.push({ command: entry.command, ...runtime });
+          const command = entry.command ?? "unknown";
+          const server = new Server(
+            { name: command, version: "1.0.0" },
+            { capabilities: { tools: {} } },
+          );
+          server.setRequestHandler(ListToolsRequestSchema, async () => ({
+            tools: [
+              {
+                name: `${command}_tool`,
+                description: `${command} capability`,
+                inputSchema: { type: "object" },
+              },
+            ],
+          }));
+          server.setRequestHandler(CallToolRequestSchema, async () => ({ content: [] }));
+          const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+          upstreams.push(server);
+          void server.connect(serverTransport);
+          return clientTransport;
+        },
+      },
+      (message) => logs.push(message),
+      { open: () => {}, ensureToken: async () => "daemon-test-token" },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+    const uiToken = new URL(await mintUiSession(daemonUrl, "daemon-test-token")).searchParams.get(
+      "t",
+    );
+
+    const connect = async (projectRoot: string, name: string) => {
+      const client = new Client({ name, version: "1.0.0" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("/mcp", daemonUrl), {
+          requestInit: { headers: connectorHeaders("daemon-test-token", projectRoot) },
+        }),
+      );
+      return client;
+    };
+
+    const oldA = await connect(projectA, "project-a-old");
+    const clientB = await connect(projectB, "project-b");
+    await writeProject(projectA, "project-a-v2");
+    const newA = await connect(projectA, "project-a-new");
+    try {
+      const oldSearch = await oldA.callTool({
+        name: "search_capabilities",
+        arguments: { query: "project-a-v1" },
+      });
+      const newSearch = await newA.callTool({
+        name: "search_capabilities",
+        arguments: { query: "project-a-v2" },
+      });
+      const bSearch = await clientB.callTool({
+        name: "search_capabilities",
+        arguments: { query: "project-b-v1" },
+      });
+      expect(JSON.stringify(oldSearch.content)).toContain("project-a-v1_tool");
+      expect(JSON.stringify(newSearch.content)).toContain("project-a-v2_tool");
+      expect(JSON.stringify(bSearch.content)).toContain("project-b-v1_tool");
+
+      expect(runtimeInputs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ command: "project-a-v1", cwd: projectA }),
+          expect.objectContaining({ command: "project-a-v2", cwd: projectA }),
+          expect.objectContaining({ command: "project-b-v1", cwd: projectB }),
+        ]),
+      );
+      expect(new Set(runtimeInputs.map((runtime) => runtime.oauthStorePath)).size).toBe(2);
+
+      const clientsUrl = new URL("/api/mcp-clients", daemonUrl);
+      clientsUrl.searchParams.set("projectId", projectIdFromCanonicalRoot(projectA));
+      const clientsResponse = await fetch(clientsUrl, {
+        headers: { Authorization: `Bearer ${uiToken}` },
+      });
+      const clientsBody = (await clientsResponse.json()) as {
+        clients: Array<{ name: string; runtimeRevision: string; stale: boolean }>;
+      };
+      expect(clientsBody.clients.find((client) => client.name === "project-a-old")?.stale).toBe(
+        true,
+      );
+      expect(clientsBody.clients.find((client) => client.name === "project-a-new")?.stale).toBe(
+        false,
+      );
+    } finally {
+      await oldA.close();
+      await newA.close();
       await clientB.close();
       await result.shutdown();
       await Promise.all(upstreams.map((server) => server.close()));
@@ -519,4 +668,15 @@ function daemonUrlFromLogs(logs: string[]): string {
   const match = /https?:\/\/\S+/.exec(line);
   if (!match) throw new Error(`daemon URL missing from log: ${line}`);
   return match[0];
+}
+
+async function mintUiSession(daemonUrl: string, daemonToken: string): Promise<string> {
+  const response = await fetch(new URL("/api/ui/sessions", daemonUrl), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${daemonToken}` },
+  });
+  if (!response.ok) throw new Error(`unable to mint test UI session: ${response.status}`);
+  const body = (await response.json()) as { url?: unknown };
+  if (typeof body.url !== "string") throw new Error("daemon returned no UI session URL");
+  return body.url;
 }

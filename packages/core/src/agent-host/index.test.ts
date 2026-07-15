@@ -13,6 +13,7 @@ function adapter(input: {
   mcpServers?: Record<string, { type: string; command?: string; args?: string[] }>;
 }): AgentHostAdapter {
   return {
+    supportedScopes: ["user"],
     async detect() {
       return {
         displayName: input.displayName,
@@ -79,6 +80,15 @@ describe("AutomaticAgentHostAdapter", () => {
 });
 
 describe("NamedAgentHostAdapter", () => {
+  it("declares the native scopes each host can link", () => {
+    expect(new NamedAgentHostAdapter("claude-code").supportedScopes).toEqual([
+      "user",
+      "project",
+      "local",
+    ]);
+    expect(new NamedAgentHostAdapter("codex").supportedScopes).toEqual(["user", "project"]);
+  });
+
   it("resolves concrete supported adapters by kind", async () => {
     const claude = await new NamedAgentHostAdapter("claude-code").detect(CTX);
     const codex = await new NamedAgentHostAdapter("codex").detect(CTX);

@@ -149,7 +149,15 @@ describe("Claude Ratel-on detection", () => {
     const fs = new MemFs();
     fs.files.set(
       CLAUDE_CONFIG,
-      JSON.stringify({ mcpServers: { "ratel-local": { type: "stdio", command: "ratel-local" } } }),
+      JSON.stringify({
+        mcpServers: {
+          "ratel-local": {
+            type: "stdio",
+            command: "ratel-local",
+            args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
+          },
+        },
+      }),
     );
     const state = await getClaudeCodeStatuslineState(ctx(fs));
     expect(state.ratelEnabled).toBe(true);

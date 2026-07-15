@@ -46,8 +46,14 @@ describe("parseConfig", () => {
     expect(() => parseConfig("not a config")).toThrow(/root.*object/i);
   });
 
-  it("rejects when mcpServers is missing or not an object", () => {
-    expect(() => parseConfig({})).toThrow(/mcpServers/);
+  it("accepts a skills-only document by defaulting mcpServers to an empty object", () => {
+    expect(parseConfig({ skills: { dirs: [] } })).toEqual({
+      mcpServers: {},
+      skills: { dirs: [] },
+    });
+  });
+
+  it("rejects when mcpServers is present but not an object", () => {
     expect(() => parseConfig({ mcpServers: "nope" })).toThrow(/mcpServers/);
   });
 
@@ -265,6 +271,30 @@ describe("mergeConfigs", () => {
 });
 
 describe("parseConfig skills", () => {
+  it("parses explicit reference and managed-copy entries", () => {
+    const config = parseConfig({
+      skills: {
+        entries: {
+          review: { mode: "reference", path: "../.agents/skills/review", source: "codex" },
+          release: {
+            mode: "copy",
+            source: "claude",
+            copiedFrom: { source: "claude", id: "release" },
+          },
+        },
+      },
+    });
+
+    expect(config.skills?.entries).toEqual({
+      review: { mode: "reference", path: "../.agents/skills/review", source: "codex" },
+      release: {
+        mode: "copy",
+        source: "claude",
+        copiedFrom: { source: "claude", id: "release" },
+      },
+    });
+  });
+
   it("parses an optional skills.dirs array", () => {
     const config = parseConfig({
       mcpServers: {},

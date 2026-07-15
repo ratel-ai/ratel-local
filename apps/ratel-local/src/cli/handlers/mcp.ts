@@ -5,7 +5,7 @@ import { runMcpGet } from "./get.js";
 import { runMcpAuth } from "./mcp-auth.js";
 import { runMcpList } from "./mcp-list.js";
 import { runRemove } from "./remove.js";
-import type { HandlerCtx } from "./types.js";
+import type { CliServerMutator, HandlerCtx } from "./types.js";
 
 export const MCP_USAGE = `usage: ratel-local mcp <verb> [args...]
 
@@ -22,14 +22,17 @@ To import agent MCP configs and skills, see \`ratel-local import\`.
 To point an agent at Ratel, see \`ratel-local link\`.
 To start the gateway, see \`ratel-local serve\`.`;
 
-export async function runMcp(ctx: HandlerCtx): Promise<void> {
+export async function runMcp(
+  ctx: HandlerCtx,
+  options: { mutateServer?: CliServerMutator } = {},
+): Promise<void> {
   const { verb } = ctx.argv;
   switch (verb) {
     case "add":
-      await runAdd(ctx);
+      await runAdd(ctx, { mutateServer: options.mutateServer });
       return;
     case "remove":
-      await runRemove(ctx);
+      await runRemove(ctx, { mutateServer: options.mutateServer });
       return;
     case "list":
       await runMcpList(ctx);
@@ -38,7 +41,7 @@ export async function runMcp(ctx: HandlerCtx): Promise<void> {
       await runMcpGet(ctx);
       return;
     case "edit":
-      await runEdit(ctx);
+      await runEdit(ctx, { mutateServer: options.mutateServer });
       return;
     case "auth":
       await runMcpAuth(ctx);

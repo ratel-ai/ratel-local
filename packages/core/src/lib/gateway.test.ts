@@ -75,6 +75,44 @@ describe("buildGatewayFromConfig", () => {
     await remote.server.close();
   });
 
+  it("builds from resolved MCP entries and passes scoped runtime inputs to transports", async () => {
+    const fs = await startUpstream([{ name: "read_file", description: "Read a file." }]);
+    const runtimeInputs: unknown[] = [];
+
+    const handle = await buildGatewayFromConfig(
+      { mcpServers: {} },
+      {
+        resolvedMcpEntries: [
+          {
+            name: "fs",
+            entry: { type: "stdio", command: "noop" },
+            owner: { scope: "project", projectId: "prj_test" },
+            status: "effective",
+            runtimeCwd: "/workspace/project-a",
+            oauthKey: { path: "/tmp/scoped-oauth.json", fingerprint: "fingerprint" },
+            diagnostics: [],
+          },
+        ],
+        transportFactory: (_name, _entry, runtime) => {
+          runtimeInputs.push(runtime);
+          return fs.clientTransport;
+        },
+      },
+    );
+
+    expect(handle.catalog.has("fs__read_file")).toBe(true);
+    expect(runtimeInputs).toEqual([
+      {
+        cwd: "/workspace/project-a",
+        oauthStorePath: "/tmp/scoped-oauth.json",
+        oauthStoreFingerprint: "fingerprint",
+      },
+    ]);
+
+    await handle.close();
+    await fs.server.close();
+  });
+
   it("skips entries with unsupported transport types and logs a warning", async () => {
     const logs: string[] = [];
     const handle = await buildGatewayFromConfig(
@@ -414,6 +452,44 @@ describe("buildGatewayFromConfig", () => {
       raw.expires_at = expiresAt;
       await fs.writeFile(storePath(name), JSON.stringify(raw, null, 2));
     }
+
+    it("marks a changed OAuth target as needsAuth without constructing a transport", async () => {
+      const store = new RatelOAuthStore(storePath("remote"), "old-target");
+      await store.save({
+        tokens: {
+          access_token: "old",
+          token_type: "Bearer",
+          refresh_token: "refresh",
+        },
+      });
+      const factory = vi.fn(() => undefined);
+      const logs: string[] = [];
+
+      const handle = await buildGatewayFromConfig(
+        { mcpServers: {} },
+        {
+          resolvedMcpEntries: [
+            {
+              name: "remote",
+              entry: { type: "http", url: "https://new.example/mcp" },
+              owner: { scope: "user" },
+              status: "effective",
+              runtimeCwd: "/home/u",
+              oauthKey: { path: storePath("remote"), fingerprint: "new-target" },
+              diagnostics: [],
+            },
+          ],
+          transportFactory: factory,
+          logger: (message) => logs.push(message),
+        },
+      );
+
+      expect(factory).not.toHaveBeenCalled();
+      expect(handle.upstreamServers).toContainEqual({ name: "remote", needsAuth: true });
+      expect(logs.join("\n")).toMatch(/target changed.*re-authoriz/i);
+
+      await handle.close();
+    });
 
     it("calls refreshTokens for HTTP upstreams with stored tokens before register", async () => {
       const ok = await startUpstream([{ name: "ping", description: "Ping." }]);

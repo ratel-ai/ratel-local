@@ -6,6 +6,31 @@ export function newSessionToken(): string {
   return randomBytes(32).toString("hex");
 }
 
+export class InMemoryUiSessionTokens {
+  private readonly tokens = new Set<string>();
+
+  constructor(initialTokens: Iterable<string> = []) {
+    for (const token of initialTokens) this.tokens.add(token);
+  }
+
+  issue(): string {
+    const token = newSessionToken();
+    this.tokens.add(token);
+    return token;
+  }
+
+  isValid(candidate: string): boolean {
+    for (const token of this.tokens) {
+      if (constantTimeEqual(candidate, token)) return true;
+    }
+    return false;
+  }
+
+  revoke(token: string): void {
+    this.tokens.delete(token);
+  }
+}
+
 export function isLoopbackHost(host: string | undefined, port: number): boolean {
   if (!host) return false;
   return host.toLowerCase() === `${UI_HOST}:${port}` || host.toLowerCase() === `localhost:${port}`;

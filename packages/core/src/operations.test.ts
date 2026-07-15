@@ -1,11 +1,16 @@
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BackupFs } from "./backup.js";
-import type { JsonFs } from "./io.js";
+import { type JsonFs, nodeFs } from "./io.js";
+import { createMutationEngine, MISSING_DOCUMENT_REVISION } from "./mutation-engine.js";
 import {
   addServerEntry,
   applyAgentImportAgent,
   applyAgentImportRatel,
   applyAgentLink,
+  applyCombinedAgentImport,
   editServerEntry,
   getAgentHostsState,
   getConfigState,
@@ -16,6 +21,7 @@ import {
   removeAgentRatelMcpFallback,
   removeServerEntry,
 } from "./operations.js";
+import { executePlan } from "./plan-exec.js";
 
 const HOME = "/home/u";
 const ROOT = "/repo";
@@ -63,7 +69,12 @@ class MemFs implements BackupFs, JsonFs {
 }
 
 function ctx(fs = new MemFs()) {
-  return { env: { homeDir: HOME, projectRoot: ROOT }, fs, log: () => {} };
+  return {
+    env: { homeDir: HOME, projectRoot: ROOT },
+    fs,
+    log: () => {},
+    planExecutor: executePlan,
+  };
 }
 
 describe("core operations — server entries", () => {
@@ -86,6 +97,22 @@ describe("core operations — server entries", () => {
     await removeServerEntry(ctx(fs), { scope: "user", name: "fs" });
     expect(JSON.parse(fs.files.get(USER_PATH) as string).mcpServers).toEqual({});
     expect([...fs.files.keys()].some((path) => path.includes("/.ratel/backups/"))).toBe(true);
+  });
+
+  it("mutates a skills-only document without dropping unknown fields", async () => {
+    const fs = new MemFs();
+    fs.files.set(USER_PATH, JSON.stringify({ skills: { dirs: [] }, custom: { keep: "yes" } }));
+
+    await addServerEntry(ctx(fs), {
+      scope: "user",
+      name: "fs",
+      entry: { type: "stdio", command: "echo" },
+    });
+
+    const document = JSON.parse(fs.files.get(USER_PATH) as string);
+    expect(document.skills).toEqual({ dirs: [] });
+    expect(document.custom).toEqual({ keep: "yes" });
+    expect(document.mcpServers.fs.command).toBe("echo");
   });
 });
 
@@ -191,7 +218,15 @@ describe("core operations — agent interop", () => {
 
     fs.files.set(
       CLAUDE_PATH,
-      JSON.stringify({ mcpServers: { "ratel-local": { type: "stdio", command: "ratel-local" } } }),
+      JSON.stringify({
+        mcpServers: {
+          "ratel-local": {
+            type: "stdio",
+            command: "ratel-local",
+            args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
+          },
+        },
+      }),
     );
     state = await getAgentHostsState(ctx(fs));
     expect(state.hosts.find((host) => host.kind === "claude-code")?.posture).toBe("ratel-only");
@@ -201,7 +236,11 @@ describe("core operations — agent interop", () => {
       JSON.stringify({
         mcpServers: {
           fs: { type: "stdio", command: "echo" },
-          "ratel-local": { type: "stdio", command: "ratel-local" },
+          "ratel-local": {
+            type: "stdio",
+            command: "ratel-local",
+            args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
+          },
         },
       }),
     );
@@ -429,6 +468,54 @@ command = "echo"
     expect(claude.mcpServers["ratel-local"]).toBeUndefined();
   });
 
+  it("includes a local Git exclude edit in the same Ratel import stage", async () => {
+    const fs = new MemFs();
+    const excludePath = `${ROOT}/.git/info/exclude`;
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        projects: {
+          [ROOT]: { mcpServers: { local: { type: "stdio", command: "echo" } } },
+        },
+      }),
+    );
+
+    const preview = await previewAgentImport(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      {
+        envVar: "/usr/local/bin/ratel-local",
+        localGitExcludeManager: {
+          async preview(projectRoot) {
+            return {
+              projectRoot,
+              excludePath,
+              changed: true,
+              currentContents: "# keep\n",
+              contents: "# keep\n# ratel local\n",
+              documentRevision: MISSING_DOCUMENT_REVISION,
+            };
+          },
+          async ensure(projectRoot) {
+            return { projectRoot, excludePath, changed: true };
+          },
+        },
+      },
+    );
+
+    expect(preview.plan.ratelChanges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: `${ROOT}/.ratel/config.local.json` }),
+        {
+          kind: "write",
+          path: excludePath,
+          before: "# keep\n",
+          after: "# keep\n# ratel local\n",
+        },
+      ]),
+    );
+  });
+
   it("rejects stale import plan hashes before applying", async () => {
     const fs = new MemFs();
     fs.files.set(
@@ -457,6 +544,34 @@ command = "echo"
         { envVar: "/usr/local/bin/ratel-local" },
       ),
     ).rejects.toThrow(/preview is stale/);
+  });
+
+  it("binds and applies both import stages together", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    const preview = await previewAgentImport(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-local" },
+    );
+
+    await applyCombinedAgentImport(
+      ctx(fs),
+      {
+        hostKind: "claude-code",
+        selection: preview.selected,
+        stageHashes: preview.stageHashes,
+      },
+      { envVar: "/usr/local/bin/ratel-local" },
+    );
+
+    expect(JSON.parse(fs.files.get(USER_PATH) as string).mcpServers.fs.command).toBe("echo");
+    const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
+    expect(claude.mcpServers.fs).toBeUndefined();
+    expect(claude.mcpServers["ratel-local"]).toBeUndefined();
   });
 
   it("previews and applies link without removing native agent entries", async () => {
@@ -496,7 +611,13 @@ command = "echo"
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers.other.command).toBe("node");
-    expect(claude.mcpServers["ratel-local"].args).toContain(USER_PATH);
+    expect(claude.mcpServers["ratel-local"].args).toEqual([
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "user",
+    ]);
   });
 
   it("previews link as a plugin-aware no-op without an explicit gateway", async () => {
@@ -555,7 +676,13 @@ command = "echo"
     );
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
-    expect(claude.mcpServers["ratel-local"].args).toContain(USER_PATH);
+    expect(claude.mcpServers["ratel-local"].args).toEqual([
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "user",
+    ]);
   });
 
   it("links the Ratel gateway into an empty Claude Code config", async () => {
@@ -563,6 +690,45 @@ command = "echo"
     fs.files.set(
       USER_PATH,
       JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(CLAUDE_PATH, JSON.stringify({}));
+
+    const preview = await previewAgentLink(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-local" },
+    );
+
+    expect(preview.plan.agentChanges).toHaveLength(1);
+    expect(preview.emptyReason).toBeNull();
+  });
+
+  it("previews a link for a skills-only Ratel document", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      USER_PATH,
+      JSON.stringify({
+        skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+      }),
+    );
+    fs.files.set(CLAUDE_PATH, JSON.stringify({}));
+
+    const preview = await previewAgentLink(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "/usr/local/bin/ratel-local" },
+    );
+
+    expect(preview.plan.agentChanges).toHaveLength(1);
+    expect(preview.emptyReason).toBeNull();
+  });
+
+  it("previews a link for an implicit default user skill directory", async () => {
+    const fs = new MemFs();
+    fs.files.set(USER_PATH, JSON.stringify({ custom: true }));
+    fs.files.set(
+      "/home/u/.ratel/skills/review/SKILL.md",
+      "---\nname: review\ndescription: review\n---\n",
     );
     fs.files.set(CLAUDE_PATH, JSON.stringify({}));
 
@@ -591,6 +757,72 @@ command = "echo"
     expect(claude.mcpServers["ratel-local"]).toBeUndefined();
   });
 
+  it("rolls back a non-interactive import when the agent rewrite fails after the Ratel write", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-core-import-transaction-"));
+    try {
+      const claudePath = join(homeDir, ".claude.json");
+      const ratelPath = join(homeDir, ".ratel", "config.json");
+      const originalClaude = JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "echo" } },
+      });
+      await writeFile(claudePath, originalClaude, "utf8");
+      const mutationEngine = await createMutationEngine({
+        controlDir: join(homeDir, ".ratel"),
+        hooks: {
+          beforeApplyOperation(_operation, index) {
+            if (index === 1) throw new Error("fail-core-agent-publication");
+          },
+        },
+      });
+
+      await expect(
+        importAgentServers(
+          { env: { homeDir }, fs: nodeFs, log: () => {} },
+          {
+            envVar: "/usr/local/bin/ratel-local",
+            mutationEngine,
+          },
+        ),
+      ).rejects.toThrow("fail-core-agent-publication");
+
+      await expect(readFile(ratelPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(claudePath, "utf8")).toBe(originalClaude);
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves unknown Ratel document fields through a transactional agent import", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-core-import-lossless-"));
+    try {
+      const claudePath = join(homeDir, ".claude.json");
+      const ratelPath = join(homeDir, ".ratel", "config.json");
+      await mkdir(join(homeDir, ".ratel"), { recursive: true });
+      await writeFile(
+        claudePath,
+        JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+        "utf8",
+      );
+      await writeFile(
+        ratelPath,
+        JSON.stringify({ custom: { keep: true }, skills: { dirs: [] } }),
+        "utf8",
+      );
+
+      await importAgentServers(
+        { env: { homeDir }, fs: nodeFs, log: () => {} },
+        { envVar: "/usr/local/bin/ratel-local" },
+      );
+
+      const document = JSON.parse(await readFile(ratelPath, "utf8"));
+      expect(document.custom).toEqual({ keep: true });
+      expect(document.skills).toEqual({ dirs: [] });
+      expect(document.mcpServers.fs.command).toBe("echo");
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("links Claude Code non-interactively without removing native entries", async () => {
     const fs = new MemFs();
     fs.files.set(
@@ -606,7 +838,62 @@ command = "echo"
 
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
-    expect(claude.mcpServers["ratel-local"].args).toContain(USER_PATH);
+    expect(claude.mcpServers["ratel-local"].args).toEqual([
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "user",
+    ]);
+  });
+
+  it("rejects a native project Codex config behind an escaping .codex symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ratel-codex-path-safety-"));
+    try {
+      const homeDir = join(root, "home");
+      const projectRoot = join(root, "project");
+      const outside = join(root, "outside-codex");
+      await mkdir(homeDir, { recursive: true });
+      await mkdir(projectRoot, { recursive: true });
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, "config.toml"), '[mcp_servers.escape]\ncommand = "echo"\n');
+      await symlink(outside, join(projectRoot, ".codex"));
+
+      await expect(
+        previewAgentLink(
+          { env: { homeDir, projectRoot }, fs: nodeFs, log: () => {} },
+          { hostKind: "codex" },
+          { bin: { command: "/usr/local/bin/ratel-local", args: [], source: "env" } },
+        ),
+      ).rejects.toMatchObject({ statusCode: 422, code: "PROJECT_PATH_UNSAFE" });
+      await expect(readFile(join(outside, "config.toml"), "utf8")).resolves.toContain(
+        "mcp_servers.escape",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects native project Ratel config behind an escaping .ratel symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ratel-config-path-safety-"));
+    try {
+      const homeDir = join(root, "home");
+      const projectRoot = join(root, "project");
+      const outside = join(root, "outside-ratel");
+      await mkdir(homeDir, { recursive: true });
+      await mkdir(projectRoot, { recursive: true });
+      await mkdir(outside, { recursive: true });
+      const outsideConfig = join(outside, "config.json");
+      await writeFile(outsideConfig, '{"mcpServers":{"escape":{"command":"echo"}}}\n');
+      await symlink(outside, join(projectRoot, ".ratel"));
+
+      await expect(
+        getAgentHostsState({ env: { homeDir, projectRoot }, fs: nodeFs, log: () => {} }),
+      ).rejects.toMatchObject({ statusCode: 422, code: "PROJECT_PATH_UNSAFE" });
+      await expect(readFile(outsideConfig, "utf8")).resolves.toContain('"escape"');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("leaves plugin-linked Claude Code unchanged in the non-interactive link operation", async () => {

@@ -52,7 +52,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { importStatuslineAction, linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
-import { availableSkillsForKind, fetchSkills, type SkillSummary } from "@/lib/skills";
+import {
+  applySkillImportSelections,
+  availableSkillsForKind,
+  buildSkillImportSelections,
+  defaultSkillImportTarget,
+  discoveredSkillSummaries,
+  fetchSkills,
+  type SkillSummary,
+} from "@/lib/skills";
 import { cn } from "@/lib/utils";
 
 type AgentHostKind = "claude-code" | "codex";
@@ -222,7 +230,7 @@ function useAvailableSkills() {
   const reload = useCallback(async () => {
     try {
       const data = await fetchSkills(request);
-      setAvailable(data.available);
+      setAvailable(discoveredSkillSummaries(data));
     } catch {
       setAvailable([]);
     }
@@ -234,7 +242,7 @@ function useAvailableSkills() {
 }
 
 export function AgentSetupPage() {
-  const { clearSetupIntent, config, openCommandMenu, refresh, request, setupIntent, token } =
+  const { clearSetupIntent, config, openCommandMenu, pagePath, refresh, request, setupIntent } =
     useRatelApp();
   const navigate = useNavigate();
   const { available } = useAvailableSkills();
@@ -257,12 +265,13 @@ export function AgentSetupPage() {
 
   const openAgent = useCallback(
     (kind: AgentHostKind, operation?: SetupFlow) => {
-      const search = new URLSearchParams();
-      if (token) search.set("t", token);
-      if (operation) search.set("operation", operation);
-      void navigate({ to: `/agent-setup/${kind}?${search.toString()}` } as never);
+      const path = pagePath(`/agent-setup/${kind}`);
+      const separator = path.includes("?") ? "&" : "?";
+      void navigate({
+        to: operation ? `${path}${separator}operation=${operation}` : path,
+      } as never);
     },
-    [navigate, token],
+    [navigate, pagePath],
   );
   useEffect(() => {
     void scanHosts();
@@ -354,7 +363,7 @@ export function AgentSetupPage() {
 }
 
 export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupFlow }) {
-  const { openCommandMenu, refresh, request, token } = useRatelApp();
+  const { openCommandMenu, pagePath, refresh, request } = useRatelApp();
   const navigate = useNavigate();
   const { available, reload: reloadSkills } = useAvailableSkills();
   const agentAvailable = availableSkillsForKind(available, props.kind);
@@ -379,13 +388,10 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
 
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
-    const target = token ? `/agent-setup?t=${encodeURIComponent(token)}` : "/agent-setup";
-    void navigate({ to: target } as never);
+    void navigate({ to: pagePath("/agent-setup") } as never);
   };
   const switchHost = (kind: AgentHostKind) => {
-    const search = new URLSearchParams();
-    if (token) search.set("t", token);
-    void navigate({ to: `/agent-setup/${kind}?${search.toString()}` } as never);
+    void navigate({ to: pagePath(`/agent-setup/${kind}`) } as never);
   };
   const primaryPath = host?.scopes.find((scope) => scope.available)?.path ?? host?.scopes[0]?.path;
 
@@ -827,7 +833,7 @@ function PreviewFlow(props: {
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
-  const { runAction } = useRatelApp();
+  const { context, runAction } = useRatelApp();
   const [preview, setPreview] = useState<AgentPlanPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -875,20 +881,20 @@ function PreviewFlow(props: {
     [props.host.connection.linked, props.host.statusline?.status, props.hostKind],
   );
 
-  const applyRatel = async (
+  const applyImport = async (
     importPreview: AgentPlanPreview,
     conflictStrategy: ConflictStrategy,
     replaceConflicts: string[],
   ) => {
-    const applied = await runAction("Ratel config changes applied", () =>
-      props.request("/api/agent-apply/import/ratel", {
+    const applied = await runAction("Ratel and agent config changes applied", () =>
+      props.request("/api/agent-apply/import", {
         method: "POST",
         body: {
           hostKind: props.hostKind,
           selection: importPreview.selected,
           conflictStrategy,
           replaceConflicts,
-          planHash: importPreview.stageHashes.ratel,
+          stageHashes: importPreview.stageHashes,
         },
       }),
     );
@@ -967,54 +973,27 @@ function PreviewFlow(props: {
     replaceConflicts: string[],
     selectedSkills: SkillSummary[],
   ) => {
-    if (importPreview.plan.ratelChanges.length > 0) {
-      const ratelApplied = await applyRatel(importPreview, conflictStrategy, replaceConflicts);
-      if (!ratelApplied) return false;
-    }
-    if (importPreview.plan.agentChanges.length > 0) {
-      const agentApplied = await applyAgent(importPreview, {
-        conflictStrategy,
-        replaceConflicts,
-      });
-      if (!agentApplied) return false;
+    if (importPreview.plan.ratelChanges.length > 0 || importPreview.plan.agentChanges.length > 0) {
+      const configsApplied = await applyImport(importPreview, conflictStrategy, replaceConflicts);
+      if (!configsApplied) return false;
     }
     if (selectedSkills.length > 0) {
-      const skillsApplied = await activateSelectedSkills(selectedSkills);
+      const skillsApplied = await importSelectedSkills(selectedSkills);
       if (!skillsApplied) return false;
     }
     return true;
   };
 
-  const activateSelectedSkills = async (selectedSkills: SkillSummary[]) => {
-    type ActivateSkillsResponse = {
-      managed: Array<{ id: string; mode: string }>;
-      skipped?: Array<{ id: string; reason: string }>;
-    };
-    const idsBySource = new Map<SkillSummary["source"], string[]>();
-    for (const skill of selectedSkills) {
-      if (skill.source !== "claude" && skill.source !== "codex") continue;
-      const ids = idsBySource.get(skill.source) ?? [];
-      ids.push(skill.id);
-      idsBySource.set(skill.source, ids);
-    }
-    const managed: ActivateSkillsResponse["managed"] = [];
-    const skipped: NonNullable<ActivateSkillsResponse["skipped"]> = [];
-    const applied = await runAction("Skill management complete", async () => {
-      for (const [source, ids] of idsBySource) {
-        const result = await props.request<ActivateSkillsResponse>("/api/skills/activate", {
-          method: "POST",
-          body: { ids, source },
-        });
-        managed.push(...result.managed);
-        skipped.push(...(result.skipped ?? []));
-      }
-      return {
-        log: [
-          `Now managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
-          ...(skipped.length > 0 ? [skippedSkillsMessage(skipped)] : []),
-        ],
-      };
-    });
+  const importSelectedSkills = async (selectedSkills: SkillSummary[]) => {
+    const applied = await runAction(
+      `Now managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"}`,
+      async () => {
+        const target = defaultSkillImportTarget(context);
+        if (!target) throw new Error("Select Global or a project before importing skills");
+        const selections = buildSkillImportSelections(selectedSkills, context, target);
+        await applySkillImportSelections(props.request, selections);
+       },
+     );
     if (!applied) return false;
     await props.onSkillsImported();
     setRefreshNonce((value) => value + 1);
@@ -1216,11 +1195,6 @@ function importAvailabilityLabel(mcpCount: number, skillCount: number) {
   if (skillCount > 0) parts.push(`${skillCount} skill${skillCount === 1 ? "" : "s"}`);
   if (parts.length === 0) return "Nothing available to import.";
   return `${parts.join(" and ")} available.`;
-}
-
-function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>) {
-  const details = skipped.map((skill) => `${skill.id}: ${skill.reason}`).join("; ");
-  return `Could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
 }
 
 type ImportScene =

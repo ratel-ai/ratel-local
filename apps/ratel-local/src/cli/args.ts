@@ -1,7 +1,9 @@
 export type Group =
   | "mcp"
   | "backup"
+  | "project"
   | "skill"
+  | "doctor"
   | "import"
   | "link"
   | "setup"
@@ -17,13 +19,27 @@ export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "auth";
 
 export type BackupVerb = "list";
 
+export type ProjectVerb = "list" | "add" | "remove";
+
 export type StatuslineVerb = "install" | "uninstall";
 
-export type DaemonVerb = "run" | "install" | "uninstall" | "status" | "start" | "stop" | "restart";
+export type DaemonVerb =
+  | "run"
+  | "install"
+  | "uninstall"
+  | "status"
+  | "start"
+  | "stop"
+  | "restart"
+  | "open";
 
 export type SkillVerb =
   | "activate"
   | "deactivate"
+  | "import"
+  | "add-scope"
+  | "remove-scope"
+  | "remove"
   | "list"
   | "suggest"
   | "preload-hook"
@@ -33,6 +49,8 @@ export type SkillVerb =
 const MCP_VERBS: ReadonlySet<string> = new Set(["add", "remove", "list", "get", "edit", "auth"]);
 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
+
+const PROJECT_VERBS: ReadonlySet<string> = new Set(["list", "add", "remove"]);
 
 const STATUSLINE_VERBS: ReadonlySet<string> = new Set(["install", "uninstall"]);
 
@@ -44,11 +62,16 @@ const DAEMON_VERBS: ReadonlySet<string> = new Set([
   "start",
   "stop",
   "restart",
+  "open",
 ]);
 
 const SKILL_VERBS: ReadonlySet<string> = new Set([
   "activate",
   "deactivate",
+  "import",
+  "add-scope",
+  "remove-scope",
+  "remove",
   "list",
   "suggest",
   "preload-hook",
@@ -139,6 +162,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
+  } else if (first === "project") {
+    group = "project";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!PROJECT_VERBS.has(candidate)) {
+        throw new ArgError(`unknown project verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
   } else if (first === "skill") {
     group = "skill";
     i = 1;
@@ -150,7 +184,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
-  } else if (first === "import" || first === "link" || first === "setup") {
+  } else if (first === "import" || first === "link" || first === "setup" || first === "doctor") {
     group = first;
     i = 1;
   } else if (first === "statusline") {

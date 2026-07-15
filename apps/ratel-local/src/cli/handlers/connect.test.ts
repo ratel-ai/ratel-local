@@ -51,7 +51,12 @@ describe("runConnect", () => {
         configPaths: [],
         rest: [],
         extras: [],
-        flags: { "project-root": "/repo", "daemon-url": "http://127.0.0.1:5731/mcp" },
+        flags: {
+          "project-root": "/repo",
+          "daemon-url": "http://127.0.0.1:5731/mcp",
+          "agent-host": "codex",
+          "link-scope": "project",
+        },
       },
       {
         argv: {
@@ -85,10 +90,47 @@ describe("runConnect", () => {
       token: "secret",
       projectRoot: "/repo",
       clientVersion: "1.2.3",
+      agentHost: "codex",
+      linkScope: "project",
     });
 
     await host.close();
     await connector.shutdown();
     await remoteServer.close();
+  });
+
+  it.each([
+    [{ "agent-host": "cursor" }, /--agent-host must be one of: claude-code, codex/],
+    [{ "link-scope": "workspace" }, /--link-scope must be one of: user, project, local/],
+    [{ "agent-host": true }, /--agent-host must be one of: claude-code, codex/],
+  ] as const)("rejects invalid connector metadata flags", async (flags, message) => {
+    const fs = new MemFs();
+
+    await expect(
+      runConnect(
+        {
+          group: "connect",
+          configPaths: [],
+          rest: [],
+          extras: [],
+          flags: { ...flags, "daemon-url": "http://127.0.0.1:5731/mcp" },
+        },
+        {
+          argv: {
+            group: "connect",
+            configPaths: [],
+            rest: [],
+            extras: [],
+            flags: {},
+          },
+          env: { homeDir: "/home/u" },
+          fs,
+          log: () => {},
+          prompts: silentPromptAdapter(),
+        },
+        { cliVersion: "1.2.3" },
+        () => {},
+      ),
+    ).rejects.toThrow(message);
   });
 });

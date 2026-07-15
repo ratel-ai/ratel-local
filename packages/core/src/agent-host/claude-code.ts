@@ -30,6 +30,8 @@ interface ClaudeConfigDoc {
 }
 
 export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
+  readonly supportedScopes = ["user", "project", "local"] as const;
+
   async detect(ctx: AgentHostContext): Promise<AgentHostDetection> {
     const paths = [
       claudeConfigPath("user", ctx.env),
@@ -37,6 +39,9 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     ];
     const present: string[] = [];
     for (const path of paths) {
+      if (ctx.env.projectRoot && path === claudeConfigPath("project", ctx.env)) {
+        await ctx.assertProjectPath?.(ctx.env.projectRoot, path);
+      }
       if ((await ctx.fs.read(path)) !== null) present.push(path);
     }
     return {
@@ -55,6 +60,7 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     const user = await readClaudeConfig("user", ctx.env, ctx.fs);
     scopes.push(toScopeState("user", "User", claudeConfigPath("user", ctx.env), user));
     if (ctx.env.projectRoot) {
+      await ctx.assertProjectPath?.(ctx.env.projectRoot, claudeConfigPath("project", ctx.env));
       const project = await readClaudeConfig("project", ctx.env, ctx.fs);
       const local = await readClaudeConfig("local", ctx.env, ctx.fs);
       scopes.push(
@@ -82,43 +88,52 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     const userWrite = Boolean(userRemove?.size || userInstall);
     const projectWrite = Boolean(projectRemove?.size || projectInstall);
     const localWrite = Boolean(localRemove?.size || localInstall);
+    const projectRoot = deriveProjectRoot(input.ratelConfigPaths);
     const userGateway = userInstall
-      ? makeRatelGatewayEntry({ bin: input.bin, configPaths: [input.ratelConfigPaths.user] })
+      ? makeRatelGatewayEntry({
+          bin: input.bin,
+          agentHost: "claude-code",
+          linkScope: "user",
+        })
       : undefined;
     const projectGateway =
       projectInstall && input.ratelConfigPaths.project
         ? makeRatelGatewayEntry({
             bin: input.bin,
-            configPaths: [input.ratelConfigPaths.user, input.ratelConfigPaths.project],
+            agentHost: "claude-code",
+            linkScope: "project",
+            projectRoot,
           })
         : undefined;
     const localGateway =
       localInstall && input.ratelConfigPaths.project && input.ratelConfigPaths.local
         ? makeRatelGatewayEntry({
             bin: input.bin,
-            configPaths: [
-              input.ratelConfigPaths.user,
-              input.ratelConfigPaths.project,
-              input.ratelConfigPaths.local,
-            ],
+            agentHost: "claude-code",
+            linkScope: "local",
+            projectRoot,
           })
         : undefined;
 
     const home = user ?? local;
-    if (home?.raw && (userWrite || localWrite)) {
+    if (home && (userWrite || localWrite)) {
       const next = rewriteHomeClaude(
-        home.raw,
+        home.raw ?? {},
         userGateway,
         localGateway,
         userWrite ? (userRemove ?? new Set()) : null,
         localWrite ? (localRemove ?? new Set()) : null,
-        deriveProjectRoot(input.ratelConfigPaths),
+        projectRoot,
       );
-      pushJsonWrite(changes, home.path, home.raw, next);
+      pushJsonWrite(changes, home.path, home.raw ?? null, next);
     }
-    if (project?.raw && projectWrite) {
-      const next = rewriteProjectClaude(project.raw, projectGateway, projectRemove ?? new Set());
-      pushJsonWrite(changes, project.path, project.raw, next);
+    if (project && projectWrite) {
+      const next = rewriteProjectClaude(
+        project.raw ?? {},
+        projectGateway,
+        projectRemove ?? new Set(),
+      );
+      pushJsonWrite(changes, project.path, project.raw ?? null, next);
     }
 
     for (const [scope, names] of input.removeEntriesByScope) {
@@ -273,10 +288,10 @@ function asServerEntries(v: unknown): Record<string, ServerEntry> {
 function pushJsonWrite(
   changes: FileChange[],
   path: string,
-  before: Record<string, unknown>,
+  before: Record<string, unknown> | null,
   after: Record<string, unknown>,
 ) {
-  const beforeText = serializeJson(before);
+  const beforeText = before ? serializeJson(before) : null;
   const afterText = serializeJson(after);
   if (beforeText !== afterText)
     changes.push({ kind: "write", path, before: beforeText, after: afterText });

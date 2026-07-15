@@ -8,7 +8,7 @@ import {
   beginAgentImportWorkflow,
   buildAgentImportPlan,
   conflictKey,
-  executePlan,
+  executePlanTransactionally,
   type FileChange,
   getAgentHostRatelConnection,
   getClaudeCodeStatuslineState,
@@ -16,6 +16,7 @@ import {
   type ImportConflictStrategy,
   type ImportPlan,
   isRatelGatewayEntry,
+  type MutationEngine,
   NamedAgentHostAdapter,
   pluginLinkNoOpMessage,
   probeEntryInstructions,
@@ -52,6 +53,7 @@ export interface ImportFlowOptions {
   probe?: ProbeFn;
   skillPaths?: SkillManagePaths;
   now?: () => Date;
+  mutationEngine?: MutationEngine;
 }
 
 interface Candidate {
@@ -118,7 +120,7 @@ export async function runImport(
     now: opts.now,
   });
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
-  const connection =
+  let connection =
     workflowHostKind && agentState
       ? await getAgentHostRatelConnection(workflowHostKind, agentState, ctx)
       : null;
@@ -170,9 +172,10 @@ export async function runImport(
           exists: opts.exists,
         });
         linkCommitted = linkManifest !== null;
-        if (agentState) {
+        if (agentState && workflowHostKind) {
           agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
           candidates = collectCandidates(agentState);
+          connection = await getAgentHostRatelConnection(workflowHostKind, agentState, ctx);
         }
       }
       workflow = advanceAgentImportWorkflow(workflow, { type: "link-completed" });
@@ -229,7 +232,10 @@ export async function runImport(
       ratelLocalPath,
       projectRoot: ctx.env.projectRoot,
     };
-    const planOptions = { selection: new Set(selection.map((c) => c.name)) };
+    const planOptions = {
+      selection: new Set(selection.map((c) => c.name)),
+      installGateway: connection?.explicit === true,
+    };
     const initialPlan = await buildAgentImportPlan(planInputs, planOptions);
     const conflictResolution = await resolveConflictStrategy(
       ctx,
@@ -285,13 +291,11 @@ export async function runImport(
     }
   }
 
-  let latestManifest: BackupManifest | null = null;
-  if (plan.ratelChanges.length > 0) {
-    latestManifest = await tryExecute(ctx, plan.ratelChanges, "import");
-  }
-  if (plan.agentChanges.length > 0) {
-    latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
-  }
+  const acceptedChanges = [...plan.ratelChanges, ...plan.agentChanges];
+  const latestManifest =
+    acceptedChanges.length > 0
+      ? await tryExecute(ctx, acceptedChanges, "import", opts.mutationEngine)
+      : null;
 
   let skillImportResult: SkillImportResult = { managed: 0, skipped: [] };
   if (selectedSkills.length > 0) {
@@ -717,9 +721,15 @@ async function tryExecute(
   ctx: HandlerCtx,
   changes: readonly FileChange[],
   action: BackupManifest["action"],
+  mutationEngine?: MutationEngine,
 ): Promise<BackupManifest> {
   try {
-    return await executePlan(changes, { fs: ctx.fs, env: ctx.env, action });
+    return await (ctx.planExecutor ?? executePlanTransactionally)(changes, {
+      fs: ctx.fs,
+      env: ctx.env,
+      action,
+      mutationEngine,
+    });
   } catch (err) {
     ctx.log(`error during execution: ${(err as Error).message}`);
     ctx.log(`partial backup may exist under ~/.ratel/backups/.`);

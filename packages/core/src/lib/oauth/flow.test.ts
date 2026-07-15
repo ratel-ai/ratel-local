@@ -367,4 +367,40 @@ describe("defaultAuthStep", () => {
     expect(pkceFlow).toHaveBeenCalledTimes(1);
     expect(result.status).toBe("authorized");
   });
+
+  it("clears credentials for a changed OAuth target before starting interactive auth", async () => {
+    const oldStore = new RatelOAuthStore(storePath("stripe"), "old-target");
+    await oldStore.save({
+      tokens: {
+        access_token: "old",
+        token_type: "Bearer",
+        refresh_token: "refresh",
+      },
+    });
+    const refreshTokens = vi.fn();
+    const pkceFlow = vi.fn(async () => {
+      expect(await new RatelOAuthStore(storePath("stripe")).load()).toEqual({});
+      return {
+        status: "authorized" as const,
+        handle: fakeHandle(["stripe__after-target-change"]),
+        mode: "interactive" as const,
+      };
+    });
+    const step = defaultAuthStep({
+      storePath,
+      storeFingerprint: () => "new-target",
+      refreshTokens,
+      pkceFlow,
+    });
+
+    const result = await step(
+      "stripe",
+      { type: "http", url: "https://new.example/mcp" },
+      { catalog: new ToolCatalog() },
+    );
+
+    expect(refreshTokens).not.toHaveBeenCalled();
+    expect(pkceFlow).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("authorized");
+  });
 });

@@ -1,12 +1,15 @@
-import { join } from "node:path";
+import { realpath } from "node:fs/promises";
 import {
   type AuthFlowOptions,
   type AuthFlowResult,
-  authorizeServer,
-  loadMergedConfig,
-  type RatelConfig,
+  buildGatewayFromConfig,
+  type McpConfigDocument,
+  parseConfig,
+  projectIdFromCanonicalRoot,
+  type ResolvedMcpEntry,
+  ratelConfigPath,
   readJson,
-  type ServerEntry,
+  resolveMcpEntries,
 } from "@ratel-ai/ratel-local-core";
 import type { HandlerCtx } from "./types.js";
 
@@ -18,19 +21,36 @@ export interface RunMcpAuthOptions {
 }
 
 export async function runMcpAuth(ctx: HandlerCtx, opts: RunMcpAuthOptions = {}): Promise<void> {
-  const config = await loadMergedConfig(ctx);
-  if (!config || Object.keys(config.mcpServers).length === 0) {
+  const entries = (await loadResolvedEntries(ctx)).filter(({ status }) => status === "effective");
+  if (entries.length === 0) {
     ctx.log("[ratel] no Ratel config found in user/project/local scope; nothing to auth");
     return;
   }
 
   if (ctx.argv.flags.check === true) {
-    await printCheckReport(ctx, config);
+    await printCheckReport(ctx, entries);
     return;
   }
 
   const positional = ctx.argv.rest[0];
-  const results = await authorizeServer(ctx, positional, { authRunner: opts.authRunner });
+  if (positional && !entries.some(({ name }) => name === positional)) {
+    throw new Error(`unknown upstream "${positional}" — not present in the effective context`);
+  }
+  const authOptions: AuthFlowOptions = positional ? { name: positional } : {};
+  let results: AuthFlowResult[];
+  if (opts.authRunner) {
+    results = await opts.authRunner(authOptions);
+  } else {
+    const gateway = await buildGatewayFromConfig(
+      { mcpServers: {} },
+      { logger: ctx.log, resolvedMcpEntries: entries },
+    );
+    try {
+      results = await gateway.runAuthFlow(authOptions);
+    } finally {
+      await gateway.close();
+    }
+  }
   printResults(ctx, results);
 }
 
@@ -53,29 +73,35 @@ interface StoredOAuth {
   tokens?: { access_token?: string; refresh_token?: string };
   expires_at?: number;
   unsupported?: { reason?: string; detected_at?: string };
+  resource_fingerprint?: string;
 }
 
 type CheckStatus = "n/a" | "needs auth" | "expired" | "ok" | "unsupported";
 
-async function printCheckReport(ctx: HandlerCtx, config: RatelConfig): Promise<void> {
+async function printCheckReport(ctx: HandlerCtx, entries: ResolvedMcpEntry[]): Promise<void> {
   const lines: string[] = [];
-  for (const [name, entry] of Object.entries(config.mcpServers)) {
-    const { status, detail } = await checkUpstream(ctx, name, entry);
+  for (const resolved of entries) {
+    const { status, detail } = await checkUpstream(ctx, resolved);
     const detailText = detail ? `  ${detail}` : "";
-    lines.push(`  ${name.padEnd(20)} [${status}]${detailText}`);
+    lines.push(`  ${resolved.name.padEnd(20)} [${status}]${detailText}`);
   }
   ctx.log(lines.join("\n"));
 }
 
 async function checkUpstream(
   ctx: HandlerCtx,
-  name: string,
-  entry: ServerEntry,
+  resolved: ResolvedMcpEntry,
 ): Promise<{ status: CheckStatus; detail?: string }> {
+  const { entry } = resolved;
   if (entry.type !== "http" && entry.type !== "sse") return { status: "n/a" };
   if (!ctx.env.homeDir) return { status: "needs auth" };
-  const path = join(ctx.env.homeDir, ".ratel", "oauth", `${name}.json`);
-  const stored = await readJson<StoredOAuth>(ctx.fs, path);
+  const stored = await readJson<StoredOAuth>(ctx.fs, resolved.oauthKey.path);
+  if (
+    stored?.resource_fingerprint &&
+    stored.resource_fingerprint !== resolved.oauthKey.fingerprint
+  ) {
+    return { status: "needs auth", detail: "stored credentials belong to another resource" };
+  }
   if (!stored?.tokens?.access_token) {
     if (stored?.unsupported?.reason) {
       return { status: "unsupported", detail: stored.unsupported.reason };
@@ -94,6 +120,30 @@ async function checkUpstream(
     return { status: "ok", detail: `expires in ${humanizeDuration(expiresAt - now)}` };
   }
   return { status: "ok" };
+}
+
+async function loadResolvedEntries(ctx: HandlerCtx): Promise<ResolvedMcpEntry[]> {
+  const projectRoot = ctx.env.projectRoot
+    ? await realpath(ctx.env.projectRoot).catch(() => ctx.env.projectRoot)
+    : undefined;
+  const projectId = projectRoot ? projectIdFromCanonicalRoot(projectRoot) : undefined;
+  const documents: McpConfigDocument[] = [];
+  for (const scope of ["user", "project", "local"] as const) {
+    if (scope !== "user" && (!projectRoot || !projectId)) continue;
+    const path = ratelConfigPath(scope, { homeDir: ctx.env.homeDir, projectRoot });
+    const document = await readJson(ctx.fs, path);
+    if (!document) continue;
+    if (scope === "user") {
+      documents.push({ ref: { scope: "user" }, config: parseConfig(document) });
+    } else if (projectId) {
+      documents.push({ ref: { scope, projectId }, config: parseConfig(document) });
+    }
+  }
+  return resolveMcpEntries({
+    homeDir: ctx.env.homeDir,
+    ...(projectRoot ? { projectRoot } : {}),
+    documents,
+  });
 }
 
 function humanizeDuration(ms: number): string {
