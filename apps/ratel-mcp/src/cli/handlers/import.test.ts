@@ -94,6 +94,12 @@ async function writeCliClaudeSkill(paths: SkillManagePaths, name: string): Promi
   return text;
 }
 
+async function writeMalformedClaudeSkill(paths: SkillManagePaths, name: string): Promise<void> {
+  const dir = join(paths.nativeDir, name);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "SKILL.md"), "# missing frontmatter", "utf8");
+}
+
 async function writeCliCodexSkill(paths: SkillManagePaths, name: string): Promise<string> {
   const dir = join(paths.codexDir, name);
   await mkdir(dir, { recursive: true });
@@ -550,6 +556,32 @@ command = "codex"
       expect(JSON.parse(fs.files.get(CLAUDE_SETTINGS) as string).statusLine.command).toContain(
         "ratel-mcp statusline",
       );
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps valid skill imports and warns when another selected skill is skipped", async () => {
+    const fs = new MemFs();
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliClaudeSkill(skillPaths, "valid-policy");
+      await writeMalformedClaudeSkill(skillPaths, "broken-policy");
+      const { ctx, logs } = ctxOf(fs, autoConfirm(), false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        yes: true,
+        agentKind: "claude-code",
+        skillPaths,
+      });
+
+      expect((await lstat(join(skillPaths.managedDir, "valid-policy"))).isSymbolicLink()).toBe(
+        true,
+      );
+      expect(await pathExists(join(skillPaths.managedDir, "broken-policy"))).toBe(false);
+      expect(logs.join("\n")).toMatch(/managing 1 skill as invoke-only/);
+      expect(logs.join("\n")).toMatch(/could not manage selected skill.*broken-policy/i);
     } finally {
       await rm(skillPaths.root, { recursive: true, force: true });
     }

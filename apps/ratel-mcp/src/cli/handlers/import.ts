@@ -67,6 +67,11 @@ interface SkillPreview {
   skipped: Array<{ id: string; reason: string }>;
 }
 
+interface SkillImportResult {
+  managed: number;
+  skipped: Array<{ id: string; reason: string }>;
+}
+
 type ConflictResolutionResult =
   | { kind: "resolved"; resolution: ConflictResolution }
   | { kind: "cancelled" };
@@ -246,6 +251,7 @@ export async function runImport(
     }
   }
 
+  let skillImportResult: SkillImportResult = { managed: 0, skipped: [] };
   if (selectedSkills.length > 0) {
     ctx.prompts.note(renderSkillStage(selectedSkills), "Skill changes");
     if (!opts.yes) {
@@ -260,7 +266,7 @@ export async function runImport(
         return latestManifest;
       }
     }
-    await activateSelectedSkills(ctx, skillPaths, selectedSkills, opts);
+    skillImportResult = await activateSelectedSkills(ctx, skillPaths, selectedSkills, opts);
   }
 
   const statuslineHostKind = agentState?.host.kind ?? opts.agentKind;
@@ -276,7 +282,9 @@ export async function runImport(
   if (latestManifest) {
     ctx.prompts.note(`Backup created. Run \`ratel-mcp backup list\` to inspect backups.`, "Done");
   }
-  ctx.prompts.outro(renderCompletion(agentState, plan, selectedSkills, agentChangesSkipped));
+  ctx.prompts.outro(
+    renderCompletion(agentState, plan, skillImportResult.managed, agentChangesSkipped),
+  );
   return latestManifest;
 }
 
@@ -463,7 +471,7 @@ async function activateSelectedSkills(
   paths: SkillManagePaths,
   skills: SkillCandidate[],
   opts: ImportFlowOptions,
-): Promise<void> {
+): Promise<SkillImportResult> {
   const idsBySource = new Map<SkillSource, string[]>();
   for (const skill of skills) {
     const ids = idsBySource.get(skill.source) ?? [];
@@ -471,7 +479,7 @@ async function activateSelectedSkills(
     idsBySource.set(skill.source, ids);
   }
   const skipped: Array<{ id: string; reason: string }> = [];
-  let moved = 0;
+  let managed = 0;
   for (const [source, ids] of idsBySource) {
     const result = await activateSkills(paths, {
       ids,
@@ -479,13 +487,14 @@ async function activateSelectedSkills(
       logger: ctx.log,
       now: opts.now,
     });
-    moved += result.managed.length;
+    managed += result.managed.length;
     skipped.push(...result.skipped);
   }
+  ctx.log(`managing ${managed} skill${managed === 1 ? "" : "s"} as invoke-only`);
   if (skipped.length > 0) {
-    throw new Error(skippedSkillsMessage(skipped));
+    ctx.log(`warning: ${skippedSkillsMessage(skipped)}`);
   }
-  ctx.log(`managing ${moved} skill${moved === 1 ? "" : "s"} as invoke-only`);
+  return { managed, skipped };
 }
 
 function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>): string {
@@ -782,7 +791,7 @@ function renderSkillStage(skills: readonly SkillCandidate[]): string {
 function renderCompletion(
   agentState: AgentHostState | null,
   plan: ImportPlan,
-  selectedSkills: readonly SkillCandidate[],
+  managedSkillCount: number,
   agentChangesSkipped = false,
 ): string {
   const parts: string[] = ["import complete"];
@@ -793,9 +802,9 @@ function renderCompletion(
   } else if (agentState && plan.ratelChanges.length > 0) {
     parts.push(`no ${agentState.host.displayName} changes needed`);
   }
-  if (selectedSkills.length > 0) {
+  if (managedSkillCount > 0) {
     parts.push(
-      `managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"} as invoke-only`,
+      `managing ${managedSkillCount} skill${managedSkillCount === 1 ? "" : "s"} as invoke-only`,
     );
   }
   return parts.join(" · ");
