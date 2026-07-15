@@ -1,8 +1,8 @@
 import {
   ClaudeStatuslineConflictError,
   installClaudeCodeStatusline,
-  renderRatelStatusline,
   type ResolvedBin,
+  renderRatelStatusline,
   uninstallClaudeCodeStatusline,
 } from "@ratel-ai/mcp-core";
 import { currentGitBranch } from "../git.js";

@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Download, SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
+import { LinkIcon, SearchIcon, Sparkles, TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { skillPath, useRatelApp } from "@/App";
 import { ImportSkillsDialog } from "@/components/import-skills-dialog";
@@ -13,7 +13,7 @@ import {
   PageHeaderTitle,
 } from "@/components/page-header";
 import { ResponsiveToolbar, ResponsiveToolbarButton } from "@/components/responsive-toolbar";
-import { type SkillSource, SourceIcon } from "@/components/source-icon";
+import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -103,9 +103,8 @@ export function SkillsPage() {
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
-            Reusable playbooks Ratel manages and serves through the gateway. Import skills from
-            Claude Code or Codex to manage them here; stop managing one to return it to where it
-            came from.
+            Reusable playbooks Ratel manages and serves through the gateway. Link skills from Claude
+            Code or Codex as invoke-only without moving their native folders.
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="hidden items-center sm:flex">
@@ -117,8 +116,8 @@ export function SkillsPage() {
               size="sm"
               variant="outline"
             >
-              <Download />
-              Import skills
+              <LinkIcon />
+              Manage skills
             </Button>
           )}
           {canDeactivateAll && (
@@ -184,11 +183,11 @@ export function SkillsPage() {
       {ready && managed.length === 0 && available.length > 0 && (
         <EmptyState
           title="No skills managed by Ratel yet"
-          description="Import skills from Claude Code or Codex to serve them through the gateway."
+          description="Manage skills from Claude Code or Codex as invoke-only so Ratel can serve them through the gateway."
         >
           <Button onClick={() => setImportOpen(true)} size="sm">
-            <Download />
-            Import skills
+            <LinkIcon />
+            Manage skills
           </Button>
         </EmptyState>
       )}
@@ -196,14 +195,14 @@ export function SkillsPage() {
       {ready && managed.length === 0 && available.length === 0 && (
         <EmptyState
           title="No skills managed by Ratel yet"
-          description="Add skills under ~/.claude/skills (Claude Code) or ~/.codex/skills (Codex), or create one in Ratel, then import them here."
+          description="Add skills under ~/.claude/skills (Claude Code) or ~/.codex/skills (Codex), or create one in Ratel, then manage them here."
         />
       )}
 
       {ready && managed.length > 0 && (
         <SkillSection
           title="Managed by Ratel"
-          caption="Served through the gateway. Stop managing one to return it to its agent."
+          caption="Served through the gateway. Linked native skills remain in their agent folders."
           iconSource="ratel"
           onView={openSkill}
           skills={managed}
@@ -265,37 +264,45 @@ function SkillSection(props: {
         <p className="text-muted-foreground text-xs">{props.caption}</p>
       </div>
       <ul className="grid gap-2">
-        {visible.map((skill) => (
-          <li
-            key={`${skill.source}:${skill.id}`}
-            className="flex items-center gap-3 rounded-md border border-border bg-card p-3"
-          >
-            <SourceIcon source={props.iconSource ?? skill.source} />
-            <button
-              className="min-w-0 flex-1 text-left"
-              onClick={() => props.onView(skill.id)}
-              type="button"
+        {visible.map((skill) => {
+          const modeLabel = managedSkillModeLabel(skill);
+          return (
+            <li
+              key={`${skill.source}:${skill.id}`}
+              className="flex items-center gap-3 rounded-md border border-border bg-card p-3"
             >
-              <strong className="block truncate font-medium hover:underline">{skill.name}</strong>
-              {skill.description && (
-                <p className="mt-1 text-muted-foreground text-sm">{skill.description}</p>
-              )}
-              {skill.tags.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {skill.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </button>
-            <div className="shrink-0">{props.renderAction(skill)}</div>
-          </li>
-        ))}
+              <SourceIcon source={props.iconSource ?? skill.source} />
+              <button
+                className="min-w-0 flex-1 text-left"
+                onClick={() => props.onView(skill.id)}
+                type="button"
+              >
+                <strong className="block truncate font-medium hover:underline">{skill.name}</strong>
+                {modeLabel && (
+                  <span className="mt-1 inline-flex rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
+                    {modeLabel}
+                  </span>
+                )}
+                {skill.description && (
+                  <p className="mt-1 text-muted-foreground text-sm">{skill.description}</p>
+                )}
+                {skill.tags.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {skill.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </button>
+              <div className="shrink-0">{props.renderAction(skill)}</div>
+            </li>
+          );
+        })}
       </ul>
       {pageCount > 1 && (
         <div className="flex items-center justify-between px-1 text-muted-foreground text-xs">
@@ -327,6 +334,19 @@ function SkillSection(props: {
       )}
     </section>
   );
+}
+
+function managedSkillModeLabel(skill: SkillSummary): string | null {
+  switch (skill.mode) {
+    case "linked":
+      return `Linked from ${sourceLabel(skill.source)}`;
+    case "moved":
+      return "Legacy managed copy";
+    case "ratel":
+      return "Created in Ratel";
+    default:
+      return null;
+  }
 }
 
 function EmptyState(props: { title: string; description: string; children?: ReactNode }) {

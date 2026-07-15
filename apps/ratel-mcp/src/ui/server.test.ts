@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -168,8 +168,8 @@ describe("UI server — auth", () => {
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { moved: string[]; skipped: unknown[] };
-    expect(Array.isArray(body.moved)).toBe(true);
+    const body = (await res.json()) as { managed: unknown[]; skipped: unknown[] };
+    expect(Array.isArray(body.managed)).toBe(true);
   });
 
   it("deactivates skills via POST /api/skills/deactivate (no-op when none managed)", async () => {
@@ -179,8 +179,8 @@ describe("UI server — auth", () => {
       body: JSON.stringify({ ids: ["nonexistent"] }),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { restored: string[] };
-    expect(Array.isArray(body.restored)).toBe(true);
+    const body = (await res.json()) as { unmanaged: string[] };
+    expect(Array.isArray(body.unmanaged)).toBe(true);
   });
 
   it("rejects POST /api/skills (create) without a bearer token", async () => {
@@ -1041,5 +1041,69 @@ describe("UI server — skill sources (Claude / Codex / Ratel)", () => {
       body: JSON.stringify({ description: "x", tags: [], body: "y" }),
     });
     expect(patch.status).toBe(409);
+  });
+
+  it("activates a native skill as a linked managed skill and edits through the link", async () => {
+    const activate = await fetch(url("/api/skills/activate"), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ ids: ["from-claude"], source: "claude" }),
+    });
+    expect(activate.status).toBe(200);
+    expect((await lstat(join(home, ".ratel", "skills", "from-claude"))).isSymbolicLink()).toBe(
+      true,
+    );
+
+    const list = await fetch(url("/api/skills"), { headers: headers() });
+    const body = (await list.json()) as {
+      managed: Array<{ id: string; mode?: string; source: string }>;
+      available: Array<{ id: string; source: string }>;
+    };
+    expect(body.managed.find((s) => s.id === "from-claude")).toMatchObject({
+      mode: "linked",
+      source: "claude",
+    });
+    expect(body.available.some((s) => s.id === "from-claude" && s.source === "claude")).toBe(false);
+
+    const patch = await fetch(url("/api/skills/from-claude"), {
+      method: "PATCH",
+      headers: headers(),
+      body: JSON.stringify({ description: "updated", tags: ["x"], body: "# Updated" }),
+    });
+    expect(patch.status).toBe(200);
+    expect(
+      await readFile(join(home, ".claude", "skills", "from-claude", "SKILL.md"), "utf8"),
+    ).toContain('description: "updated"');
+  });
+
+  it("returns partial skill activation results without hiding successful writes", async () => {
+    await writeSkill(".codex/skills", "valid-policy");
+    await writeSkill(".codex/skills", "flow-policy");
+    const policyDir = join(home, ".codex", "skills", "flow-policy", "agents");
+    await mkdir(policyDir, { recursive: true });
+    await writeFile(
+      join(policyDir, "openai.yaml"),
+      "policy: { allow_implicit_invocation: true, review: manual }\n",
+    );
+
+    const activate = await fetch(url("/api/skills/activate"), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ ids: ["valid-policy", "flow-policy"], source: "codex" }),
+    });
+
+    expect(activate.status).toBe(200);
+    const body = (await activate.json()) as {
+      managed: Array<{ id: string; mode: string }>;
+      skipped: Array<{ id: string; reason: string }>;
+    };
+    expect(body.managed).toEqual([{ id: "valid-policy", mode: "linked" }]);
+    expect(body.skipped[0]).toMatchObject({
+      id: "flow-policy",
+      reason: expect.stringMatching(/unsupported/i),
+    });
+    expect((await lstat(join(home, ".ratel", "skills", "valid-policy"))).isSymbolicLink()).toBe(
+      true,
+    );
   });
 });

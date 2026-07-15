@@ -16,7 +16,7 @@
 #   mv node_modules/@ratel-ai/sdk node_modules/@ratel-ai/sdk.orig
 #   ln -s ../ratel/src/sdk/ts node_modules/@ratel-ai/sdk
 #   pnpm build
-#   bash e2e/run.sh          # → "16 passed, 0 failed"
+#   bash e2e/run.sh          # → "19 passed, 0 failed"
 #   rm node_modules/@ratel-ai/sdk && mv node_modules/@ratel-ai/sdk.orig node_modules/@ratel-ai/sdk
 set -u
 RMCP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,17 +48,19 @@ printf -- '---\nname: alpha\ndescription: Alpha skill.\n---\nALPHA-BODY\n' > "$H
 printf -- '---\nname: beta\ndescription: Beta skill.\n---\nBETA-BODY\n' > "$HLC/.claude/skills/beta/SKILL.md"
 
 HOME="$HLC" node "$BIN" skill activate --yes >/dev/null 2>&1
-{ [ ! -e "$HLC/.claude/skills/alpha" ] && [ ! -e "$HLC/.claude/skills/beta" ]; } && ok "activate: native ~/.claude/skills emptied" || no "activate: native dir not emptied"
-{ [ -f "$HLC/.ratel/skills/alpha/SKILL.md" ] && [ -f "$HLC/.ratel/skills/beta/SKILL.md" ]; } && ok "activate: skills now in Ratel-managed ~/.ratel/skills" || no "activate: not in managed dir"
-[ -f "$HLC/.ratel/skill-manifest.json" ] && ok "activate: manifest written (records what moved)" || no "activate: no manifest"
+{ [ -f "$HLC/.claude/skills/alpha/SKILL.md" ] && [ -f "$HLC/.claude/skills/beta/SKILL.md" ]; } && ok "activate: native ~/.claude/skills stay in place" || no "activate: native skills missing"
+{ grep -q 'disable-model-invocation: true' "$HLC/.claude/skills/alpha/SKILL.md" && grep -q 'disable-model-invocation: true' "$HLC/.claude/skills/beta/SKILL.md"; } && ok "activate: native skills marked invoke-only" || no "activate: native skills not marked invoke-only"
+{ [ -L "$HLC/.ratel/skills/alpha" ] && [ -L "$HLC/.ratel/skills/beta" ]; } && ok "activate: skills linked into Ratel-managed ~/.ratel/skills" || no "activate: not linked in managed dir"
+[ -f "$HLC/.ratel/skill-manifest.json" ] && ok "activate: manifest written (records managed links)" || no "activate: no manifest"
 
 LIST="$(HOME="$HLC" node "$BIN" skill list 2>&1)"
 { echo "$LIST" | grep -q alpha && echo "$LIST" | grep -q beta; } && ok "list: reports both managed skills" || no "list: missing entries" "$LIST"
 
 HOME="$HLC" node "$BIN" skill deactivate --yes >/dev/null 2>&1
-{ [ -f "$HLC/.claude/skills/alpha/SKILL.md" ] && [ -f "$HLC/.claude/skills/beta/SKILL.md" ]; } && ok "deactivate: skills restored to ~/.claude/skills" || no "deactivate: not restored"
+{ [ -f "$HLC/.claude/skills/alpha/SKILL.md" ] && [ -f "$HLC/.claude/skills/beta/SKILL.md" ]; } && ok "deactivate: native skills remain in ~/.claude/skills" || no "deactivate: native skills missing"
+{ ! grep -q 'disable-model-invocation' "$HLC/.claude/skills/alpha/SKILL.md" && ! grep -q 'disable-model-invocation' "$HLC/.claude/skills/beta/SKILL.md"; } && ok "deactivate: invoke-only marker removed" || no "deactivate: invoke-only marker remains"
 grep -q ALPHA-BODY "$HLC/.claude/skills/alpha/SKILL.md" 2>/dev/null && ok "deactivate: content intact after round-trip (non-destructive)" || no "deactivate: content lost"
-{ [ ! -e "$HLC/.ratel/skills/alpha" ] && [ ! -e "$HLC/.ratel/skills/beta" ]; } && ok "deactivate: managed dir cleared of restored skills" || no "deactivate: still in managed dir"
+{ [ ! -e "$HLC/.ratel/skills/alpha" ] && [ ! -e "$HLC/.ratel/skills/beta" ]; } && ok "deactivate: managed links removed" || no "deactivate: still in managed dir"
 echo "$(cat "$HLC/.ratel/skill-manifest.json" 2>/dev/null)" | tr -d ' \n' | grep -q '"managed":\[\]' && ok "deactivate: manifest emptied" || no "deactivate: manifest not empty"
 rm -rf "$HLC"
 

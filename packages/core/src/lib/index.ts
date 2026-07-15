@@ -1,5 +1,6 @@
 export type { RatelConfig, ServerEntry, SkillsConfig } from "./config.js";
 export { ConfigError, mergeConfigs, parseConfig } from "./config.js";
+export { isDirectoryEntry } from "./fs.js";
 export type {
   BuildGatewayOptions,
   GatewayHandle,

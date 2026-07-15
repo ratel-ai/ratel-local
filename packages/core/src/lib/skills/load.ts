@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
+import { isDirectoryEntry } from "../fs.js";
 
 /** The Ratel-managed skill folder scanned by default. */
 export function defaultSkillDirs(): string[] {
@@ -48,7 +49,7 @@ export async function loadSkills(
     }
 
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!(await isDirectoryEntry(dir, entry))) continue;
       const skillDir = join(dir, entry.name);
       const skillMd = join(skillDir, "SKILL.md");
 

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -93,6 +93,25 @@ describe("loadSkills", () => {
     const skills = await loadSkills([root]);
     const ids = skills.map((s) => s.id).sort();
     expect(ids).toEqual(["api-design", "slides"]);
+  });
+
+  it("loads managed skill directory symlinks", async () => {
+    const native = join(root, "native");
+    const managed = join(root, "managed");
+    const skillDir = await writeSkill(
+      native,
+      "linked",
+      `---\nname: linked\ndescription: via symlink\n---\nbody`,
+    );
+    await mkdir(managed, { recursive: true });
+    await symlink(
+      skillDir,
+      join(managed, "linked"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const skills = await loadSkills([managed]);
+    expect(skills.map((s) => s.id)).toEqual(["linked"]);
   });
 
   it("ignores a missing directory without throwing", async () => {

@@ -46,7 +46,7 @@ Commands:
            or --auto-config to load user/project/local Ratel configs)
   mcp      manage MCP servers (add, remove, list, get, edit, import, link, auth)
   backup   manage backup snapshots (list)
-  skill    move skills between Claude Code and Ratel (activate, deactivate, list)
+  skill    manage Claude Code/Codex skills through Ratel (activate, deactivate, list)
   statusline render or install the Claude Code Ratel statusline
   ui       launch a local browser UI mirroring the CLI [--port N] [--no-open]
 

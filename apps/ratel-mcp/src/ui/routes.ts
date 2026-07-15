@@ -17,6 +17,7 @@ import {
   type ImportConflictStrategy,
   importAgentServers,
   installClaudeCodeStatusline,
+  isDirectoryEntry,
   linkAgentToRatel,
   loadSkills,
   parseSkillMd,
@@ -71,7 +72,7 @@ type SkillOrigin = SkillSource | "ratel";
 
 /**
  * The skills Ratel serves (under the managed folder `~/.ratel/skills`) plus the
- * unmanaged skills available to bring in, from Claude Code (`~/.claude/skills`)
+ * unmanaged skills available to manage, from Claude Code (`~/.claude/skills`)
  * and Codex (`~/.codex/skills`). Each carries a `source`: managed skills report
  * the agent they came from (or "ratel" when created here); available skills
  * report the agent whose folder they live in. Loaded as the gateway loads them.
@@ -98,9 +99,11 @@ export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
 
   // Managed skills carry their origin agent; one created directly in Ratel has
   // no manifest entry → "ratel".
+  const manifestEntries = await listManaged(paths);
   const originById = new Map(
-    (await listManaged(paths)).map((m) => [m.id, (m.source ?? "claude") as SkillOrigin]),
+    manifestEntries.map((m) => [m.id, (m.source ?? "claude") as SkillOrigin]),
   );
+  const modeById = new Map(manifestEntries.map((m) => [m.id, m.mode ?? "moved"]));
 
   // Available = every unmanaged skill from each agent. A name that lives in both
   // Claude and Codex appears once per agent (each independently manageable, told
@@ -120,7 +123,11 @@ export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
     managedDir,
     nativeDir,
     codexDir,
-    managed: managed.map((s) => ({ ...skillSummary(s), source: originById.get(s.id) ?? "ratel" })),
+    managed: managed.map((s) => ({
+      ...skillSummary(s),
+      source: originById.get(s.id) ?? "ratel",
+      mode: modeById.get(s.id) ?? "ratel",
+    })),
     available,
     problems,
   });
@@ -172,7 +179,7 @@ async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | 
     }
     let match: FoundSkill | null = null;
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!(await isDirectoryEntry(dir, entry))) continue;
       const filePath = join(dir, entry.name, "SKILL.md");
       let raw: string;
       try {
@@ -224,7 +231,7 @@ export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse
   });
 }
 
-/** Move skills into the Ratel-managed folder. `ids` omitted = activate all;
+/** Manage skills through Ratel as invoke-only. `ids` omitted = activate all;
  *  `source` ("claude"|"codex") disambiguates a name present in both agents. */
 export async function activateSkillsRoute(
   ctx: HandlerCtx,
@@ -237,10 +244,14 @@ export async function activateSkillsRoute(
     source,
     logger: ctx.log,
   });
-  return ok({ moved: result.moved.map((m) => m.id), skipped: result.skipped });
+  const responseBody = {
+    managed: result.managed.map((m) => ({ id: m.id, mode: m.mode ?? "moved" })),
+    skipped: result.skipped,
+  };
+  return ok(responseBody);
 }
 
-/** Restore managed skills to the agent they came from. `ids` omitted = all. */
+/** Stop managing skills through Ratel. `ids` omitted = all. */
 export async function deactivateSkillsRoute(
   ctx: HandlerCtx,
   body: { ids?: unknown },
@@ -250,7 +261,7 @@ export async function deactivateSkillsRoute(
     ids,
     logger: ctx.log,
   });
-  return ok({ restored: result.restored.map((m) => m.id), skipped: result.skipped });
+  return ok({ unmanaged: result.unmanaged.map((m) => m.id), skipped: result.skipped });
 }
 
 const SAFE_SKILL_NAME = /^[a-z0-9][a-z0-9-]*$/i;
