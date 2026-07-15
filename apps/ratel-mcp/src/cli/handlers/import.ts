@@ -133,18 +133,22 @@ export async function runImport(
       return null;
     }
     if (decision === "link") {
-      await runLink(ctx, {
-        yes: true,
-        bin: opts.bin,
-        envVar: opts.envVar,
-        whichResult: opts.whichResult,
-        workspaceRoot: opts.workspaceRoot,
-        agentKind: workflowHostKind ?? undefined,
-        exists: opts.exists,
-      });
-      if (agentState) {
-        agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
-        candidates = collectCandidates(agentState);
+      if (opts.dryRun) {
+        ctx.log(`would link ${detection.displayName} to Ratel before importing`);
+      } else {
+        await runLink(ctx, {
+          yes: true,
+          bin: opts.bin,
+          envVar: opts.envVar,
+          whichResult: opts.whichResult,
+          workspaceRoot: opts.workspaceRoot,
+          agentKind: workflowHostKind ?? undefined,
+          exists: opts.exists,
+        });
+        if (agentState) {
+          agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+          candidates = collectCandidates(agentState);
+        }
       }
       workflow = advanceAgentImportWorkflow(workflow, { type: "link-completed" });
     } else {

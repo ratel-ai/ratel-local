@@ -12,6 +12,7 @@ All notable changes to this package are documented here. The format is based on 
 
 ### Fixed
 - Skill-only Claude Code imports now reach the statusline step, and one invalid selected skill no longer aborts other successful skill imports.
+- Dry-run imports no longer execute the Link preflight or write agent configs and backups.
 
 ## [0.3.1] - 2026-06-18
 

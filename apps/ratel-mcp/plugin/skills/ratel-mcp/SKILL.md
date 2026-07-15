@@ -58,8 +58,11 @@ the existing config shape, and validate the JSON afterwards.
 Top-level commands:
 
 - `ratel-mcp serve` starts the MCP gateway over stdio.
+- `ratel-mcp import` migrates agent MCP entries and native skills into Ratel.
+- `ratel-mcp link` points an agent at the Ratel gateway without removing native MCP entries.
 - `ratel-mcp mcp` manages upstream MCP server entries.
 - `ratel-mcp backup` manages backup snapshots.
+- `ratel-mcp skill` manages Claude Code and Codex skills through Ratel.
 - `ratel-mcp ui` launches the local browser UI.
 - `ratel-mcp statusline` renders or manages the Claude Code Ratel statusline.
 - `ratel-mcp --version` or `ratel-mcp version` prints the CLI version.
@@ -72,9 +75,17 @@ Top-level commands:
 - `list` lists configured upstreams across Ratel scopes.
 - `get` shows one entry's resolved details.
 - `edit` edits fields on an existing entry; it is interactive when no edit flags are supplied.
-- `import` migrates agent MCP configs into Ratel and can rewrite the agent to use the Ratel gateway.
-- `link` rewrites an agent's config to point at Ratel for entries already in Ratel scopes.
 - `auth` runs OAuth for HTTP/SSE upstreams or checks stored auth state.
+
+`ratel-mcp skill` verbs:
+
+- `activate` links native Claude Code and Codex skills into Ratel as invoke-only without moving their folders.
+- `deactivate` removes Ratel-managed links and restores Ratel-owned metadata edits.
+- `list` shows the skills Ratel currently manages.
+- `suggest` ranks skills for a prompt.
+- `preload-hook` is the `UserPromptSubmit` hook entrypoint.
+- `install-hook` registers the preload hook in `settings.json`.
+- `uninstall-hook` removes the preload hook from `settings.json`.
 
 `ratel-mcp statusline` verbs:
 
@@ -136,6 +147,14 @@ ratel-mcp import --agent codex
 ratel-mcp import --agent claude-code
 ```
 
+If the selected agent is not linked, interactive import first offers to link
+and continue, continue without linking, or cancel. Import then resolves
+selected MCP entries against the matching Ratel scopes: the conflict strategy
+decides whether to add the incoming definition, replace the Ratel definition,
+or keep the existing Ratel definition. Entries covered by the resulting plan
+are removed from the source agent, and selected native skills are managed as
+invoke-only.
+
 Preview or automate an import:
 
 ```bash
@@ -143,16 +162,24 @@ ratel-mcp import --agent codex --dry-run
 ratel-mcp import --agent codex --yes --conflict-strategy add-missing-only
 ```
 
-Link a host to Ratel after entries already exist in Ratel config:
+Supported conflict strategies are `add-missing-only`, `replace-selected`, and
+`replace-from-agent`. `--dry-run` performs no writes. `--yes` accepts the
+non-interactive defaults; do not combine `replace-selected` with `--yes` or
+`--dry-run` because per-conflict choices require interaction.
+
+Link a host to the Ratel gateway without importing or removing native MCP
+entries:
 
 ```bash
 ratel-mcp link --agent codex
 ratel-mcp link --agent claude-code
 ```
 
-`ratel-mcp link` and `ratel-mcp import` install the Claude Code
-statusline automatically once they finish wiring up Claude Code (skipped if a
-non-Ratel statusline is already configured). Manage it directly with:
+`ratel-mcp link` changes only the gateway configuration; it never installs the
+Claude Code statusline. After a successful Claude Code import, import offers a
+separate, skippable statusline step when the Ratel statusline is not already
+installed. With `--yes`, import installs a missing statusline automatically but
+leaves an existing non-Ratel statusline unchanged. Manage it directly with:
 
 ```bash
 ratel-mcp statusline install
@@ -161,7 +188,7 @@ ratel-mcp statusline uninstall
 ```
 
 Claude Code plugins cannot currently set top-level `statusLine` defaults
-directly; use the CLI (directly, or automatically via `link`/`import`) or the
+directly; use the standalone statusline CLI, the optional import step, or the
 Claude Code agent page in `ratel-mcp ui`. The statusline reports Ratel as on
 when Claude Code starts Ratel via a linked MCP entry or an enabled
 `ratel-mcp@...` plugin.

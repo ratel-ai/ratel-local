@@ -402,16 +402,19 @@ command = "codex"
 
   it("--dry-run skips execution and logs what would be written", async () => {
     const fs = new MemFs();
-    fs.files.set(
-      HOME_CLAUDE,
-      JSON.stringify({
-        mcpServers: { fs: { type: "stdio", command: "echo" } },
-      }),
-    );
+    const originalClaudeConfig = JSON.stringify({
+      mcpServers: { fs: { type: "stdio", command: "echo" } },
+    });
+    fs.files.set(HOME_CLAUDE, originalClaudeConfig);
     const { ctx, logs } = ctxOf(fs, autoConfirm(), false);
     await runImport(ctx, { bin: BIN, yes: true, dryRun: true });
 
     expect(fs.files.has(RATEL_USER)).toBe(false);
+    expect(fs.files.get(HOME_CLAUDE)).toBe(originalClaudeConfig);
+    expect(Array.from(fs.files.keys()).some((path) => path.includes("/.ratel/backups/"))).toBe(
+      false,
+    );
+    expect(logs.join("\n")).toMatch(/would link Claude Code to Ratel before importing/);
     expect(logs.join("\n")).toMatch(/would write/);
     expect(logs.join("\n")).toMatch(/\/home\/u\/\.ratel\/config\.json/);
   });
