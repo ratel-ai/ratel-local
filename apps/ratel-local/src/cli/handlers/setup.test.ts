@@ -53,7 +53,7 @@ describe("runSetup", () => {
   it("persists a stable node+npx package runner instead of the npx cache script", () => {
     expect(
       resolveSetupServiceExecutable({
-        expectedVersion: "0.5.0-rc.0",
+        expectedVersion: "0.6.0-rc.0",
         env: { PATH: "/opt/node/bin" },
         execPath: "/opt/node/bin/node",
         argv1: "/home/u/.npm/_npx/cache/node_modules/@ratel-ai/ratel-local/dist/bin.js",
@@ -61,7 +61,7 @@ describe("runSetup", () => {
       }),
     ).toEqual({
       executablePath: "/opt/node/bin/node",
-      executableArgs: ["/opt/node/bin/npx", "-y", "@ratel-ai/ratel-local@0.5.0-rc.0"],
+      executableArgs: ["/opt/node/bin/npx", "-y", "@ratel-ai/ratel-local@0.6.0-rc.0"],
     });
   });
 
@@ -207,12 +207,12 @@ describe("runSetup", () => {
     });
 
     const result = await runSetup(ctx, {
-      expectedVersion: "0.5.0-rc.0",
+      expectedVersion: "0.6.0-rc.0",
       inspect: async () => {
         inspection++;
         return inspection === 1
           ? { state: "running", port: 7331, version: "0.4.0" }
-          : { state: "running", port: 7331, version: "0.5.0-rc.0" };
+          : { state: "running", port: 7331, version: "0.6.0-rc.0" };
       },
       install: vi.fn(async () => {}),
       start: vi.fn(async () => {}),
@@ -223,7 +223,7 @@ describe("runSetup", () => {
     expect(result).toEqual({
       state: "running",
       port: 7331,
-      version: "0.5.0-rc.0",
+      version: "0.6.0-rc.0",
       changed: true,
     });
   });

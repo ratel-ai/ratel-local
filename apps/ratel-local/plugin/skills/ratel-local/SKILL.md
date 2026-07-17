@@ -19,7 +19,7 @@ the plugin `.mcp.json`.
 
 ## Plugin Runtime
 
-The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.5.0 connect`.
+The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.6.0-rc.0 connect`.
 The connector sends its resolved project root to the authenticated loopback
 daemon, which loads the appropriate config chain and shares upstream
 connections only within that canonical project scope. Do not replace the
@@ -29,7 +29,7 @@ into the plugin `.mcp.json`.
 Run the setup wizard once from a terminal:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.5.0 setup
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
 ```
 
 When the daemon is unavailable, the connector exposes
@@ -40,7 +40,7 @@ MCP stdio.
 For human CLI work, install the package globally and use the `ratel-local` bin:
 
 ```bash
-pnpm add -g @ratel-ai/ratel-local@0.5.0-rc.0
+pnpm add -g @ratel-ai/ratel-local@0.6.0-rc.0
 ratel-local --version
 ```
 
@@ -248,7 +248,7 @@ ratel-local backup list
 ## Debug Checklist
 
 1. Confirm Node and `npx` are available.
-2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.5.0` with `connect`.
+2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.6.0-rc.0` with `connect`.
 3. Run `ratel-local daemon status`; if needed, run `ratel-local setup`.
 4. Run `ratel-local mcp list` to verify Ratel config has upstreams.
 5. Run `ratel-local connect` from the relevant project to reproduce the scoped bridge outside the host, or `ratel-local serve --auto-config` to isolate the gateway itself.

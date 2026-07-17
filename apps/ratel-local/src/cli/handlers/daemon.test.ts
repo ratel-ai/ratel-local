@@ -106,7 +106,7 @@ describe("runDaemon", () => {
             uiUrl: `http://127.0.0.1:${port}`,
             mcpUrl: `http://127.0.0.1:${port}/mcp`,
             startedAt: "2026-07-10T08:00:00.000Z",
-            version: "0.5.0-rc.0",
+            version: "0.6.0-rc.0",
             configMode: "auto",
             uptimeSeconds: 10,
             upstreamCount: 0,
@@ -120,7 +120,7 @@ describe("runDaemon", () => {
     ).resolves.toEqual({
       state: "running",
       port: DEFAULT_DAEMON_PORT,
-      version: "0.5.0-rc.0",
+      version: "0.6.0-rc.0",
     });
   });
 
@@ -485,7 +485,7 @@ describe("runDaemon", () => {
       executableArgs: [
         "/opt/node/lib/node_modules/npm/bin/npx-cli.js",
         "-y",
-        "@ratel-ai/ratel-local@0.5.0-rc.0",
+        "@ratel-ai/ratel-local@0.6.0-rc.0",
       ],
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
@@ -493,7 +493,7 @@ describe("runDaemon", () => {
 
     expect(plist).toContain("<string>/opt/node/bin/node</string>");
     expect(plist).toContain("<string>/opt/node/lib/node_modules/npm/bin/npx-cli.js</string>");
-    expect(plist.indexOf("@ratel-ai/ratel-local@0.5.0-rc.0")).toBeLessThan(
+    expect(plist.indexOf("@ratel-ai/ratel-local@0.6.0-rc.0")).toBeLessThan(
       plist.indexOf("<string>daemon</string>"),
     );
   });
@@ -563,14 +563,14 @@ describe("runDaemon", () => {
       executableArgs: [
         "/opt/node/lib/node_modules/npm/bin/npx-cli.js",
         "-y",
-        "@ratel-ai/ratel-local@0.5.0-rc.0",
+        "@ratel-ai/ratel-local@0.6.0-rc.0",
       ],
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
     });
 
     expect(service).toContain(
-      "ExecStart=/opt/node/bin/node /opt/node/lib/node_modules/npm/bin/npx-cli.js -y @ratel-ai/ratel-local@0.5.0-rc.0 daemon run",
+      "ExecStart=/opt/node/bin/node /opt/node/lib/node_modules/npm/bin/npx-cli.js -y @ratel-ai/ratel-local@0.6.0-rc.0 daemon run",
     );
   });
 
