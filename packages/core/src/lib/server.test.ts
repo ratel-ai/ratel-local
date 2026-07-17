@@ -124,7 +124,12 @@ describe("createMcpServer", () => {
     const instructions = client.getInstructions();
     expect(instructions).toBeDefined();
     expect(instructions).toMatch(/search_capabilities/);
-    expect(instructions?.toLowerCase()).toMatch(/before/);
+    expect(instructions).toMatch(/Before responding to a substantive user request/);
+    expect(instructions).toMatch(/even when you could answer from general knowledge/);
+    expect(instructions).toMatch(
+      /Always search before saying information or a workflow is unavailable/,
+    );
+    expect(instructions).toMatch(/Skip the search only for casual conversation/);
 
     await client.close();
     await handle.close();

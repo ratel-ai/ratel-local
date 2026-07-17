@@ -17,7 +17,7 @@ Keep the plugin MCP definition limited to starting the Ratel gateway. Put upstre
 
 ## Plugin Runtime
 
-The plugin `.mcp.json` starts Ratel over stdio through `npx` with `@ratel-ai/ratel-local@latest` and `serve --auto-config`. Do not duplicate upstream MCP definitions into the plugin `.mcp.json`.
+The plugin `.mcp.json` starts Ratel over stdio through `npx` with `@ratel-ai/ratel-local@0.5.0-rc.0` and `serve --auto-config`. Do not duplicate upstream MCP definitions into the plugin `.mcp.json`.
 
 For human CLI work, install the package globally and use the `ratel-local` bin:
 
@@ -210,7 +210,7 @@ ratel-local backup list
 ## Debug Checklist
 
 1. Confirm Node and `npx` are available.
-2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@latest` with `serve --auto-config`.
+2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.5.0-rc.0` with `serve --auto-config`.
 3. Run `ratel-local mcp list` to verify Ratel config has upstreams.
 4. Run `ratel-local serve --auto-config` from the relevant project to reproduce startup outside the host.
 5. For HTTP/SSE upstreams, run `ratel-local mcp auth --check` or `ratel-local mcp auth <name>`.

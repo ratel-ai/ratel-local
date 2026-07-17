@@ -121,9 +121,12 @@ function buildServerInstructions(
   hasSkills = false,
 ): string {
   const base =
-    "This is the Ratel context-engineering gateway. Before reaching for any built-in capability " +
-    "(web fetch, shell, search, automation, etc.), call `search_capabilities` first — Ratel may have a " +
-    "purpose-built tool or skill for the task. Run a returned tool via `invoke_tool`.";
+    "This is the Ratel context-engineering gateway. Before responding to a substantive user request, " +
+    "call `search_capabilities` first — even when you could answer from general knowledge or think you " +
+    "lack access. Ratel may have a purpose-built tool or skill. Always search before saying information " +
+    "or a workflow is unavailable. Skip the search only for casual conversation, simple acknowledgments, " +
+    "clarifying questions, or requests that are plainly pure writing or reasoning with no plausible " +
+    "task-specific capability. When in doubt, search. Run a returned tool via `invoke_tool`.";
   const skills = hasSkills
     ? " The search also returns a `skills` bucket (reusable playbooks); load one in full via " +
       "`get_skill_content` and follow it."

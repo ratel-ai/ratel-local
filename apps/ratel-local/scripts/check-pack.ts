@@ -6,6 +6,19 @@ const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = resolve(appRoot, "dist");
 
 const packageJson = await readJson(resolve(appRoot, "package.json"));
+for (const workspacePackagePath of [
+  "../../package.json",
+  "../../packages/core/package.json",
+  "../../packages/ui/package.json",
+]) {
+  const workspacePackage = await readJson(resolve(appRoot, workspacePackagePath));
+  if (workspacePackage.version !== packageJson.version) {
+    throw new Error(
+      `${workspacePackagePath} version ${String(workspacePackage.version)} does not match published package version ${String(packageJson.version)}`,
+    );
+  }
+}
+
 for (const manifestPath of [
   "plugin/.codex-plugin/plugin.json",
   "plugin/.claude-plugin/plugin.json",
@@ -16,6 +29,15 @@ for (const manifestPath of [
       `${manifestPath} version ${String(manifest.version)} does not match package version ${String(packageJson.version)}`,
     );
   }
+}
+
+const pluginMcp = await readJson<{
+  mcpServers?: Record<string, { args?: unknown }>;
+}>(resolve(appRoot, "plugin/.mcp.json"));
+const pluginArgs = pluginMcp.mcpServers?.["ratel-local"]?.args;
+const expectedRuntime = `@ratel-ai/ratel-local@${String(packageJson.version)}`;
+if (!Array.isArray(pluginArgs) || !pluginArgs.includes(expectedRuntime)) {
+  throw new Error(`plugin/.mcp.json must pin the runtime to ${expectedRuntime}`);
 }
 
 await mustExist(resolve(dist, "bin.js"));
@@ -49,8 +71,8 @@ async function mustExist(path: string): Promise<void> {
   }
 }
 
-async function readJson(path: string): Promise<{ version?: unknown }> {
-  return JSON.parse(await readFile(path, "utf8")) as { version?: unknown };
+async function readJson<T = { version?: unknown }>(path: string): Promise<T> {
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 async function listFiles(dir: string): Promise<string[]> {

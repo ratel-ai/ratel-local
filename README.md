@@ -35,7 +35,7 @@ Choose the setup that matches where you are starting:
 - **Migrate existing MCP servers:** install the CLI and import the servers already configured in Claude Code or Codex.
 - **Start fresh with the plugin:** let the plugin start Ratel Local, then add upstreams directly to Ratel Local configuration.
 
-The CLI and UI prefer the `ratel-local` plugin when linking because it bundles the gateway and agent skills. If plugin installation fails, Ratel Local reports the failure and applies the reviewed explicit MCP gateway fallback instead. An enabled plugin is recognized as an existing Ratel connection, so importing does not add a second gateway and `link` becomes a no-op. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server. If both the plugin and an explicit Ratel MCP entry are present, Ratel Local reports the duplicate connection and leaves both installation paths unchanged.
+The CLI and UI prefer the `ratel-local` plugin when linking because it bundles the gateway and agent skills. If plugin installation fails, Ratel Local reports the failure and applies the reviewed explicit MCP gateway fallback instead. An enabled plugin is recognized as an existing Ratel connection, so importing does not add a second gateway and `link` becomes a no-op. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server. Agent Setup offers **Fix duplicate installation** when both the plugin and an explicit Ratel MCP entry are present, and **Switch to plugin** for MCP-only installations. Both actions preserve the existing MCP connection unless plugin installation succeeds, and only recognized Ratel entries are removed.
 
 ### Migrate an existing MCP setup
 
