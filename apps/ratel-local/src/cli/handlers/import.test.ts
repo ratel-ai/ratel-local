@@ -236,6 +236,83 @@ describe("runImport", () => {
     });
   });
 
+  it("imports through an enabled Claude plugin without writing an explicit gateway", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(
+      CLAUDE_SETTINGS,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await runImport(ctx, { bin: BIN, yes: true, agentKind: "claude-code" });
+
+    expect(JSON.parse(fs.files.get(RATEL_USER) as string).mcpServers.fs.command).toBe("echo");
+    const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
+    expect(claude.mcpServers.fs).toBeUndefined();
+    expect(claude.mcpServers["ratel-local"]).toBeUndefined();
+  });
+
+  it("imports through an enabled Codex plugin without writing an explicit gateway", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CODEX,
+      `[plugins."ratel-local@ratel"]
+enabled = true
+
+[mcp_servers.fs]
+command = "echo"
+`,
+    );
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+    await runImport(ctx, { bin: BIN, yes: true, agentKind: "codex" });
+
+    expect(JSON.parse(fs.files.get(RATEL_USER) as string).mcpServers.fs.command).toBe("echo");
+    const codex = fs.files.get(HOME_CODEX) as string;
+    expect(codex).toContain(`[plugins."ratel-local@ratel"]`);
+    expect(codex).not.toContain("[mcp_servers.fs]");
+    expect(codex).not.toContain("[mcp_servers.ratel-local]");
+  });
+
+  it("reports duplicate plugin and explicit connections during import", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      HOME_CLAUDE,
+      JSON.stringify({
+        mcpServers: {
+          "ratel-local": { type: "stdio", command: "ratel-local" },
+        },
+      }),
+    );
+    fs.files.set(
+      CLAUDE_SETTINGS,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+    const notes: Array<{ message: string; title: string | undefined }> = [];
+    const { ctx } = ctxOf(
+      fs,
+      {
+        ...autoConfirm(),
+        note: (message, title) => notes.push({ message, title }),
+      },
+      false,
+    );
+
+    await runImport(ctx, { bin: BIN, yes: true, agentKind: "claude-code" });
+
+    expect(notes).toContainEqual(
+      expect.objectContaining({
+        title: "Duplicate Ratel connections",
+        message: expect.stringMatching(/duplicate Ratel connections/i),
+      }),
+    );
+    expect(notes.at(-1)?.message).toMatch(/No native Claude Code MCP servers/i);
+  });
+
   it("shows the detected agent and MCP source paths before selection", async () => {
     const fs = new MemFs();
     fs.files.set(

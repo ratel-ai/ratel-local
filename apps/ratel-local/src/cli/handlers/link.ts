@@ -1,15 +1,24 @@
 import type { BackupManifest, RatelConfig } from "@ratel-ai/ratel-local-core";
 import {
   AutomaticAgentHostAdapter,
+  buildAgentHostRatelPluginLinkChanges,
   buildAgentLinkPlan,
-  type buildImportPlan,
   executePlan,
+  findAgentHostRatelPluginConnection,
+  getAgentHostRatelConnection,
+  type ImportPlan,
   NamedAgentHostAdapter,
+  pluginLinkNoOpMessage,
   type ResolvedBin,
   ratelConfigPath,
   readJson,
   type SupportedAgentHostKind,
 } from "@ratel-ai/ratel-local-core";
+import {
+  type AgentPluginInstaller,
+  attemptRatelAgentPluginInstall,
+  unavailableAgentPluginInstaller,
+} from "../../agent-plugin.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -20,6 +29,7 @@ export interface LinkOptions {
   whichResult?: string;
   workspaceRoot?: string;
   agentKind?: SupportedAgentHostKind;
+  installPlugin?: AgentPluginInstaller;
   exists?: (path: string) => Promise<boolean>;
 }
 
@@ -42,55 +52,98 @@ export async function runLink(
     : new AutomaticAgentHostAdapter();
   const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
   if (!detection.present) {
+    const pluginHost = await findAgentHostRatelPluginConnection(ctx, opts.agentKind);
+    if (pluginHost) {
+      ctx.prompts.outro(
+        pluginLinkNoOpMessage(pluginHost.state.host.displayName, pluginHost.connection),
+      );
+      return null;
+    }
     ctx.prompts.note("No supported agent config found. Nothing to link.");
     ctx.prompts.outro("done");
     return null;
   }
   const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const hostKind = resolveHostKind(opts.agentKind, agentState.host.kind);
+  const connection = await getAgentHostRatelConnection(hostKind, agentState, ctx);
+  if (connection.plugin) {
+    ctx.prompts.outro(pluginLinkNoOpMessage(agentState.host.displayName, connection));
+    return null;
+  }
 
-  const ratelUserPath = ratelConfigPath("user", ctx.env);
-  const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
-  const ratelLocalPath = ctx.env.projectRoot ? ratelConfigPath("local", ctx.env) : undefined;
+  const pluginChanges = buildAgentHostRatelPluginLinkChanges(hostKind, agentState, connection);
+  const enablingPlugin = pluginChanges.length > 0;
 
-  const ratelUser = await readJson<RatelConfig>(ctx.fs, ratelUserPath);
-  const ratelProject = ratelProjectPath
-    ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath)
-    : null;
-  const ratelLocal = ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null;
+  let plan: Pick<ImportPlan, "agentChanges">;
+  if (enablingPlugin) {
+    plan = { agentChanges: pluginChanges };
+  } else {
+    const ratelUserPath = ratelConfigPath("user", ctx.env);
+    const ratelProjectPath = ctx.env.projectRoot ? ratelConfigPath("project", ctx.env) : undefined;
+    const ratelLocalPath = ctx.env.projectRoot ? ratelConfigPath("local", ctx.env) : undefined;
 
-  const bin = opts.bin ?? (await resolveBin(ctx, opts));
+    const ratelUser = await readJson<RatelConfig>(ctx.fs, ratelUserPath);
+    const ratelProject = ratelProjectPath
+      ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath)
+      : null;
+    const ratelLocal = ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null;
 
-  const plan = await buildAgentLinkPlan({
-    agentHost,
-    agentState,
-    ratelUser,
-    ratelProject,
-    ratelLocal,
-    bin,
-    ratelUserPath,
-    ratelProjectPath,
-    ratelLocalPath,
-    projectRoot: ctx.env.projectRoot,
-  });
+    const bin = opts.bin ?? (await resolveBin(ctx, opts));
+
+    plan = await buildAgentLinkPlan({
+      agentHost,
+      agentState,
+      ratelUser,
+      ratelProject,
+      ratelLocal,
+      bin,
+      ratelUserPath,
+      ratelProjectPath,
+      ratelLocalPath,
+      projectRoot: ctx.env.projectRoot,
+    });
+  }
 
   if (plan.agentChanges.length === 0) {
     ctx.prompts.outro(`nothing to do (${agentState.host.displayName} already points at Ratel)`);
     return null;
   }
 
-  ctx.prompts.note(renderAgentStage(plan), `${agentState.host.displayName} rewrites`);
+  ctx.prompts.note(
+    renderAgentStage(plan, enablingPlugin),
+    `${agentState.host.displayName} rewrites`,
+  );
 
   if (!opts.yes) {
     const ok = await ctx.prompts.confirm({
-      message: `Write the ratel-local gateway into ${plan.agentChanges.length} ${
-        agentState.host.displayName
-      } config file${plan.agentChanges.length === 1 ? "" : "s"}?`,
+      message: enablingPlugin
+        ? `Re-enable the Ratel Local plugin MCP server in ${agentState.host.displayName}?`
+        : `Install the Ratel Local plugin for ${agentState.host.displayName}? If plugin installation fails, Ratel will write the reviewed MCP gateway fallback.`,
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
       ctx.prompts.cancel("link cancelled");
       return null;
     }
+  }
+
+  let usedMcpFallback = false;
+  if (!enablingPlugin) {
+    const installPlugin =
+      opts.installPlugin ?? ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+    const pluginResult = await attemptRatelAgentPluginInstall(hostKind, installPlugin);
+    if (pluginResult.installed) {
+      ctx.prompts.note(pluginResult.message, "Plugin installed");
+      ctx.prompts.outro(
+        `plugin link complete · reload or restart ${agentState.host.displayName} to load Ratel Local`,
+      );
+      return null;
+    }
+    usedMcpFallback = true;
+    ctx.prompts.note(
+      `${pluginResult.message}\nFalling back to the reviewed explicit MCP gateway configuration.`,
+      "Plugin installation failed",
+    );
   }
 
   const manifest = await executePlan(plan.agentChanges, {
@@ -100,9 +153,20 @@ export async function runLink(
   });
   ctx.prompts.note(`Backup created. Run \`ratel-local backup list\` to inspect backups.`, "Done");
   ctx.prompts.outro(
-    `link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
+    usedMcpFallback
+      ? `MCP fallback link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`
+      : `link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`,
   );
   return manifest;
+}
+
+function resolveHostKind(
+  requested: SupportedAgentHostKind | undefined,
+  detected: string,
+): SupportedAgentHostKind {
+  if (requested) return requested;
+  if (detected === "claude-code" || detected === "codex") return detected;
+  throw new Error(`Unsupported agent host ${JSON.stringify(detected)}`);
 }
 
 async function resolveBin(ctx: HandlerCtx, opts: LinkOptions): Promise<ResolvedBin> {
@@ -114,13 +178,15 @@ async function resolveBin(ctx: HandlerCtx, opts: LinkOptions): Promise<ResolvedB
   });
 }
 
-function renderAgentStage(plan: ReturnType<typeof buildImportPlan>): string {
+function renderAgentStage(plan: Pick<ImportPlan, "agentChanges">, enablingPlugin: boolean): string {
   const lines = plan.agentChanges.map(
     (c) => `write ${c.path}${c.before === null ? " (new file)" : ""}`,
   );
   lines.push("");
   lines.push(
-    "The ratel-local gateway entry will be written for the available Ratel scopes. Native agent MCP entries are preserved.",
+    enablingPlugin
+      ? "The disabled Ratel Local plugin MCP server will be re-enabled. No explicit gateway will be added."
+      : "Ratel will install the agent plugin first. If installation fails, the ratel-local gateway changes above will be written as an explicit MCP fallback. Native agent MCP entries are preserved.",
   );
   return lines.join("\n");
 }

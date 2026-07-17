@@ -13,6 +13,7 @@ import {
   linkAgentToRatel,
   previewAgentImport,
   previewAgentLink,
+  removeAgentRatelMcpFallback,
   removeServerEntry,
 } from "./operations.js";
 
@@ -20,6 +21,8 @@ const HOME = "/home/u";
 const ROOT = "/repo";
 const USER_PATH = "/home/u/.ratel/config.json";
 const CLAUDE_PATH = "/home/u/.claude.json";
+const CLAUDE_SETTINGS_PATH = "/home/u/.claude/settings.json";
+const CODEX_PATH = "/home/u/.codex/config.toml";
 
 class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
@@ -143,6 +146,30 @@ describe("core operations — config state", () => {
 });
 
 describe("core operations — agent interop", () => {
+  it("reports an enabled Claude Ratel plugin as the host connection", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(
+      CLAUDE_SETTINGS_PATH,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+
+    const state = await getAgentHostsState(ctx(fs));
+    const claude = state.hosts.find((host) => host.kind === "claude-code");
+
+    expect(claude?.connection).toEqual({
+      kind: "plugin",
+      linked: true,
+      explicit: false,
+      plugin: true,
+    });
+    expect(claude?.posture).toBe("mixed");
+    expect(claude?.ratelEntryCount).toBe(0);
+  });
+
   it("reports detected agent posture for supported hosts", async () => {
     const fs = new MemFs();
     let state = await getAgentHostsState(ctx(fs));
@@ -180,6 +207,184 @@ describe("core operations — agent interop", () => {
     );
     state = await getAgentHostsState(ctx(fs));
     expect(state.hosts.find((host) => host.kind === "claude-code")?.posture).toBe("mixed");
+  });
+
+  it("reports an enabled Codex Ratel plugin as the host connection", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CODEX_PATH,
+      `[plugins."ratel-local@ratel"]
+enabled = true
+
+[mcp_servers.fs]
+command = "echo"
+`,
+    );
+
+    const state = await getAgentHostsState(ctx(fs));
+    const codex = state.hosts.find((host) => host.kind === "codex");
+
+    expect(codex?.connection).toEqual({
+      kind: "plugin",
+      linked: true,
+      explicit: false,
+      plugin: true,
+    });
+    expect(codex?.posture).toBe("mixed");
+    expect(codex?.ratelEntryCount).toBe(0);
+  });
+
+  it("does not treat an explicitly disabled Codex plugin as a connection", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CODEX_PATH,
+      `[plugins."ratel-local@ratel"]
+enabled = false
+
+[mcp_servers.fs]
+command = "echo"
+`,
+    );
+
+    const state = await getAgentHostsState(ctx(fs));
+    const codex = state.hosts.find((host) => host.kind === "codex");
+
+    expect(codex?.connection).toEqual({
+      kind: "none",
+      linked: false,
+      explicit: false,
+      plugin: false,
+    });
+    expect(codex?.posture).toBe("not-linked");
+  });
+
+  it("re-enables a disabled Codex plugin MCP instead of adding an explicit gateway", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CODEX_PATH,
+      `[plugins."ratel-local@ratel"]
+enabled = true
+
+[plugins."ratel-local@ratel".mcp_servers.ratel-local]
+enabled = false # keep this comment
+
+[mcp_servers.fs]
+command = "echo"
+`,
+    );
+
+    const state = await getAgentHostsState(ctx(fs));
+    const codex = state.hosts.find((host) => host.kind === "codex");
+    expect(codex?.connection).toEqual({
+      kind: "none",
+      linked: false,
+      explicit: false,
+      plugin: false,
+      pluginDisabled: true,
+    });
+
+    const preview = await previewAgentLink(ctx(fs), { hostKind: "codex" });
+    expect(preview.plan.agentChanges).toHaveLength(1);
+    expect(preview.plan.agentChanges[0]?.after).toContain("enabled = true # keep this comment");
+    expect(preview.plan.agentChanges[0]?.after).not.toContain("[mcp_servers.ratel-local]");
+
+    await applyAgentLink(ctx(fs), {
+      hostKind: "codex",
+      planHash: preview.stageHashes.agent,
+    });
+    const after = fs.files.get(CODEX_PATH) as string;
+    expect(after).toContain("enabled = true # keep this comment");
+    expect(after).not.toContain("[mcp_servers.ratel-local]");
+  });
+
+  it("keeps host discovery working when Claude plugin settings cannot be read", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    const read = fs.read.bind(fs);
+    fs.read = async (path: string) => {
+      if (path === CLAUDE_SETTINGS_PATH) throw new Error("permission denied");
+      return read(path);
+    };
+
+    const state = await getAgentHostsState(ctx(fs));
+    const claude = state.hosts.find((host) => host.kind === "claude-code");
+
+    expect(claude?.connection.linked).toBe(false);
+    expect(claude?.detection.warnings.join("\n")).toMatch(/permission denied/i);
+  });
+
+  it("reports plugin plus explicit MCP as a duplicate without changing either connection", async () => {
+    const fs = new MemFs();
+    const claudeBefore = JSON.stringify({
+      mcpServers: {
+        "ratel-local": { type: "stdio", command: "ratel-local" },
+      },
+    });
+    fs.files.set(CLAUDE_PATH, claudeBefore);
+    fs.files.set(
+      CLAUDE_SETTINGS_PATH,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+
+    const state = await getAgentHostsState(ctx(fs));
+    const claude = state.hosts.find((host) => host.kind === "claude-code");
+    expect(claude?.connection).toEqual({
+      kind: "duplicate",
+      linked: true,
+      explicit: true,
+      plugin: true,
+    });
+
+    const preview = await previewAgentLink(ctx(fs), { hostKind: "claude-code" });
+    expect(preview.plan.agentChanges).toEqual([]);
+    expect(preview.emptyReason).toMatch(/duplicate Ratel connections/i);
+    expect(fs.files.get(CLAUDE_PATH)).toBe(claudeBefore);
+  });
+
+  it("removes only the explicit Claude Ratel fallback", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        mcpServers: {
+          fs: { type: "stdio", command: "echo" },
+          "ratel-local": { type: "stdio", command: "ratel-local" },
+        },
+      }),
+    );
+
+    await removeAgentRatelMcpFallback(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "ratel-local" },
+    );
+
+    expect(JSON.parse(fs.files.get(CLAUDE_PATH) as string).mcpServers).toEqual({
+      fs: { type: "stdio", command: "echo" },
+    });
+  });
+
+  it("removes only the explicit Codex Ratel fallback", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CODEX_PATH,
+      [
+        "[mcp_servers.fs]",
+        'command = "echo"',
+        "",
+        "[mcp_servers.ratel-local]",
+        'command = "ratel-local"',
+        "",
+      ].join("\n"),
+    );
+
+    await removeAgentRatelMcpFallback(ctx(fs), { hostKind: "codex" }, { envVar: "ratel-local" });
+
+    expect(fs.files.get(CODEX_PATH)).toContain("[mcp_servers.fs]");
+    expect(fs.files.get(CODEX_PATH)).not.toContain("[mcp_servers.ratel-local]");
   });
 
   it("previews and applies import in Ratel and agent stages", async () => {
@@ -294,6 +499,27 @@ describe("core operations — agent interop", () => {
     expect(claude.mcpServers["ratel-local"].args).toContain(USER_PATH);
   });
 
+  it("previews link as a plugin-aware no-op without an explicit gateway", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      USER_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
+    );
+    fs.files.set(
+      CLAUDE_SETTINGS_PATH,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+
+    const preview = await previewAgentLink(ctx(fs), { hostKind: "claude-code" });
+
+    expect(preview.plan.agentChanges).toEqual([]);
+    expect(preview.emptyReason).toMatch(/linked through the Ratel Local plugin/i);
+  });
+
   it("links the Ratel gateway even when native agent entries do not match Ratel entries", async () => {
     const fs = new MemFs();
     fs.files.set(
@@ -381,5 +607,24 @@ describe("core operations — agent interop", () => {
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers["ratel-local"].args).toContain(USER_PATH);
+  });
+
+  it("leaves plugin-linked Claude Code unchanged in the non-interactive link operation", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_SETTINGS_PATH,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+    const logs: string[] = [];
+
+    const manifest = await linkAgentToRatel({
+      env: { homeDir: HOME, projectRoot: ROOT },
+      fs,
+      log: (message) => logs.push(message),
+    });
+
+    expect(manifest).toBeNull();
+    expect(fs.files.has(CLAUDE_PATH)).toBe(false);
+    expect(logs.join("\n")).toMatch(/linked through the Ratel Local plugin/i);
   });
 });

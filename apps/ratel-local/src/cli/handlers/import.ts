@@ -10,12 +10,14 @@ import {
   conflictKey,
   executePlan,
   type FileChange,
+  getAgentHostRatelConnection,
   getClaudeCodeStatuslineState,
   type ImportConflict,
   type ImportConflictStrategy,
   type ImportPlan,
   isRatelGatewayEntry,
   NamedAgentHostAdapter,
+  pluginLinkNoOpMessage,
   probeEntryInstructions,
   type ResolvedBin,
   ratelConfigPath,
@@ -115,26 +117,36 @@ export async function runImport(
     source: resolveSkillSource(opts.agentKind, agentState),
     now: opts.now,
   });
+  const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
+  const connection =
+    workflowHostKind && agentState
+      ? await getAgentHostRatelConnection(workflowHostKind, agentState, ctx)
+      : null;
+  if (agentState && connection?.kind === "duplicate") {
+    ctx.prompts.note(
+      pluginLinkNoOpMessage(agentState.host.displayName, connection),
+      "Duplicate Ratel connections",
+    );
+  }
 
   if (!detection.present && skillPreview.candidates.length === 0) {
     ctx.prompts.note(
-      "No supported agent MCP servers or native skills found at any scope. Nothing to import.",
+      "No supported agent native MCP servers or native skills found at any scope. Nothing to import.",
     );
     ctx.prompts.outro("done");
     return null;
   }
   if (agentState && candidates.length === 0 && skillPreview.candidates.length === 0) {
     ctx.prompts.note(
-      `No ${agentState.host.displayName} MCP servers or native skills found at any scope. Nothing to import.`,
+      `No native ${agentState.host.displayName} MCP servers or native skills found at any scope. Nothing to import.`,
     );
     ctx.prompts.outro("done");
     return null;
   }
 
-  const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
   let linkCommitted = false;
   let workflow = workflowHostKind
-    ? await beginCliImportWorkflow(ctx, workflowHostKind, agentState)
+    ? await beginCliImportWorkflow(ctx, workflowHostKind, connection?.linked ?? true)
     : null;
   if (workflow?.step === "link") {
     const decision = opts.yes
@@ -307,9 +319,8 @@ export async function runImport(
 async function beginCliImportWorkflow(
   ctx: HandlerCtx,
   hostKind: SupportedAgentHostKind,
-  agentState: AgentHostState | null,
+  linked: boolean,
 ): Promise<AgentImportWorkflowState> {
-  const linked = agentState ? isAgentStateLinked(agentState) : true;
   const statuslineInstalled =
     hostKind === "claude-code"
       ? (await getClaudeCodeStatuslineState(ctx)).status === "installed"
@@ -325,12 +336,6 @@ function resolveWorkflowHostKind(
   return state?.host.kind === "claude-code" || state?.host.kind === "codex"
     ? state.host.kind
     : null;
-}
-
-function isAgentStateLinked(state: AgentHostState): boolean {
-  return state.scopes.some((scope) =>
-    Object.entries(scope.mcpServers).some(([name, entry]) => isRatelGatewayEntry(name, entry)),
-  );
 }
 
 async function selectUnlinkedAgentAction(

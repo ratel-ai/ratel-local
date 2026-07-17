@@ -16,6 +16,7 @@ import {
   RefreshCw,
   SearchIcon,
   Sparkles,
+  Wrench,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -57,6 +58,7 @@ import { cn } from "@/lib/utils";
 type AgentHostKind = "claude-code" | "codex";
 type AgentScope = "user" | "project" | "local";
 type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mixed";
+type RatelConnectionKind = "none" | "explicit" | "plugin" | "duplicate";
 type ConflictStrategy = "add-missing-only" | "replace-from-agent" | "replace-selected";
 type SetupFlow = "import" | "link";
 
@@ -91,10 +93,18 @@ interface ClaudeStatuslineState {
   warnings: string[];
 }
 
+interface RatelConnectionState {
+  kind: RatelConnectionKind;
+  linked: boolean;
+  explicit: boolean;
+  plugin: boolean;
+}
+
 interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
   detection: AgentHostDetection;
+  connection: RatelConnectionState;
   posture: AgentPosture;
   nativeEntryCount: number;
   ratelEntryCount: number;
@@ -188,12 +198,12 @@ const POSTURE_COPY: Record<
   "ratel-only": {
     label: "Ratel only",
     tone: "secondary",
-    description: "Only Ratel gateway entries are configured.",
+    description: "Ratel is connected with no native MCP entries.",
   },
   mixed: {
     label: "Mixed",
     tone: "default",
-    description: "Native and Ratel entries are both present.",
+    description: "Native MCP entries exist alongside a Ratel connection.",
   },
 };
 
@@ -618,7 +628,9 @@ function AgentOperationPanel(props: {
 }) {
   const canImport =
     missingRatelEntryNames(props.host).length > 0 || props.availableSkills.length > 0;
-  const canLink = props.host.posture !== "unavailable" && props.host.ratelEntryCount === 0;
+  const canLink = props.host.posture !== "unavailable" && !props.host.connection.linked;
+  const canRepairConnection =
+    props.host.connection.kind === "duplicate" || props.host.connection.kind === "explicit";
   const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
     <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
@@ -627,6 +639,13 @@ function AgentOperationPanel(props: {
           onScanHosts={props.onScanHosts}
           request={props.request}
           state={props.host.statusline}
+        />
+      ) : null}
+      {canRepairConnection ? (
+        <AgentConnectionRepairSection
+          host={props.host}
+          onScanHosts={props.onScanHosts}
+          request={props.request}
         />
       ) : null}
       {canImport ? (
@@ -648,8 +667,8 @@ function AgentOperationPanel(props: {
       ) : null}
       {canLink ? (
         <SetupActionSection
-          description="Add the Ratel gateway entry when this agent is not routed through Ratel yet."
-          title="Link Ratel gateway"
+          description="Install the Ratel plugin with its bundled skills, with a reviewed explicit MCP fallback if installation fails."
+          title="Link Ratel integration"
         >
           <PreviewFlow
             availableSkills={[]}
@@ -663,7 +682,7 @@ function AgentOperationPanel(props: {
           />
         </SetupActionSection>
       ) : null}
-      {!canImport && !canLink && !canManageStatusline ? (
+      {!canImport && !canLink && !canRepairConnection && !canManageStatusline ? (
         <div>
           <h3 className="text-lg font-semibold tracking-tight">Nothing to do</h3>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -673,6 +692,53 @@ function AgentOperationPanel(props: {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function AgentConnectionRepairSection(props: {
+  host: DetectedAgentHostSummary;
+  onScanHosts: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+}) {
+  const { runAction } = useRatelApp();
+  const duplicate = props.host.connection.kind === "duplicate";
+  const actionLabel = duplicate ? "Fix duplicate installation" : "Switch to plugin";
+  const commit = async () => {
+    const ok = await runAction(actionLabel, () =>
+      props.request("/api/agent-connection/repair", {
+        method: "POST",
+        body: { hostKind: props.host.kind },
+      }),
+    );
+    if (ok) await props.onScanHosts();
+  };
+
+  return (
+    <SetupActionSection
+      description={
+        duplicate
+          ? `Ratel is connected to ${props.host.displayName} twice. Remove the extra MCP connection and keep the plugin.`
+          : `Replace the standalone MCP connection with the Ratel plugin, including its bundled skills. If plugin installation fails, your current connection stays unchanged.`
+      }
+      title={duplicate ? "Duplicate installation detected" : "Upgrade to the Ratel plugin"}
+    >
+      <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div>
+          <p className="font-medium text-sm">
+            {duplicate ? "Use one clean Ratel connection" : "Get the complete Ratel integration"}
+          </p>
+          <p className="mt-1 max-w-xl text-muted-foreground text-xs">
+            {duplicate
+              ? "Ratel will remove only its recognized standalone MCP entry. Other MCP servers and the plugin stay untouched."
+              : "Ratel installs the plugin first and removes the old MCP entry only after installation succeeds."}
+          </p>
+        </div>
+        <Button className="min-h-12 px-6 text-base md:min-w-44" onClick={() => void commit()}>
+          {duplicate ? <Wrench /> : <Sparkles />}
+          {actionLabel}
+        </Button>
+      </div>
+    </SetupActionSection>
   );
 }
 
@@ -795,7 +861,7 @@ function PreviewFlow(props: {
 
   const agentChanges = preview?.plan.agentChanges ?? [];
   const linkedAndCovered =
-    props.host.ratelEntryCount > 0 && missingRatelEntryNames(props.host).length === 0;
+    props.host.connection.linked && missingRatelEntryNames(props.host).length === 0;
   const friendlyNoOp = Boolean(
     preview?.emptyReason && linkedAndCovered && props.availableSkills.length === 0,
   );
@@ -803,10 +869,10 @@ function PreviewFlow(props: {
     () =>
       beginAgentImportWorkflow({
         hostKind: props.hostKind,
-        linked: props.host.ratelEntryCount > 0,
+        linked: props.host.connection.linked,
         statuslineInstalled: props.host.statusline?.status === "installed",
       }),
-    [props.host.ratelEntryCount, props.host.statusline?.status, props.hostKind],
+    [props.host.connection.linked, props.host.statusline?.status, props.hostKind],
   );
 
   const applyRatel = async (
@@ -1124,12 +1190,12 @@ function SetupRecap(props: {
         <p className="font-medium text-sm">
           {props.flow === "import"
             ? importAvailabilityLabel(mcpCount, skillCount)
-            : "One agent config change will be reviewed before writing."}
+            : "Ratel will install the agent plugin, including its bundled skills."}
         </p>
         <p className="mt-1 text-muted-foreground text-xs">
           {props.flow === "import"
             ? "Skills are selected first; MCP conflict handling follows only when needed."
-            : "Native MCP entries are preserved."}
+            : "If plugin installation fails, the reviewed MCP fallback is applied and reported. Native MCP entries are preserved."}
         </p>
       </div>
       <Button
@@ -1641,14 +1707,21 @@ function LinkSceneDialog(props: {
           </>
         }
         kicker="Review"
-        title="Review config changes"
+        title="Review link and fallback"
         wide
       >
-        <SceneScrollSection className="max-h-[65vh]">
+        <SceneScrollSection className="grid max-h-[65vh] gap-4">
+          <Alert>
+            <AlertTitle>Plugin first</AlertTitle>
+            <AlertDescription>
+              Ratel will install the {props.preview.host.displayName} plugin first. If that fails,
+              it will report the failure and apply only the explicit MCP changes reviewed below.
+            </AlertDescription>
+          </Alert>
           <ChangeList
             changes={props.preview.plan.agentChanges}
             defaultOpen
-            title={`${props.preview.host.displayName} changes`}
+            title={`${props.preview.host.displayName} MCP fallback`}
           />
         </SceneScrollSection>
       </ScenePanel>
@@ -2166,7 +2239,13 @@ function LinkStatusBadge(props: { host: DetectedAgentHostSummary }) {
   if (props.host.posture === "unavailable") {
     return <StatusBadge tone="muted">Unavailable</StatusBadge>;
   }
-  if (props.host.ratelEntryCount > 0) {
+  if (props.host.connection.kind === "duplicate") {
+    return <StatusBadge tone="warning">Duplicate connection</StatusBadge>;
+  }
+  if (props.host.connection.kind === "plugin") {
+    return <StatusBadge tone="success">Linked via plugin</StatusBadge>;
+  }
+  if (props.host.connection.linked) {
     return <StatusBadge tone="success">Linked</StatusBadge>;
   }
   return <StatusBadge tone="muted">Not linked</StatusBadge>;

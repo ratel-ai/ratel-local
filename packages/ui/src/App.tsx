@@ -62,6 +62,7 @@ export type RatelScope = "user" | "project" | "local";
 export type AuthStatus = "n/a" | "needs auth" | "expired" | "ok" | "unsupported";
 type AgentHostKind = "claude-code" | "codex";
 type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mixed";
+type RatelConnectionKind = "none" | "explicit" | "plugin" | "duplicate";
 
 export interface ServerEntry {
   type: string;
@@ -144,10 +145,18 @@ interface ClaudeStatuslineState {
   warnings: string[];
 }
 
+interface RatelConnectionState {
+  kind: RatelConnectionKind;
+  linked: boolean;
+  explicit: boolean;
+  plugin: boolean;
+}
+
 interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
   detection: AgentHostDetection;
+  connection: RatelConnectionState;
   posture: AgentPosture;
   nativeEntryCount: number;
   ratelEntryCount: number;
@@ -601,7 +610,7 @@ function CommandMenu(props: {
                       className="items-start py-2"
                       key={item.kind}
                       onSelect={() => props.onSelectAgent(item.kind)}
-                      value={`${item.displayName} ${item.kind} ${item.statusLabel} ${item.postureLabel} ${item.nativeEntryCount} native ${item.ratelEntryCount} ratel ${item.missingRatelEntryCount} missing ${item.searchText}`}
+                      value={`${item.displayName} ${item.kind} ${item.statusLabel} ${item.postureLabel} ${item.nativeEntryCount} native ${item.connectionDetail} ${item.missingRatelEntryCount} missing ${item.searchText}`}
                     >
                       <Settings2 className="mt-0.5" />
                       <span className="grid min-w-0 flex-1 gap-1">
@@ -613,7 +622,7 @@ function CommandMenu(props: {
                         </span>
                         <span className="truncate text-xs text-muted-foreground">
                           {item.postureLabel} / {item.nativeEntryCount} native /{" "}
-                          {item.ratelEntryCount} Ratel
+                          {item.connectionDetail}
                           {item.missingRatelEntryCount > 0
                             ? ` / ${item.missingRatelEntryCount} missing`
                             : ""}
@@ -695,16 +704,17 @@ function commandAgentItems(hosts: readonly DetectedAgentHostSummary[]) {
       const status = commandAgentStatus(host);
       return {
         displayName: host.displayName,
+        connectionDetail: commandAgentConnectionDetail(host),
         kind: host.kind,
         missingRatelEntryCount: host.missingRatelEntryNames?.length ?? 0,
         nativeEntryCount: host.nativeEntryCount,
         postureLabel: AGENT_POSTURE_LABELS[host.posture],
-        ratelEntryCount: host.ratelEntryCount,
         searchText: [
           host.detection.reasons.join(" "),
           host.detection.warnings.join(" "),
           host.nativeEntryNames?.join(" "),
           host.ratelEntryNames?.join(" "),
+          host.connection.kind,
           host.scopes.map((scope) => scope.path).join(" "),
         ].join(" "),
         statusLabel: status.label,
@@ -714,11 +724,19 @@ function commandAgentItems(hosts: readonly DetectedAgentHostSummary[]) {
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+function commandAgentConnectionDetail(host: DetectedAgentHostSummary): string {
+  if (host.connection.kind === "duplicate") {
+    return `plugin + ${host.ratelEntryCount} explicit Ratel`;
+  }
+  if (host.connection.kind === "plugin") return "Ratel plugin";
+  return `${host.ratelEntryCount} Ratel`;
+}
+
 const AGENT_POSTURE_LABELS: Record<AgentPosture, string> = {
   empty: "No MCP entries",
-  mixed: "Native and Ratel entries",
+  mixed: "Native entries with Ratel",
   "not-linked": "Native entries only",
-  "ratel-only": "Ratel gateway configured",
+  "ratel-only": "Ratel connected",
   unavailable: "Config unavailable",
 };
 
@@ -727,10 +745,13 @@ function commandAgentStatus(host: DetectedAgentHostSummary): {
   tone: "muted" | "success" | "warning";
 } {
   if (host.posture === "unavailable") return { label: "Unavailable", tone: "muted" };
-  if (host.ratelEntryCount > 0 && (host.missingRatelEntryNames?.length ?? 0) === 0) {
+  if (host.connection.kind === "duplicate") {
+    return { label: "Duplicate", tone: "warning" };
+  }
+  if (host.connection.linked && (host.missingRatelEntryNames?.length ?? 0) === 0) {
     return { label: "Linked", tone: "success" };
   }
-  if (host.ratelEntryCount > 0) return { label: "Mixed", tone: "warning" };
+  if (host.connection.linked) return { label: "Mixed", tone: "warning" };
   return { label: "Not linked", tone: "muted" };
 }
 

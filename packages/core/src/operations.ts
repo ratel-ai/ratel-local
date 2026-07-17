@@ -14,6 +14,13 @@ import {
   NamedAgentHostAdapter,
   SUPPORTED_AGENT_HOSTS,
 } from "./agent-host/index.js";
+import {
+  buildAgentHostRatelPluginLinkChanges,
+  findAgentHostRatelPluginConnection,
+  getAgentHostRatelConnection,
+  pluginLinkNoOpMessage,
+  type RatelConnectionState,
+} from "./agent-host/ratel-connection.js";
 import { type BackupFs, type BackupManifest, listBackups, startBackup } from "./backup.js";
 import { isRatelGatewayEntry } from "./gateway-entry.js";
 import { ProjectRootNotFoundError, type RatelScope, ratelConfigPath } from "./hierarchy.js";
@@ -266,6 +273,7 @@ export interface DetectedAgentHostSummary {
   kind: SupportedAgentHostKind;
   displayName: string;
   detection: AgentHostDetection;
+  connection: RatelConnectionState;
   posture: AgentPosture;
   nativeEntryCount: number;
   ratelEntryCount: number;
@@ -321,6 +329,10 @@ export interface ApplyAgentLinkInput extends PreviewAgentLinkInput {
   planHash: string;
 }
 
+export interface RemoveAgentRatelMcpFallbackInput {
+  hostKind: SupportedAgentHostKind;
+}
+
 export async function getAgentHostsState(ctx: CoreContext): Promise<AgentHostsState> {
   const hosts: DetectedAgentHostSummary[] = [];
   const ratelKnownNames = collectRatelKnownNames(await readAllRatelConfigs(ctx));
@@ -333,11 +345,12 @@ export async function getAgentHostsState(ctx: CoreContext): Promise<AgentHostsSt
     } catch (err) {
       detection.warnings.push(`Failed to read ${host.displayName}: ${(err as Error).message}`);
     }
-    const summary = summarizeDetectedAgentHost(
+    const summary = await summarizeDetectedAgentHost(
       host.kind,
       host.displayName,
       detection,
       state,
+      ctx,
       ratelKnownNames,
     );
     if (host.kind === "claude-code") {
@@ -363,11 +376,12 @@ export async function previewAgentImport(
   const agentHost = new NamedAgentHostAdapter(hostKind);
   const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
   const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
-  const host = summarizeDetectedAgentHost(
+  const host = await summarizeDetectedAgentHost(
     hostKind,
     agentState.host.displayName,
     detection,
     agentState,
+    ctx,
     collectRatelKnownNames(await readAllRatelConfigs(ctx)),
   );
   const candidates = collectAgentCandidates(agentState);
@@ -401,13 +415,25 @@ export async function previewAgentLink(
   const agentHost = new NamedAgentHostAdapter(hostKind);
   const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
   const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
-  const host = summarizeDetectedAgentHost(
+  const host = await summarizeDetectedAgentHost(
     hostKind,
     agentState.host.displayName,
     detection,
     agentState,
+    ctx,
     collectRatelKnownNames(await readAllRatelConfigs(ctx)),
   );
+  if (host.connection.plugin) {
+    return toAgentPlanPreview("link", host, [], [], emptyAgentPlan("add-missing-only"), input, {
+      emptyReason: pluginLinkNoOpMessage(host.displayName, host.connection),
+    });
+  }
+  const pluginChanges = buildAgentHostRatelPluginLinkChanges(hostKind, agentState, host.connection);
+  if (pluginChanges.length > 0) {
+    const plan = emptyAgentPlan("add-missing-only");
+    plan.agentChanges = pluginChanges;
+    return toAgentPlanPreview("link", host, [], [], plan, input);
+  }
   const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
   const plan = await buildAgentLinkPlan(inputs);
   return toAgentPlanPreview("link", host, [], [], plan, input, {
@@ -495,10 +521,26 @@ export async function linkAgentToRatel(
   const agentHost = new AutomaticAgentHostAdapter();
   const detection = await agentHost.detect({ env: ctx.env, fs: ctx.fs });
   if (!detection.present) {
+    const pluginHost = await findAgentHostRatelPluginConnection(ctx);
+    if (pluginHost) {
+      ctx.log?.(pluginLinkNoOpMessage(pluginHost.state.host.displayName, pluginHost.connection));
+      return null;
+    }
     ctx.log?.("No supported agent config found. Nothing to link.");
     return null;
   }
   const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const hostKind = assertSupportedAgentHostKind(agentState.host.kind);
+  const connection = await getAgentHostRatelConnection(hostKind, agentState, ctx);
+  if (connection.plugin) {
+    ctx.log?.(pluginLinkNoOpMessage(agentState.host.displayName, connection));
+    return null;
+  }
+  const pluginChanges = buildAgentHostRatelPluginLinkChanges(hostKind, agentState, connection);
+  if (pluginChanges.length > 0) {
+    ctx.log?.(`Re-enabling the Ratel Local plugin MCP server in ${agentState.host.displayName}.`);
+    return executePlan(pluginChanges, { fs: ctx.fs, env: ctx.env, action: "link" });
+  }
   const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
 
   const plan = await buildAgentLinkPlan(inputs);
@@ -509,6 +551,49 @@ export async function linkAgentToRatel(
 
   ctx.log?.(`Rewriting ${plan.agentChanges.length} ${agentState.host.displayName} config file(s).`);
   return executePlan(plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "link" });
+}
+
+export async function removeAgentRatelMcpFallback(
+  ctx: CoreContext,
+  input: RemoveAgentRatelMcpFallbackInput,
+  opts: AgentInteropOptions = {},
+): Promise<BackupManifest | null> {
+  const hostKind = assertSupportedAgentHostKind(input.hostKind);
+  const agentHost = new NamedAgentHostAdapter(hostKind);
+  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const removeEntriesByScope = new Map<AgentScope, Set<string>>();
+
+  for (const scope of agentState.scopes) {
+    const names = Object.entries(scope.mcpServers)
+      .filter(([name, entry]) => isRatelGatewayEntry(name, entry))
+      .map(([name]) => name);
+    if (names.length > 0) removeEntriesByScope.set(scope.scope, new Set(names));
+  }
+
+  if (removeEntriesByScope.size === 0) {
+    ctx.log?.(`${agentState.host.displayName} has no explicit Ratel MCP fallback to remove.`);
+    return null;
+  }
+
+  const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
+  const hostChanges = await agentHost.planChanges({
+    state: agentState,
+    bin: inputs.bin,
+    ratelConfigPaths: {
+      user: inputs.ratelUserPath,
+      ...(inputs.ratelProjectPath ? { project: inputs.ratelProjectPath } : {}),
+      ...(inputs.ratelLocalPath ? { local: inputs.ratelLocalPath } : {}),
+    },
+    removeEntriesByScope,
+  });
+  if (hostChanges.changes.length === 0) return null;
+
+  ctx.log?.(
+    `Removing ${hostChanges.summary.removedNativeEntries.length} explicit Ratel MCP fallback entr${
+      hostChanges.summary.removedNativeEntries.length === 1 ? "y" : "ies"
+    } from ${agentState.host.displayName}.`,
+  );
+  return executePlan(hostChanges.changes, { fs: ctx.fs, env: ctx.env, action: "link" });
 }
 
 async function defaultAuthRunner(config: RatelConfig, ctx: CoreContext) {
@@ -543,26 +628,34 @@ function assertSupportedAgentHostKind(value: unknown): SupportedAgentHostKind {
   throw new Error(`agent host must be one of claude-code|codex, got ${JSON.stringify(value)}`);
 }
 
-function summarizeDetectedAgentHost(
+async function summarizeDetectedAgentHost(
   kind: SupportedAgentHostKind,
   displayName: string,
   detection: AgentHostDetection,
   state: AgentHostState | null,
+  ctx: Pick<CoreContext, "env" | "fs">,
   ratelKnownNames: ReadonlySet<string> = new Set(),
-): DetectedAgentHostSummary {
+): Promise<DetectedAgentHostSummary> {
   const scopes = state?.scopes.map(summarizeAgentScope) ?? [];
   const nativeEntryCount = scopes.reduce((sum, scope) => sum + scope.nativeEntryCount, 0);
   const ratelEntryCount = scopes.reduce((sum, scope) => sum + scope.ratelEntryCount, 0);
   const entryCount = nativeEntryCount + ratelEntryCount;
   const nativeEntryNames = [...new Set(scopes.flatMap((scope) => scope.nativeEntryNames))].sort();
   const ratelEntryNames = [...new Set(scopes.flatMap((scope) => scope.ratelEntryNames))].sort();
+  const connection = await getAgentHostRatelConnection(kind, state, ctx, detection.warnings);
   return {
     kind,
     displayName,
     detection,
-    posture: detection.present
-      ? classifyPosture({ available: true, nativeEntryCount, ratelEntryCount })
-      : "unavailable",
+    connection,
+    posture:
+      detection.present || connection.plugin
+        ? classifyPosture({
+            available: true,
+            nativeEntryCount,
+            linked: connection.linked,
+          })
+        : "unavailable",
     nativeEntryCount,
     ratelEntryCount,
     entryCount,
@@ -592,7 +685,11 @@ function summarizeAgentScope(scope: AgentScopeState): AgentScopePosture {
     displayName: scope.displayName,
     path: scope.path,
     available: scope.available,
-    posture: classifyPosture({ available: scope.available, nativeEntryCount, ratelEntryCount }),
+    posture: classifyPosture({
+      available: scope.available,
+      nativeEntryCount,
+      linked: ratelEntryCount > 0,
+    }),
     nativeEntryCount,
     ratelEntryCount,
     entryCount: nativeEntryCount + ratelEntryCount,
@@ -604,12 +701,12 @@ function summarizeAgentScope(scope: AgentScopeState): AgentScopePosture {
 function classifyPosture(input: {
   available: boolean;
   nativeEntryCount: number;
-  ratelEntryCount: number;
+  linked: boolean;
 }): AgentPosture {
   if (!input.available) return "unavailable";
-  if (input.nativeEntryCount === 0 && input.ratelEntryCount === 0) return "empty";
+  if (input.nativeEntryCount === 0 && !input.linked) return "empty";
   if (input.nativeEntryCount === 0) return "ratel-only";
-  if (input.ratelEntryCount === 0) return "not-linked";
+  if (!input.linked) return "not-linked";
   return "mixed";
 }
 
