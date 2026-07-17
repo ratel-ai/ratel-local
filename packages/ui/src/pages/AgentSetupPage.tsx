@@ -16,6 +16,7 @@ import {
   RefreshCw,
   SearchIcon,
   Sparkles,
+  Wrench,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -628,6 +629,8 @@ function AgentOperationPanel(props: {
   const canImport =
     missingRatelEntryNames(props.host).length > 0 || props.availableSkills.length > 0;
   const canLink = props.host.posture !== "unavailable" && !props.host.connection.linked;
+  const canRepairConnection =
+    props.host.connection.kind === "duplicate" || props.host.connection.kind === "explicit";
   const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
     <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
@@ -636,6 +639,13 @@ function AgentOperationPanel(props: {
           onScanHosts={props.onScanHosts}
           request={props.request}
           state={props.host.statusline}
+        />
+      ) : null}
+      {canRepairConnection ? (
+        <AgentConnectionRepairSection
+          host={props.host}
+          onScanHosts={props.onScanHosts}
+          request={props.request}
         />
       ) : null}
       {canImport ? (
@@ -672,7 +682,7 @@ function AgentOperationPanel(props: {
           />
         </SetupActionSection>
       ) : null}
-      {!canImport && !canLink && !canManageStatusline ? (
+      {!canImport && !canLink && !canRepairConnection && !canManageStatusline ? (
         <div>
           <h3 className="text-lg font-semibold tracking-tight">Nothing to do</h3>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -682,6 +692,53 @@ function AgentOperationPanel(props: {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function AgentConnectionRepairSection(props: {
+  host: DetectedAgentHostSummary;
+  onScanHosts: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+}) {
+  const { runAction } = useRatelApp();
+  const duplicate = props.host.connection.kind === "duplicate";
+  const actionLabel = duplicate ? "Fix duplicate installation" : "Switch to plugin";
+  const commit = async () => {
+    const ok = await runAction(actionLabel, () =>
+      props.request("/api/agent-connection/repair", {
+        method: "POST",
+        body: { hostKind: props.host.kind },
+      }),
+    );
+    if (ok) await props.onScanHosts();
+  };
+
+  return (
+    <SetupActionSection
+      description={
+        duplicate
+          ? `Ratel is connected to ${props.host.displayName} twice. Remove the extra MCP connection and keep the plugin.`
+          : `Replace the standalone MCP connection with the Ratel plugin, including its bundled skills. If plugin installation fails, your current connection stays unchanged.`
+      }
+      title={duplicate ? "Duplicate installation detected" : "Upgrade to the Ratel plugin"}
+    >
+      <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div>
+          <p className="font-medium text-sm">
+            {duplicate ? "Use one clean Ratel connection" : "Get the complete Ratel integration"}
+          </p>
+          <p className="mt-1 max-w-xl text-muted-foreground text-xs">
+            {duplicate
+              ? "Ratel will remove only its recognized standalone MCP entry. Other MCP servers and the plugin stay untouched."
+              : "Ratel installs the plugin first and removes the old MCP entry only after installation succeeds."}
+          </p>
+        </div>
+        <Button className="min-h-12 px-6 text-base md:min-w-44" onClick={() => void commit()}>
+          {duplicate ? <Wrench /> : <Sparkles />}
+          {actionLabel}
+        </Button>
+      </div>
+    </SetupActionSection>
   );
 }
 

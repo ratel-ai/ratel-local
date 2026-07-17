@@ -23,6 +23,7 @@ import {
   previewAgentImport,
   previewAgentLink,
   type ResolvedBin,
+  removeAgentRatelMcpFallback,
   removeServerEntry,
   type ServerEntry,
   type SupportedAgentHostKind,
@@ -641,6 +642,46 @@ export async function applyLink(
   const { result, log } = await withCapture(ctx, (c) => applyAgentLink(c, input, interop));
   if (!result) log.push("nothing to apply");
   return ok({ mode: "config", log });
+}
+
+export async function repairAgentConnection(
+  ctx: HandlerCtx,
+  body: Record<string, unknown>,
+): Promise<ApiResponse> {
+  const hostKind = requiredHostKind(body.hostKind);
+  const hosts = await getAgentHostsState(ctx);
+  const host = hosts.hosts.find((candidate) => candidate.kind === hostKind);
+  if (!host) throw new Error("Agent configuration is unavailable. Scan again and retry.");
+
+  if (host.connection.kind !== "duplicate" && host.connection.kind !== "explicit") {
+    throw new Error(
+      host.connection.kind === "plugin"
+        ? `${host.displayName} is already connected through the Ratel plugin.`
+        : `${host.displayName} does not have a Ratel connection to upgrade or repair.`,
+    );
+  }
+
+  const log: string[] = [];
+  if (host.connection.kind === "explicit") {
+    const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+    const pluginResult = await attemptRatelAgentPluginInstall(hostKind, installPlugin);
+    log.push(pluginResult.message);
+    if (!pluginResult.installed) {
+      throw new Error(`${pluginResult.message}\nYour existing MCP connection was left unchanged.`);
+    }
+  }
+
+  const captured = await withCapture(ctx, (c) =>
+    removeAgentRatelMcpFallback(c, { hostKind }, { envVar: resolveRatelBin() }),
+  );
+  log.push(...captured.log);
+  if (!captured.result) throw new Error("No explicit Ratel MCP fallback was found to remove.");
+  log.push(
+    host.connection.kind === "duplicate"
+      ? "Duplicate installation fixed. Ratel is now connected through the plugin."
+      : "Upgrade complete. Ratel is now connected through the plugin.",
+  );
+  return ok({ mode: host.connection.kind === "duplicate" ? "repaired" : "promoted", log });
 }
 
 export async function installClaudeStatuslineRoute(

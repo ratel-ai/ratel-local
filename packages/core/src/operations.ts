@@ -329,6 +329,10 @@ export interface ApplyAgentLinkInput extends PreviewAgentLinkInput {
   planHash: string;
 }
 
+export interface RemoveAgentRatelMcpFallbackInput {
+  hostKind: SupportedAgentHostKind;
+}
+
 export async function getAgentHostsState(ctx: CoreContext): Promise<AgentHostsState> {
   const hosts: DetectedAgentHostSummary[] = [];
   const ratelKnownNames = collectRatelKnownNames(await readAllRatelConfigs(ctx));
@@ -547,6 +551,49 @@ export async function linkAgentToRatel(
 
   ctx.log?.(`Rewriting ${plan.agentChanges.length} ${agentState.host.displayName} config file(s).`);
   return executePlan(plan.agentChanges, { fs: ctx.fs, env: ctx.env, action: "link" });
+}
+
+export async function removeAgentRatelMcpFallback(
+  ctx: CoreContext,
+  input: RemoveAgentRatelMcpFallbackInput,
+  opts: AgentInteropOptions = {},
+): Promise<BackupManifest | null> {
+  const hostKind = assertSupportedAgentHostKind(input.hostKind);
+  const agentHost = new NamedAgentHostAdapter(hostKind);
+  const agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
+  const removeEntriesByScope = new Map<AgentScope, Set<string>>();
+
+  for (const scope of agentState.scopes) {
+    const names = Object.entries(scope.mcpServers)
+      .filter(([name, entry]) => isRatelGatewayEntry(name, entry))
+      .map(([name]) => name);
+    if (names.length > 0) removeEntriesByScope.set(scope.scope, new Set(names));
+  }
+
+  if (removeEntriesByScope.size === 0) {
+    ctx.log?.(`${agentState.host.displayName} has no explicit Ratel MCP fallback to remove.`);
+    return null;
+  }
+
+  const inputs = await buildAgentPlanInputs(ctx, agentHost, agentState, opts);
+  const hostChanges = await agentHost.planChanges({
+    state: agentState,
+    bin: inputs.bin,
+    ratelConfigPaths: {
+      user: inputs.ratelUserPath,
+      ...(inputs.ratelProjectPath ? { project: inputs.ratelProjectPath } : {}),
+      ...(inputs.ratelLocalPath ? { local: inputs.ratelLocalPath } : {}),
+    },
+    removeEntriesByScope,
+  });
+  if (hostChanges.changes.length === 0) return null;
+
+  ctx.log?.(
+    `Removing ${hostChanges.summary.removedNativeEntries.length} explicit Ratel MCP fallback entr${
+      hostChanges.summary.removedNativeEntries.length === 1 ? "y" : "ies"
+    } from ${agentState.host.displayName}.`,
+  );
+  return executePlan(hostChanges.changes, { fs: ctx.fs, env: ctx.env, action: "link" });
 }
 
 async function defaultAuthRunner(config: RatelConfig, ctx: CoreContext) {

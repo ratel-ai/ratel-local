@@ -637,6 +637,86 @@ command = "echo"
     expect(res.status).toBe(400);
     expect(installCalls).toBe(0);
   });
+
+  it("fixes a duplicate Claude Code installation without reinstalling the plugin", async () => {
+    session.fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        mcpServers: {
+          fs: { type: "stdio", command: "echo" },
+          "ratel-local": { type: "stdio", command: "ratel-local" },
+        },
+      }),
+    );
+    session.fs.files.set(
+      CLAUDE_SETTINGS_PATH,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+    let installCalls = 0;
+    session.ctx.installAgentPlugin = async () => {
+      installCalls += 1;
+      return { installed: true, message: "installed" };
+    };
+
+    const res = await fetch(apiUrl("/api/agent-connection/repair"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ hostKind: "claude-code" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(installCalls).toBe(0);
+    const body = (await res.json()) as { mode: string; log: string[] };
+    expect(body.mode).toBe("repaired");
+    expect(body.log.join("\n")).toMatch(/duplicate installation fixed/i);
+    expect(JSON.parse(session.fs.files.get(CLAUDE_PATH) as string).mcpServers).toEqual({
+      fs: { type: "stdio", command: "echo" },
+    });
+  });
+
+  it("promotes a standalone Codex MCP connection to the plugin", async () => {
+    session.fs.files.set(
+      CODEX_PATH,
+      ["[mcp_servers.ratel-local]", 'command = "ratel-local"', ""].join("\n"),
+    );
+    session.ctx.installAgentPlugin = async (hostKind) => ({
+      installed: hostKind === "codex",
+      message: "Ratel Local plugin installed for Codex.",
+    });
+
+    const res = await fetch(apiUrl("/api/agent-connection/repair"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ hostKind: "codex" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { mode: string; log: string[] };
+    expect(body.mode).toBe("promoted");
+    expect(body.log.join("\n")).toMatch(/upgrade complete/i);
+    expect(session.fs.files.get(CODEX_PATH)).not.toContain("mcp_servers.ratel-local");
+  });
+
+  it("keeps the standalone MCP connection when plugin promotion fails", async () => {
+    const before = JSON.stringify({
+      mcpServers: { "ratel-local": { type: "stdio", command: "ratel-local" } },
+    });
+    session.fs.files.set(CLAUDE_PATH, before);
+    session.ctx.installAgentPlugin = async () => ({
+      installed: false,
+      message: "Claude Code plugin installation failed: unavailable",
+    });
+
+    const res = await fetch(apiUrl("/api/agent-connection/repair"), {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ hostKind: "claude-code" }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(session.fs.files.get(CLAUDE_PATH)).toBe(before);
+    expect(((await res.json()) as { error: string }).error).toMatch(/left unchanged/i);
+  });
 });
 
 describe("UI server — Claude statusline", () => {

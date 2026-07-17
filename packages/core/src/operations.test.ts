@@ -13,6 +13,7 @@ import {
   linkAgentToRatel,
   previewAgentImport,
   previewAgentLink,
+  removeAgentRatelMcpFallback,
   removeServerEntry,
 } from "./operations.js";
 
@@ -341,6 +342,49 @@ command = "echo"
     expect(preview.plan.agentChanges).toEqual([]);
     expect(preview.emptyReason).toMatch(/duplicate Ratel connections/i);
     expect(fs.files.get(CLAUDE_PATH)).toBe(claudeBefore);
+  });
+
+  it("removes only the explicit Claude Ratel fallback", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_PATH,
+      JSON.stringify({
+        mcpServers: {
+          fs: { type: "stdio", command: "echo" },
+          "ratel-local": { type: "stdio", command: "ratel-local" },
+        },
+      }),
+    );
+
+    await removeAgentRatelMcpFallback(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { envVar: "ratel-local" },
+    );
+
+    expect(JSON.parse(fs.files.get(CLAUDE_PATH) as string).mcpServers).toEqual({
+      fs: { type: "stdio", command: "echo" },
+    });
+  });
+
+  it("removes only the explicit Codex Ratel fallback", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CODEX_PATH,
+      [
+        "[mcp_servers.fs]",
+        'command = "echo"',
+        "",
+        "[mcp_servers.ratel-local]",
+        'command = "ratel-local"',
+        "",
+      ].join("\n"),
+    );
+
+    await removeAgentRatelMcpFallback(ctx(fs), { hostKind: "codex" }, { envVar: "ratel-local" });
+
+    expect(fs.files.get(CODEX_PATH)).toContain("[mcp_servers.fs]");
+    expect(fs.files.get(CODEX_PATH)).not.toContain("[mcp_servers.ratel-local]");
   });
 
   it("previews and applies import in Ratel and agent stages", async () => {

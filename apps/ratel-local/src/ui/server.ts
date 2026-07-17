@@ -32,6 +32,7 @@ import {
   previewImport,
   previewLink,
   removeServer,
+  repairAgentConnection,
   uninstallClaudeStatuslineRoute,
   updateSkillRoute,
 } from "./routes.js";
@@ -218,6 +219,10 @@ async function route(
   if (method === "POST" && path === "/api/agent-apply/link") {
     const body = await readJsonBody(req);
     return applyLink(ctx, body);
+  }
+  if (method === "POST" && path === "/api/agent-connection/repair") {
+    const body = await readJsonBody(req);
+    return repairAgentConnection(ctx, body);
   }
   if (method === "POST" && path === "/api/claude-statusline/install") {
     const body = await readJsonBody(req);
