@@ -24,7 +24,7 @@ shared `assets/icon.svg` remains referenced by the Codex manifest.
 The plugin MCP config starts the lightweight scoped connector through `npx`:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.5.0-rc.0 connect
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 connect
 ```
 
 The connector forwards the agent's resolved project root to the authenticated
@@ -35,7 +35,7 @@ connections only between sessions in the same canonical project.
 Set up the persistent login service once on macOS or Linux:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.5.0-rc.0 setup
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
 ```
 
 Re-running setup is safe: it starts a stopped service and offers to replace a

@@ -1,6 +1,6 @@
 {
   "name": "@ratel-ai/ratel-local",
-  "version": "0.5.0-rc.0",
+  "version": "0.6.0-rc.0",
   "description": "Ratel Local package: a project-scoped persistent MCP gateway plus the ratel-local CLI for managing upstream servers, OAuth, and agent imports.",
   "private": false,
   "type": "module",
