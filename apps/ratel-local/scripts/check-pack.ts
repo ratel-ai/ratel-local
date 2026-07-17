@@ -6,6 +6,19 @@ const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = resolve(appRoot, "dist");
 
 const packageJson = await readJson(resolve(appRoot, "package.json"));
+for (const workspacePackagePath of [
+  "../../package.json",
+  "../../packages/core/package.json",
+  "../../packages/ui/package.json",
+]) {
+  const workspacePackage = await readJson(resolve(appRoot, workspacePackagePath));
+  if (workspacePackage.version !== packageJson.version) {
+    throw new Error(
+      `${workspacePackagePath} version ${String(workspacePackage.version)} does not match published package version ${String(packageJson.version)}`,
+    );
+  }
+}
+
 for (const manifestPath of [
   "plugin/.codex-plugin/plugin.json",
   "plugin/.claude-plugin/plugin.json",
