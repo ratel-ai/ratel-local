@@ -18,6 +18,15 @@ for (const manifestPath of [
   }
 }
 
+const pluginMcp = await readJson<{
+  mcpServers?: Record<string, { args?: unknown }>;
+}>(resolve(appRoot, "plugin/.mcp.json"));
+const pluginArgs = pluginMcp.mcpServers?.["ratel-local"]?.args;
+const expectedRuntime = `@ratel-ai/ratel-local@${String(packageJson.version)}`;
+if (!Array.isArray(pluginArgs) || !pluginArgs.includes(expectedRuntime)) {
+  throw new Error(`plugin/.mcp.json must pin the runtime to ${expectedRuntime}`);
+}
+
 await mustExist(resolve(dist, "bin.js"));
 await mustExist(resolve(dist, "index.js"));
 await mustExist(resolve(dist, "index.d.ts"));
@@ -49,8 +58,8 @@ async function mustExist(path: string): Promise<void> {
   }
 }
 
-async function readJson(path: string): Promise<{ version?: unknown }> {
-  return JSON.parse(await readFile(path, "utf8")) as { version?: unknown };
+async function readJson<T = { version?: unknown }>(path: string): Promise<T> {
+  return JSON.parse(await readFile(path, "utf8")) as T;
 }
 
 async function listFiles(dir: string): Promise<string[]> {

@@ -4,12 +4,16 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
-## [0.5.0-rc.0] - 2026-07-15
+## [0.5.0-rc.0] - 2026-07-17
 
 ### Changed
 - Made the Ratel Local plugin the preferred link path in both CLI and UI flows so Codex and Claude Code receive the bundled agent skills; when plugin installation fails, linking reports the failure and applies the reviewed, backed-up explicit MCP gateway fallback.
-- Made Claude Code and Codex linking plugin-aware: enabled `ratel-local` plugins now count as host-level Ratel connections in CLI/UI import and link flows, avoiding a second explicit gateway; linking re-enables a disabled Codex plugin MCP server; explicit-plus-plugin duplicates are reported without automatic cleanup.
+- Made Claude Code and Codex linking plugin-aware: enabled `ratel-local` plugins now count as host-level Ratel connections in CLI/UI import and link flows, avoiding a second explicit gateway; linking re-enables a disabled Codex plugin MCP server; explicit-plus-plugin duplicates are detected without silently deleting user configuration.
+- Strengthened the MCP server instructions so agents search Ratel capabilities before answering substantive requests or concluding that a workflow is unavailable, while exempting casual conversation and pure writing or reasoning.
 - Renamed Ratel MCP to Ratel Local: the repository moved from `ratel-ai/ratel-mcp` to `ratel-ai/ratel-local`, the npm package changed from `@ratel-ai/mcp-server` to `@ratel-ai/ratel-local`, and the CLI changed from `ratel-mcp` to `ratel-local`. This is a breaking package/CLI rename: reinstall the new package and rename `$RATEL_MCP_BIN` to `$RATEL_LOCAL_BIN`. Existing agent gateway entries named `ratel-mcp` remain recognized during import/link migration, while rewritten entries use `ratel-local`.
+
+### Fixed
+- Added Agent Setup actions to fix duplicate plugin-plus-MCP installations and promote MCP-only installations to the plugin for both Claude Code and Codex. Plugin promotion removes the explicit fallback only after installation succeeds, and cleanup preserves unrelated MCP entries.
 
 ## [0.4.0] - 2026-06-30
 
