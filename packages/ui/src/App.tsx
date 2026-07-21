@@ -538,8 +538,15 @@ function ProductSidebar(props: {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton className="cursor-default hover:bg-transparent" size="lg">
-              <BrandLogo className="h-5 w-fit max-w-[92px] transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
+            <SidebarMenuButton
+              className="hover:bg-transparent"
+              render={
+                <Link aria-label="Ratel Local home" preload="intent" to={props.pagePath("/")} />
+              }
+              size="lg"
+              tooltip="Ratel Local"
+            >
+              <BrandLogo />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

@@ -73,4 +73,11 @@
   --color-ctx-history: #9b8cff;
   --color-ctx-memory: #5b9bd5;
   --color-ctx-user-input: #239452;
+
+  /* Sub-split shades — same hue as the parent source, paler for the reclaimable
+     half (unused tools, uncached history) so the split reads as one group. */
+  --color-ctx-tools-used: #e0922f;
+  --color-ctx-tools-unused: #f4cd9c;
+  --color-ctx-history-cached: #9b8cff;
+  --color-ctx-history-uncached: #cfc6ff;
 }
