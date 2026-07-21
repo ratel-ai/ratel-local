@@ -1,15 +1,28 @@
 import { useLocation } from "@tanstack/react-router";
-import { AgentDetailPage, AgentSetupPage } from "@/pages/AgentSetupPage";
+import type { ConfigResponse } from "@/App";
+import { contextualizeApiPath, type RuntimeUiContext } from "@/lib/runtime-context";
+import { discoveredSkillSummaries, type SkillsResponse } from "@/lib/skills";
+import {
+  AgentDetailPage,
+  AgentSetupPage,
+  type AgentSetupRouteData,
+  agentHostsFromResponse,
+} from "@/pages/AgentSetupPage";
 import { McpClientsPage } from "@/pages/McpClientsPage";
 import { SkillDetailPage } from "@/pages/SkillDetailPage";
 import { SkillsPage } from "@/pages/SkillsPage";
 import { ToolSourceCreatePage, ToolSourceDetailPage, ToolsPage } from "@/pages/ToolsPage";
 
 interface ContextRoutePageProps {
+  routeData?: ContextRouteData;
   subpath?: string;
 }
 
-export function ContextRoutePage({ subpath = "" }: ContextRoutePageProps) {
+export interface ContextRouteData {
+  agentSetup?: AgentSetupRouteData;
+}
+
+export function ContextRoutePage({ routeData, subpath = "" }: ContextRoutePageProps) {
   const location = useLocation();
   const search = new URLSearchParams(location.searchStr);
   const segments = subpath.split("/").filter(Boolean).map(decodeSegment);
@@ -26,10 +39,13 @@ export function ContextRoutePage({ subpath = "" }: ContextRoutePageProps) {
   if (segments[0] === "tools" && segments.length === 3) {
     return <ToolSourceDetailPage scope={segments[1]} name={segments[2]} />;
   }
-  if (segments[0] === "agent-setup" && segments.length === 1) return <AgentSetupPage />;
+  if (segments[0] === "agent-setup" && segments.length === 1) {
+    return <AgentSetupPage initialData={routeData?.agentSetup} />;
+  }
   if (segments[0] === "agent-setup" && segments.length === 2) {
     return (
       <AgentDetailPage
+        initialData={routeData?.agentSetup}
         kind={segments[1] === "codex" ? "codex" : "claude-code"}
         operation={operationFromSearch(search.get("operation"))}
       />
@@ -46,6 +62,40 @@ export function ContextRoutePage({ subpath = "" }: ContextRoutePageProps) {
       </div>
     </main>
   );
+}
+
+export async function loadContextRouteData(input: {
+  context: RuntimeUiContext;
+  signal: AbortSignal;
+  subpath?: string;
+  token?: string;
+}): Promise<ContextRouteData> {
+  const segments = (input.subpath ?? "").split("/").filter(Boolean);
+  if (segments[0] !== "agent-setup" || !input.token) return {};
+
+  const request = async <T,>(path: string): Promise<T> => {
+    const headers = new Headers({ Authorization: `Bearer ${input.token}` });
+    const response = await fetch(contextualizeApiPath(path, input.context), {
+      headers,
+      signal: input.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message =
+        payload && typeof payload === "object" && "error" in payload
+          ? String(payload.error)
+          : `${response.status} ${response.statusText}`;
+      throw new Error(message);
+    }
+    return payload as T;
+  };
+
+  const [hosts, available, config] = await Promise.all([
+    request<unknown>("/api/agent-hosts").then(agentHostsFromResponse, () => []),
+    request<SkillsResponse>("/api/skills").then(discoveredSkillSummaries, () => []),
+    request<ConfigResponse>("/api/config").catch(() => null),
+  ]);
+  return { agentSetup: { available, backups: config?.backups ?? [], hosts } };
 }
 
 function decodeSegment(segment: string): string {

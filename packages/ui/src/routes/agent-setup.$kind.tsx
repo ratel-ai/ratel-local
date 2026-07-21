@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { loadContextRouteData } from "@/components/context-route-page";
 import { AgentDetailPage } from "@/pages/AgentSetupPage";
 
 type AppSearch = {
@@ -8,6 +9,15 @@ type AppSearch = {
 
 export const Route = createFileRoute("/agent-setup/$kind")({
   validateSearch,
+  loaderDeps: ({ search }) => ({ token: search.t }),
+  loader: ({ abortController, deps }) =>
+    loadContextRouteData({
+      context: { kind: "global" },
+      signal: abortController.signal,
+      subpath: "agent-setup",
+      token: deps.token,
+    }),
+  staleTime: 10_000,
   component: AgentDetailRoute,
 });
 
@@ -15,7 +25,13 @@ function AgentDetailRoute() {
   const { kind } = Route.useParams();
   const search = Route.useSearch();
   const hostKind = kind === "codex" ? "codex" : "claude-code";
-  return <AgentDetailPage kind={hostKind} operation={search.operation} />;
+  return (
+    <AgentDetailPage
+      initialData={Route.useLoaderData().agentSetup}
+      kind={hostKind}
+      operation={search.operation}
+    />
+  );
 }
 
 function validateSearch(search: Record<string, unknown>): AppSearch {
