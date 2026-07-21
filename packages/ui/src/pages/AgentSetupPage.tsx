@@ -992,8 +992,8 @@ function PreviewFlow(props: {
         if (!target) throw new Error("Select Global or a project before importing skills");
         const selections = buildSkillImportSelections(selectedSkills, context, target);
         await applySkillImportSelections(props.request, selections);
-       },
-     );
+      },
+    );
     if (!applied) return false;
     await props.onSkillsImported();
     setRefreshNonce((value) => value + 1);

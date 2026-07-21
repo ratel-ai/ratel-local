@@ -81,14 +81,7 @@ importers:
       '@fontsource-variable/geist':
         specifier: ^5.2.9
         version: 5.2.9
-<<<<<<< HEAD
-      '@fontsource-variable/inter-tight':
-        specifier: ^5.2.7
-        version: 5.2.7
-      '@fontsource/jetbrains-mono':
-=======
       '@fontsource-variable/geist-mono':
->>>>>>> 23f0c8f (feat(ui): dark Cloud-style theme + header/rail shell)
         specifier: ^5.2.8
         version: 5.2.8
       '@radix-ui/react-slot':
