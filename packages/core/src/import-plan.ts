@@ -242,9 +242,7 @@ export async function buildAgentImportPlan(
   }
   const installGatewayScopes = new Set<AgentScope>();
   const hasExplicitGateway = inputs.agentState.scopes.some((scopeState) =>
-    Object.entries(scopeState.mcpServers).some(([name, entry]) =>
-      isRatelGatewayEntry(name, entry),
-    ),
+    Object.entries(scopeState.mcpServers).some(([name, entry]) => isRatelGatewayEntry(name, entry)),
   );
   if (options.installGateway ?? hasExplicitGateway) {
     for (const scope of removeEntriesByScope.keys()) installGatewayScopes.add(scope);

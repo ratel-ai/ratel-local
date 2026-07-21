@@ -25,11 +25,11 @@ import {
 import { type AgentPluginInstaller, installRatelAgentPlugin } from "../agent-plugin.js";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
-import { IMPORT_USAGE, runImport } from "./handlers/import.js";
-import { LINK_USAGE, runLink } from "./handlers/link.js";
 import { runConnect } from "./handlers/connect.js";
 import { daemonPaths, runDaemon } from "./handlers/daemon.js";
 import { runDoctor } from "./handlers/doctor.js";
+import { IMPORT_USAGE, runImport } from "./handlers/import.js";
+import { LINK_USAGE, runLink } from "./handlers/link.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { PROJECT_USAGE, runProject } from "./handlers/project.js";
 import { runServe } from "./handlers/serve.js";

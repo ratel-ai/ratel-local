@@ -20,7 +20,13 @@ export function RatelBadger({ className }: { className?: string }) {
   );
 }
 
-export function BrandLogo({ className, suffix = "MCP" }: { className?: string; suffix?: string }) {
+export function BrandLogo({
+  className,
+  suffix = "Local",
+}: {
+  className?: string;
+  suffix?: string;
+}) {
   return (
     <span className={cn("inline-flex items-center gap-2.5", className)}>
       <RatelBadger className="h-[17px] w-[37px] bg-brand-green dark:bg-brand-cream" />

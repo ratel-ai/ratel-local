@@ -130,9 +130,7 @@ function ContextMenuSubTrigger({
 }
 
 function ContextMenuSubContent({ ...props }: React.ComponentProps<typeof ContextMenuContent>) {
-  return (
-    <ContextMenuContent data-slot="context-menu-sub-content" side="right" {...props} />
-  );
+  return <ContextMenuContent data-slot="context-menu-sub-content" side="right" {...props} />;
 }
 
 function ContextMenuCheckboxItem({
