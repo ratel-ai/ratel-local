@@ -108,7 +108,7 @@ interface RatelConnectionState {
   plugin: boolean;
 }
 
-interface DetectedAgentHostSummary {
+export interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
   detection: AgentHostDetection;
@@ -128,7 +128,7 @@ interface AgentHostsResponse {
   hosts: DetectedAgentHostSummary[];
 }
 
-function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
+export function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
   if (
     typeof body === "object" &&
     body !== null &&
@@ -224,9 +224,10 @@ const CLAUDE_CODE_ICON_SRC = new URL("../assets/claudecode-color.svg", import.me
  * page (for the import section). Fail-soft to an empty list so a skills hiccup
  * never blocks the MCP setup flows.
  */
-function useAvailableSkills() {
+function useAvailableSkills(initialAvailable?: SkillSummary[]) {
   const { request } = useRatelApp();
-  const [available, setAvailable] = useState<SkillSummary[]>([]);
+  const [available, setAvailable] = useState<SkillSummary[]>(initialAvailable ?? []);
+  const skipInitialReload = useRef(initialAvailable !== undefined);
   const reload = useCallback(async () => {
     try {
       const data = await fetchSkills(request);
@@ -236,20 +237,31 @@ function useAvailableSkills() {
     }
   }, [request]);
   useEffect(() => {
+    if (skipInitialReload.current) {
+      skipInitialReload.current = false;
+      return;
+    }
     void reload();
   }, [reload]);
   return { available, reload };
 }
 
-export function AgentSetupPage() {
+export interface AgentSetupRouteData {
+  available: SkillSummary[];
+  backups: BackupManifest[];
+  hosts: DetectedAgentHostSummary[];
+}
+
+export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteData }) {
   const { clearSetupIntent, config, openCommandMenu, pagePath, refresh, request, setupIntent } =
     useRatelApp();
   const navigate = useNavigate();
-  const { available } = useAvailableSkills();
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
+  const { available } = useAvailableSkills(initialData?.available);
+  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>(initialData?.hosts ?? []);
+  const skipInitialHostScan = useRef(initialData !== undefined);
   const [scanning, setScanning] = useState(false);
   const handledIntent = useRef<number | null>(null);
-  const backups = config?.backups ?? [];
+  const backups = config?.backups ?? initialData?.backups ?? [];
 
   const scanHosts = useCallback(async () => {
     setScanning(true);
@@ -274,6 +286,10 @@ export function AgentSetupPage() {
     [navigate, pagePath],
   );
   useEffect(() => {
+    if (skipInitialHostScan.current) {
+      skipInitialHostScan.current = false;
+      return;
+    }
     void scanHosts();
   }, [scanHosts]);
 
@@ -362,12 +378,17 @@ export function AgentSetupPage() {
   );
 }
 
-export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupFlow }) {
+export function AgentDetailPage(props: {
+  initialData?: AgentSetupRouteData;
+  kind: AgentHostKind;
+  operation?: SetupFlow;
+}) {
   const { openCommandMenu, pagePath, refresh, request } = useRatelApp();
   const navigate = useNavigate();
-  const { available, reload: reloadSkills } = useAvailableSkills();
+  const { available, reload: reloadSkills } = useAvailableSkills(props.initialData?.available);
   const agentAvailable = availableSkillsForKind(available, props.kind);
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
+  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>(props.initialData?.hosts ?? []);
+  const skipInitialHostScan = useRef(props.initialData !== undefined);
   const [scanning, setScanning] = useState(false);
 
   const scanHosts = useCallback(async () => {
@@ -383,6 +404,10 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
   }, [request]);
 
   useEffect(() => {
+    if (skipInitialHostScan.current) {
+      skipInitialHostScan.current = false;
+      return;
+    }
     void scanHosts();
   }, [scanHosts]);
 

@@ -345,7 +345,7 @@ export function ToolsPage() {
             <TabsList variant="line" className="justify-start">
               {visibleScopes.map((item) => (
                 <TabsTrigger
-                  className="font-mono text-[11px] tracking-[0.14em] uppercase data-active:text-brand-green"
+                  className="font-mono text-[11px] tracking-[0.14em] uppercase"
                   key={item}
                   value={item}
                 >
@@ -1600,7 +1600,7 @@ function EmptyTools(props: { action: ReactNode; children: ReactNode; title: stri
   return (
     <section className="-mx-4 grid min-h-64 place-items-center border-border border-y bg-muted/15 px-4 py-8 text-center sm:-mx-6 sm:px-6">
       <div className="grid max-w-md gap-3">
-        <div className="mx-auto rounded-md bg-muted p-2 text-brand-green">
+        <div className="mx-auto rounded-md border border-coral/30 bg-coral/10 p-2 text-coral">
           <Server className="size-5" />
         </div>
         <div>

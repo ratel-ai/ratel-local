@@ -1,5 +1,5 @@
 import { useHotkey } from "@tanstack/react-hotkeys";
-import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ChevronsUpDown,
   Download,
@@ -467,8 +467,8 @@ export function AppShell() {
         <ProductSidebar
           config={config}
           context={runtimeContext}
-          onNavigate={goTo}
           onSelectContext={selectContext}
+          pagePath={pagePath}
           pathname={location.pathname}
           projects={projects}
         />
@@ -527,8 +527,8 @@ export function AppShell() {
 function ProductSidebar(props: {
   config: ConfigResponse | null;
   context: RuntimeUiContext;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/clients") => void;
   onSelectContext: (context: RuntimeUiContext) => void;
+  pagePath: (page: string) => string;
   pathname: string;
   projects: readonly ProjectView[];
 }) {
@@ -558,7 +558,7 @@ function ProductSidebar(props: {
                   active
                   icon={<LayoutGrid />}
                   label="Overview"
-                  onClick={() => props.onNavigate("/")}
+                  to={props.pagePath("/")}
                 />
               ) : (
                 <>
@@ -566,25 +566,25 @@ function ProductSidebar(props: {
                     active={pageSuffix === "/" || pageSuffix.startsWith("/tools/")}
                     icon={<Server />}
                     label="Tools"
-                    onClick={() => props.onNavigate("/")}
+                    to={props.pagePath("/")}
                   />
                   <ProductSidebarItem
                     active={pageSuffix.startsWith("/agent-setup")}
                     icon={<Settings2 />}
                     label="Agent Setup"
-                    onClick={() => props.onNavigate("/agent-setup")}
+                    to={props.pagePath("/agent-setup")}
                   />
                   <ProductSidebarItem
                     active={pageSuffix === "/clients"}
                     icon={<RadioTower />}
                     label="Clients"
-                    onClick={() => props.onNavigate("/clients")}
+                    to={props.pagePath("/clients")}
                   />
                   <ProductSidebarItem
                     active={pageSuffix.startsWith("/skills")}
                     icon={<Sparkles />}
                     label="Skills"
-                    onClick={() => props.onNavigate("/skills")}
+                    to={props.pagePath("/skills")}
                   />
                 </>
               )}
@@ -604,18 +604,21 @@ function ProductSidebarItem(props: {
   active: boolean;
   icon: ReactNode;
   label: string;
-  onClick: () => void;
   suffix?: ReactNode;
+  to: string;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
   const handleClick = () => {
-    props.onClick();
     if (isMobile) setOpenMobile(false);
   };
 
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton isActive={props.active} onClick={handleClick} tooltip={props.label}>
+      <SidebarMenuButton
+        isActive={props.active}
+        render={<Link onClick={handleClick} preload="intent" to={props.to} />}
+        tooltip={props.label}
+      >
         {props.icon}
         <span className="transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
           {props.label}
