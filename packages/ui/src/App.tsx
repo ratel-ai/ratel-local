@@ -1,7 +1,6 @@
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import {
-  ChevronsUpDown,
   Download,
   FolderOpen,
   House,
@@ -9,6 +8,7 @@ import {
   LinkIcon,
   Plus,
   RadioTower,
+  Search,
   Server,
   Settings2,
   Sparkles,
@@ -50,21 +50,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarHeader,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarRail,
-  useSidebar,
-} from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { type ProjectView, projectsFromResponse } from "@/lib/projects";
 import {
@@ -220,7 +205,6 @@ interface RatelAppContextValue {
   setupIntent: SetupIntent | null;
   token: string;
   clearSetupIntent: () => void;
-  openCommandMenu: () => void;
   triggerSetupIntent: (kind: SetupIntent["kind"]) => void;
 }
 
@@ -457,34 +441,40 @@ export function AppShell() {
     setupIntent,
     token,
     clearSetupIntent: () => setSetupIntent(null),
-    openCommandMenu: () => setCommandOpen(true),
     triggerSetupIntent: (kind) => setSetupIntent({ id: Date.now(), kind }),
   };
 
   return (
     <RatelAppContext.Provider value={context}>
-      <SidebarProvider>
-        <ProductSidebar
+      <div className="min-h-dvh">
+        <AppHeader
           config={config}
           context={runtimeContext}
+          homePath={pagePath("/")}
+          onSearch={() => setCommandOpen(true)}
           onSelectContext={selectContext}
-          pagePath={pagePath}
-          pathname={location.pathname}
           projects={projects}
         />
-        <SidebarInset>
-          {!token ? (
-            <main className="w-full px-4 py-6 sm:px-6">
-              <Alert>
-                <AlertTitle>Missing session token</AlertTitle>
-                <AlertDescription>Open the URL printed by ratel-local ui.</AlertDescription>
-              </Alert>
-            </main>
-          ) : (
-            <Outlet />
-          )}
-        </SidebarInset>
-      </SidebarProvider>
+        <div className="mx-auto flex max-w-7xl flex-col md:flex-row">
+          <ProductSidebar
+            context={runtimeContext}
+            pagePath={pagePath}
+            pathname={location.pathname}
+          />
+          <div className="min-w-0 flex-1 [&>main]:!px-6 [&>main]:!py-8">
+            {!token ? (
+              <main className="w-full">
+                <Alert>
+                  <AlertTitle>Missing session token</AlertTitle>
+                  <AlertDescription>Open the URL printed by ratel-local ui.</AlertDescription>
+                </Alert>
+              </main>
+            ) : (
+              <Outlet />
+            )}
+          </div>
+        </div>
+      </div>
 
       <CommandMenu
         agentHosts={agentHosts}
@@ -524,162 +514,154 @@ export function AppShell() {
   );
 }
 
-function ProductSidebar(props: {
-  config: ConfigResponse | null;
+function ProductSidebar({
+  context,
+  pagePath,
+  pathname,
+}: {
   context: RuntimeUiContext;
-  onSelectContext: (context: RuntimeUiContext) => void;
   pagePath: (page: string) => string;
   pathname: string;
-  projects: readonly ProjectView[];
 }) {
-  const pageSuffix = pageSuffixFromPathname(props.pathname);
+  const pageSuffix = pageSuffixFromPathname(pathname);
   return (
-    <Sidebar collapsible="icon" variant="inset">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              className="hover:bg-transparent"
-              render={
-                <Link aria-label="Ratel Local home" preload="intent" to={props.pagePath("/")} />
-              }
-              size="lg"
-              tooltip="Ratel Local"
-            >
-              <BrandLogo />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-        <ContextSwitcher
-          context={props.context}
-          onSelect={props.onSelectContext}
-          projects={props.projects}
-        />
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-1.5">
-              {props.context.kind === "all" ? (
-                <ProductSidebarItem
-                  active
-                  icon={<LayoutGrid />}
-                  label="Overview"
-                  to={props.pagePath("/")}
-                />
-              ) : (
-                <>
-                  <ProductSidebarItem
-                    active={pageSuffix === "/" || pageSuffix.startsWith("/tools/")}
-                    icon={<Server />}
-                    label="Tools"
-                    to={props.pagePath("/")}
-                  />
-                  <ProductSidebarItem
-                    active={pageSuffix.startsWith("/agent-setup")}
-                    icon={<Settings2 />}
-                    label="Agent Setup"
-                    to={props.pagePath("/agent-setup")}
-                  />
-                  <ProductSidebarItem
-                    active={pageSuffix === "/clients"}
-                    icon={<RadioTower />}
-                    label="Clients"
-                    to={props.pagePath("/clients")}
-                  />
-                  <ProductSidebarItem
-                    active={pageSuffix.startsWith("/skills")}
-                    icon={<Sparkles />}
-                    label="Skills"
-                    to={props.pagePath("/skills")}
-                  />
-                </>
-              )}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <SessionMenu config={props.config} />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+    <aside className="flex gap-1 overflow-x-auto border-forest-300 border-b px-4 py-2 md:sticky md:top-16 md:h-[calc(100dvh-4rem)] md:w-56 md:shrink-0 md:flex-col md:overflow-visible md:border-r md:border-b-0 md:px-3 md:py-6">
+      <nav aria-label="Primary" className="flex gap-1 md:flex-col">
+        {context.kind === "all" ? (
+          <ProductSidebarItem active icon={<LayoutGrid />} label="Overview" to={pagePath("/")} />
+        ) : (
+          <>
+            <ProductSidebarItem
+              active={pageSuffix === "/" || pageSuffix.startsWith("/tools/")}
+              icon={<Server />}
+              label="Tools"
+              to={pagePath("/")}
+            />
+            <ProductSidebarItem
+              active={pageSuffix.startsWith("/agent-setup")}
+              icon={<Settings2 />}
+              label="Agent Setup"
+              to={pagePath("/agent-setup")}
+            />
+            <ProductSidebarItem
+              active={pageSuffix === "/clients"}
+              icon={<RadioTower />}
+              label="Clients"
+              to={pagePath("/clients")}
+            />
+            <ProductSidebarItem
+              active={pageSuffix.startsWith("/skills")}
+              icon={<Sparkles />}
+              label="Skills"
+              to={pagePath("/skills")}
+            />
+          </>
+        )}
+      </nav>
+    </aside>
   );
 }
 
-function ProductSidebarItem(props: {
+function AppHeader({
+  config,
+  context,
+  homePath,
+  onSearch,
+  onSelectContext,
+  projects,
+}: {
+  config: ConfigResponse | null;
+  context: RuntimeUiContext;
+  homePath: string;
+  onSearch: () => void;
+  onSelectContext: (context: RuntimeUiContext) => void;
+  projects: readonly ProjectView[];
+}) {
+  return (
+    <header className="sticky top-0 z-20 border-forest-300 border-b bg-background/80 backdrop-blur">
+      <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-6">
+        <Link
+          aria-label="Ratel Local home"
+          className="flex shrink-0 items-center text-cream"
+          preload="intent"
+          to={homePath}
+        >
+          <BrandLogo />
+        </Link>
+        <span aria-hidden className="h-5 w-px bg-forest-300" />
+        <ContextSwitcher context={context} onSelect={onSelectContext} projects={projects} />
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            className="hidden h-9 gap-2 border-0 bg-transparent px-2.5 text-cream-dim hover:bg-forest/40 hover:text-cream sm:inline-flex"
+            onClick={onSearch}
+            type="button"
+            variant="ghost"
+          >
+            <Search className="size-4" />
+            <span className="text-sm">Search</span>
+            <span className="ml-1 rounded border border-forest-300 px-1.5 font-mono text-[10px] leading-5 text-warm-muted">
+              ⌘K
+            </span>
+          </Button>
+          <Button
+            aria-label="Search"
+            className="sm:hidden"
+            onClick={onSearch}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <Search />
+          </Button>
+          <SessionMenu config={config} />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function ProductSidebarItem({
+  active,
+  icon,
+  label,
+  suffix,
+  to,
+}: {
   active: boolean;
   icon: ReactNode;
   label: string;
   suffix?: ReactNode;
   to: string;
 }) {
-  const { isMobile, setOpenMobile } = useSidebar();
-  const handleClick = () => {
-    if (isMobile) setOpenMobile(false);
-  };
-
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        isActive={props.active}
-        render={<Link onClick={handleClick} preload="intent" to={props.to} />}
-        tooltip={props.label}
-      >
-        {props.icon}
-        <span className="transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
-          {props.label}
-        </span>
-        {props.suffix}
-      </SidebarMenuButton>
-    </SidebarMenuItem>
+    <Link
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors [&_svg]:size-[18px] [&_svg]:shrink-0",
+        active ? "bg-forest text-cream" : "text-cream-dim hover:bg-forest/40 hover:text-cream",
+      )}
+      preload="intent"
+      to={to}
+    >
+      {icon}
+      <span className="whitespace-nowrap">{label}</span>
+      {suffix}
+    </Link>
   );
 }
 
-function SessionMenu(props: { compact?: boolean; config: ConfigResponse | null }) {
-  const { isMobile } = useSidebar();
-  const homeLabel = compactPathLabel(props.config?.homeDir) ?? "Local machine";
-  const projectLabel = compactPathLabel(props.config?.projectRoot) ?? "No project root";
+function SessionMenu({ config }: { config: ConfigResponse | null }) {
+  const homeLabel = compactPathLabel(config?.homeDir) ?? "Local machine";
+  const projectLabel = compactPathLabel(config?.projectRoot) ?? "No project root";
 
   return (
     <DropdownMenu>
-      {props.compact ? (
-        <DropdownMenuTrigger
-          render={<Button aria-label="Session menu" size="icon-sm" variant="ghost" />}
-        >
-          <UserCircle />
-        </DropdownMenuTrigger>
-      ) : (
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <DropdownMenuTrigger
-              render={
-                <SidebarMenuButton
-                  className="data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground group-data-[collapsible=icon]:w-10! group-data-[collapsible=icon]:justify-start! group-data-[collapsible=icon]:p-2!"
-                  size="lg"
-                />
-              }
-            >
-              <Avatar size="sm">
-                <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground [&>svg]:size-3.5">
-                  <UserCircle />
-                </AvatarFallback>
-              </Avatar>
-              <div className="grid flex-1 text-left text-sm leading-tight transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
-                <span className="truncate font-medium">Session</span>
-                <span className="truncate text-xs">{homeLabel}</span>
-              </div>
-              <ChevronsUpDown className="ml-auto size-4 transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
-            </DropdownMenuTrigger>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      )}
-      <DropdownMenuContent
-        align="end"
-        className="min-w-64 rounded-lg"
-        side={props.compact || isMobile ? "bottom" : "right"}
-        sideOffset={4}
+      <DropdownMenuTrigger
+        render={<Button aria-label="Session menu" size="icon-sm" variant="ghost" />}
       >
+        <UserCircle />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-64 rounded-lg" side="bottom" sideOffset={8}>
         <DropdownMenuGroup>
           <DropdownMenuLabel className="p-0 font-normal">
             <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
@@ -701,7 +683,7 @@ function SessionMenu(props: { compact?: boolean; config: ConfigResponse | null }
             <House className="mt-0.5 text-muted-foreground" />
             <span className="text-xs text-muted-foreground">Home</span>
             <span className="col-start-2 truncate font-mono text-xs">
-              {props.config?.homeDir ?? "Not loaded"}
+              {config?.homeDir ?? "Not loaded"}
             </span>
           </DropdownMenuItem>
           <DropdownMenuItem className="grid cursor-default grid-cols-[1rem_minmax(0,1fr)] gap-x-2 gap-y-0.5 p-2 hover:bg-transparent focus:bg-transparent">

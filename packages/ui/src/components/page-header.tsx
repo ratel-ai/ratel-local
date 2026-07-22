@@ -19,11 +19,21 @@ function PageHeaderBackRow({ className, ...props }: ComponentProps<"div">) {
 }
 
 function PageHeaderTitle({ className, ...props }: ComponentProps<"h2">) {
-  return <h2 className={cn("text-xl font-semibold tracking-tight", className)} {...props} />;
+  return (
+    <h1
+      className={cn("font-display text-2xl font-bold tracking-tight text-cream", className)}
+      {...props}
+    />
+  );
 }
 
 function PageHeaderDescription({ className, ...props }: ComponentProps<"p">) {
-  return <p className={cn("mt-1 max-w-2xl text-sm text-muted-foreground", className)} {...props} />;
+  return (
+    <p
+      className={cn("mt-1.5 max-w-2xl text-pretty text-sm text-warm-muted", className)}
+      {...props}
+    />
+  );
 }
 
 function PageHeaderActions({ className, ...props }: ComponentProps<"div">) {
@@ -32,22 +42,11 @@ function PageHeaderActions({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
-/**
- * Legacy slot for the old shadcn sidebar's mobile hamburger. The shell now uses
- * a header + always-visible nav rail (a horizontal strip on mobile), so there's
- * nothing to toggle — this renders nothing and is kept only so existing page
- * headers keep compiling. Safe to delete once the pages drop the reference.
- */
-function PageHeaderSidebarTrigger(_props: ComponentProps<"button">) {
-  return null;
-}
-
 export {
   PageHeader,
   PageHeaderActions,
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 };

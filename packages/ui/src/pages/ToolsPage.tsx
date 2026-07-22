@@ -2,14 +2,11 @@ import { useForm } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
-  Check,
-  Copy,
   ExternalLink,
   Pencil,
   Plus,
   RefreshCw,
   Save,
-  SearchIcon,
   Server,
   Trash2,
   Wand2,
@@ -32,13 +29,13 @@ import {
   toolSourcePath,
   useRatelApp,
 } from "@/App";
+import { CodeBlock } from "@/components/code-block";
 import {
   PageHeader,
   PageHeaderActions,
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import {
@@ -73,6 +70,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupTextarea } from "@/components/ui/input-group";
+import { type Segment, SegmentedControl } from "@/components/ui/segmented-control";
 import {
   Select,
   SelectContent,
@@ -81,7 +79,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { scopeTarget } from "@/lib/runtime-context";
 import {
@@ -225,7 +222,6 @@ export function ToolsPage() {
     busy,
     config,
     context,
-    openCommandMenu,
     pagePath,
     refresh,
     request,
@@ -237,6 +233,10 @@ export function ToolsPage() {
   const [authFilter, setAuthFilter] = useState<AuthFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const visibleScopes = context.kind === "project" ? SCOPES : SCOPES.slice(0, 1);
+  const scopeOptions: Segment<RatelScope>[] = visibleScopes.map((value) => ({
+    label: scopeLabel(value),
+    value,
+  }));
 
   const scopeData = config?.scopes[scope];
   const servers = scopeData?.available ? scopeData.config.mcpServers : {};
@@ -272,28 +272,16 @@ export function ToolsPage() {
           <PageHeaderBackRow>
             <PageHeaderTitle>Tool Sources</PageHeaderTitle>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  onClick={() => void refresh()}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
+              <Button
+                aria-label="Refresh"
+                onClick={() => void refresh()}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw />
+                <span className="sr-only">Refresh</span>
+              </Button>
               <Button
                 aria-label="Add source"
                 disabled={!scopeData?.available}
@@ -304,7 +292,6 @@ export function ToolsPage() {
                 <Plus />
                 <span className="sr-only">Add source</span>
               </Button>
-              <PageHeaderSidebarTrigger />
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
@@ -314,12 +301,6 @@ export function ToolsPage() {
         <PageHeaderActions className="hidden sm:flex">
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
-              <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
               <ResponsiveToolbarButton
                 icon={<RefreshCw />}
                 kbd="⌘R"
@@ -335,25 +316,17 @@ export function ToolsPage() {
               variant="default"
             />
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
-      <section className="-mx-4 flex flex-col gap-3 border-border border-y bg-muted/20 px-4 py-3 sm:-mx-6 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+      <section className="flex flex-col gap-3 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <Tabs value={scope} onValueChange={(value) => setScope(value as RatelScope)}>
-            <TabsList variant="line" className="justify-start">
-              {visibleScopes.map((item) => (
-                <TabsTrigger
-                  className="font-mono text-[11px] tracking-[0.14em] uppercase"
-                  key={item}
-                  value={item}
-                >
-                  {item}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+          <SegmentedControl<RatelScope>
+            ariaLabel="Tool source scope"
+            onChange={setScope}
+            options={scopeOptions}
+            value={scope}
+          />
           <p className="mt-2 truncate font-mono text-xs text-muted-foreground">
             {scopeData?.available ? scopeData.path : "scope unavailable"}
           </p>
@@ -451,10 +424,10 @@ export function ToolsPage() {
             : "Add a source directly, or import detected entries from an agent config."}
         </EmptyTools>
       ) : (
-        <section className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
+        <section className="overflow-hidden rounded-2xl border border-forest-300 bg-forest-600/40">
           <div
             className={cn(
-              "hidden gap-3 border-border border-b bg-muted/35 px-4 py-2 font-mono text-[11px] text-muted-foreground uppercase sm:px-6 lg:grid",
+              "hidden gap-3 border-border border-b px-4 py-2.5 font-mono text-[11px] font-normal tracking-[0.08em] text-muted-foreground uppercase sm:px-6 lg:grid",
               TOOL_SOURCE_GRID,
             )}
           >
@@ -464,7 +437,7 @@ export function ToolsPage() {
             <span>Tools</span>
             <span>Auth</span>
           </div>
-          <div className="divide-border divide-y">
+          <div className="divide-y divide-border/60">
             {rows.map(({ authStatus, entry, name, usage }) => (
               <ToolSourceRow
                 authStatus={authStatus}
@@ -509,17 +482,17 @@ function ToolSourceRow(props: {
   return (
     <div
       className={cn(
-        "relative grid grid-cols-2 gap-x-3 gap-y-3 px-4 py-4 transition-colors hover:bg-muted/35 sm:px-6 lg:grid lg:items-center lg:py-3",
+        "relative grid grid-cols-2 gap-x-3 gap-y-3 px-4 py-4 transition-colors hover:bg-forest/30 focus-within:bg-forest/30 sm:px-6 lg:grid lg:items-center lg:py-3",
         TOOL_SOURCE_GRID,
       )}
     >
       <button
         aria-label={`Open ${props.name}`}
-        className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+        className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
         onClick={props.onOpen}
         type="button"
       />
-      <div className="pointer-events-none relative z-10 order-1 col-span-2 min-w-0 lg:order-none lg:col-span-1">
+      <div className="pointer-events-none relative z-20 order-1 col-span-2 min-w-0 lg:order-none lg:col-span-1">
         <div className="flex min-w-0 items-center gap-2">
           <strong className="truncate font-medium">{props.name}</strong>
           <Badge className="shrink-0" variant="outline">
@@ -530,7 +503,7 @@ function ToolSourceRow(props: {
           {props.entry.description || "No description stored for this tool source."}
         </p>
       </div>
-      <div className="pointer-events-none relative z-10 order-2 col-span-1 grid gap-1.5 lg:order-none lg:col-span-1 lg:block">
+      <div className="pointer-events-none relative z-20 order-2 col-span-1 grid gap-1.5 lg:order-none lg:col-span-1 lg:block">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Transport
         </span>
@@ -538,7 +511,7 @@ function ToolSourceRow(props: {
           {toolSourceTypeLabel(entryTypeOf(props.entry))}
         </Badge>
       </div>
-      <div className="pointer-events-none relative z-10 order-4 col-span-2 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
+      <div className="pointer-events-none relative z-20 order-4 col-span-2 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Target
         </span>
@@ -546,13 +519,13 @@ function ToolSourceRow(props: {
           {summaryOf(props.entry)}
         </code>
       </div>
-      <div className="pointer-events-none relative z-10 order-3 col-span-1 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
+      <div className="pointer-events-none relative z-20 order-3 col-span-1 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Tools
         </span>
         <ToolCountLabel usage={props.usage} />
       </div>
-      <div className="relative z-10 order-5 col-span-2 grid gap-1.5 sm:col-span-1 lg:order-none lg:col-span-1 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
+      <div className="relative z-30 order-5 col-span-2 grid gap-1.5 sm:col-span-1 lg:order-none lg:col-span-1 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Auth
         </span>
@@ -693,7 +666,6 @@ export function ToolSourceCreatePage(props: { scope: string }) {
               <ArrowLeft />
               Tool Sources
             </Button>
-            <PageHeaderSidebarTrigger />
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
             <Badge variant="outline">MCP</Badge>
@@ -708,7 +680,7 @@ export function ToolSourceCreatePage(props: { scope: string }) {
         </PageHeaderContent>
       </PageHeader>
 
-      <section className="-mx-4 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+      <section className="rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
         <EntryForm layout="page" onCancel={goBack} onSubmit={addEntry} />
       </section>
     </main>
@@ -720,7 +692,6 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
   const { busy, config, context, pagePath, request, runAction } = useRatelApp();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [copied, setCopied] = useState(false);
   const parsedScope = isRatelScope(props.scope) ? props.scope : null;
   const scope = context.kind === "project" || parsedScope === "user" ? parsedScope : null;
   const scopeData = scope ? config?.scopes[scope] : undefined;
@@ -796,12 +767,6 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
     goBack();
   };
 
-  const copyCode = async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
-  };
-
   return (
     <main className="grid w-full gap-5 px-4 py-5 sm:px-6">
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
@@ -855,7 +820,6 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                     <span className="sr-only">Remove</span>
                   </Button>
                 </ButtonGroup>
-                <PageHeaderSidebarTrigger />
               </div>
             </PageHeaderBackRow>
             <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
@@ -905,7 +869,6 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                 />
               </ResponsiveToolbarGroup>
             </ResponsiveToolbar>
-            <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
           </PageHeaderActions>
         </PageHeader>
 
@@ -937,7 +900,7 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
       </AlertDialog>
 
       {isEditing ? (
-        <section className="-mx-4 border-border border-b bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+        <section className="rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
           <EntryForm
             entry={entry}
             formId={editFormId}
@@ -977,18 +940,7 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
             </p>
           </DetailGrid>
 
-          <section className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
-            <div className="flex items-center justify-between gap-3 border-border border-b bg-muted/35 px-4 py-2 sm:px-6">
-              <span className="font-mono text-xs text-muted-foreground">config.json</span>
-              <Button onClick={() => void copyCode()} size="sm" type="button" variant="outline">
-                {copied ? <Check /> : <Copy />}
-                {copied ? "Copied" : "Copy"}
-              </Button>
-            </div>
-            <pre className="max-h-[min(70vh,720px)] overflow-auto bg-brand-green p-4 font-mono text-xs text-brand-green-foreground scroll-mask-y scroll-mask-y-from-88% sm:p-6">
-              {code}
-            </pre>
-          </section>
+          <CodeBlock code={code} label="config.json" />
         </section>
       )}
     </main>
@@ -1005,7 +957,6 @@ function ToolDetailShell(props: { children: ReactNode; onBack: () => void; title
               <ArrowLeft />
               Tool Sources
             </Button>
-            <PageHeaderSidebarTrigger />
           </PageHeaderBackRow>
           <PageHeaderTitle className="mt-4 text-2xl">{props.title}</PageHeaderTitle>
         </PageHeaderContent>
@@ -1017,6 +968,10 @@ function ToolDetailShell(props: { children: ReactNode; onBack: () => void; title
 
 function isRatelScope(value: string): value is RatelScope {
   return SCOPES.includes(value as RatelScope);
+}
+
+function scopeLabel(scope: RatelScope): string {
+  return scope[0].toUpperCase() + scope.slice(1);
 }
 
 function EntryForm(props: {
@@ -1598,7 +1553,7 @@ function authControlButtonClassName(status?: AuthStatus) {
 
 function EmptyTools(props: { action: ReactNode; children: ReactNode; title: string }) {
   return (
-    <section className="-mx-4 grid min-h-64 place-items-center border-border border-y bg-muted/15 px-4 py-8 text-center sm:-mx-6 sm:px-6">
+    <section className="grid min-h-64 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 py-8 text-center">
       <div className="grid max-w-md gap-3">
         <div className="mx-auto rounded-md border border-coral/30 bg-coral/10 p-2 text-coral">
           <Server className="size-5" />

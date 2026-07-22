@@ -1,4 +1,4 @@
-import { RefreshCw, SearchIcon, TriangleAlert, Unplug } from "lucide-react";
+import { RefreshCw, TriangleAlert, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useRatelApp } from "@/App";
 import {
@@ -7,7 +7,6 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import {
@@ -18,7 +17,6 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -52,7 +50,7 @@ interface ClientsResponse {
 }
 
 export function McpClientsPage() {
-  const { openCommandMenu, request } = useRatelApp();
+  const { request } = useRatelApp();
   const [clients, setClients] = useState<ActiveMcpClient[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,29 +82,17 @@ export function McpClientsPage() {
           <PageHeaderBackRow>
             <PageHeaderTitle>MCP Clients</PageHeaderTitle>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh clients"
-                  disabled={loading}
-                  onClick={() => void refresh()}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  {loading ? <Spinner /> : <RefreshCw />}
-                  <span className="sr-only">Refresh clients</span>
-                </Button>
-              </ButtonGroup>
+              <Button
+                aria-label="Refresh clients"
+                disabled={loading}
+                onClick={() => void refresh()}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                {loading ? <Spinner /> : <RefreshCw />}
+                <span className="sr-only">Refresh clients</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
@@ -114,14 +100,8 @@ export function McpClientsPage() {
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions>
-          <PageHeaderSidebarTrigger />
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
-              <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                label="Search"
-                onClick={openCommandMenu}
-              />
               <ResponsiveToolbarButton
                 disabled={loading}
                 icon={loading ? <Spinner /> : <RefreshCw />}
@@ -152,7 +132,7 @@ export function McpClientsPage() {
       )}
 
       {clients.length === 0 ? (
-        <section className="grid min-h-72 place-items-center rounded-lg border border-dashed bg-muted/20 px-6 text-center">
+        <section className="grid min-h-72 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 text-center">
           <div className="grid max-w-sm gap-2">
             <Unplug className="mx-auto size-7 text-muted-foreground" />
             <h2 className="font-medium">No active MCP clients</h2>
@@ -162,7 +142,7 @@ export function McpClientsPage() {
           </div>
         </section>
       ) : (
-        <section className="rounded-lg border bg-background">
+        <section className="overflow-hidden rounded-2xl border border-forest-300 bg-forest-600/40">
           <Table>
             <TableHeader>
               <TableRow>

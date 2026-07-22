@@ -1,4 +1,4 @@
-import { FolderKanban, RefreshCw, SearchIcon } from "lucide-react";
+import { FolderKanban, RefreshCw } from "lucide-react";
 import { useRatelApp } from "@/App";
 import {
   PageHeader,
@@ -6,7 +6,6 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import {
@@ -14,6 +13,7 @@ import {
   ResponsiveToolbarButton,
   ResponsiveToolbarGroup,
 } from "@/components/responsive-toolbar";
+import { Stat } from "@/components/stat";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,8 +30,7 @@ import { projectLabel } from "@/lib/projects";
 import { contextPagePath } from "@/lib/runtime-context";
 
 export function AllProjectsPage() {
-  const { openCommandMenu, projects, projectsError, projectsLoading, refreshProjects, token } =
-    useRatelApp();
+  const { projects, projectsError, projectsLoading, refreshProjects, token } = useRatelApp();
   const availableCount = projects.filter(
     (project) => project.available === true || project.status === "available",
   ).length;
@@ -62,14 +61,8 @@ export function AllProjectsPage() {
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions>
-          <PageHeaderSidebarTrigger />
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
-              <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                label="Search"
-                onClick={openCommandMenu}
-              />
               <ResponsiveToolbarButton
                 disabled={projectsLoading}
                 icon={projectsLoading ? <Spinner /> : <RefreshCw />}
@@ -90,34 +83,38 @@ export function AllProjectsPage() {
 
       <section aria-label="Project summary" className="grid gap-3 sm:grid-cols-3">
         <Card>
-          <CardHeader>
-            <CardDescription>Registered</CardDescription>
-            <CardTitle className="font-mono text-3xl">{projects.length}</CardTitle>
-          </CardHeader>
+          <CardContent>
+            <Stat label="Registered" value={String(projects.length)} />
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardDescription>Available / missing</CardDescription>
-            <CardTitle className="font-mono text-3xl">
-              {availableCount} / {missingCount}
-            </CardTitle>
-          </CardHeader>
+          <CardContent>
+            <Stat
+              label="Project health"
+              sub="available / missing"
+              tone={missingCount > 0 ? "amber" : "green"}
+              value={`${availableCount} / ${missingCount}`}
+            />
+          </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardDescription>Active clients</CardDescription>
-            <CardTitle className="font-mono text-3xl">{clientCount}</CardTitle>
-            {staleClientCount > 0 && (
-              <CardDescription className="text-amber-700 dark:text-amber-300">
-                {staleClientCount} need{staleClientCount === 1 ? "s" : ""} reconnect
-              </CardDescription>
-            )}
-          </CardHeader>
+          <CardContent>
+            <Stat
+              label="Active clients"
+              sub={
+                staleClientCount > 0
+                  ? `${staleClientCount} need${staleClientCount === 1 ? "s" : ""} reconnect`
+                  : "all clients current"
+              }
+              tone={staleClientCount > 0 ? "amber" : "default"}
+              value={String(clientCount)}
+            />
+          </CardContent>
         </Card>
       </section>
 
       {projects.length === 0 && !projectsLoading ? (
-        <section className="grid min-h-72 place-items-center rounded-lg border border-dashed bg-muted/20 px-6 text-center">
+        <section className="grid min-h-72 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 text-center">
           <div className="grid max-w-sm gap-2">
             <FolderKanban className="mx-auto size-7 text-muted-foreground" />
             <h2 className="font-medium">No registered projects</h2>
