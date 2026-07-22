@@ -1067,6 +1067,32 @@ describe("UI server — add / edit / remove", () => {
         expect.objectContaining({ name: "filesystem", status: "effective" }),
       );
 
+      const createdSkill = await fetch(`${base}/api/skills?projectId=${project.id}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          target: { scope: "project", projectId: project.id },
+          name: "authored",
+          description: "Authored in Ratel",
+          tags: ["test"],
+          body: "# Instructions",
+        }),
+      });
+      expect(createdSkill.status).toBe(200);
+      expect(
+        JSON.parse(await readFile(join(projectRoot, ".ratel", "config.json"), "utf8")),
+      ).toMatchObject({
+        skills: { entries: { authored: { mode: "copy", source: "ratel" } } },
+      });
+      expect(
+        JSON.parse(
+          await readFile(
+            join(projectRoot, ".ratel", "skills", "authored", ".ratel-skill.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual({ version: 1, id: "authored" });
+
       const skills = (await (
         await fetch(`${base}/api/skills?projectId=${project.id}`, { headers })
       ).json()) as { discovered: Array<{ id: string; candidateId: string }> };
@@ -1176,7 +1202,7 @@ describe("UI server — add / edit / remove", () => {
       expect(
         JSON.parse(await readFile(join(projectRoot, ".ratel", "config.json"), "utf8")).skills
           .entries,
-      ).toEqual({});
+      ).toEqual({ authored: { mode: "copy", source: "ratel" } });
 
       const beforeManualEdit = await control.read({ scope: "local", projectId: project.id });
       await writeFile(

@@ -28,12 +28,24 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { projectLabel } from "@/lib/projects";
+import { scopeTarget } from "@/lib/runtime-context";
 import {
+  availableSkillImportScopes,
   configuredSkillRegistrationGroups,
+  defaultSkillImportTarget,
   discoveredSkillSummaries,
   effectiveSkillSummaries,
+  type SkillImportScope,
   type SkillRegistrationView,
   type SkillSummary,
   type SkillsResponse,
@@ -138,7 +150,7 @@ export function SkillsPage() {
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="hidden items-center sm:flex">
-          {!usesScopedResolver && <NewSkillDialog onCreated={load} />}
+          <NewSkillDialog onCreated={load} />
           <Button
             className="h-10"
             disabled={loading || !canImport}
@@ -507,12 +519,20 @@ function EmptyState(props: { title: string; description: string; children?: Reac
 }
 
 function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
-  const { request, runAction, busy } = useRatelApp();
+  const { busy, context, projects, request, runAction } = useRatelApp();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
   const [body, setBody] = useState("");
+  const [scope, setScope] = useState<SkillImportScope>(
+    defaultSkillImportTarget(context)?.scope ?? "user",
+  );
+  const availableScopes = availableSkillImportScopes(context);
+  const project =
+    context.kind === "project"
+      ? projects.find((candidate) => candidate.id === context.projectId)
+      : undefined;
 
   const reset = () => {
     setName("");
@@ -529,7 +549,13 @@ function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
     const created = await runAction(`Created skill ${name.trim()}`, () =>
       request("/api/skills", {
         method: "POST",
-        body: { name: name.trim(), description: description.trim(), tags: tagList, body },
+        body: {
+          target: scopeTarget(context, scope),
+          name: name.trim(),
+          description: description.trim(),
+          tags: tagList,
+          body,
+        },
       }),
     );
     if (created) {
@@ -540,17 +566,53 @@ function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setScope(defaultSkillImportTarget(context)?.scope ?? "user");
+      }}
+    >
       <DialogTrigger render={<Button className="h-10" size="sm" />}>New skill</DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>New skill</DialogTitle>
           <DialogDescription>
-            Writes a SKILL.md into Ratel's managed folder; it's served through the gateway
-            immediately.
+            Creates an owned skill copy in the selected Ratel scope; it is served through the
+            gateway immediately.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="skill-scope">Destination</Label>
+            <Select value={scope} onValueChange={(value) => setScope(value as SkillImportScope)}>
+              <SelectTrigger aria-label="Skill destination" id="skill-scope">
+                <SelectValue>{scopeLabel(scope)}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {availableScopes.map((candidateScope) => (
+                  <SelectItem key={candidateScope} value={candidateScope}>
+                    {scopeLabel(candidateScope)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-xs">
+              {scope === "user" ? (
+                <>Global · available to every project</>
+              ) : (
+                <>
+                  Project:{" "}
+                  {project
+                    ? projectLabel(project)
+                    : context.kind === "project"
+                      ? context.projectId
+                      : "Unknown"}
+                  {scope === "local" ? " · machine-local" : " · shared project config"}
+                </>
+              )}
+            </p>
+          </div>
           <div className="grid gap-1.5">
             <Label htmlFor="skill-name">Name</Label>
             <Input
@@ -592,7 +654,12 @@ function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
         <DialogFooter>
           <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
           <Button
-            disabled={busy || name.trim() === "" || description.trim() === ""}
+            disabled={
+              busy ||
+              availableScopes.length === 0 ||
+              name.trim() === "" ||
+              description.trim() === ""
+            }
             onClick={() => void submit()}
             size="sm"
           >

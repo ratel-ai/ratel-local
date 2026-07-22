@@ -64,6 +64,8 @@ Verbs:
   uninstall-hook   remove the preload hook from settings.json (--scope user|project)
 
 Flags:
+  --scope          target user|project|local (default: user)
+  --mode           use reference|copy for import/add-scope (default: reference)
   --effective      list the effective catalog (default)
   --configured     list registrations including shadowed/invalid entries
   --discovered     inventory native candidate skills

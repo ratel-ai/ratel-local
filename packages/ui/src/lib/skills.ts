@@ -81,7 +81,10 @@ interface ResolvedSkill {
 interface DiscoveredSkill {
   candidateId: string;
   id: string;
+  name?: string;
+  description?: string;
   source: string;
+  canonicalPath?: string;
 }
 
 export interface SkillProblem {
@@ -210,12 +213,24 @@ export function discoveredSkillSummaries(response: SkillsResponse): SkillSummary
       .filter(({ state }) => state !== "invalid")
       .map(({ id, source }) => `${normalizedSource(source)}\0${id}`),
   );
+  const configuredPaths = new Set(
+    (response.registrations ?? [])
+      .filter(
+        (registration) =>
+          registration.state !== "invalid" && registration.canonicalPath !== undefined,
+      )
+      .map((registration) => registration.canonicalPath as string),
+  );
   return response.discovered
-    .filter(({ id, source }) => !configured.has(`${normalizedSource(source)}\0${id}`))
+    .filter(
+      ({ canonicalPath, id, source }) =>
+        !configured.has(`${normalizedSource(source)}\0${id}`) &&
+        (canonicalPath === undefined || !configuredPaths.has(canonicalPath)),
+    )
     .map((skill) => ({
       id: skill.id,
-      name: skill.id,
-      description: "Discovered native skill",
+      name: skill.name ?? skill.id,
+      description: skill.description ?? "Discovered native skill",
       tags: [],
       source: normalizedSource(skill.source),
       candidateId: skill.candidateId,

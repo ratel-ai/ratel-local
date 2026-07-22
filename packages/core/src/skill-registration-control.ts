@@ -13,6 +13,7 @@ import type { SkillRegistrationView } from "./lib/skills/resolve.js";
 import type { LocalGitExcludeManager } from "./local-git-exclude.js";
 import {
   documentRevision,
+  MISSING_DOCUMENT_REVISION,
   MutationConflictError,
   type MutationInputOperation,
   type MutationPreview,
@@ -46,6 +47,14 @@ export interface EditSkillRegistrationRequest {
   expectedRevision?: DocumentRevision;
 }
 
+export interface CreateSkillRegistrationRequest {
+  target: RatelScopeRef;
+  id: string;
+  description: string;
+  tags: string[];
+  body: string;
+}
+
 export interface AddSkillScopeRequest {
   context: RuntimeContextRef;
   target: RatelScopeRef;
@@ -63,6 +72,9 @@ export interface SkillRegistrationControlPlaneOptions {
 }
 
 export interface SkillRegistrationControlPlane {
+  prepareCreate(
+    request: CreateSkillRegistrationRequest,
+  ): Promise<PreparedChange<SkillRegistrationReview>>;
   prepareAddScope(request: AddSkillScopeRequest): Promise<PreparedChange<SkillRegistrationReview>>;
   prepareEdit(
     request: EditSkillRegistrationRequest,
@@ -72,13 +84,14 @@ export interface SkillRegistrationControlPlane {
   ): Promise<PreparedChange<SkillRegistrationReview>>;
   commit(changeId: string): Promise<SkillRegistrationCommit>;
   cancel(changeId: string): void;
+  create(request: CreateSkillRegistrationRequest): Promise<SkillRegistrationCommit>;
   addScope(request: AddSkillScopeRequest): Promise<SkillRegistrationCommit>;
   edit(request: EditSkillRegistrationRequest): Promise<SkillRegistrationCommit>;
   remove(request: RemoveSkillRegistrationRequest): Promise<SkillRegistrationCommit>;
 }
 
 export interface SkillRegistrationReview {
-  action: "add-scope" | "edit" | "remove";
+  action: "create" | "add-scope" | "edit" | "remove";
   target: RatelScopeRef;
   id: string;
   files: MutationPreview["files"];
@@ -139,6 +152,154 @@ export function createSkillRegistrationControlPlane(
 
 class FilesystemSkillRegistrationControlPlane implements SkillRegistrationControlPlane {
   constructor(private readonly options: SkillRegistrationControlPlaneOptions) {}
+
+  async prepareCreate(
+    request: CreateSkillRegistrationRequest,
+  ): Promise<PreparedChange<SkillRegistrationReview>> {
+    validateRegistrationId(request.id);
+    if (
+      typeof request.description !== "string" ||
+      request.description.trim().length === 0 ||
+      !Array.isArray(request.tags) ||
+      request.tags.some((tag) => typeof tag !== "string") ||
+      typeof request.body !== "string"
+    ) {
+      throw new SkillRegistrationValidationError(
+        "invalid_registration",
+        "description, tags, and body must form a valid skill document",
+      );
+    }
+
+    const current = await this.options.configControlPlane.read(request.target);
+    const document = { ...current.document } as Record<string, unknown>;
+    const skills = isPlainObject(document.skills) ? { ...document.skills } : {};
+    const entries = isPlainObject(skills.entries) ? { ...skills.entries } : {};
+    if (Object.hasOwn(entries, request.id)) {
+      throw new SkillRegistrationConflictError(
+        "registration_exists",
+        `skill registration ${JSON.stringify(request.id)} already exists in ${formatScope(request.target)}`,
+      );
+    }
+
+    const projectRoot = await this.projectRootForTarget(request.target);
+    const copyPath = await this.ownedCopyPath(request.target, request.id);
+    if (await artifactExists(copyPath)) {
+      throw new SkillRegistrationConflictError(
+        "registration_exists",
+        `skill copy ${JSON.stringify(request.id)} already exists in ${formatScope(request.target)}`,
+      );
+    }
+    const skillPath = join(copyPath, "SKILL.md");
+    const markerPath = join(copyPath, ".ratel-skill.json");
+    const contents = buildSkillDocument(request);
+    try {
+      parseSkillMd(contents, skillPath, request.id);
+    } catch (error) {
+      throw new SkillRegistrationValidationError("invalid_registration", (error as Error).message);
+    }
+
+    entries[request.id] = { mode: "copy", source: "ratel" } satisfies SkillEntry;
+    skills.entries = entries;
+    document.skills = skills;
+    try {
+      parseConfig(document);
+    } catch (error) {
+      throw new SkillRegistrationValidationError("invalid_registration", (error as Error).message);
+    }
+
+    const operations: MutationInputOperation[] = [
+      {
+        kind: "replace-file",
+        path: current.path,
+        contents: `${JSON.stringify(document, null, 2)}\n`,
+      },
+      { kind: "replace-file", path: skillPath, contents },
+      {
+        kind: "replace-file",
+        path: markerPath,
+        contents: `${JSON.stringify({ version: 1, id: request.id })}\n`,
+      },
+    ];
+    let localGitPath: string | undefined;
+    let localGitRevision: DocumentRevision | undefined;
+    if (request.target.scope === "local" && this.options.localGitExcludeManager && projectRoot) {
+      const preview = await this.options.localGitExcludeManager.preview(projectRoot);
+      if (preview.changed) {
+        localGitPath = preview.excludePath;
+        localGitRevision = preview.documentRevision;
+        operations.push({
+          kind: "replace-file",
+          path: preview.excludePath,
+          contents: preview.contents,
+        });
+      }
+    }
+
+    const projectRootsByPath = new Map<string, string>();
+    if (projectRoot) {
+      for (const operation of operations) {
+        if (operation.path !== localGitPath) projectRootsByPath.set(operation.path, projectRoot);
+      }
+    }
+    return this.prepareRegistrationChange({
+      action: "create",
+      target: request.target,
+      id: request.id,
+      operations,
+      projectRootsByPath,
+      verifyPreview: (mutation) => {
+        if (mutation.baseRevisions[current.path] !== current.documentRevision) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `config changed while creating skill: ${current.path}`,
+            current.path,
+            current.documentRevision,
+            mutation.baseRevisions[current.path],
+          );
+        }
+        if (
+          mutation.baseRevisions[skillPath] !== MISSING_DOCUMENT_REVISION ||
+          mutation.baseRevisions[markerPath] !== MISSING_DOCUMENT_REVISION
+        ) {
+          throw new SkillRegistrationConflictError(
+            "registration_exists",
+            `skill copy ${JSON.stringify(request.id)} already exists in ${formatScope(request.target)}`,
+          );
+        }
+        if (
+          localGitPath &&
+          localGitRevision &&
+          mutation.baseRevisions[localGitPath] !== localGitRevision
+        ) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `Git exclude changed while creating skill: ${localGitPath}`,
+            localGitPath,
+            localGitRevision,
+            mutation.baseRevisions[localGitPath],
+          );
+        }
+      },
+      precondition: async () => {
+        const latest = await this.options.configControlPlane.read(request.target);
+        if (latest.documentRevision !== current.documentRevision) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `skill registration changed after preview: ${current.path}`,
+            current.path,
+            current.documentRevision,
+            latest.documentRevision,
+          );
+        }
+        if (await artifactExists(copyPath)) {
+          throw new SkillRegistrationConflictError(
+            "registration_exists",
+            `skill copy ${JSON.stringify(request.id)} already exists in ${formatScope(request.target)}`,
+          );
+        }
+      },
+    });
+  }
 
   async prepareAddScope(
     request: AddSkillScopeRequest,
@@ -453,6 +614,11 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     this.options.preparedChanges.cancel(changeId);
   }
 
+  async create(request: CreateSkillRegistrationRequest): Promise<SkillRegistrationCommit> {
+    const change = await this.prepareCreate(request);
+    return this.commit(change.changeId);
+  }
+
   async remove(request: RemoveSkillRegistrationRequest): Promise<SkillRegistrationCommit> {
     const change = await this.prepareRemove(request);
     return this.commit(change.changeId);
@@ -539,7 +705,11 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
           }
         }
         return backup.finalize(
-          input.action === "add-scope" ? "add" : input.action === "remove" ? "remove" : "edit",
+          input.action === "create" || input.action === "add-scope"
+            ? "add"
+            : input.action === "remove"
+              ? "remove"
+              : "edit",
         );
       },
       result: { action: input.action, target: input.target, id: input.id },
@@ -606,6 +776,31 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         }
       }
     }
+  }
+}
+
+function buildSkillDocument(request: CreateSkillRegistrationRequest): string {
+  return [
+    "---",
+    `name: ${JSON.stringify(request.id)}`,
+    `description: ${JSON.stringify(request.description.trim())}`,
+    ...(request.tags.length > 0
+      ? [`tags: [${request.tags.map((tag) => JSON.stringify(tag)).join(", ")}]`]
+      : []),
+    "---",
+    "",
+    request.body.trim(),
+    "",
+  ].join("\n");
+}
+
+async function artifactExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 
