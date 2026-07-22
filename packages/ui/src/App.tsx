@@ -190,6 +190,8 @@ type SetupIntent = { id: number; kind: "import" | "link" };
 interface RatelAppContextValue {
   busy: boolean;
   config: ConfigResponse | null;
+  configError: string | null;
+  configLoading: boolean;
   context: RuntimeUiContext;
   pagePath: (page: string) => string;
   projects: ProjectView[];
@@ -232,13 +234,21 @@ export function AppShell() {
     runtimeContext.kind === "project" ? `project:${runtimeContext.projectId}` : runtimeContext.kind;
   const [configState, setConfigState] = useState<{
     contextKey: string;
+    error: string | null;
+    loading: boolean;
     value: ConfigResponse | null;
-  }>({ contextKey: "", value: null });
+  }>({ contextKey: "", error: null, loading: false, value: null });
   const [agentHostsState, setAgentHostsState] = useState<{
     contextKey: string;
     value: DetectedAgentHostSummary[];
   }>({ contextKey: "", value: [] });
   const config = configState.contextKey === runtimeContextKey ? configState.value : null;
+  const configError = configState.contextKey === runtimeContextKey ? configState.error : null;
+  const configLoading =
+    Boolean(token) &&
+    runtimeContext.kind !== "all" &&
+    (configState.contextKey !== runtimeContextKey ||
+      (configState.loading && configState.value === null));
   const agentHosts = agentHostsState.contextKey === runtimeContextKey ? agentHostsState.value : [];
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [projectsError, setProjectsError] = useState<string | null>(null);
@@ -287,14 +297,30 @@ export function AppShell() {
 
   const refresh = useCallback(async () => {
     if (runtimeContext.kind === "all") {
-      setConfigState({ contextKey: runtimeContextKey, value: null });
+      setConfigState({ contextKey: runtimeContextKey, error: null, loading: false, value: null });
       return;
     }
+    setConfigState((current) => ({
+      contextKey: runtimeContextKey,
+      error: null,
+      loading: true,
+      value: current.contextKey === runtimeContextKey ? current.value : null,
+    }));
     try {
       const value = await request<ConfigResponse>("/api/config");
-      setConfigState({ contextKey: runtimeContextKey, value });
+      setConfigState((current) =>
+        current.contextKey === runtimeContextKey
+          ? { contextKey: runtimeContextKey, error: null, loading: false, value }
+          : current,
+      );
     } catch (err) {
-      notify((err as Error).message, "error");
+      const message = (err as Error).message;
+      setConfigState((current) =>
+        current.contextKey === runtimeContextKey
+          ? { ...current, error: message, loading: false }
+          : current,
+      );
+      notify(message, "error");
     }
   }, [notify, request, runtimeContext.kind, runtimeContextKey]);
 
@@ -429,6 +455,8 @@ export function AppShell() {
   const context: RatelAppContextValue = {
     busy,
     config,
+    configError,
+    configLoading,
     context: runtimeContext,
     pagePath,
     projects,
