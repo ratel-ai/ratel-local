@@ -10,17 +10,17 @@ describe("linkThenRefreshImportPreview", () => {
     });
     const loadImportPreview = vi.fn(async () => {
       order.push("preview");
-      return { stageHashes: { agent: "fresh" } };
+      return { changeId: "fresh" };
     });
 
     await expect(linkThenRefreshImportPreview(link, loadImportPreview)).resolves.toEqual({
-      stageHashes: { agent: "fresh" },
+      changeId: "fresh",
     });
     expect(order).toEqual(["link", "preview"]);
   });
 
   it("does not load a preview when linking fails", async () => {
-    const loadImportPreview = vi.fn(async () => ({ stageHashes: { agent: "unused" } }));
+    const loadImportPreview = vi.fn(async () => ({ changeId: "unused" }));
 
     await expect(
       linkThenRefreshImportPreview(async () => false, loadImportPreview),

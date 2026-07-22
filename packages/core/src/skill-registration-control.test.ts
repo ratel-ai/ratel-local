@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createConfigControlPlane } from "./config-control-plane.js";
 import { createContextSnapshotResolver } from "./context-snapshot.js";
 import { createMutationEngine, documentRevision } from "./mutation-engine.js";
+import { createPreparedChangeCoordinator } from "./prepared-change-coordinator.js";
 import { createProjectRegistry } from "./project-registry.js";
 import { createSkillRegistrationControlPlane } from "./skill-registration-control.js";
 
@@ -27,10 +28,11 @@ describe("SkillRegistrationControlPlane", () => {
     await writeFile(configPath, `${JSON.stringify({ skills: { entries, dirs: [] } }, null, 2)}\n`);
     const registry = createProjectRegistry({ homeDir });
     const mutationEngine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
+    const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
     const configControlPlane = await createConfigControlPlane({
       homeDir,
       projectRegistry: registry,
-      mutationEngine,
+      preparedChanges,
     });
     const snapshotResolver = createContextSnapshotResolver({ homeDir, projectRegistry: registry });
     return {
@@ -41,7 +43,7 @@ describe("SkillRegistrationControlPlane", () => {
         projectRegistry: registry,
         configControlPlane,
         snapshotResolver,
-        mutationEngine,
+        preparedChanges,
       }),
     };
   }
@@ -58,12 +60,12 @@ describe("SkillRegistrationControlPlane", () => {
     const copyPath = await putOwnedCopy("demo");
     const { control, configPath } = await fixture({ demo: { mode: "copy" } });
 
-    const plan = await control.previewRemove({
+    const plan = await control.prepareRemove({
       target: { scope: "user" },
       id: "demo",
       deleteOwnedCopy: false,
     });
-    await control.apply(plan, { digest: plan.digest });
+    await control.commit(plan.changeId);
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
       skills: { entries: {}, dirs: [] },
@@ -102,7 +104,7 @@ describe("SkillRegistrationControlPlane", () => {
       demo: { mode: "reference", path: "/external/demo" },
     });
     await expect(
-      reference.control.previewEdit({
+      reference.control.prepareEdit({
         target: { scope: "user" },
         id: "demo",
         description: "new",
@@ -114,7 +116,7 @@ describe("SkillRegistrationControlPlane", () => {
     await putOwnedCopy("owned");
     const owned = await fixture({ owned: { mode: "copy" } });
     await expect(
-      owned.control.previewEdit({
+      owned.control.prepareEdit({
         target: { scope: "user" },
         id: "owned",
         description: "new",
@@ -148,16 +150,17 @@ describe("SkillRegistrationControlPlane", () => {
     const registeredA = await registry.registerRoot(projectA);
     const registeredB = await registry.registerRoot(projectB);
     const mutationEngine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
+    const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
     const control = createSkillRegistrationControlPlane({
       homeDir,
       projectRegistry: registry,
       configControlPlane: await createConfigControlPlane({
         homeDir,
         projectRegistry: registry,
-        mutationEngine,
+        preparedChanges,
       }),
       snapshotResolver: createContextSnapshotResolver({ homeDir, projectRegistry: registry }),
-      mutationEngine,
+      preparedChanges,
     });
 
     await control.addScope({
@@ -183,12 +186,12 @@ describe("SkillRegistrationControlPlane", () => {
     const copyPath = await putOwnedCopy("demo");
     const { control, configPath } = await fixture({ demo: { mode: "copy" } });
 
-    const plan = await control.previewRemove({
+    const plan = await control.prepareRemove({
       target: { scope: "user" },
       id: "demo",
       deleteOwnedCopy: true,
     });
-    await control.apply(JSON.parse(JSON.stringify(plan)), { digest: plan.digest });
+    await control.commit(plan.changeId);
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
       skills: { entries: {}, dirs: [] },
@@ -208,7 +211,7 @@ describe("SkillRegistrationControlPlane", () => {
     const { control } = await fixture({ [traversalId]: { mode: "copy" } });
 
     await expect(
-      control.previewRemove({
+      control.prepareRemove({
         target: { scope: "user" },
         id: traversalId,
         deleteOwnedCopy: true,
@@ -222,7 +225,7 @@ describe("SkillRegistrationControlPlane", () => {
     await writeFile(join(copyPath, ".ratel-skill.json"), '{"version":1,"id":"other"}\n');
     const forged = await fixture({ demo: { mode: "copy" } });
     await expect(
-      forged.control.previewRemove({
+      forged.control.prepareRemove({
         target: { scope: "user" },
         id: "demo",
         deleteOwnedCopy: true,
@@ -234,7 +237,7 @@ describe("SkillRegistrationControlPlane", () => {
     await rm(join(copyPath, ".ratel-skill.json"));
     await symlink(externalMarker, join(copyPath, ".ratel-skill.json"));
     await expect(
-      forged.control.previewRemove({
+      forged.control.prepareRemove({
         target: { scope: "user" },
         id: "demo",
         deleteOwnedCopy: true,
@@ -265,29 +268,30 @@ describe("SkillRegistrationControlPlane", () => {
     const registry = createProjectRegistry({ homeDir });
     const project = await registry.registerRoot(projectRoot);
     const mutationEngine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
+    const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
     const referenced = createSkillRegistrationControlPlane({
       homeDir,
       projectRegistry: registry,
       configControlPlane: await createConfigControlPlane({
         homeDir,
         projectRegistry: registry,
-        mutationEngine,
+        preparedChanges,
       }),
       snapshotResolver: createContextSnapshotResolver({
         homeDir,
         projectRegistry: registry,
       }),
-      mutationEngine,
+      preparedChanges,
     });
     await expect(
-      referenced.previewRemove({
+      referenced.prepareRemove({
         target: { scope: "project", projectId: project.id },
         id: "demo",
         deleteOwnedCopy: true,
       }),
     ).rejects.toMatchObject({ statusCode: 409, reason: "copy_still_referenced" });
     await expect(
-      referenced.previewEdit({
+      referenced.prepareEdit({
         target: { scope: "project", projectId: project.id },
         id: "demo",
         description: "changed",
@@ -312,7 +316,7 @@ describe("SkillRegistrationControlPlane", () => {
     );
     const { control, registry, configPath } = await fixture({});
     const project = await registry.registerRoot(projectRoot);
-    const plan = await control.previewRemove({
+    const plan = await control.prepareRemove({
       target: { scope: "project", projectId: project.id },
       id: "demo",
       deleteOwnedCopy: true,
@@ -327,7 +331,7 @@ describe("SkillRegistrationControlPlane", () => {
       })}\n`,
     );
 
-    await expect(control.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    await expect(control.commit(plan.changeId)).rejects.toMatchObject({
       statusCode: 409,
       reason: "copy_still_referenced",
     });
@@ -349,7 +353,7 @@ describe("SkillRegistrationControlPlane", () => {
     );
     const { control, registry, configPath } = await fixture({});
     const project = await registry.registerRoot(projectRoot);
-    const plan = await control.previewEdit({
+    const plan = await control.prepareEdit({
       target: { scope: "project", projectId: project.id },
       id: "demo",
       description: "changed",
@@ -363,7 +367,7 @@ describe("SkillRegistrationControlPlane", () => {
       })}\n`,
     );
 
-    await expect(control.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    await expect(control.commit(plan.changeId)).rejects.toMatchObject({
       statusCode: 409,
       reason: "copy_still_referenced",
     });

@@ -145,8 +145,7 @@ interface AgentCandidate {
   entry: ServerEntry;
 }
 
-interface FileChange {
-  kind: "write";
+interface PlannedFileWrite {
   path: string;
   before: string | null;
   after: string;
@@ -160,13 +159,14 @@ interface ImportConflict {
 }
 
 interface AgentPlanPreview {
+  changeId: string;
   flow: SetupFlow;
   host: DetectedAgentHostSummary;
   candidates: AgentCandidate[];
   selected: string[];
   plan: {
-    ratelChanges: FileChange[];
-    agentChanges: FileChange[];
+    ratelChanges: PlannedFileWrite[];
+    agentChanges: PlannedFileWrite[];
     summary: {
       movedFromUser: string[];
       movedFromProject: string[];
@@ -180,8 +180,18 @@ interface AgentPlanPreview {
       overwrittenRatelEntries: AgentScope[];
     };
   };
-  stageHashes: { ratel: string; agent: string };
   emptyReason: string | null;
+}
+
+interface PreparedAgentChangeResponse {
+  changeId: string;
+  kind: string;
+  expiresAt: string;
+  preview: Omit<AgentPlanPreview, "changeId">;
+}
+
+function agentPreviewFromPrepared(change: PreparedAgentChangeResponse): AgentPlanPreview {
+  return { ...change.preview, changeId: change.changeId };
 }
 
 const POSTURE_COPY: Record<
@@ -864,7 +874,7 @@ function PreviewFlow(props: {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const endpoint =
-    props.flow === "import" ? "/api/agent-preview/import" : "/api/agent-preview/link";
+    props.flow === "import" ? "/api/agents/import/prepare" : "/api/agents/link/prepare";
   const previewPath = `${endpoint}?r=${refreshNonce}`;
 
   useEffect(() => {
@@ -872,14 +882,26 @@ function PreviewFlow(props: {
     const load = async () => {
       setLoading(true);
       try {
-        const body = await props.request<AgentPlanPreview>(previewPath, {
+        const body = await props.request<PreparedAgentChangeResponse>(previewPath, {
           method: "POST",
           body: {
             hostKind: props.hostKind,
           },
         });
-        if (cancelled) return;
-        setPreview(body);
+        if (cancelled) {
+          await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+            method: "DELETE",
+          });
+          return;
+        }
+        setPreview((current) => {
+          if (current) {
+            void props.request(`/api/changes/${encodeURIComponent(current.changeId)}`, {
+              method: "DELETE",
+            });
+          }
+          return agentPreviewFromPrepared(body);
+        });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -906,21 +928,25 @@ function PreviewFlow(props: {
     [props.host.connection.linked, props.host.statusline?.status, props.hostKind],
   );
 
+  const setPreparedDialogOpen = (open: boolean) => {
+    setDialogOpen(open);
+    if (!open && preview) {
+      void props.request(`/api/changes/${encodeURIComponent(preview.changeId)}`, {
+        method: "DELETE",
+      });
+      setPreview(null);
+      setRefreshNonce((value) => value + 1);
+    }
+  };
+
   const applyImport = async (
     importPreview: AgentPlanPreview,
-    conflictStrategy: ConflictStrategy,
-    replaceConflicts: string[],
+    _conflictStrategy: ConflictStrategy,
+    _replaceConflicts: string[],
   ) => {
     const applied = await runAction("Ratel and agent config changes applied", () =>
-      props.request("/api/agent-apply/import", {
+      props.request(`/api/changes/${encodeURIComponent(importPreview.changeId)}/commit`, {
         method: "POST",
-        body: {
-          hostKind: props.hostKind,
-          selection: importPreview.selected,
-          conflictStrategy,
-          replaceConflicts,
-          stageHashes: importPreview.stageHashes,
-        },
       }),
     );
     if (!applied) return false;
@@ -929,27 +955,15 @@ function PreviewFlow(props: {
     return true;
   };
 
-  const applyAgent = async (
+  const commitAgentChange = async (
     activePreview: AgentPlanPreview,
-    options?: {
-      conflictStrategy?: ConflictStrategy;
-      replaceConflicts?: string[];
-    },
+    _options?: { conflictStrategy?: ConflictStrategy; replaceConflicts?: string[] },
   ) => {
-    const path =
-      props.flow === "import" ? "/api/agent-apply/import/agent" : "/api/agent-apply/link";
     const applied = await runAction(
       props.flow === "import" ? "Source agent cleanup applied" : "Link complete",
       () =>
-        props.request(path, {
+        props.request(`/api/changes/${encodeURIComponent(activePreview.changeId)}/commit`, {
           method: "POST",
-          body: {
-            hostKind: props.hostKind,
-            selection: props.flow === "import" ? activePreview.selected : undefined,
-            conflictStrategy: props.flow === "import" ? options?.conflictStrategy : undefined,
-            replaceConflicts: props.flow === "import" ? options?.replaceConflicts : undefined,
-            planHash: activePreview.stageHashes.agent,
-          },
         }),
     );
     if (!applied) return false;
@@ -959,21 +973,22 @@ function PreviewFlow(props: {
   };
 
   const applyLinkFromImport = async () => {
-    const linkPreview = await props.request<AgentPlanPreview>("/api/agent-preview/link", {
+    const prepared = await props.request<PreparedAgentChangeResponse>("/api/agents/link/prepare", {
       method: "POST",
       body: { hostKind: props.hostKind },
     });
+    const linkPreview = agentPreviewFromPrepared(prepared);
     if (linkPreview.plan.agentChanges.length > 0) {
       const linked = await runAction("Link complete", () =>
-        props.request("/api/agent-apply/link", {
+        props.request(`/api/changes/${encodeURIComponent(linkPreview.changeId)}/commit`, {
           method: "POST",
-          body: {
-            hostKind: props.hostKind,
-            planHash: linkPreview.stageHashes.agent,
-          },
         }),
       );
       if (!linked) return false;
+    } else {
+      await props.request(`/api/changes/${encodeURIComponent(linkPreview.changeId)}`, {
+        method: "DELETE",
+      });
     }
     await props.onScanHosts();
     setRefreshNonce((value) => value + 1);
@@ -1001,6 +1016,10 @@ function PreviewFlow(props: {
     if (importPreview.plan.ratelChanges.length > 0 || importPreview.plan.agentChanges.length > 0) {
       const configsApplied = await applyImport(importPreview, conflictStrategy, replaceConflicts);
       if (!configsApplied) return false;
+    } else {
+      await props.request(`/api/changes/${encodeURIComponent(importPreview.changeId)}`, {
+        method: "DELETE",
+      });
     }
     if (selectedSkills.length > 0) {
       const skillsApplied = await importSelectedSkills(selectedSkills);
@@ -1028,7 +1047,7 @@ function PreviewFlow(props: {
   const commitLink = async () => {
     if (!preview) return false;
     if (agentChanges.length > 0) {
-      const linked = await applyAgent(preview);
+      const linked = await commitAgentChange(preview);
       if (!linked) return false;
     }
     setDialogOpen(false);
@@ -1051,7 +1070,7 @@ function PreviewFlow(props: {
             <SetupRecap
               availableSkills={props.availableSkills}
               flow={props.flow}
-              onOpen={() => setDialogOpen(true)}
+              onOpen={() => setPreparedDialogOpen(true)}
               preview={preview}
             />
           )}
@@ -1066,7 +1085,7 @@ function PreviewFlow(props: {
               onCommit={commitImport}
               onInstallStatusline={installStatuslineFromImport}
               onLink={applyLinkFromImport}
-              onOpenChange={setDialogOpen}
+              onOpenChange={setPreparedDialogOpen}
               open={dialogOpen}
               preview={preview}
               request={props.request}
@@ -1079,7 +1098,7 @@ function PreviewFlow(props: {
           {!friendlyNoOp && props.flow === "link" ? (
             <LinkSceneDialog
               onCommit={commitLink}
-              onOpenChange={setDialogOpen}
+              onOpenChange={setPreparedDialogOpen}
               open={dialogOpen}
               preview={preview}
             />
@@ -1262,6 +1281,7 @@ function ImportSceneDialog(props: {
   const statuslineAction = importStatuslineAction(props.statuslineStatus);
   const wasOpenRef = useRef(false);
   const previewRequestIdRef = useRef(0);
+  const activeChangeIdRef = useRef(draftPreview.changeId);
   const selected = new Set(draftSelection);
   const selectedSkills = props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill)));
   const conflicts = draftPreview.plan.summary.conflicts;
@@ -1302,9 +1322,29 @@ function ImportSceneDialog(props: {
     setReplaceConflicts([]);
   }, [props.open, props.preview, props.workflow]);
 
+  useEffect(() => {
+    activeChangeIdRef.current = draftPreview.changeId;
+  }, [draftPreview.changeId]);
+
+  useEffect(() => {
+    if (props.open) return;
+    void props.request(`/api/changes/${encodeURIComponent(activeChangeIdRef.current)}`, {
+      method: "DELETE",
+    });
+  }, [props.open, props.request]);
+
+  useEffect(
+    () => () => {
+      void props.request(`/api/changes/${encodeURIComponent(activeChangeIdRef.current)}`, {
+        method: "DELETE",
+      });
+    },
+    [props.request],
+  );
+
   const loadDraftPreview = useCallback(async () => {
     const requestId = ++previewRequestIdRef.current;
-    const body = await props.request<AgentPlanPreview>("/api/agent-preview/import", {
+    const body = await props.request<PreparedAgentChangeResponse>("/api/agents/import/prepare", {
       method: "POST",
       body: {
         hostKind: props.hostKind,
@@ -1313,7 +1353,13 @@ function ImportSceneDialog(props: {
         replaceConflicts,
       },
     });
-    return requestId === previewRequestIdRef.current ? body : null;
+    if (requestId !== previewRequestIdRef.current) {
+      await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+        method: "DELETE",
+      });
+      return null;
+    }
+    return agentPreviewFromPrepared(body);
   }, [conflictStrategy, draftSelection, props.hostKind, props.request, replaceConflicts]);
 
   useEffect(() => {
@@ -1321,13 +1367,26 @@ function ImportSceneDialog(props: {
     let cancelled = false;
     const refreshDraftPreview = async () => {
       const body = await loadDraftPreview();
-      if (!cancelled && body) setDraftPreview(body);
+      if (!cancelled && body) {
+        setDraftPreview((current) => {
+          if (current.changeId !== body.changeId) {
+            void props.request(`/api/changes/${encodeURIComponent(current.changeId)}`, {
+              method: "DELETE",
+            });
+          }
+          return body;
+        });
+      } else if (body) {
+        await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+          method: "DELETE",
+        });
+      }
     };
     void refreshDraftPreview();
     return () => {
       cancelled = true;
     };
-  }, [loadDraftPreview, props.open]);
+  }, [loadDraftPreview, props.open, props.request]);
 
   const commit = async () => {
     setCommitting(true);
@@ -1997,7 +2056,7 @@ function LinkedCoveredPreview(props: { flow: SetupFlow; host: DetectedAgentHostS
   );
 }
 
-function ChangeList(props: { changes: FileChange[]; defaultOpen?: boolean; title: string }) {
+function ChangeList(props: { changes: PlannedFileWrite[]; defaultOpen?: boolean; title: string }) {
   if (props.changes.length === 0) return null;
   const stats = props.changes.reduce(
     (total, change) => {
@@ -2047,7 +2106,7 @@ type DiffRow =
       oldLine: number | null;
     };
 
-function UnifiedDiff(props: { change: FileChange }) {
+function UnifiedDiff(props: { change: PlannedFileWrite }) {
   const before = props.change.before ?? "";
   const patch = structuredPatch(
     props.change.path,
@@ -2143,7 +2202,7 @@ function DiffRowsTable(props: { conflictSelection?: "agent" | "ratel"; rows: Dif
   );
 }
 
-function DiffStatBadge(props: { change: FileChange }) {
+function DiffStatBadge(props: { change: PlannedFileWrite }) {
   const stats = diffStats(props.change);
   return (
     <span className="shrink-0 font-mono text-xs">
@@ -2185,7 +2244,7 @@ function diffRowsFromHunk(hunk: StructuredPatchHunk): DiffRow[] {
   return rows;
 }
 
-function diffStats(change: FileChange) {
+function diffStats(change: PlannedFileWrite) {
   const patch = structuredPatch(
     change.path,
     change.path,

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { isRatelGatewayEntry } from "../gateway-entry.js";
-import type { FileChange } from "../import-plan.js";
+import type { PlannedFileWrite } from "../import-plan.js";
 import { isPlainObject } from "../json.js";
 import { rewriteCodexPluginMcpServerEnabled } from "./codex.js";
 import {
@@ -83,7 +83,7 @@ export function buildAgentHostRatelPluginLinkChanges(
   kind: SupportedAgentHostKind,
   state: AgentHostState,
   connection: RatelConnectionState,
-): FileChange[] {
+): PlannedFileWrite[] {
   if (kind !== "codex" || connection.linked || !connection.pluginDisabled) return [];
   const user = state.scopes.find((scope) => scope.scope === "user");
   if (!user?.rawText) return [];

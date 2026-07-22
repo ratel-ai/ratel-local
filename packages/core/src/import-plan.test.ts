@@ -11,11 +11,11 @@ import type {
   AgentScope,
 } from "./agent-host/index.js";
 import {
-  buildAgentImportPlan,
+  buildAgentAgentImportDraft,
+  buildAgentImportDraft,
   buildAgentLinkPlan,
-  buildImportPlan,
-  type FileChange,
   type ImportInputs,
+  type PlannedFileWrite,
 } from "./import-plan.js";
 import type { ServerEntry } from "./lib/index.js";
 import type { ResolvedBin } from "./locate-bin.js";
@@ -64,15 +64,15 @@ function emptyInputs(overrides: Partial<ImportInputs> = {}): ImportInputs {
   };
 }
 
-function allChanges(plan: ReturnType<typeof buildImportPlan>) {
+function allChanges(plan: ReturnType<typeof buildAgentImportDraft>) {
   return [...plan.ratelChanges, ...plan.agentChanges];
 }
 
-function findWrite(plan: ReturnType<typeof buildImportPlan>, path: string) {
+function findWrite(plan: ReturnType<typeof buildAgentImportDraft>, path: string) {
   return allChanges(plan).find((c) => c.kind === "write" && c.path === path);
 }
 
-function parseAfter(plan: ReturnType<typeof buildImportPlan>, path: string) {
+function parseAfter(plan: ReturnType<typeof buildAgentImportDraft>, path: string) {
   const c = findWrite(plan, path);
   if (!c || c.kind !== "write") throw new Error(`no write to ${path}`);
   return JSON.parse(c.after);
@@ -93,7 +93,7 @@ class RecordingAgentHost implements AgentHostAdapter {
 
   async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
     this.input = input;
-    const changes: FileChange[] = [];
+    const changes: PlannedFileWrite[] = [];
     for (const [scope, names] of input.removeEntriesByScope) {
       changes.push({
         kind: "write",
@@ -114,9 +114,9 @@ class RecordingAgentHost implements AgentHostAdapter {
   }
 }
 
-describe("buildImportPlan", () => {
+describe("buildAgentImportDraft", () => {
   it("user-only: moves entries into Ratel user config and records gateway args", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, remote: REMOTE_ENTRY } }),
       }),
@@ -134,7 +134,7 @@ describe("buildImportPlan", () => {
   });
 
   it("preserves skills while importing MCP entries into the same scope", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY } }),
         ratelUser: {
@@ -151,7 +151,7 @@ describe("buildImportPlan", () => {
   });
 
   it("project entries use the user+project config chain", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY }, project: { proj: PROJ_ENTRY } }),
       }),
@@ -166,7 +166,7 @@ describe("buildImportPlan", () => {
   });
 
   it("local entries use all three configs", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({
           user: { fs: FS_ENTRY },
@@ -187,7 +187,7 @@ describe("buildImportPlan", () => {
   });
 
   it("local-only: writes only the local Ratel target", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ local: { local: LOCAL_ENTRY } }),
       }),
@@ -204,7 +204,7 @@ describe("buildImportPlan", () => {
       command: "ratel-local",
       args: ["serve", "--config", RATEL_USER],
     };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({
           user: { "ratel-local": ratelStub },
@@ -226,7 +226,7 @@ describe("buildImportPlan", () => {
       command: "ratel-mcp",
       args: ["serve", "--config", RATEL_USER],
     };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { "ratel-mcp": legacyGateway } }),
       }),
@@ -238,7 +238,7 @@ describe("buildImportPlan", () => {
 
   it("keeps Ratel entries on conflicts by default and exposes structured conflict data", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, other: REMOTE_ENTRY } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -268,7 +268,7 @@ describe("buildImportPlan", () => {
       args: ["fs"],
       command: "echo",
     };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: incoming } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -282,7 +282,7 @@ describe("buildImportPlan", () => {
     expect(plan.summary.replacedFromUser).toEqual(["fs"]);
 
     const agentHost = new RecordingAgentHost();
-    const agentPlan = await buildAgentImportPlan({
+    const agentPlan = await buildAgentAgentImportDraft({
       ...emptyInputs({
         agentState: agentState({ user: { fs: incoming } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -295,7 +295,7 @@ describe("buildImportPlan", () => {
 
   it("replaces Ratel entries on conflicts when requested", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, other: REMOTE_ENTRY } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -309,7 +309,7 @@ describe("buildImportPlan", () => {
   });
 
   it("preserves same-name registrations at user and project scopes", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY }, project: { fs: PROJ_ENTRY } }),
       }),
@@ -324,7 +324,7 @@ describe("buildImportPlan", () => {
   });
 
   it("filters movable entries by selection", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, remote: REMOTE_ENTRY } }),
       }),
@@ -339,7 +339,7 @@ describe("buildImportPlan", () => {
 
   it("delegates native rewrites to the selected agent adapter", async () => {
     const agentHost = new RecordingAgentHost();
-    const plan = await buildAgentImportPlan(
+    const plan = await buildAgentAgentImportDraft(
       { ...emptyInputs({ agentState: agentState({ user: { fs: FS_ENTRY } }) }), agentHost },
       { selection: new Set(["fs"]) },
     );
@@ -371,7 +371,7 @@ describe("buildImportPlan", () => {
       ],
     };
 
-    const plan = await buildAgentImportPlan(
+    const plan = await buildAgentAgentImportDraft(
       {
         ...emptyInputs({ agentState: state }),
         agentHost: new ClaudeCodeAgentHostAdapter(),
@@ -421,7 +421,7 @@ args = ["fs"]
       ],
     };
 
-    const plan = await buildAgentImportPlan(
+    const plan = await buildAgentAgentImportDraft(
       {
         ...emptyInputs({ agentState: state }),
         agentHost: new CodexAgentHostAdapter(),

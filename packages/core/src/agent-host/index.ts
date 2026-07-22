@@ -1,6 +1,6 @@
 import { isRatelGatewayEntry } from "../gateway-entry.js";
 import type { HierarchyEnv } from "../hierarchy.js";
-import type { FileChange } from "../import-plan.js";
+import type { PlannedFileWrite } from "../import-plan.js";
 import type { JsonFs } from "../io.js";
 import type { ServerEntry } from "../lib/index.js";
 import type { ResolvedBin } from "../locate-bin.js";
@@ -63,7 +63,7 @@ export interface RatelConfigPaths {
 }
 
 export interface AgentHostChangeSet {
-  changes: FileChange[];
+  changes: PlannedFileWrite[];
   summary: AgentHostChangeSummary;
 }
 

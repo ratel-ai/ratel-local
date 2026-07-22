@@ -5,21 +5,25 @@ import {
   createContextSnapshotResolver,
   createLocalGitExcludeManager,
   createMutationEngine,
+  createPreparedChangeCoordinator,
   createProjectRegistry,
   createSkillDiscovery,
   createSkillImportControlPlane,
   createSkillRegistrationControlPlane,
   type MutationCommit,
-  type MutationPlan,
+  type PreparedChange,
   type ProjectId,
   ProjectNotFoundError,
   type ProjectRegistry,
   type RuntimeContextRef,
   type SkillCandidate,
   type SkillDiscovery,
+  type SkillImportCommit,
   type SkillImportControlPlane,
-  type SkillImportPlan,
+  type SkillImportReview,
+  type SkillRegistrationCommit,
   type SkillRegistrationControlPlane,
+  type SkillRegistrationReview,
 } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import type { FlagValue } from "../args.js";
@@ -29,10 +33,11 @@ import {
   type HookScope,
   installHook,
   preloadHookCommand,
+  prepareInstallHook,
+  prepareUninstallHook,
   settingsPathForScope,
   uninstallHook,
 } from "../skills/install-hook.js";
-import { activateSkills, deactivateSkills, defaultSkillManagePaths } from "../skills/manage.js";
 import {
   loadNudged,
   parseHookInput,
@@ -48,9 +53,6 @@ import type { HandlerCtx } from "./types.js";
 export const SKILL_USAGE = `usage: ratel-local skill <verb>
 
 Verbs:
-  activate         deprecated wrapper: manage native user skills as invoke-only
-                   without moving the native skill folders
-  deactivate       deprecated wrapper: stop managing native user skills
   import           import discovered skills into a scoped registration
   add-scope        add another scoped registration for a skill
   remove-scope     remove only the selected registration
@@ -80,61 +82,10 @@ export interface SkillHandlerOptions {
 
 export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {}): Promise<void> {
   const verb = ctx.argv.verb;
-  const paths = defaultSkillManagePaths(ctx.env.homeDir);
   const dryRun = ctx.argv.flags["dry-run"] === true;
   const assumeYes = ctx.argv.flags.yes === true;
 
   switch (verb) {
-    case "activate": {
-      const pending = await activateSkills(paths, { dryRun: true });
-      if (pending.managed.length === 0) {
-        ctx.log("no skills to activate (nothing new in native skill folders)");
-        return;
-      }
-      if (dryRun) {
-        for (const m of pending.managed) ctx.log(`would manage ${m.id} as invoke-only`);
-        return;
-      }
-      if (!assumeYes) {
-        const answer = await ctx.prompts.confirm({
-          message: `Manage ${pending.managed.length} skill(s) through Ratel as invoke-only? (reversible with "skill deactivate")`,
-          initialValue: true,
-        });
-        if (ctx.prompts.isCancel(answer) || answer === false) {
-          ctx.log("activate cancelled");
-          return;
-        }
-      }
-      const result = await activateSkills(paths, { logger: ctx.log });
-      ctx.log(`managing ${result.managed.length} skill(s) as invoke-only`);
-      return;
-    }
-
-    case "deactivate": {
-      const pending = await deactivateSkills(paths, { dryRun: true });
-      if (pending.unmanaged.length === 0) {
-        ctx.log("no managed skills to deactivate");
-        return;
-      }
-      if (dryRun) {
-        for (const r of pending.unmanaged) ctx.log(`would stop managing ${r.id}`);
-        return;
-      }
-      if (!assumeYes) {
-        const answer = await ctx.prompts.confirm({
-          message: `Stop managing ${pending.unmanaged.length} skill(s) through Ratel?`,
-          initialValue: true,
-        });
-        if (ctx.prompts.isCancel(answer) || answer === false) {
-          ctx.log("deactivate cancelled");
-          return;
-        }
-      }
-      const result = await deactivateSkills(paths, { logger: ctx.log });
-      ctx.log(`deactivated ${result.unmanaged.length} skill(s)`);
-      return;
-    }
-
     case "import": {
       const runtime = createSkillReadRuntime(ctx, options);
       const context = await resolveSkillContext(
@@ -176,16 +127,19 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         targets: [{ scopeRef: target, mode }],
       }));
       const remotePreview = await daemonRequest(
-        contextApiPath("/api/skills/import/preview", context),
+        contextApiPath("/api/skills/import/prepare", context),
         {
           method: "POST",
           body: { selections },
         },
       );
       let control: SkillImportControlPlane | undefined;
-      let plan: SkillImportPlan;
+      let change: PreparedChange<SkillImportReview>;
       if (remotePreview) {
-        plan = await requireDaemonJson<SkillImportPlan>(remotePreview, "skill import preview");
+        change = await requireDaemonJson<PreparedChange<SkillImportReview>>(
+          remotePreview,
+          "skill import preparation",
+        );
       } else {
         if (remoteDiscovery) {
           throw new Error(
@@ -193,12 +147,18 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           );
         }
         control = options.importControlPlane ?? (await createImportControlPlane(ctx, runtime));
-        plan = await control.preview(selections);
+        change = await control.prepare(selections);
       }
       if (dryRun) {
         for (const candidate of selectedCandidates) {
           ctx.log(`would import ${candidate.id} as ${mode} into ${target.scope}`);
         }
+        await cancelPreparedSkillChange(
+          daemonRequest,
+          remotePreview !== null,
+          control,
+          change.changeId,
+        );
         return;
       }
       if (!assumeYes) {
@@ -207,20 +167,25 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           initialValue: true,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {
+          await cancelPreparedSkillChange(
+            daemonRequest,
+            remotePreview !== null,
+            control,
+            change.changeId,
+          );
           ctx.log(`${verb} cancelled`);
           return;
         }
       }
       const commit = remotePreview
-        ? await applySkillPlanThroughDaemon<{ imported: unknown[]; changedPaths: string[] }>(
+        ? await commitPreparedSkillChange<SkillImportCommit>(
             daemonRequest,
-            contextApiPath("/api/skills/import/apply", context),
-            plan,
+            change.changeId,
             "skill import",
           )
-        : await control?.apply(plan, { digest: plan.digest });
+        : await control?.commit(change.changeId);
       if (!commit) throw new Error("skill import control plane is unavailable");
-      ctx.log(`imported ${commit.imported.length} skill(s)`);
+      ctx.log(`imported ${commit.result.imported.length} skill(s)`);
       return;
     }
 
@@ -242,20 +207,29 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       const daemonRequest =
         options.daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
       const remotePreview = await daemonRequest(
-        contextApiPath("/api/skills/add-scope/preview", context),
+        contextApiPath("/api/skills/add-scope/prepare", context),
         { method: "POST", body: request },
       );
       let control: SkillRegistrationControlPlane | undefined;
-      let plan: MutationPlan;
+      let change: PreparedChange<SkillRegistrationReview>;
       if (remotePreview) {
-        plan = await requireDaemonJson<MutationPlan>(remotePreview, "skill add-scope preview");
+        change = await requireDaemonJson<PreparedChange<SkillRegistrationReview>>(
+          remotePreview,
+          "skill add-scope preparation",
+        );
       } else {
         control =
           options.registrationControlPlane ?? (await createRegistrationControlPlane(ctx, runtime));
-        plan = await control.previewAddScope(request);
+        change = await control.prepareAddScope(request);
       }
       if (dryRun) {
         ctx.log(`would add ${request.id} as ${mode} to ${target.scope}`);
+        await cancelPreparedSkillChange(
+          daemonRequest,
+          remotePreview !== null,
+          control,
+          change.changeId,
+        );
         return;
       }
       if (!assumeYes) {
@@ -264,19 +238,23 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           initialValue: true,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {
+          await cancelPreparedSkillChange(
+            daemonRequest,
+            remotePreview !== null,
+            control,
+            change.changeId,
+          );
           ctx.log("add-scope cancelled");
           return;
         }
       }
       const commit = remotePreview
-        ? await applySkillPlanThroughDaemon<MutationCommit>(
+        ? await commitPreparedSkillChange<SkillRegistrationCommit>(
             daemonRequest,
-            contextApiPath("/api/skills/add-scope/apply", context),
-            plan,
+            change.changeId,
             "skill add-scope",
-            target,
           )
-        : await control?.apply(plan, { digest: plan.digest });
+        : await control?.commit(change.changeId);
       if (!commit) throw new Error("skill registration control plane is unavailable");
       ctx.log(`added ${request.id} to ${target.scope} (${commit.changedPaths.join(", ")})`);
       return;
@@ -302,8 +280,9 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       const control =
         options.registrationControlPlane ?? (await createRegistrationControlPlane(ctx, runtime));
       if (dryRun) {
-        const plan = await control.previewRemove(request);
-        ctx.log(`would update ${plan.preview.files.map(({ path }) => path).join(", ")}`);
+        const change = await control.prepareRemove(request);
+        ctx.log(`would update ${change.preview.files.map(({ path }) => path).join(", ")}`);
+        control.cancel(change.changeId);
         return;
       }
       if (!assumeYes) {
@@ -491,7 +470,15 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       const settingsPath = settingsPathForScope(scope, ctx.env);
       const deps = { fs: ctx.fs, env: ctx.env };
       if (verb === "uninstall-hook") {
-        const { changed } = await uninstallHook(settingsPath, deps);
+        const { changed } = ctx.preparedChanges
+          ? (
+              await ctx.preparedChanges.commit<{ changed: boolean }>(
+                (
+                  await prepareUninstallHook(settingsPath, deps, ctx.preparedChanges)
+                ).changeId,
+              )
+            ).result
+          : await uninstallHook(settingsPath, deps);
         ctx.log(
           changed ? `removed preload hook from ${settingsPath}` : "no preload hook to remove",
         );
@@ -509,7 +496,15 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           return;
         }
       }
-      const { changed } = await installHook(settingsPath, command, deps);
+      const { changed } = ctx.preparedChanges
+        ? (
+            await ctx.preparedChanges.commit<{ changed: boolean }>(
+              (
+                await prepareInstallHook(settingsPath, command, deps, ctx.preparedChanges)
+              ).changeId,
+            )
+          ).result
+        : await installHook(settingsPath, command, deps);
       ctx.log(
         changed ? `installed preload hook into ${settingsPath}` : "preload hook already installed",
       );
@@ -527,23 +522,33 @@ function contextApiPath(path: string, context: RuntimeContextRef): string {
   return `${path}${separator}projectId=${encodeURIComponent(context.projectId)}`;
 }
 
-async function applySkillPlanThroughDaemon<T>(
+async function commitPreparedSkillChange<T>(
   request: DaemonApiRequest,
-  path: string,
-  plan: { digest: string },
+  changeId: string,
   operation: string,
-  target?: ReturnType<typeof mutationTarget>,
 ): Promise<T> {
-  const response = await request(path, {
+  const response = await request(`/api/changes/${encodeURIComponent(changeId)}/commit`, {
     method: "POST",
-    body: { plan, digest: plan.digest, ...(target ? { target } : {}) },
   });
   if (!response) {
     throw new Error(
-      `${operation} preview was created by the daemon, but the daemon disappeared before apply`,
+      `${operation} was prepared by the daemon, but the daemon disappeared before commit`,
     );
   }
   return requireDaemonJson<T>(response, operation);
+}
+
+async function cancelPreparedSkillChange(
+  request: DaemonApiRequest,
+  remote: boolean,
+  control: SkillImportControlPlane | SkillRegistrationControlPlane | undefined,
+  changeId: string,
+): Promise<void> {
+  if (!remote) {
+    control?.cancel(changeId);
+    return;
+  }
+  await request(`/api/changes/${encodeURIComponent(changeId)}`, { method: "DELETE" });
 }
 
 interface SkillReadRuntime {
@@ -556,20 +561,24 @@ async function createRegistrationControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
 ): Promise<SkillRegistrationControlPlane> {
-  const mutationEngine = await createMutationEngine({
-    controlDir: join(ctx.env.homeDir, ".ratel"),
-  });
+  const preparedChanges =
+    ctx.preparedChanges ??
+    createPreparedChangeCoordinator({
+      mutationEngine: await createMutationEngine({
+        controlDir: join(ctx.env.homeDir, ".ratel"),
+      }),
+    });
   const configControlPlane = await createConfigControlPlane({
     homeDir: ctx.env.homeDir,
     projectRegistry: runtime.registry,
-    mutationEngine,
+    preparedChanges,
   });
   return createSkillRegistrationControlPlane({
     homeDir: ctx.env.homeDir,
     projectRegistry: runtime.registry,
     configControlPlane,
     snapshotResolver: runtime.resolver,
-    mutationEngine,
+    preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
   });
 }
@@ -578,14 +587,18 @@ async function createImportControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
 ): Promise<SkillImportControlPlane> {
-  const mutationEngine = await createMutationEngine({
-    controlDir: join(ctx.env.homeDir, ".ratel"),
-  });
+  const preparedChanges =
+    ctx.preparedChanges ??
+    createPreparedChangeCoordinator({
+      mutationEngine: await createMutationEngine({
+        controlDir: join(ctx.env.homeDir, ".ratel"),
+      }),
+    });
   return createSkillImportControlPlane({
     homeDir: ctx.env.homeDir,
     projectRegistry: runtime.registry,
     discovery: runtime.discovery,
-    mutationEngine,
+    preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
   });
 }

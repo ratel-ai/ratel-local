@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   type BackupFs,
   createMutationEngine,
-  executePlan,
+  createPreparedChangeCoordinator,
   type JsonFs,
   nodeFs,
   type ResolvedBin,
@@ -12,6 +12,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import { runLink } from "./link.js";
+import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
 
 const HOME = "/home/u";
@@ -70,7 +71,7 @@ function ctxOf(
       env: { homeDir: HOME, projectRoot: withProjectRoot ? ROOT : undefined },
       fs,
       log: (m) => logs.push(m),
-      planExecutor: executePlan,
+      preparedChanges: createTestPreparedChanges(fs),
       prompts,
       installAgentPlugin: async () => ({
         installed: false,
@@ -262,6 +263,7 @@ enabled = false
         env: { homeDir, projectRoot },
         fs: nodeFs,
         log: () => {},
+        preparedChanges: createPreparedChangeCoordinator({ mutationEngine }),
         prompts: autoConfirm(),
       };
 
@@ -270,7 +272,6 @@ enabled = false
           bin: BIN,
           yes: true,
           agentKind: "claude-code",
-          mutationEngine,
         }),
       ).rejects.toThrow("fail-project-link-publication");
 

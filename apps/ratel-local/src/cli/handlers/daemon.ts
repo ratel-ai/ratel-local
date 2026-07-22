@@ -8,12 +8,14 @@ import {
   createContextSnapshotResolver,
   createLocalGitExcludeManager,
   createMutationEngine,
+  createPreparedChangeCoordinator,
   createProjectAdmissionLock,
   createProjectRegistry,
   createSkillDiscovery,
   createSkillImportControlPlane,
   createSkillRegistrationControlPlane,
   migrateLegacyOAuthStores,
+  type PreparedChangeCoordinator,
   type ProjectRegistry,
   type RuntimeContextRef,
   readJson,
@@ -114,6 +116,7 @@ interface DaemonHandlerDeps {
   skillDiscovery?: SkillDiscovery;
   skillImportControlPlane?: SkillImportControlPlane;
   skillRegistrationControlPlane?: SkillRegistrationControlPlane;
+  preparedChanges?: PreparedChangeCoordinator;
 }
 
 export interface DaemonServiceStatus {
@@ -246,6 +249,16 @@ export async function runDaemonServer(
   const mutationEngine = useResolvedControlPlane
     ? await createMutationEngine({ controlDir: join(ctx.env.homeDir, ".ratel") })
     : undefined;
+  let publishPreparedContexts: (contexts: readonly RuntimeContextRef[]) => Promise<void> =
+    async () => {};
+  const preparedChanges =
+    useResolvedControlPlane && mutationEngine
+      ? (opts.preparedChanges ??
+        createPreparedChangeCoordinator({
+          mutationEngine,
+          publish: async (contexts) => publishPreparedContexts(contexts),
+        }))
+      : undefined;
   // Recover any interrupted config ownership change before snapshots drive OAuth
   // migration; otherwise a transient half-transaction could mis-scope credentials.
   if (useResolvedControlPlane) {
@@ -259,7 +272,7 @@ export async function runDaemonServer(
       (await createConfigControlPlane({
         homeDir: ctx.env.homeDir,
         projectRegistry,
-        mutationEngine,
+        preparedChanges,
         localGitExcludeManager,
       })))
     : undefined;
@@ -272,25 +285,25 @@ export async function runDaemonServer(
       }))
     : undefined;
   const skillImportControlPlane =
-    useResolvedControlPlane && mutationEngine && skillDiscovery
+    useResolvedControlPlane && preparedChanges && skillDiscovery
       ? (opts.skillImportControlPlane ??
         createSkillImportControlPlane({
           homeDir: ctx.env.homeDir,
           projectRegistry,
           discovery: skillDiscovery,
-          mutationEngine,
+          preparedChanges,
           localGitExcludeManager,
         }))
       : undefined;
   const skillRegistrationControlPlane =
-    useResolvedControlPlane && mutationEngine && configControlPlane
+    useResolvedControlPlane && preparedChanges && configControlPlane
       ? (opts.skillRegistrationControlPlane ??
         createSkillRegistrationControlPlane({
           homeDir: ctx.env.homeDir,
           projectRegistry,
           configControlPlane,
           snapshotResolver,
-          mutationEngine,
+          preparedChanges,
           localGitExcludeManager,
         }))
       : undefined;
@@ -305,6 +318,32 @@ export async function runDaemonServer(
         log,
       })
     : undefined;
+  publishPreparedContexts = async (contexts) => {
+    if (!reconciledGatewayPool) return;
+    const expanded = new Map<string, RuntimeContextRef>();
+    for (const context of contexts) {
+      expanded.set(context.kind === "global" ? "global" : `project:${context.projectId}`, context);
+      if (context.kind === "global") {
+        for (const client of registry.listActiveClients()) {
+          expanded.set(
+            client.context.kind === "global" ? "global" : `project:${client.context.projectId}`,
+            client.context,
+          );
+        }
+      }
+    }
+    for (const context of expanded.values()) {
+      try {
+        await reconciledGatewayPool.reconcileContext(context);
+      } catch (error) {
+        log(
+          `[ratel] post-commit snapshot is invalid for ${
+            context.kind === "global" ? "global" : context.projectId
+          }: ${(error as Error).message}`,
+        );
+      }
+    }
+  };
   const gatewayPool = reconciledGatewayPool ?? generationPool;
   const mcp = createMcpHttpRoute({
     gatewayPool,
@@ -352,39 +391,7 @@ export async function runDaemonServer(
     skillDiscovery,
     skillImportControlPlane,
     skillRegistrationControlPlane,
-    onScopedMutationCommitted: reconciledGatewayPool
-      ? async (targets) => {
-          const contexts = new Map<string, RuntimeContextRef>();
-          for (const target of targets) {
-            if (target.scope === "user") {
-              contexts.set("global", { kind: "global" });
-              for (const client of registry.listActiveClients()) {
-                const key =
-                  client.context.kind === "global"
-                    ? "global"
-                    : `project:${client.context.projectId}`;
-                contexts.set(key, client.context);
-              }
-            } else {
-              contexts.set(`project:${target.projectId}`, {
-                kind: "project",
-                projectId: target.projectId,
-              });
-            }
-          }
-          for (const context of contexts.values()) {
-            try {
-              await reconciledGatewayPool.reconcileContext(context);
-            } catch (error) {
-              log(
-                `[ratel] post-commit snapshot is invalid for ${
-                  context.kind === "global" ? "global" : context.projectId
-                }: ${(error as Error).message}`,
-              );
-            }
-          }
-        }
-      : undefined,
+    preparedChanges,
     daemonToken,
     sessionTokens: uiSessions,
     publicRoute: async (req, res, path) => {

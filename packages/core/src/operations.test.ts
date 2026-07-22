@@ -4,24 +4,27 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BackupFs } from "./backup.js";
 import { type JsonFs, nodeFs } from "./io.js";
-import { createMutationEngine, MISSING_DOCUMENT_REVISION } from "./mutation-engine.js";
+import {
+  documentRevision,
+  MISSING_DOCUMENT_REVISION,
+  type MutationCommit,
+  MutationConflictError,
+  type PreparedMutation,
+} from "./mutation-engine.js";
 import {
   addServerEntry,
-  applyAgentImportAgent,
-  applyAgentImportRatel,
-  applyAgentLink,
-  applyCombinedAgentImport,
   editServerEntry,
   getAgentHostsState,
   getConfigState,
-  importAgentServers,
-  linkAgentToRatel,
-  previewAgentImport,
-  previewAgentLink,
-  removeAgentRatelMcpFallback,
+  prepareAgentImport,
+  prepareAgentLink,
+  prepareAgentRatelMcpFallbackRemoval,
   removeServerEntry,
 } from "./operations.js";
-import { executePlan } from "./plan-exec.js";
+import type {
+  PrepareChangeInput,
+  PreparedChangeCoordinator,
+} from "./prepared-change-coordinator.js";
 
 const HOME = "/home/u";
 const ROOT = "/repo";
@@ -73,7 +76,120 @@ function ctx(fs = new MemFs()) {
     env: { homeDir: HOME, projectRoot: ROOT },
     fs,
     log: () => {},
-    planExecutor: executePlan,
+  };
+}
+
+interface StoredMemoryChange {
+  input: PrepareChangeInput<unknown, unknown>;
+  mutation: PreparedMutation;
+}
+
+function memoryPreparedChanges(fs: MemFs): PreparedChangeCoordinator {
+  let nextId = 0;
+  const changes = new Map<string, StoredMemoryChange>();
+  return {
+    async prepare<ReviewData, DomainResult>(input: PrepareChangeInput<ReviewData, DomainResult>) {
+      const baseRevisions: PreparedMutation["baseRevisions"] = {};
+      const operations: PreparedMutation["operations"] = [];
+      const files: PreparedMutation["preview"]["files"] = [];
+      for (const operation of input.operations) {
+        if (operation.kind !== "replace-file") {
+          throw new Error(`memory test coordinator does not support ${operation.kind}`);
+        }
+        const before = fs.files.get(operation.path) ?? null;
+        const after =
+          typeof operation.contents === "string"
+            ? operation.contents
+            : Buffer.from(operation.contents).toString("utf8");
+        const beforeRevision =
+          before === null ? MISSING_DOCUMENT_REVISION : documentRevision(before);
+        baseRevisions[operation.path] = beforeRevision;
+        operations.push({
+          kind: "replace-file",
+          path: operation.path,
+          contentsBase64: Buffer.from(after).toString("base64"),
+        });
+        files.push({
+          kind: "file",
+          path: operation.path,
+          existedBefore: before !== null,
+          beforeRevision,
+          afterRevision: documentRevision(after),
+        });
+      }
+      const mutation: PreparedMutation = {
+        id: `mutation-${nextId}`,
+        digest: "memory-test" as PreparedMutation["digest"],
+        baseRevisions,
+        operations,
+        preview: { files },
+      };
+      const preview = input.buildPreview
+        ? input.buildPreview(structuredClone(mutation))
+        : (input.preview as ReviewData);
+      const changeId = `change-${nextId++}`;
+      changes.set(changeId, {
+        input: input as PrepareChangeInput<unknown, unknown>,
+        mutation,
+      });
+      return {
+        changeId,
+        kind: input.kind,
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        preview,
+      };
+    },
+    async commit<DomainResult>(changeId: string) {
+      const stored = changes.get(changeId);
+      changes.delete(changeId);
+      if (!stored) throw new Error(`unavailable prepared change: ${changeId}`);
+      const decision = await stored.input.beforeCommit?.();
+      if (decision?.action === "cancel") {
+        return {
+          transactionId: changeId,
+          changedPaths: [],
+          revisions: {},
+          backupManifest: null,
+          result: decision.result as DomainResult,
+        };
+      }
+      await stored.input.invariants?.precondition?.();
+      const revisions: MutationCommit["revisions"] = {};
+      for (const [index, operation] of stored.mutation.operations.entries()) {
+        const before = fs.files.get(operation.path) ?? null;
+        const actual = before === null ? MISSING_DOCUMENT_REVISION : documentRevision(before);
+        const expected = stored.mutation.baseRevisions[operation.path];
+        if (actual !== expected) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `document changed after preparation: ${operation.path}`,
+            operation.path,
+            expected,
+            actual,
+          );
+        }
+        await stored.input.invariants?.operationPrecondition?.(operation, index);
+        if (operation.kind !== "replace-file") {
+          throw new Error(`memory test coordinator does not support ${operation.kind}`);
+        }
+        const after = Buffer.from(operation.contentsBase64, "base64").toString("utf8");
+        fs.files.set(operation.path, after);
+        revisions[operation.path] = documentRevision(after);
+      }
+      const commit: MutationCommit = {
+        transactionId: changeId,
+        changedPaths: stored.mutation.operations.map(({ path }) => path),
+        revisions,
+      };
+      const result =
+        typeof stored.input.result === "function"
+          ? await (stored.input.result as (commit: MutationCommit) => unknown)(commit)
+          : stored.input.result;
+      return { ...commit, backupManifest: null, result: result as DomainResult };
+    },
+    cancel(changeId: string) {
+      changes.delete(changeId);
+    },
   };
 }
 
@@ -322,15 +438,14 @@ command = "echo"
       pluginDisabled: true,
     });
 
-    const preview = await previewAgentLink(ctx(fs), { hostKind: "codex" });
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentLink(ctx(fs), { hostKind: "codex" }, { preparedChanges });
+    const preview = prepared.preview;
     expect(preview.plan.agentChanges).toHaveLength(1);
     expect(preview.plan.agentChanges[0]?.after).toContain("enabled = true # keep this comment");
     expect(preview.plan.agentChanges[0]?.after).not.toContain("[mcp_servers.ratel-local]");
 
-    await applyAgentLink(ctx(fs), {
-      hostKind: "codex",
-      planHash: preview.stageHashes.agent,
-    });
+    await preparedChanges.commit(prepared.changeId);
     const after = fs.files.get(CODEX_PATH) as string;
     expect(after).toContain("enabled = true # keep this comment");
     expect(after).not.toContain("[mcp_servers.ratel-local]");
@@ -377,7 +492,12 @@ command = "echo"
       plugin: true,
     });
 
-    const preview = await previewAgentLink(ctx(fs), { hostKind: "claude-code" });
+    const prepared = await prepareAgentLink(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { preparedChanges: memoryPreparedChanges(fs) },
+    );
+    const preview = prepared.preview;
     expect(preview.plan.agentChanges).toEqual([]);
     expect(preview.emptyReason).toMatch(/duplicate Ratel connections/i);
     expect(fs.files.get(CLAUDE_PATH)).toBe(claudeBefore);
@@ -395,11 +515,13 @@ command = "echo"
       }),
     );
 
-    await removeAgentRatelMcpFallback(
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentRatelMcpFallbackRemoval(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "ratel-local" },
+      { envVar: "ratel-local", preparedChanges },
     );
+    await preparedChanges.commit(prepared.changeId);
 
     expect(JSON.parse(fs.files.get(CLAUDE_PATH) as string).mcpServers).toEqual({
       fs: { type: "stdio", command: "echo" },
@@ -420,49 +542,38 @@ command = "echo"
       ].join("\n"),
     );
 
-    await removeAgentRatelMcpFallback(ctx(fs), { hostKind: "codex" }, { envVar: "ratel-local" });
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentRatelMcpFallbackRemoval(
+      ctx(fs),
+      { hostKind: "codex" },
+      { envVar: "ratel-local", preparedChanges },
+    );
+    await preparedChanges.commit(prepared.changeId);
 
     expect(fs.files.get(CODEX_PATH)).toContain("[mcp_servers.fs]");
     expect(fs.files.get(CODEX_PATH)).not.toContain("[mcp_servers.ratel-local]");
   });
 
-  it("previews and applies import in Ratel and agent stages", async () => {
+  it("prepares and commits Ratel and agent import changes atomically", async () => {
     const fs = new MemFs();
     fs.files.set(
       CLAUDE_PATH,
       JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
     );
 
-    const preview = await previewAgentImport(
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentImport(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      { envVar: "/usr/local/bin/ratel-local", preparedChanges },
     );
+    const preview = prepared.preview;
     expect(preview.candidates.map((candidate) => candidate.name)).toEqual(["fs"]);
     expect(preview.plan.ratelChanges).toHaveLength(1);
     expect(preview.plan.agentChanges).toHaveLength(1);
 
-    await applyAgentImportRatel(
-      ctx(fs),
-      {
-        hostKind: "claude-code",
-        selection: preview.selected,
-        planHash: preview.stageHashes.ratel,
-      },
-      { envVar: "/usr/local/bin/ratel-local" },
-    );
+    await preparedChanges.commit(prepared.changeId);
     expect(JSON.parse(fs.files.get(USER_PATH) as string).mcpServers.fs.command).toBe("echo");
-    expect(JSON.parse(fs.files.get(CLAUDE_PATH) as string).mcpServers.fs.command).toBe("echo");
-
-    await applyAgentImportAgent(
-      ctx(fs),
-      {
-        hostKind: "claude-code",
-        selection: preview.selected,
-        planHash: preview.stageHashes.agent,
-      },
-      { envVar: "/usr/local/bin/ratel-local" },
-    );
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs).toBeUndefined();
     expect(claude.mcpServers["ratel-local"]).toBeUndefined();
@@ -479,12 +590,14 @@ command = "echo"
         },
       }),
     );
+    fs.files.set(excludePath, "# keep\n");
 
-    const preview = await previewAgentImport(
+    const prepared = await prepareAgentImport(
       ctx(fs),
       { hostKind: "claude-code" },
       {
         envVar: "/usr/local/bin/ratel-local",
+        preparedChanges: memoryPreparedChanges(fs),
         localGitExcludeManager: {
           async preview(projectRoot) {
             return {
@@ -502,12 +615,12 @@ command = "echo"
         },
       },
     );
+    const preview = prepared.preview;
 
     expect(preview.plan.ratelChanges).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: `${ROOT}/.ratel/config.local.json` }),
         {
-          kind: "write",
           path: excludePath,
           before: "# keep\n",
           after: "# keep\n# ratel local\n",
@@ -516,34 +629,28 @@ command = "echo"
     );
   });
 
-  it("rejects stale import plan hashes before applying", async () => {
+  it("rejects stale files when committing a prepared import", async () => {
     const fs = new MemFs();
     fs.files.set(
       CLAUDE_PATH,
       JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
     );
 
-    const preview = await previewAgentImport(
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentImport(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      { envVar: "/usr/local/bin/ratel-local", preparedChanges },
     );
     fs.files.set(
       CLAUDE_PATH,
       JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "node" } } }),
     );
 
-    await expect(
-      applyAgentImportRatel(
-        ctx(fs),
-        {
-          hostKind: "claude-code",
-          selection: preview.selected,
-          planHash: preview.stageHashes.ratel,
-        },
-        { envVar: "/usr/local/bin/ratel-local" },
-      ),
-    ).rejects.toThrow(/preview is stale/);
+    await expect(preparedChanges.commit(prepared.changeId)).rejects.toMatchObject({
+      code: "MUTATION_CONFLICT",
+      reason: "revision_conflict",
+    });
   });
 
   it("binds and applies both import stages together", async () => {
@@ -552,21 +659,13 @@ command = "echo"
       CLAUDE_PATH,
       JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
     );
-    const preview = await previewAgentImport(
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentImport(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      { envVar: "/usr/local/bin/ratel-local", preparedChanges },
     );
-
-    await applyCombinedAgentImport(
-      ctx(fs),
-      {
-        hostKind: "claude-code",
-        selection: preview.selected,
-        stageHashes: preview.stageHashes,
-      },
-      { envVar: "/usr/local/bin/ratel-local" },
-    );
+    await preparedChanges.commit(prepared.changeId);
 
     expect(JSON.parse(fs.files.get(USER_PATH) as string).mcpServers.fs.command).toBe("echo");
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
@@ -590,24 +689,19 @@ command = "echo"
       }),
     );
 
-    const preview = await previewAgentLink(
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentLink(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      { envVar: "/usr/local/bin/ratel-local", preparedChanges },
     );
+    const preview = prepared.preview;
     expect(preview.candidates).toEqual([]);
     expect(preview.selected).toEqual([]);
     expect(preview.plan.ratelChanges).toHaveLength(0);
     expect(preview.plan.agentChanges).toHaveLength(1);
 
-    await applyAgentLink(
-      ctx(fs),
-      {
-        hostKind: "claude-code",
-        planHash: preview.stageHashes.agent,
-      },
-      { envVar: "/usr/local/bin/ratel-local" },
-    );
+    await preparedChanges.commit(prepared.changeId);
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers.other.command).toBe("node");
@@ -635,7 +729,12 @@ command = "echo"
       JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
     );
 
-    const preview = await previewAgentLink(ctx(fs), { hostKind: "claude-code" });
+    const prepared = await prepareAgentLink(
+      ctx(fs),
+      { hostKind: "claude-code" },
+      { preparedChanges: memoryPreparedChanges(fs) },
+    );
+    const preview = prepared.preview;
 
     expect(preview.plan.agentChanges).toEqual([]);
     expect(preview.emptyReason).toMatch(/linked through the Ratel Local plugin/i);
@@ -656,24 +755,19 @@ command = "echo"
       }),
     );
 
-    const preview = await previewAgentLink(
+    const preparedChanges = memoryPreparedChanges(fs);
+    const prepared = await prepareAgentLink(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      { envVar: "/usr/local/bin/ratel-local", preparedChanges },
     );
+    const preview = prepared.preview;
     expect(preview.candidates).toEqual([]);
     expect(preview.selected).toEqual([]);
     expect(preview.plan.ratelChanges).toHaveLength(0);
     expect(preview.plan.agentChanges).toHaveLength(1);
 
-    await applyAgentLink(
-      ctx(fs),
-      {
-        hostKind: "claude-code",
-        planHash: preview.stageHashes.agent,
-      },
-      { envVar: "/usr/local/bin/ratel-local" },
-    );
+    await preparedChanges.commit(prepared.changeId);
     const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
     expect(claude.mcpServers.fs.command).toBe("echo");
     expect(claude.mcpServers["ratel-local"].args).toEqual([
@@ -693,11 +787,15 @@ command = "echo"
     );
     fs.files.set(CLAUDE_PATH, JSON.stringify({}));
 
-    const preview = await previewAgentLink(
+    const prepared = await prepareAgentLink(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      {
+        envVar: "/usr/local/bin/ratel-local",
+        preparedChanges: memoryPreparedChanges(fs),
+      },
     );
+    const preview = prepared.preview;
 
     expect(preview.plan.agentChanges).toHaveLength(1);
     expect(preview.emptyReason).toBeNull();
@@ -713,11 +811,15 @@ command = "echo"
     );
     fs.files.set(CLAUDE_PATH, JSON.stringify({}));
 
-    const preview = await previewAgentLink(
+    const prepared = await prepareAgentLink(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      {
+        envVar: "/usr/local/bin/ratel-local",
+        preparedChanges: memoryPreparedChanges(fs),
+      },
     );
+    const preview = prepared.preview;
 
     expect(preview.plan.agentChanges).toHaveLength(1);
     expect(preview.emptyReason).toBeNull();
@@ -732,119 +834,18 @@ command = "echo"
     );
     fs.files.set(CLAUDE_PATH, JSON.stringify({}));
 
-    const preview = await previewAgentLink(
+    const prepared = await prepareAgentLink(
       ctx(fs),
       { hostKind: "claude-code" },
-      { envVar: "/usr/local/bin/ratel-local" },
+      {
+        envVar: "/usr/local/bin/ratel-local",
+        preparedChanges: memoryPreparedChanges(fs),
+      },
     );
+    const preview = prepared.preview;
 
     expect(preview.plan.agentChanges).toHaveLength(1);
     expect(preview.emptyReason).toBeNull();
-  });
-
-  it("imports Claude Code entries non-interactively", async () => {
-    const fs = new MemFs();
-    fs.files.set(
-      CLAUDE_PATH,
-      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
-    );
-
-    await importAgentServers(ctx(fs), { envVar: "/usr/local/bin/ratel-local" });
-
-    expect(JSON.parse(fs.files.get(USER_PATH) as string).mcpServers.fs.command).toBe("echo");
-    const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
-    expect(claude.mcpServers.fs).toBeUndefined();
-    expect(claude.mcpServers["ratel-local"]).toBeUndefined();
-  });
-
-  it("rolls back a non-interactive import when the agent rewrite fails after the Ratel write", async () => {
-    const homeDir = await mkdtemp(join(tmpdir(), "ratel-core-import-transaction-"));
-    try {
-      const claudePath = join(homeDir, ".claude.json");
-      const ratelPath = join(homeDir, ".ratel", "config.json");
-      const originalClaude = JSON.stringify({
-        mcpServers: { fs: { type: "stdio", command: "echo" } },
-      });
-      await writeFile(claudePath, originalClaude, "utf8");
-      const mutationEngine = await createMutationEngine({
-        controlDir: join(homeDir, ".ratel"),
-        hooks: {
-          beforeApplyOperation(_operation, index) {
-            if (index === 1) throw new Error("fail-core-agent-publication");
-          },
-        },
-      });
-
-      await expect(
-        importAgentServers(
-          { env: { homeDir }, fs: nodeFs, log: () => {} },
-          {
-            envVar: "/usr/local/bin/ratel-local",
-            mutationEngine,
-          },
-        ),
-      ).rejects.toThrow("fail-core-agent-publication");
-
-      await expect(readFile(ratelPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await readFile(claudePath, "utf8")).toBe(originalClaude);
-    } finally {
-      await rm(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("preserves unknown Ratel document fields through a transactional agent import", async () => {
-    const homeDir = await mkdtemp(join(tmpdir(), "ratel-core-import-lossless-"));
-    try {
-      const claudePath = join(homeDir, ".claude.json");
-      const ratelPath = join(homeDir, ".ratel", "config.json");
-      await mkdir(join(homeDir, ".ratel"), { recursive: true });
-      await writeFile(
-        claudePath,
-        JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
-        "utf8",
-      );
-      await writeFile(
-        ratelPath,
-        JSON.stringify({ custom: { keep: true }, skills: { dirs: [] } }),
-        "utf8",
-      );
-
-      await importAgentServers(
-        { env: { homeDir }, fs: nodeFs, log: () => {} },
-        { envVar: "/usr/local/bin/ratel-local" },
-      );
-
-      const document = JSON.parse(await readFile(ratelPath, "utf8"));
-      expect(document.custom).toEqual({ keep: true });
-      expect(document.skills).toEqual({ dirs: [] });
-      expect(document.mcpServers.fs.command).toBe("echo");
-    } finally {
-      await rm(homeDir, { recursive: true, force: true });
-    }
-  });
-
-  it("links Claude Code non-interactively without removing native entries", async () => {
-    const fs = new MemFs();
-    fs.files.set(
-      USER_PATH,
-      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
-    );
-    fs.files.set(
-      CLAUDE_PATH,
-      JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } }),
-    );
-
-    await linkAgentToRatel(ctx(fs), { envVar: "/usr/local/bin/ratel-local" });
-
-    const claude = JSON.parse(fs.files.get(CLAUDE_PATH) as string);
-    expect(claude.mcpServers.fs.command).toBe("echo");
-    expect(claude.mcpServers["ratel-local"].args).toEqual([
-      "connect",
-      "--agent-host",
-      "claude-code",
-      "--link-scope",
-      "user",
-    ]);
   });
 
   it("rejects a native project Codex config behind an escaping .codex symlink", async () => {
@@ -860,10 +861,13 @@ command = "echo"
       await symlink(outside, join(projectRoot, ".codex"));
 
       await expect(
-        previewAgentLink(
+        prepareAgentLink(
           { env: { homeDir, projectRoot }, fs: nodeFs, log: () => {} },
           { hostKind: "codex" },
-          { bin: { command: "/usr/local/bin/ratel-local", args: [], source: "env" } },
+          {
+            bin: { command: "/usr/local/bin/ratel-local", args: [], source: "env" },
+            preparedChanges: memoryPreparedChanges(new MemFs()),
+          },
         ),
       ).rejects.toMatchObject({ statusCode: 422, code: "PROJECT_PATH_UNSAFE" });
       await expect(readFile(join(outside, "config.toml"), "utf8")).resolves.toContain(
@@ -894,24 +898,5 @@ command = "echo"
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("leaves plugin-linked Claude Code unchanged in the non-interactive link operation", async () => {
-    const fs = new MemFs();
-    fs.files.set(
-      CLAUDE_SETTINGS_PATH,
-      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
-    );
-    const logs: string[] = [];
-
-    const manifest = await linkAgentToRatel({
-      env: { homeDir: HOME, projectRoot: ROOT },
-      fs,
-      log: (message) => logs.push(message),
-    });
-
-    expect(manifest).toBeNull();
-    expect(fs.files.has(CLAUDE_PATH)).toBe(false);
-    expect(logs.join("\n")).toMatch(/linked through the Ratel Local plugin/i);
   });
 });

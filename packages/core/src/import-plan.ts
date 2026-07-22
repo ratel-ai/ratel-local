@@ -14,6 +14,9 @@ export interface ImportInputs {
   ratelUser: RatelConfig | null;
   ratelProject: RatelConfig | null;
   ratelLocal: RatelConfig | null;
+  ratelUserText?: string | null;
+  ratelProjectText?: string | null;
+  ratelLocalText?: string | null;
   bin: ResolvedBin;
   ratelUserPath: string;
   ratelProjectPath?: string;
@@ -21,7 +24,7 @@ export interface ImportInputs {
   projectRoot?: string;
 }
 
-export type FileChange = {
+export type PlannedFileWrite = {
   kind: "write";
   path: string;
   before: string | null;
@@ -43,9 +46,9 @@ export interface ImportConflict {
 
 export type ImportConflictStrategy = "add-missing-only" | "replace-from-agent" | "replace-selected";
 
-export interface ImportPlan {
-  ratelChanges: FileChange[];
-  agentChanges: FileChange[];
+export interface AgentImportDraft {
+  ratelChanges: PlannedFileWrite[];
+  agentChanges: PlannedFileWrite[];
   agentHostChanges?: AgentHostChangeSet;
   summary: {
     movedFromUser: string[];
@@ -62,7 +65,7 @@ export interface ImportPlan {
   };
 }
 
-export interface BuildImportPlanOptions {
+export interface BuildAgentImportDraftOptions {
   selection?: ReadonlySet<string> | readonly string[];
   conflictStrategy?: ImportConflictStrategy;
   replaceConflicts?: ReadonlySet<string> | readonly string[];
@@ -92,10 +95,10 @@ function bundleAgentScope(state: AgentHostState, scope: AgentScope): ScopeBundle
   return { movableNames, movableEntries, hadRatelEntry };
 }
 
-export function buildImportPlan(
+export function buildAgentImportDraft(
   inputs: ImportInputs,
-  options: BuildImportPlanOptions = {},
-): ImportPlan {
+  options: BuildAgentImportDraftOptions = {},
+): AgentImportDraft {
   const skipped: SkippedEntry[] = [];
   const conflicts: ImportConflict[] = [];
   const selection = normalizeSelection(options.selection);
@@ -195,15 +198,33 @@ export function buildImportPlan(
   if (agentRewriteP.length > 0 && p.hadRatelEntry) overwrittenRatelEntries.push("project");
   if (agentRewriteL.length > 0 && l.hadRatelEntry) overwrittenRatelEntries.push("local");
 
-  // Generate FileChanges, partitioned by audience.
-  const ratelChanges: FileChange[] = [];
+  // Generate PlannedFileWrites, partitioned by audience.
+  const ratelChanges: PlannedFileWrite[] = [];
 
-  pushRatelWrite(ratelChanges, inputs.ratelUserPath, inputs.ratelUser, ratelUserNew);
+  pushRatelWrite(
+    ratelChanges,
+    inputs.ratelUserPath,
+    inputs.ratelUser,
+    ratelUserNew,
+    inputs.ratelUserText,
+  );
   if (inputs.ratelProjectPath) {
-    pushRatelWrite(ratelChanges, inputs.ratelProjectPath, inputs.ratelProject, ratelProjectNew);
+    pushRatelWrite(
+      ratelChanges,
+      inputs.ratelProjectPath,
+      inputs.ratelProject,
+      ratelProjectNew,
+      inputs.ratelProjectText,
+    );
   }
   if (inputs.ratelLocalPath) {
-    pushRatelWrite(ratelChanges, inputs.ratelLocalPath, inputs.ratelLocal, ratelLocalNew);
+    pushRatelWrite(
+      ratelChanges,
+      inputs.ratelLocalPath,
+      inputs.ratelLocal,
+      ratelLocalNew,
+      inputs.ratelLocalText,
+    );
   }
 
   return {
@@ -225,11 +246,11 @@ export function buildImportPlan(
   };
 }
 
-export async function buildAgentImportPlan(
+export async function buildAgentAgentImportDraft(
   inputs: ImportInputs & { agentHost: AgentHostAdapter; agentState: AgentHostState },
-  options: BuildImportPlanOptions = {},
-): Promise<ImportPlan> {
-  const base = buildImportPlan(inputs, options);
+  options: BuildAgentImportDraftOptions = {},
+): Promise<AgentImportDraft> {
+  const base = buildAgentImportDraft(inputs, options);
   const removeEntriesByScope = new Map<AgentScope, Set<string>>();
   for (const scope of ["user", "project", "local"] as const) {
     const moved =
@@ -267,7 +288,7 @@ export async function buildAgentImportPlan(
 
 export async function buildAgentLinkPlan(
   inputs: ImportInputs & { agentHost: AgentHostAdapter; agentState: AgentHostState },
-): Promise<ImportPlan> {
+): Promise<AgentImportDraft> {
   const installGatewayScopes = collectRatelScopesWithEntries(
     inputs,
     new Set(inputs.agentHost.supportedScopes),
@@ -331,7 +352,7 @@ function hasRuntimeContent(config: RatelConfig | null): boolean {
   return (config.skills?.dirs?.length ?? 0) > 0;
 }
 
-function emptyImportSummary(conflictStrategy: ImportConflictStrategy): ImportPlan["summary"] {
+function emptyImportSummary(conflictStrategy: ImportConflictStrategy): AgentImportDraft["summary"] {
   return {
     movedFromUser: [],
     movedFromProject: [],
@@ -417,13 +438,15 @@ function normalizeEntry(entry: ServerEntry): Record<string, unknown> {
 }
 
 function pushRatelWrite(
-  changes: FileChange[],
+  changes: PlannedFileWrite[],
   path: string,
   before: RatelConfig | null,
   after: RatelConfig | null,
+  beforeSource?: string | null,
 ) {
   if (!after) return;
-  const beforeText = before ? serialize(before) : null;
+  const beforeText =
+    beforeSource === undefined ? (before ? serialize(before) : null) : beforeSource;
   const afterText = serialize(after);
   if (beforeText !== afterText) {
     changes.push({ kind: "write", path, before: beforeText, after: afterText });

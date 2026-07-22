@@ -1,6 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { DocumentRevision, ProjectId, RatelScopeRef } from "./context.js";
+import { startBackup } from "./backup.js";
+import type { DocumentRevision, ProjectId, RatelScopeRef, RuntimeContextRef } from "./context.js";
+import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
 import {
   ConfigError,
@@ -13,12 +15,16 @@ import {
   createMutationEngine,
   documentRevision,
   MISSING_DOCUMENT_REVISION,
-  type MutationCommit,
   MutationConflictError,
-  type MutationEngine,
-  type MutationPlan,
+  type MutationPreview,
   MutationValidationError,
 } from "./mutation-engine.js";
+import {
+  createPreparedChangeCoordinator,
+  type PreparedChange,
+  type PreparedChangeCommit,
+  type PreparedChangeCoordinator,
+} from "./prepared-change-coordinator.js";
 import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import {
   type ProjectContext,
@@ -45,15 +51,33 @@ export interface ScopedConfigRead {
 
 export interface ConfigControlPlane {
   read(target: RatelScopeRef): Promise<ScopedConfigRead>;
-  previewServerMutation(request: ScopedServerMutationRequest): Promise<MutationPlan>;
-  apply(plan: MutationPlan, options: { digest: string }): Promise<MutationCommit>;
-  mutateServer(request: ScopedServerMutationRequest): Promise<MutationCommit>;
+  prepareServerMutation(
+    request: ScopedServerMutationRequest,
+  ): Promise<PreparedChange<ServerMutationReview>>;
+  commit(changeId: string): Promise<PreparedChangeCommit<ServerMutationResult>>;
+  cancel(changeId: string): void;
+  mutateServer(
+    request: ScopedServerMutationRequest,
+  ): Promise<PreparedChangeCommit<ServerMutationResult>>;
+}
+
+export interface ServerMutationReview {
+  action: ServerMutationAction;
+  target: RatelScopeRef;
+  name: string;
+  files: MutationPreview["files"];
+}
+
+export interface ServerMutationResult {
+  action: ServerMutationAction;
+  target: RatelScopeRef;
+  name: string;
 }
 
 export interface ConfigControlPlaneOptions {
   homeDir: string;
   projectRegistry: ProjectRegistry;
-  mutationEngine?: MutationEngine;
+  preparedChanges?: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
 }
 
@@ -91,25 +115,18 @@ export class ConfigRegistrationError extends Error {
 export async function createConfigControlPlane(
   options: ConfigControlPlaneOptions,
 ): Promise<ConfigControlPlane> {
-  const mutationEngine =
-    options.mutationEngine ??
-    (await createMutationEngine({ controlDir: join(options.homeDir, ".ratel") }));
-  return new FilesystemConfigControlPlane(options, mutationEngine);
+  const preparedChanges =
+    options.preparedChanges ??
+    createPreparedChangeCoordinator({
+      mutationEngine: await createMutationEngine({ controlDir: join(options.homeDir, ".ratel") }),
+    });
+  return new FilesystemConfigControlPlane(options, preparedChanges);
 }
 
 class FilesystemConfigControlPlane implements ConfigControlPlane {
-  private readonly pendingPlans = new Map<
-    string,
-    {
-      allowedPaths: Set<string>;
-      projectRootsByPath: Map<string, string>;
-      serializedPlan: string;
-    }
-  >();
-
   constructor(
     private readonly options: ConfigControlPlaneOptions,
-    private readonly mutationEngine: MutationEngine,
+    private readonly preparedChanges: PreparedChangeCoordinator,
   ) {}
 
   async read(target: RatelScopeRef): Promise<ScopedConfigRead> {
@@ -156,7 +173,9 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
     };
   }
 
-  async previewServerMutation(request: ScopedServerMutationRequest): Promise<MutationPlan> {
+  async prepareServerMutation(
+    request: ScopedServerMutationRequest,
+  ): Promise<PreparedChange<ServerMutationReview>> {
     validateRequest(request);
     let localGitOperation: { kind: "replace-file"; path: string; contents: string } | undefined;
     let localGitRevision: DocumentRevision | undefined;
@@ -220,88 +239,94 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
       throw error;
     }
 
-    const plan = await this.mutationEngine.preview([
+    const operations = [
       {
-        kind: "replace-file",
+        kind: "replace-file" as const,
         path: current.path,
         contents: `${JSON.stringify(document, null, 2)}\n`,
       },
       ...(localGitOperation ? [localGitOperation] : []),
-    ]);
-    const previewRevision = plan.baseRevisions[current.path];
-    if (previewRevision !== current.documentRevision) {
-      throw new MutationConflictError(
-        "revision_conflict",
-        `document changed while creating preview: ${current.path}`,
-        current.path,
-        current.documentRevision,
-        previewRevision,
-      );
-    }
-    if (
-      localGitOperation &&
-      localGitRevision !== undefined &&
-      plan.baseRevisions[localGitOperation.path] !== localGitRevision
-    ) {
-      throw new MutationConflictError(
-        "revision_conflict",
-        `Git exclude changed while creating preview: ${localGitOperation.path}`,
-        localGitOperation.path,
-        localGitRevision,
-        plan.baseRevisions[localGitOperation.path],
-      );
-    }
+    ];
     const projectRootsByPath = new Map<string, string>();
     if (request.target.scope !== "user") {
       const project = await this.resolveAvailableProject(request.target.projectId);
       projectRootsByPath.set(current.path, project.canonicalRoot);
     }
-    this.pendingPlans.set(plan.id, {
-      allowedPaths: new Set(plan.operations.map(({ path }) => path)),
-      projectRootsByPath,
-      serializedPlan: JSON.stringify(plan),
-    });
-    return plan;
-  }
-
-  apply(plan: MutationPlan, options: { digest: string }): Promise<MutationCommit> {
-    const pending = this.pendingPlans.get(plan.id);
-    this.pendingPlans.delete(plan.id);
-    if (!pending) {
-      throw new MutationConflictError(
-        "digest_mismatch",
-        "config mutation preview is unknown, expired, or already consumed",
-      );
-    }
-    if (JSON.stringify(plan) !== pending.serializedPlan) {
-      throw new MutationConflictError(
-        "digest_mismatch",
-        "config mutation preview was modified after it was issued",
-      );
-    }
-    return this.mutationEngine.apply(plan, {
-      ...options,
-      precondition: async () => {
-        for (const [path, projectRoot] of pending.projectRootsByPath) {
-          await assertSafeProjectControlPath(projectRoot, path);
-        }
-      },
-      operationPrecondition: async (operation) => {
-        if (!pending.allowedPaths.has(operation.path)) {
+    const allowedPaths = new Set(operations.map(({ path }) => path));
+    return this.preparedChanges.prepare({
+      kind: `mcp.${request.action}`,
+      operations,
+      affectedContexts: [contextForTarget(request.target)],
+      buildPreview: (mutation) => {
+        const previewRevision = mutation.baseRevisions[current.path];
+        if (previewRevision !== current.documentRevision) {
           throw new MutationConflictError(
-            "digest_mismatch",
-            `config mutation contains an unexpected path: ${operation.path}`,
+            "revision_conflict",
+            `document changed while creating preview: ${current.path}`,
+            current.path,
+            current.documentRevision,
+            previewRevision,
           );
         }
-        const projectRoot = pending.projectRootsByPath.get(operation.path);
-        if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
+        if (
+          localGitOperation &&
+          localGitRevision !== undefined &&
+          mutation.baseRevisions[localGitOperation.path] !== localGitRevision
+        ) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `Git exclude changed while creating preview: ${localGitOperation.path}`,
+            localGitOperation.path,
+            localGitRevision,
+            mutation.baseRevisions[localGitOperation.path],
+          );
+        }
+        return {
+          action: request.action,
+          target: request.target,
+          name: request.name,
+          files: mutation.preview.files,
+        };
       },
+      invariants: {
+        precondition: async () => {
+          for (const [path, projectRoot] of projectRootsByPath) {
+            await assertSafeProjectControlPath(projectRoot, path);
+          }
+        },
+        operationPrecondition: async (operation) => {
+          if (!allowedPaths.has(operation.path)) {
+            throw new MutationConflictError(
+              "digest_mismatch",
+              `config mutation contains an unexpected path: ${operation.path}`,
+            );
+          }
+          const projectRoot = projectRootsByPath.get(operation.path);
+          if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
+        },
+      },
+      captureBackup: async () => {
+        const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
+        for (const { path } of operations) await backup.capture(path);
+        return backup.finalize(request.action);
+      },
+      result: { action: request.action, target: request.target, name: request.name },
     });
   }
 
-  async mutateServer(request: ScopedServerMutationRequest): Promise<MutationCommit> {
-    const plan = await this.previewServerMutation(request);
-    return this.apply(plan, { digest: plan.digest });
+  async mutateServer(
+    request: ScopedServerMutationRequest,
+  ): Promise<PreparedChangeCommit<ServerMutationResult>> {
+    const change = await this.prepareServerMutation(request);
+    return this.preparedChanges.commit(change.changeId);
+  }
+
+  commit(changeId: string): Promise<PreparedChangeCommit<ServerMutationResult>> {
+    return this.preparedChanges.commit(changeId);
+  }
+
+  cancel(changeId: string): void {
+    this.preparedChanges.cancel(changeId);
   }
 
   private async resolveConfigPath(target: RatelScopeRef): Promise<string> {
@@ -361,6 +386,12 @@ function validateRequest(request: ScopedServerMutationRequest): void {
   if (request.action !== "remove" && request.entry === undefined) {
     throw new MutationValidationError(`${request.action} requires an MCP server entry`);
   }
+}
+
+function contextForTarget(target: RatelScopeRef): RuntimeContextRef {
+  return target.scope === "user"
+    ? { kind: "global" }
+    : { kind: "project", projectId: target.projectId };
 }
 
 function errorMessage(error: unknown): string {

@@ -3,7 +3,7 @@ import type {
   DocumentRevision,
   HierarchyEnv,
   JsonFs,
-  PlanExecutor,
+  PreparedChangeCoordinator,
   RatelScope,
   ServerEntry,
 } from "@ratel-ai/ratel-local-core";
@@ -18,10 +18,9 @@ export interface HandlerCtx {
   log: (message: string) => void;
   prompts: PromptAdapter;
   installAgentPlugin?: AgentPluginInstaller;
+  preparedChanges?: PreparedChangeCoordinator;
   stdin?: () => Promise<string>;
   stdout?: (message: string) => void;
-  /** Explicit compatibility seam for tests/embedders with a non-native filesystem. */
-  planExecutor?: PlanExecutor;
 }
 
 export interface CliServerMutationRequest {
