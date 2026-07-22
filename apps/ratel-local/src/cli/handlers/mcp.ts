@@ -20,7 +20,12 @@ Verbs:
 
 To import agent MCP configs and skills, see \`ratel-local import\`.
 To point an agent at Ratel, see \`ratel-local link\`.
-To start the gateway, see \`ratel-local serve\`.`;
+To start the gateway, see \`ratel-local serve\`.
+
+Scopes:
+  --scope user     write ~/.ratel/config.json (default)
+  --scope project  write <current-project>/.ratel/config.json
+  --scope local    write <current-project>/.ratel/config.local.json`;
 
 export async function runMcp(
   ctx: HandlerCtx,

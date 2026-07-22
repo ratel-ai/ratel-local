@@ -269,6 +269,24 @@ async function route(
   if (method === "GET" && path === "/api/skills") {
     return getSkillsWithSnapshot(ctx, runtimeContext, snapshotResolver, skillDiscovery);
   }
+  if (method === "POST" && path === "/api/skills" && skillRegistrationControlPlane) {
+    const body = await readJsonBody(req);
+    const target = parseRatelScopeRef(body.target);
+    const id = requiredBodyString(body.name, "name");
+    const description = requiredBodyString(body.description, "description");
+    const tags = stringArray(body.tags, "tags");
+    if (body.body !== undefined && typeof body.body !== "string") {
+      throw new UiRouteError(422, "body must be a string");
+    }
+    const commit = await skillRegistrationControlPlane.create({
+      target,
+      id,
+      description,
+      tags,
+      body: typeof body.body === "string" ? body.body : "",
+    });
+    return { status: 200, body: commit };
+  }
   if (method === "POST" && path === "/api/skills/import/prepare" && skillImportControlPlane) {
     const body = await readJsonBody(req);
     if (!Array.isArray(body.selections)) {

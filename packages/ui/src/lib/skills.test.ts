@@ -69,6 +69,48 @@ describe("scoped skill response", () => {
     ]);
   });
 
+  it("hides a discovered project skill when its exact folder is already registered", () => {
+    const canonicalPath = "/repo/.agents/skills/koota";
+    const response = {
+      managedDir: "",
+      nativeDir: "",
+      codexDir: "",
+      managed: [],
+      available: [],
+      problems: [],
+      registrations: [
+        {
+          id: "koota",
+          source: "unknown",
+          scopeRef: { scope: "project" as const, projectId: "prj_reanimal" },
+          ref: {
+            scopeRef: { scope: "project" as const, projectId: "prj_reanimal" },
+            id: "koota",
+            kind: "entry" as const,
+            configuredPath: ".agents/skills/koota",
+          },
+          configuredPath: ".agents/skills/koota",
+          canonicalPath,
+          mode: "reference" as const,
+          state: "effective" as const,
+          editable: false,
+        },
+      ],
+      discovered: [
+        {
+          id: "koota",
+          name: "Koota",
+          description: "State management",
+          source: "codex-current",
+          candidateId: "candidate_koota",
+          canonicalPath,
+        },
+      ],
+    };
+
+    expect(discoveredSkillSummaries(response)).toEqual([]);
+  });
+
   it("groups every configured registration state by project scope", () => {
     const response = {
       managedDir: "",

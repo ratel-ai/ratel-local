@@ -56,6 +56,56 @@ describe("SkillRegistrationControlPlane", () => {
     return path;
   }
 
+  it("creates an authored skill as an owned scoped copy", async () => {
+    const { control, configPath } = await fixture({});
+
+    const commit = await control.create({
+      target: { scope: "user" },
+      id: "authored",
+      description: "Authored in Ratel",
+      tags: ["one", "two"],
+      body: "# Instructions\n\nDo the thing.",
+    });
+
+    expect(commit.result).toEqual({
+      action: "create",
+      target: { scope: "user" },
+      id: "authored",
+    });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: {
+        entries: { authored: { mode: "copy", source: "ratel" } },
+        dirs: [],
+      },
+    });
+    const copyPath = join(homeDir, ".ratel", "skills", "authored");
+    expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain(
+      'description: "Authored in Ratel"',
+    );
+    expect(JSON.parse(await readFile(join(copyPath, ".ratel-skill.json"), "utf8"))).toEqual({
+      version: 1,
+      id: "authored",
+    });
+  });
+
+  it("refuses to overwrite an unregistered skill directory", async () => {
+    await putOwnedCopy("existing");
+    const { control } = await fixture({});
+
+    await expect(
+      control.prepareCreate({
+        target: { scope: "user" },
+        id: "existing",
+        description: "Do not overwrite",
+        tags: [],
+        body: "Body",
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, reason: "registration_exists" });
+    expect(
+      await readFile(join(homeDir, ".ratel", "skills", "existing", "SKILL.md"), "utf8"),
+    ).toContain("Body");
+  });
+
   it("remove-scope deletes only the registration and leaves its copy", async () => {
     const copyPath = await putOwnedCopy("demo");
     const { control, configPath } = await fixture({ demo: { mode: "copy" } });

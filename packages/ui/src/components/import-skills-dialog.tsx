@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { projectLabel } from "@/lib/projects";
 import {
   applySkillImportSelections,
   availableSkillImportScopes,
@@ -54,7 +55,7 @@ const LOAD_MORE_SKILL_COUNT = 30;
 
 /** Import opaque discovery candidates into one explicit Ratel scope and mode. */
 export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
-  const { context, request, runAction, busy } = useRatelApp();
+  const { busy, context, projects, request, runAction } = useRatelApp();
   const skills = props.source
     ? props.available.filter((skill) => skill.source === props.source)
     : props.available;
@@ -63,6 +64,10 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
   const [scope, setScope] = useState<SkillImportScope>(initialTarget?.scope ?? "user");
   const [mode, setMode] = useState<SkillImportMode>(initialTarget?.mode ?? "reference");
   const availableScopes = availableSkillImportScopes(context);
+  const project =
+    context.kind === "project"
+      ? projects.find((candidate) => candidate.id === context.projectId)
+      : undefined;
 
   // Start each session with a clean slate; the user opts in per skill (or all).
   useEffect(() => {
@@ -153,6 +158,25 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
                 </SelectContent>
               </Select>
             </div>
+            <p className="text-muted-foreground text-xs sm:col-span-2">
+              {scope === "user" ? (
+                <>
+                  Destination: <strong className="text-foreground">Global</strong> · User scope
+                </>
+              ) : (
+                <>
+                  Project:{" "}
+                  <strong className="text-foreground">
+                    {project
+                      ? projectLabel(project)
+                      : context.kind === "project"
+                        ? context.projectId
+                        : "Unknown"}
+                  </strong>{" "}
+                  · {scopeLabel(scope)} scope
+                </>
+              )}
+            </p>
           </div>
         ) : (
           <p className="rounded-md border border-border px-3 py-4 text-muted-foreground text-sm">
