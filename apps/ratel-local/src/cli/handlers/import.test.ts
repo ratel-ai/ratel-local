@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   type BackupFs,
   createMutationEngine,
-  executePlan,
+  createPreparedChangeCoordinator,
   type JsonFs,
   nodeFs,
   type ResolvedBin,
@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { CANCEL_SYMBOL, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import type { SkillManagePaths } from "../skills/manage.js";
 import { runImport } from "./import.js";
+import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
 
 const HOME = "/home/u";
@@ -75,7 +76,7 @@ function ctxOf(
       env: { homeDir: HOME, projectRoot: withProjectRoot ? ROOT : undefined },
       fs,
       log: (m) => logs.push(m),
-      planExecutor: executePlan,
+      preparedChanges: createTestPreparedChanges(fs),
       prompts,
     },
   };
@@ -341,6 +342,7 @@ command = "echo"
         env: { homeDir },
         fs: nodeFs,
         log: () => {},
+        preparedChanges: createPreparedChangeCoordinator({ mutationEngine }),
         prompts: autoConfirm(),
       };
 
@@ -349,7 +351,6 @@ command = "echo"
           bin: BIN,
           yes: true,
           agentKind: "claude-code",
-          mutationEngine,
         }),
       ).rejects.toThrow("fail-agent-publication");
 
@@ -1045,7 +1046,7 @@ command = "codex"
     expect(backupKeys.length).toBeGreaterThan(0);
   });
 
-  it("logs a backup location if executor fails mid-flight", async () => {
+  it("retains a backup and rolls back if a prepared commit fails mid-flight", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -1061,10 +1062,11 @@ command = "codex"
       }),
     );
     fs.failNextWriteAt = HOME_CLAUDE;
-    const { ctx, logs } = ctxOf(fs, autoConfirm(), false);
+    const before = fs.files.get(HOME_CLAUDE);
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
     await expect(runImport(ctx, { bin: BIN, yes: true })).rejects.toThrow();
-    expect(logs.join("\n")).toMatch(/partial backup may exist under ~\/\.ratel\/backups\//);
-    expect(logs.join("\n")).not.toMatch(/ratel-local backup undo/);
+    expect(fs.files.get(HOME_CLAUDE)).toBe(before);
+    expect([...fs.files.keys()].some((path) => path.includes("/.ratel/backups/"))).toBe(true);
   });
 
   it("multiselect deselects an entry: only selected ones land in Ratel, deselected ones stay in Claude", async () => {

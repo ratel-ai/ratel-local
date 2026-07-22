@@ -17,7 +17,7 @@ import {
   type DocumentRevision,
   documentRevision,
   InvalidContextSnapshotError,
-  type MutationPlan,
+  type PreparedChangeCoordinator,
   type ProjectAdmissionLock,
   type ProjectId,
   type ProjectRegistry,
@@ -28,7 +28,6 @@ import {
   type ServerEntry,
   type SkillDiscovery,
   type SkillImportControlPlane,
-  type SkillImportPlan,
   type SkillImportSelection,
   type SkillRegistrationControlPlane,
 } from "@ratel-ai/ratel-local-core";
@@ -43,18 +42,7 @@ import {
 import {
   type ActiveMcpClientReader,
   type ApiResponse,
-  activateSkillsRoute,
-  addServer,
-  applyCombinedImport,
-  applyImportAgent,
-  applyImportRatel,
-  applyLink,
   authServer,
-  createSkillRoute,
-  deactivateSkillsRoute,
-  doImport,
-  doLink,
-  editServer,
   getAgentHosts,
   getConfig,
   getMcpClients,
@@ -62,12 +50,10 @@ import {
   getSkills,
   installClaudeStatuslineRoute,
   openFile,
-  previewImport,
-  previewLink,
-  removeServer,
+  prepareImport,
+  prepareLink,
   repairAgentConnection,
   uninstallClaudeStatuslineRoute,
-  updateSkillRoute,
 } from "./routes.js";
 import {
   extractBearer,
@@ -91,11 +77,10 @@ export interface StartUiServerOptions {
   skillDiscovery?: SkillDiscovery;
   skillImportControlPlane?: SkillImportControlPlane;
   skillRegistrationControlPlane?: SkillRegistrationControlPlane;
+  preparedChanges?: PreparedChangeCoordinator;
   /** Long-lived local daemon credential used by CLI API clients. */
   daemonToken?: string;
   canForgetProject?: CanForgetProject;
-  /** Awaited after a scoped commit so the daemon can publish fresh revisions. */
-  onScopedMutationCommitted?: (targets: readonly RatelScopeRef[]) => void | Promise<void>;
   publicRoute?: (req: IncomingMessage, res: ServerResponse, path: string) => Promise<boolean>;
 }
 
@@ -103,7 +88,6 @@ interface RequestHandlerOptions extends StartUiServerOptions {
   projectRegistry: ProjectRegistry;
   projectAware: boolean;
   sessionTokens: InMemoryUiSessionTokens;
-  skillRegistrationPlanTargets: Map<string, RatelScopeRef>;
 }
 
 export interface UiServerHandle {
@@ -118,7 +102,6 @@ export async function startUiServer(opts: StartUiServerOptions): Promise<UiServe
     ...opts,
     projectAware: opts.projectRegistry !== undefined,
     sessionTokens: opts.sessionTokens ?? new InMemoryUiSessionTokens([opts.token]),
-    skillRegistrationPlanTargets: new Map(),
     projectRegistry:
       opts.projectRegistry ?? createProjectRegistry({ homeDir: opts.ctx.env.homeDir }),
     canForgetProject:
@@ -215,8 +198,7 @@ async function handleRequest(
       opts.skillDiscovery,
       opts.skillImportControlPlane,
       opts.skillRegistrationControlPlane,
-      opts.onScopedMutationCommitted,
-      opts.skillRegistrationPlanTargets,
+      opts.preparedChanges,
     );
     if (!response) {
       writeJson(res, 404, { error: "not found" });
@@ -224,8 +206,13 @@ async function handleRequest(
     }
     writeJson(res, response.status, response.body);
   } catch (err) {
+    const code =
+      typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
+        ? err.code
+        : undefined;
     writeJson(res, routeErrorStatus(err, opts.snapshotResolver ? 500 : 400), {
       error: (err as Error).message,
+      ...(code ? { code } : {}),
     });
   }
 }
@@ -242,10 +229,22 @@ async function route(
   skillDiscovery?: SkillDiscovery,
   skillImportControlPlane?: SkillImportControlPlane,
   skillRegistrationControlPlane?: SkillRegistrationControlPlane,
-  onScopedMutationCommitted?: (targets: readonly RatelScopeRef[]) => void | Promise<void>,
-  skillRegistrationPlanTargets: Map<string, RatelScopeRef> = new Map(),
+  preparedChanges?: PreparedChangeCoordinator,
 ): Promise<ApiResponse | null> {
   const method = req.method ?? "GET";
+
+  const commitChangeMatch = /^\/api\/changes\/([^/]+)\/commit$/.exec(path);
+  if (commitChangeMatch && method === "POST" && preparedChanges) {
+    return {
+      status: 200,
+      body: await preparedChanges.commit(decodeURIComponent(commitChangeMatch[1])),
+    };
+  }
+  const cancelChangeMatch = /^\/api\/changes\/([^/]+)$/.exec(path);
+  if (cancelChangeMatch && method === "DELETE" && preparedChanges) {
+    preparedChanges.cancel(decodeURIComponent(cancelChangeMatch[1]));
+    return { status: 204, body: null };
+  }
 
   if (method === "GET" && path === "/api/config") {
     return getConfigWithSnapshot(ctx, runtimeContext, snapshotResolver);
@@ -270,38 +269,19 @@ async function route(
   if (method === "GET" && path === "/api/skills") {
     return getSkillsWithSnapshot(ctx, runtimeContext, snapshotResolver, skillDiscovery);
   }
-  if (method === "POST" && path === "/api/skills/import/preview" && skillImportControlPlane) {
+  if (method === "POST" && path === "/api/skills/import/prepare" && skillImportControlPlane) {
     const body = await readJsonBody(req);
     if (!Array.isArray(body.selections)) {
       throw new UiRouteError(422, "selections must be an array");
     }
-    const plan = await skillImportControlPlane.preview(
+    const change = await skillImportControlPlane.prepare(
       body.selections as unknown as SkillImportSelection[],
     );
-    return { status: 200, body: plan };
-  }
-  if (method === "POST" && path === "/api/skills/import/apply" && skillImportControlPlane) {
-    const body = await readJsonBody(req);
-    if (typeof body.plan !== "object" || body.plan === null || Array.isArray(body.plan)) {
-      throw new UiRouteError(422, "plan must be an object returned by preview");
-    }
-    if (typeof body.digest !== "string" || body.digest.length === 0) {
-      throw new UiRouteError(422, "digest is required");
-    }
-    const submittedPlan = body.plan as unknown as SkillImportPlan;
-    const commit = await skillImportControlPlane.apply(submittedPlan, {
-      digest: body.digest,
-    });
-    await onScopedMutationCommitted?.(
-      submittedPlan.selections.flatMap((selection) =>
-        selection.targets.map(({ scopeRef }) => scopeRef),
-      ),
-    );
-    return { status: 200, body: commit };
+    return { status: 200, body: change };
   }
   if (
     method === "POST" &&
-    path === "/api/skills/add-scope/preview" &&
+    path === "/api/skills/add-scope/prepare" &&
     skillRegistrationControlPlane
   ) {
     const body = await readJsonBody(req);
@@ -310,62 +290,13 @@ async function route(
     if (body.mode !== "reference" && body.mode !== "copy") {
       throw new UiRouteError(422, "mode must be reference or copy");
     }
-    const plan = await skillRegistrationControlPlane.previewAddScope({
+    const change = await skillRegistrationControlPlane.prepareAddScope({
       context: runtimeContext,
       target,
       id,
       mode: body.mode,
     });
-    skillRegistrationPlanTargets.set(plan.id, target);
-    return { status: 200, body: plan };
-  }
-  if (
-    method === "POST" &&
-    path === "/api/skills/add-scope/apply" &&
-    skillRegistrationControlPlane
-  ) {
-    const body = await readJsonBody(req);
-    if (typeof body.plan !== "object" || body.plan === null || Array.isArray(body.plan)) {
-      throw new UiRouteError(422, "plan must be an object returned by preview");
-    }
-    if (typeof body.digest !== "string" || body.digest.length === 0) {
-      throw new UiRouteError(422, "digest is required");
-    }
-    const plan = body.plan as unknown as MutationPlan;
-    const target = skillRegistrationPlanTargets.get(plan.id);
-    if (!target) {
-      throw new UiRouteError(
-        409,
-        "skill add-scope preview is unknown, expired, or already consumed",
-      );
-    }
-    skillRegistrationPlanTargets.delete(plan.id);
-    const commit = await skillRegistrationControlPlane.apply(plan, {
-      digest: body.digest,
-    });
-    await onScopedMutationCommitted?.([target]);
-    return { status: 200, body: commit };
-  }
-  if (method === "POST" && path === "/api/skills") {
-    if (snapshotResolver) {
-      throw new UiRouteError(422, "create a scoped owned copy through skill import");
-    }
-    const body = await readJsonBody(req);
-    return createSkillRoute(ctx, body);
-  }
-  if (method === "POST" && path === "/api/skills/activate") {
-    if (snapshotResolver) {
-      throw new UiRouteError(422, "legacy activation is disabled; use skill import preview/apply");
-    }
-    const body = await readJsonBody(req);
-    return activateSkillsRoute(ctx, body);
-  }
-  if (method === "POST" && path === "/api/skills/deactivate") {
-    if (snapshotResolver) {
-      throw new UiRouteError(422, "legacy deactivation is disabled; remove a scoped registration");
-    }
-    const body = await readJsonBody(req);
-    return deactivateSkillsRoute(ctx, body);
+    return { status: 200, body: change };
   }
   const skillMatch = /^\/api\/skills\/([^/]+)$/.exec(path);
   if (skillMatch) {
@@ -394,11 +325,9 @@ async function route(
           body: body.body,
           ...(expectedRevision ? { expectedRevision } : {}),
         });
-        await onScopedMutationCommitted?.([target]);
         return { status: 200, body: commit };
       }
-      const body = await readJsonBody(req);
-      return updateSkillRoute(ctx, id, body);
+      return null;
     }
     if (method === "DELETE" && skillRegistrationControlPlane) {
       const body = await readJsonBody(req);
@@ -408,7 +337,6 @@ async function route(
         id,
         deleteOwnedCopy: body.deleteOwnedCopy === true,
       });
-      await onScopedMutationCommitted?.([target]);
       return { status: 200, body: commit };
     }
   }
@@ -425,10 +353,9 @@ async function route(
         undefined,
         body,
       );
-      await onScopedMutationCommitted?.([parseRatelScopeRef(body.target)]);
       return response;
     }
-    return addServer(ctx, body);
+    return null;
   }
 
   const serverMatch = /^\/api\/servers\/([^/]+)$/.exec(path);
@@ -438,10 +365,9 @@ async function route(
       const body = await readJsonBody(req);
       if (configControlPlane) {
         const response = await mutateServerWithControlPlane(configControlPlane, "edit", name, body);
-        await onScopedMutationCommitted?.([parseRatelScopeRef(body.target)]);
         return response;
       }
-      return editServer(ctx, name, body);
+      return null;
     }
     if (method === "DELETE") {
       const body = await readJsonBody(req);
@@ -452,10 +378,9 @@ async function route(
           name,
           body,
         );
-        await onScopedMutationCommitted?.([parseRatelScopeRef(body.target)]);
         return response;
       }
-      return removeServer(ctx, name, body);
+      return null;
     }
   }
 
@@ -467,64 +392,26 @@ async function route(
       : authServer(ctx, name);
   }
 
-  if (method === "POST" && path === "/api/import") {
-    const response = await doImport(ctx);
-    await onScopedMutationCommitted?.(mutationTargetsForContext(runtimeContext));
-    return response;
-  }
-  if (method === "POST" && path === "/api/link") {
-    return doLink(ctx);
-  }
-  if (method === "POST" && path === "/api/agent-preview/import") {
+  if (method === "POST" && path === "/api/agents/import/prepare" && preparedChanges) {
     const body = await readJsonBody(req);
-    return previewImport(ctx, body);
+    return prepareImport(ctx, body, preparedChanges);
   }
-  if (method === "POST" && path === "/api/agent-preview/link") {
+  if (method === "POST" && path === "/api/agents/link/prepare" && preparedChanges) {
     const body = await readJsonBody(req);
-    return previewLink(ctx, body);
+    return prepareLink(ctx, body, preparedChanges);
   }
-  if (method === "POST" && path === "/api/agent-apply/import/ratel") {
+  if (method === "POST" && path === "/api/agent-connection/repair" && preparedChanges) {
     const body = await readJsonBody(req);
-    const response = await applyImportRatel(ctx, body);
-    await onScopedMutationCommitted?.(mutationTargetsForContext(runtimeContext));
-    return response;
+    return repairAgentConnection(ctx, body, preparedChanges);
   }
-  if (method === "POST" && path === "/api/agent-apply/import") {
+  if (method === "POST" && path === "/api/claude-statusline/install" && preparedChanges) {
     const body = await readJsonBody(req);
-    const response = await applyCombinedImport(ctx, body);
-    await onScopedMutationCommitted?.(mutationTargetsForContext(runtimeContext));
-    return response;
+    return installClaudeStatuslineRoute(ctx, body, preparedChanges);
   }
-  if (method === "POST" && path === "/api/agent-apply/import/agent") {
-    const body = await readJsonBody(req);
-    return applyImportAgent(ctx, body);
-  }
-  if (method === "POST" && path === "/api/agent-apply/link") {
-    const body = await readJsonBody(req);
-    return applyLink(ctx, body);
-  }
-  if (method === "POST" && path === "/api/agent-connection/repair") {
-    const body = await readJsonBody(req);
-    return repairAgentConnection(ctx, body);
-  }
-  if (method === "POST" && path === "/api/claude-statusline/install") {
-    const body = await readJsonBody(req);
-    return installClaudeStatuslineRoute(ctx, body);
-  }
-  if (method === "POST" && path === "/api/claude-statusline/uninstall") {
-    return uninstallClaudeStatuslineRoute(ctx);
+  if (method === "POST" && path === "/api/claude-statusline/uninstall" && preparedChanges) {
+    return uninstallClaudeStatuslineRoute(ctx, preparedChanges);
   }
   return null;
-}
-
-function mutationTargetsForContext(context: RuntimeContextRef): RatelScopeRef[] {
-  return context.kind === "global"
-    ? [{ scope: "user" }]
-    : [
-        { scope: "user" },
-        { scope: "project", projectId: context.projectId },
-        { scope: "local", projectId: context.projectId },
-      ];
 }
 
 async function getResolvedSkill(

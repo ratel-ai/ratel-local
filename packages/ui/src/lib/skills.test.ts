@@ -199,12 +199,12 @@ describe("scoped skill import", () => {
     ]);
   });
 
-  it("previews and applies opaque candidates through the current import endpoints", async () => {
+  it("prepares and commits opaque candidates through the shared lifecycle", async () => {
     const calls: Array<{ path: string; body: unknown }> = [];
     const request = async <T>(path: string, init?: { body?: unknown }): Promise<T> => {
       calls.push({ path, body: init?.body });
-      if (path.endsWith("/preview")) {
-        return { id: "plan_1", digest: "digest_1", operations: [] } as T;
+      if (path.endsWith("/prepare")) {
+        return { changeId: "change_1" } as T;
       }
       return { transactionId: "tx_1" } as T;
     };
@@ -219,15 +219,12 @@ describe("scoped skill import", () => {
 
     expect(calls).toEqual([
       {
-        path: "/api/skills/import/preview",
+        path: "/api/skills/import/prepare",
         body: { selections },
       },
       {
-        path: "/api/skills/import/apply",
-        body: {
-          plan: { id: "plan_1", digest: "digest_1", operations: [] },
-          digest: "digest_1",
-        },
+        path: "/api/changes/change_1/commit",
+        body: undefined,
       },
     ]);
   });

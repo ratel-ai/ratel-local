@@ -31,6 +31,8 @@ export interface ReconciledGatewayPoolOptions {
 interface ContextMonitor {
   context: RuntimeContextRef;
   snapshot: ResolvedContextSnapshot;
+  leases: number;
+  closed: boolean;
   watchers: FSWatcher[];
   timer?: NodeJS.Timeout;
   pollTimer?: NodeJS.Timeout;
@@ -56,7 +58,10 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
   }
 
   async acquire(input: ResolvedGatewaySnapshot | DaemonRequestScope): Promise<GatewayLease> {
-    if ("runtimeRevision" in input) return this.options.generations.acquire(input);
+    if ("runtimeRevision" in input) {
+      const lease = await this.options.generations.acquire(input);
+      return input.resolvedContext ? this.bindMonitorLease(lease, input.resolvedContext) : lease;
+    }
     if (input.kind === "user") return this.acquireContext({ kind: "global" });
     const acquireProject = async () => {
       const project = await this.options.registry.registerRoot(input.projectRoot);
@@ -69,7 +74,8 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
 
   async acquireContext(context: RuntimeContextRef): Promise<GatewayLease> {
     const snapshot = await this.resolveAndPublish(context);
-    return this.options.generations.acquire(toGatewayGeneration(snapshot));
+    const lease = await this.options.generations.acquire(toGatewayGeneration(snapshot));
+    return this.bindMonitorLease(lease, snapshot);
   }
 
   /** Publish the latest revision after a committed control-plane mutation. */
@@ -91,7 +97,8 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
     try {
       const snapshot = await this.options.resolver.resolve(context);
       this.options.onRevision?.(context, snapshot.runtimeRevision);
-      if (this.watchEnabled) this.installMonitor(snapshot);
+      const monitor = this.monitors.get(contextKey(context));
+      if (this.watchEnabled && monitor) this.refreshMonitor(monitor, snapshot);
       return snapshot;
     } catch (error) {
       this.options.onInvalidSnapshot?.(context, error as Error);
@@ -99,22 +106,54 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
     }
   }
 
-  private installMonitor(snapshot: ResolvedContextSnapshot): void {
+  private bindMonitorLease(lease: GatewayLease, snapshot: ResolvedContextSnapshot): GatewayLease {
+    if (!this.watchEnabled) return lease;
     const key = contextKey(snapshot.context);
-    const existing = this.monitors.get(key);
-    if (existing && sameWatchInputs(existing.snapshot, snapshot)) {
-      existing.snapshot = snapshot;
+    let monitor = this.monitors.get(key);
+    if (!monitor) {
+      monitor = {
+        context: snapshot.context,
+        snapshot,
+        leases: 0,
+        closed: false,
+        watchers: [],
+      };
+      this.monitors.set(key, monitor);
+      this.openWatchers(monitor);
+    } else {
+      this.refreshMonitor(monitor, snapshot);
+    }
+    monitor.leases += 1;
+    let released = false;
+    return {
+      ...lease,
+      release: async () => {
+        if (released) return;
+        released = true;
+        monitor.leases = Math.max(0, monitor.leases - 1);
+        if (monitor.leases === 0 && this.monitors.get(key) === monitor) {
+          this.monitors.delete(key);
+          this.closeMonitor(monitor);
+        }
+        await lease.release();
+      },
+    };
+  }
+
+  private refreshMonitor(monitor: ContextMonitor, snapshot: ResolvedContextSnapshot): void {
+    if (monitor.closed || this.monitors.get(contextKey(monitor.context)) !== monitor) return;
+    if (sameWatchInputs(monitor.snapshot, snapshot)) {
+      monitor.snapshot = snapshot;
       return;
     }
-    if (existing) this.closeMonitor(existing);
+    this.closeWatchers(monitor);
+    monitor.snapshot = snapshot;
+    this.openWatchers(monitor);
+  }
 
-    const monitor: ContextMonitor = {
-      context: snapshot.context,
-      snapshot,
-      watchers: [],
-    };
-    this.monitors.set(key, monitor);
-    for (const path of watchPaths(snapshot)) {
+  private openWatchers(monitor: ContextMonitor): void {
+    if (monitor.closed || monitor.leases < 0) return;
+    for (const path of watchPaths(monitor.snapshot)) {
       try {
         const watcher = nodeWatch(path, { persistent: false }, () => this.scheduleMonitor(monitor));
         watcher.on("error", (error) => {
@@ -131,7 +170,7 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
   }
 
   private ensurePolling(monitor: ContextMonitor): void {
-    if (monitor.pollTimer) return;
+    if (monitor.closed || monitor.pollTimer) return;
     monitor.pollTimer = setInterval(
       () => this.scheduleMonitor(monitor),
       Math.max(this.debounceMs, 100),
@@ -140,6 +179,7 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
   }
 
   private scheduleMonitor(monitor: ContextMonitor): void {
+    if (monitor.closed || this.monitors.get(contextKey(monitor.context)) !== monitor) return;
     if (monitor.timer) clearTimeout(monitor.timer);
     monitor.timer = setTimeout(() => {
       monitor.timer = undefined;
@@ -160,10 +200,11 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
   private async reconcileMonitor(monitor: ContextMonitor): Promise<void> {
     try {
       const next = await this.options.resolver.resolve(monitor.context);
+      if (monitor.closed || this.monitors.get(contextKey(monitor.context)) !== monitor) return;
       if (next.runtimeRevision !== monitor.snapshot.runtimeRevision) {
         this.options.onRevision?.(monitor.context, next.runtimeRevision);
       }
-      this.installMonitor(next);
+      this.refreshMonitor(monitor, next);
     } catch (error) {
       this.options.onInvalidSnapshot?.(monitor.context, error as Error);
       this.log(
@@ -173,8 +214,16 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
   }
 
   private closeMonitor(monitor: ContextMonitor): void {
+    monitor.closed = true;
+    this.closeWatchers(monitor);
+  }
+
+  private closeWatchers(monitor: ContextMonitor): void {
     if (monitor.timer) clearTimeout(monitor.timer);
     if (monitor.pollTimer) clearInterval(monitor.pollTimer);
+    monitor.timer = undefined;
+    monitor.pollTimer = undefined;
+    monitor.dirty = false;
     for (const watcher of monitor.watchers) watcher.close();
     monitor.watchers = [];
   }

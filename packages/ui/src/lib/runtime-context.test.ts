@@ -50,8 +50,8 @@ describe("runtime context navigation", () => {
     expect(contextualizeApiPath("/api/auth/github", project, "POST")).toBe(
       "/api/auth/github?projectId=prj_a%2Fb",
     );
-    expect(contextualizeApiPath("/api/agent-preview/link", project, "POST")).toBe(
-      "/api/agent-preview/link?projectId=prj_a%2Fb",
+    expect(contextualizeApiPath("/api/agents/link/prepare", project, "POST")).toBe(
+      "/api/agents/link/prepare?projectId=prj_a%2Fb",
     );
     expect(contextualizeApiPath("/api/config", { kind: "global" })).toBe("/api/config");
   });

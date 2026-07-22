@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
-import type { DocumentRevision, RatelScopeRef } from "./context.js";
+import { startBackup } from "./backup.js";
+import type { DocumentRevision, RatelScopeRef, RuntimeContextRef } from "./context.js";
 import { ratelConfigPath } from "./hierarchy.js";
+import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
 import {
   parseConfig,
@@ -11,19 +12,18 @@ import {
   type SkillSource,
 } from "./lib/config.js";
 import type { LocalGitExcludeManager } from "./local-git-exclude.js";
-import type {
-  MutationCommit,
-  MutationEngine,
-  MutationInputOperation,
-  MutationPlan,
-  MutationPreview,
-} from "./mutation-engine.js";
+import type { MutationInputOperation, MutationPreview } from "./mutation-engine.js";
 import {
   documentRevision,
   MISSING_DOCUMENT_REVISION,
   MutationConflictError,
   validateCopySourceDirectory,
 } from "./mutation-engine.js";
+import type {
+  PreparedChange,
+  PreparedChangeCommit,
+  PreparedChangeCoordinator,
+} from "./prepared-change-coordinator.js";
 import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { planSkillCopyMaterialization } from "./skill-copy-adoption.js";
@@ -57,21 +57,10 @@ export interface SkillImportCandidateSnapshot {
   digest: string;
 }
 
-export type SkillImportPlanDigest = string & { readonly __brand: "SkillImportPlanDigest" };
-
-/** JSON-safe plan returned by preview and submitted unchanged to apply. */
-export interface SkillImportPlan {
-  id: string;
-  digest: SkillImportPlanDigest;
+export interface SkillImportReview {
   selections: SkillImportSelection[];
   candidates: SkillImportCandidateSnapshot[];
-  mutationPlan: MutationPlan;
-  preview: MutationPreview;
-}
-
-export interface ApplySkillImportOptions {
-  /** The digest returned by preview. */
-  digest: string;
+  files: MutationPreview["files"];
 }
 
 export interface AppliedSkillImport {
@@ -80,21 +69,24 @@ export interface AppliedSkillImport {
   targets: SkillImportTarget[];
 }
 
-export interface SkillImportCommit extends MutationCommit {
+export interface SkillImportResult {
   imported: AppliedSkillImport[];
 }
+
+export type SkillImportCommit = PreparedChangeCommit<SkillImportResult>;
 
 export interface SkillImportControlPlaneOptions {
   homeDir: string;
   projectRegistry: ProjectRegistry;
   discovery: SkillDiscovery;
-  mutationEngine: MutationEngine;
+  preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
 }
 
 export interface SkillImportControlPlane {
-  preview(selections: readonly SkillImportSelection[]): Promise<SkillImportPlan>;
-  apply(plan: SkillImportPlan, options: ApplySkillImportOptions): Promise<SkillImportCommit>;
+  prepare(selections: readonly SkillImportSelection[]): Promise<PreparedChange<SkillImportReview>>;
+  commit(changeId: string): Promise<SkillImportCommit>;
+  cancel(changeId: string): void;
 }
 
 export type SkillImportConflictReason = "digest_mismatch" | "stale_candidate" | "project_missing";
@@ -144,12 +136,6 @@ interface MutableTargetDocument {
   localGitRevision?: DocumentRevision;
 }
 
-interface PendingSkillImportPlan {
-  plan: SkillImportPlan;
-  projectRootsByPath: Map<string, string>;
-  adoptionRevisions: Map<string, DocumentRevision>;
-}
-
 export function createSkillImportControlPlane(
   options: SkillImportControlPlaneOptions,
 ): SkillImportControlPlane {
@@ -157,11 +143,11 @@ export function createSkillImportControlPlane(
 }
 
 class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
-  private readonly pendingPlans = new Map<string, PendingSkillImportPlan>();
-
   constructor(private readonly options: SkillImportControlPlaneOptions) {}
 
-  async preview(selectionsInput: readonly SkillImportSelection[]): Promise<SkillImportPlan> {
+  async prepare(
+    selectionsInput: readonly SkillImportSelection[],
+  ): Promise<PreparedChange<SkillImportReview>> {
     const selections = cloneAndValidateSelections(selectionsInput);
     const candidates = await this.resolveCandidatesForPreview(selections);
     const documents = new Map<string, MutableTargetDocument>();
@@ -242,139 +228,105 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
       if (target.localGitOperation) configOperations.push(target.localGitOperation);
     }
 
-    const mutationPlan = await this.options.mutationEngine.preview([
-      ...configOperations,
-      ...copyOperations,
-    ]);
-    for (const target of documents.values()) {
-      const previewRevision = mutationPlan.baseRevisions[target.path];
-      if (previewRevision !== target.documentRevision) {
-        throw new MutationConflictError(
-          "revision_conflict",
-          `skill config changed while creating preview: ${target.path}`,
-          target.path,
-          target.documentRevision,
-          previewRevision,
-        );
-      }
-      if (
-        target.localGitOperation &&
-        target.localGitRevision !== undefined &&
-        mutationPlan.baseRevisions[target.localGitOperation.path] !== target.localGitRevision
-      ) {
-        throw new MutationConflictError(
-          "revision_conflict",
-          `Git exclude changed while creating preview: ${target.localGitOperation.path}`,
-          target.localGitOperation.path,
-          target.localGitRevision,
-          mutationPlan.baseRevisions[target.localGitOperation.path],
-        );
-      }
-    }
     const candidateSnapshots = [...candidates.values()].map(candidateSnapshot);
-    const planBase = {
-      id: mutationPlan.id,
-      selections,
-      candidates: candidateSnapshots,
-      mutationPlan,
-      preview: mutationPlan.preview,
-    };
-    const plan = { ...planBase, digest: importPlanDigest(planBase) };
-    this.rememberPlan(plan, projectRootsByPath, adoptionRevisions);
-    return structuredClone(plan);
-  }
-
-  async apply(plan: SkillImportPlan, options: ApplySkillImportOptions): Promise<SkillImportCommit> {
-    const pending = this.takePlan(plan);
-    const storedPlan = pending.plan;
-    this.assertPlanDigest(storedPlan, options.digest);
-    await this.assertProjectsAvailable(storedPlan.selections);
     const candidateById = new Map(
-      storedPlan.candidates.map((candidate) => [candidate.candidateId, candidate]),
+      candidateSnapshots.map((candidate) => [candidate.candidateId, candidate]),
     );
-
-    for (const selection of storedPlan.selections) {
-      const expected = candidateById.get(selection.candidateId);
-      if (!expected) {
-        throw new SkillImportConflictError(
-          "digest_mismatch",
-          `preview has no candidate metadata for ${selection.candidateId}`,
-          selection.candidateId,
-        );
-      }
-      const actual = await this.resolveCandidateForApply(selection.candidateId);
-      if (!sameCandidate(expected, actual)) {
-        throw new SkillImportConflictError(
-          "stale_candidate",
-          `skill candidate is stale: ${selection.candidateId}`,
-          selection.candidateId,
-        );
-      }
-    }
-
-    const commit = await this.options.mutationEngine.apply(storedPlan.mutationPlan, {
-      digest: storedPlan.mutationPlan.digest,
-      precondition: async () => {
-        for (const [path, projectRoot] of pending.projectRootsByPath) {
-          await assertSafeProjectControlPath(projectRoot, path);
+    return this.options.preparedChanges.prepare({
+      kind: "skill.import",
+      operations: [...configOperations, ...copyOperations],
+      affectedContexts: contextsForSelections(selections),
+      buildPreview: (mutation) => {
+        for (const target of documents.values()) {
+          const previewRevision = mutation.baseRevisions[target.path];
+          if (previewRevision !== target.documentRevision) {
+            throw new MutationConflictError(
+              "revision_conflict",
+              `skill config changed while creating preview: ${target.path}`,
+              target.path,
+              target.documentRevision,
+              previewRevision,
+            );
+          }
+          if (
+            target.localGitOperation &&
+            target.localGitRevision !== undefined &&
+            mutation.baseRevisions[target.localGitOperation.path] !== target.localGitRevision
+          ) {
+            throw new MutationConflictError(
+              "revision_conflict",
+              `Git exclude changed while creating preview: ${target.localGitOperation.path}`,
+              target.localGitOperation.path,
+              target.localGitRevision,
+              mutation.baseRevisions[target.localGitOperation.path],
+            );
+          }
         }
-        await validateAdoptions(pending.adoptionRevisions);
+        return { selections, candidates: candidateSnapshots, files: mutation.preview.files };
       },
-      operationPrecondition: async (operation) => {
-        const projectRoot = pending.projectRootsByPath.get(operation.path);
-        if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
+      invariants: {
+        precondition: async () => {
+          await this.assertProjectsAvailable(selections);
+          for (const selection of selections) {
+            const expected = candidateById.get(selection.candidateId);
+            if (!expected) {
+              throw new SkillImportConflictError(
+                "digest_mismatch",
+                `preview has no candidate metadata for ${selection.candidateId}`,
+                selection.candidateId,
+              );
+            }
+            const actual = await this.resolveCandidateForApply(selection.candidateId);
+            if (!sameCandidate(expected, actual)) {
+              throw new SkillImportConflictError(
+                "stale_candidate",
+                `skill candidate is stale: ${selection.candidateId}`,
+                selection.candidateId,
+              );
+            }
+          }
+          for (const [path, projectRoot] of projectRootsByPath) {
+            await assertSafeProjectControlPath(projectRoot, path);
+          }
+          await validateAdoptions(adoptionRevisions);
+        },
+        operationPrecondition: async (operation) => {
+          const projectRoot = projectRootsByPath.get(operation.path);
+          if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
+        },
+      },
+      captureBackup: async () => {
+        const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
+        for (const operation of [...configOperations, ...copyOperations]) {
+          await backup.capture(operation.path);
+        }
+        return backup.finalize("import");
+      },
+      result: {
+        imported: selections.map((selection) => {
+          const candidate = candidateById.get(selection.candidateId);
+          if (!candidate) {
+            throw new SkillImportConflictError(
+              "digest_mismatch",
+              `preview has no candidate metadata for ${selection.candidateId}`,
+            );
+          }
+          return {
+            candidateId: selection.candidateId,
+            id: candidate.id,
+            targets: selection.targets,
+          };
+        }),
       },
     });
-    return {
-      ...commit,
-      imported: storedPlan.selections.map((selection) => {
-        const candidate = candidateById.get(selection.candidateId);
-        if (!candidate) {
-          throw new SkillImportConflictError(
-            "digest_mismatch",
-            `preview has no candidate metadata for ${selection.candidateId}`,
-          );
-        }
-        return {
-          candidateId: selection.candidateId,
-          id: candidate.id,
-          targets: selection.targets,
-        };
-      }),
-    };
   }
 
-  private rememberPlan(
-    plan: SkillImportPlan,
-    projectRootsByPath: Map<string, string>,
-    adoptionRevisions: Map<string, DocumentRevision>,
-  ): void {
-    // Preview handles are process-local capabilities. Keeping a bounded set prevents
-    // a caller from turning abandoned previews into an unbounded daemon allocation.
-    while (this.pendingPlans.size >= 128) {
-      const oldest = this.pendingPlans.keys().next().value;
-      if (typeof oldest !== "string") break;
-      this.pendingPlans.delete(oldest);
-    }
-    this.pendingPlans.set(plan.id, {
-      plan: structuredClone(plan),
-      projectRootsByPath: new Map(projectRootsByPath),
-      adoptionRevisions: new Map(adoptionRevisions),
-    });
+  commit(changeId: string): Promise<SkillImportCommit> {
+    return this.options.preparedChanges.commit(changeId);
   }
 
-  private takePlan(submitted: SkillImportPlan): PendingSkillImportPlan {
-    const stored = this.pendingPlans.get(submitted.id);
-    if (!stored || stableStringify(stored.plan) !== stableStringify(submitted)) {
-      throw new SkillImportConflictError(
-        "digest_mismatch",
-        "skill import preview is unknown, expired, or was modified after preview",
-      );
-    }
-    // One-shot consumption also prevents two concurrent apply calls from replaying
-    // the same filesystem transaction.
-    this.pendingPlans.delete(submitted.id);
-    return stored;
+  cancel(changeId: string): void {
+    this.options.preparedChanges.cancel(changeId);
   }
 
   private async resolveCandidatesForPreview(
@@ -543,22 +495,6 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     }
     return { mode: "reference", path: configuredPath, source };
   }
-
-  private assertPlanDigest(plan: SkillImportPlan, suppliedDigest: string): void {
-    const { digest: _digest, ...planBase } = plan;
-    const actual = importPlanDigest(planBase);
-    if (
-      suppliedDigest !== plan.digest ||
-      actual !== plan.digest ||
-      plan.id !== plan.mutationPlan.id ||
-      stableStringify(plan.preview) !== stableStringify(plan.mutationPlan.preview)
-    ) {
-      throw new SkillImportConflictError(
-        "digest_mismatch",
-        "skill import preview is stale or does not match the supplied digest",
-      );
-    }
-  }
 }
 
 function cloneAndValidateSelections(
@@ -701,20 +637,26 @@ function sameCandidate(expected: SkillImportCandidateSnapshot, actual: SkillCand
   return stableStringify(expected) === stableStringify(candidateSnapshot(actual));
 }
 
-function importPlanDigest(plan: Omit<SkillImportPlan, "digest">): SkillImportPlanDigest {
-  const digest = createHash("sha256")
-    .update("ratel-skill-import-plan-v1\0")
-    .update(stableStringify(plan))
-    .digest("base64url");
-  return `skill_plan_${digest}` as SkillImportPlanDigest;
-}
-
 function hasOwn(value: object, key: PropertyKey): boolean {
   return Object.hasOwn(value, key);
 }
 
 function scopeKey(scopeRef: RatelScopeRef): string {
   return scopeRef.scope === "user" ? "user" : `${scopeRef.scope}:${scopeRef.projectId}`;
+}
+
+function contextsForSelections(selections: readonly SkillImportSelection[]): RuntimeContextRef[] {
+  const contexts = new Map<string, RuntimeContextRef>();
+  for (const selection of selections) {
+    for (const { scopeRef } of selection.targets) {
+      const context: RuntimeContextRef =
+        scopeRef.scope === "user"
+          ? { kind: "global" }
+          : { kind: "project", projectId: scopeRef.projectId };
+      contexts.set(context.kind === "global" ? "global" : `project:${context.projectId}`, context);
+    }
+  }
+  return [...contexts.values()];
 }
 
 function formatScope(scopeRef: RatelScopeRef): string {

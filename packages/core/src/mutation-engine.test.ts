@@ -31,7 +31,7 @@ describe("MutationEngine", () => {
     await writeFile(configPath, original);
     const engine = await createMutationEngine({ controlDir });
 
-    const plan = await engine.preview([
+    const plan = await engine.prepare([
       { kind: "replace-file", path: configPath, contents: replacement },
     ]);
 
@@ -58,7 +58,7 @@ describe("MutationEngine", () => {
       },
     });
 
-    const commit = await engine.apply(plan, { digest: plan.digest });
+    const commit = await engine.commit(plan, { digest: plan.digest });
 
     expect(await readFile(configPath)).toEqual(replacement);
     expect(commit).toEqual({
@@ -91,10 +91,10 @@ describe("MutationEngine", () => {
           },
         },
       });
-      const plan = await engine.preview([
+      const plan = await engine.prepare([
         { kind: "replace-file", path: target, contents: '{"clientSecret":"secret"}\n' },
       ]);
-      await engine.apply(plan, { digest: plan.digest });
+      await engine.commit(plan, { digest: plan.digest });
     } finally {
       process.umask(previousUmask);
     }
@@ -107,12 +107,12 @@ describe("MutationEngine", () => {
     const configPath = join(root, "config.json");
     await writeFile(configPath, "before");
     const engine = await createMutationEngine({ controlDir });
-    const plan = await engine.preview([
+    const plan = await engine.prepare([
       { kind: "replace-file", path: configPath, contents: "planned" },
     ]);
     await writeFile(configPath, "manual edit");
 
-    await expect(engine.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    await expect(engine.commit(plan, { digest: plan.digest })).rejects.toMatchObject({
       name: "MutationConflictError",
       statusCode: 409,
       reason: "revision_conflict",
@@ -132,11 +132,11 @@ describe("MutationEngine", () => {
         },
       },
     });
-    const plan = await engine.preview([
+    const plan = await engine.prepare([
       { kind: "replace-file", path: configPath, contents: "planned" },
     ]);
 
-    await expect(engine.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    await expect(engine.commit(plan, { digest: plan.digest })).rejects.toMatchObject({
       statusCode: 409,
       reason: "revision_conflict",
       path: configPath,
@@ -147,12 +147,12 @@ describe("MutationEngine", () => {
   it("requires the exact preview digest", async () => {
     const configPath = join(root, "config.json");
     const engine = await createMutationEngine({ controlDir });
-    const plan = await engine.preview([
+    const plan = await engine.prepare([
       { kind: "replace-file", path: configPath, contents: "planned" },
     ]);
 
     const error = await engine
-      .apply(plan, { digest: "plan_wrong" })
+      .commit(plan, { digest: "plan_wrong" })
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(MutationConflictError);
@@ -164,13 +164,13 @@ describe("MutationEngine", () => {
     await writeFile(configPath, "before");
     const firstEngine = await createMutationEngine({ controlDir });
     const secondEngine = await createMutationEngine({ controlDir });
-    const plan = await firstEngine.preview([
+    const plan = await firstEngine.prepare([
       { kind: "replace-file", path: configPath, contents: "after" },
     ]);
 
     const results = await Promise.allSettled([
-      firstEngine.apply(plan, { digest: plan.digest }),
-      secondEngine.apply(plan, { digest: plan.digest }),
+      firstEngine.commit(plan, { digest: plan.digest }),
+      secondEngine.commit(plan, { digest: plan.digest }),
     ]);
 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -195,12 +195,12 @@ describe("MutationEngine", () => {
         },
       },
     });
-    const plan = await engine.preview([
+    const plan = await engine.prepare([
       { kind: "replace-file", path: firstPath, contents: "first-after" },
       { kind: "replace-file", path: secondPath, contents: "second-after" },
     ]);
 
-    await expect(engine.apply(plan, { digest: plan.digest })).rejects.toThrow("injected failure");
+    await expect(engine.commit(plan, { digest: plan.digest })).rejects.toThrow("injected failure");
 
     expect(await readFile(firstPath, "utf8")).toBe("first-before");
     expect(await readFile(secondPath, "utf8")).toBe("second-before");
@@ -253,7 +253,7 @@ describe("MutationEngine", () => {
     await writeFile(join(source, "references", "guide.md"), "guide");
     const engine = await createMutationEngine({ controlDir });
 
-    const plan = await engine.preview([
+    const plan = await engine.prepare([
       {
         kind: "copy-directory",
         sourcePath: source,
@@ -267,7 +267,7 @@ describe("MutationEngine", () => {
       },
       { kind: "replace-file", path: config, contents: '{"skills":{}}\n' },
     ]);
-    await engine.apply(plan, { digest: plan.digest });
+    await engine.commit(plan, { digest: plan.digest });
 
     expect(await readFile(join(target, "SKILL.md"), "utf8")).toBe("skill body");
     expect(JSON.parse(await readFile(join(target, ".ratel-skill.json"), "utf8"))).toEqual({
@@ -286,13 +286,13 @@ describe("MutationEngine", () => {
     const engine = await createMutationEngine({ controlDir });
 
     await expect(
-      engine.preview([{ kind: "copy-directory", sourcePath: source, path: target }]),
+      engine.prepare([{ kind: "copy-directory", sourcePath: source, path: target }]),
     ).rejects.toMatchObject({ statusCode: 422 });
 
     await rm(target, { recursive: true });
     await symlink(join(root, "outside"), join(source, "escape"));
     await expect(
-      engine.preview([{ kind: "copy-directory", sourcePath: source, path: target }]),
+      engine.prepare([{ kind: "copy-directory", sourcePath: source, path: target }]),
     ).rejects.toThrow(/symlink/i);
   });
 
@@ -302,7 +302,7 @@ describe("MutationEngine", () => {
     await writeFile(join(target, "SKILL.md"), "body");
     const engine = await createMutationEngine({ controlDir });
 
-    const plan = await engine.preview([{ kind: "delete-artifact", path: target }]);
+    const plan = await engine.prepare([{ kind: "delete-artifact", path: target }]);
     expect(plan.preview.files).toEqual([
       expect.objectContaining({
         kind: "directory",
@@ -311,7 +311,7 @@ describe("MutationEngine", () => {
         afterRevision: "missing",
       }),
     ]);
-    await engine.apply(plan, { digest: plan.digest });
+    await engine.commit(plan, { digest: plan.digest });
 
     await expect(readFile(join(target, "SKILL.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -330,12 +330,12 @@ describe("MutationEngine", () => {
         },
       },
     });
-    const plan = await engine.preview([
+    const plan = await engine.prepare([
       { kind: "replace-file", path: config, contents: "after" },
       { kind: "delete-artifact", path: target },
     ]);
 
-    await expect(engine.apply(plan, { digest: plan.digest })).rejects.toThrow(
+    await expect(engine.commit(plan, { digest: plan.digest })).rejects.toThrow(
       "delete follow-up failed",
     );
     expect(await readFile(config, "utf8")).toBe("before");

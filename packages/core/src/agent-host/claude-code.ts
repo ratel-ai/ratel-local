@@ -6,7 +6,7 @@ import {
 } from "../gateway-entry.js";
 import type { HierarchyEnv } from "../hierarchy.js";
 import { ProjectRootNotFoundError } from "../hierarchy.js";
-import type { FileChange } from "../import-plan.js";
+import type { PlannedFileWrite } from "../import-plan.js";
 import { isPlainObject } from "../json.js";
 import type { ServerEntry } from "../lib/index.js";
 import type {
@@ -26,6 +26,7 @@ interface ClaudeConfigDoc {
   scope: AgentScope;
   path: string;
   raw: Record<string, unknown>;
+  rawText: string;
   mcpServers: Record<string, ServerEntry>;
 }
 
@@ -72,7 +73,7 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
   }
 
   async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
-    const changes: FileChange[] = [];
+    const changes: PlannedFileWrite[] = [];
     const installedGatewayScopes: AgentScope[] = [];
     const removedNativeEntries: AgentHostRemovedEntry[] = [];
     const byScope = scopesByName(input.state);
@@ -125,7 +126,7 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
         localWrite ? (localRemove ?? new Set()) : null,
         projectRoot,
       );
-      pushJsonWrite(changes, home.path, home.raw ?? null, next);
+      pushJsonWrite(changes, home.path, home.rawText ?? null, next);
     }
     if (project && projectWrite) {
       const next = rewriteProjectClaude(
@@ -133,7 +134,7 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
         projectGateway,
         projectRemove ?? new Set(),
       );
-      pushJsonWrite(changes, project.path, project.raw ?? null, next);
+      pushJsonWrite(changes, project.path, project.rawText ?? null, next);
     }
 
     for (const [scope, names] of input.removeEntriesByScope) {
@@ -180,7 +181,7 @@ async function readClaudeConfig(
     throw new Error(`Failed to parse ${path}: ${(err as Error).message}`);
   }
   if (!isPlainObject(raw)) throw new Error(`${path}: root must be a JSON object`);
-  return { scope, path, raw, mcpServers: readClaudeMcpServers(scope, raw, env) };
+  return { scope, path, raw, rawText: text, mcpServers: readClaudeMcpServers(scope, raw, env) };
 }
 
 function toScopeState(
@@ -196,6 +197,7 @@ function toScopeState(
     available: doc !== null,
     mcpServers: doc?.mcpServers ?? {},
     raw: doc?.raw,
+    rawText: doc?.rawText,
   };
 }
 
@@ -286,12 +288,11 @@ function asServerEntries(v: unknown): Record<string, ServerEntry> {
 }
 
 function pushJsonWrite(
-  changes: FileChange[],
+  changes: PlannedFileWrite[],
   path: string,
-  before: Record<string, unknown> | null,
+  beforeText: string | null,
   after: Record<string, unknown>,
 ) {
-  const beforeText = before ? serializeJson(before) : null;
   const afterText = serializeJson(after);
   if (beforeText !== afterText)
     changes.push({ kind: "write", path, before: beforeText, after: afterText });

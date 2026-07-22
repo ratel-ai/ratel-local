@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectId, RatelScopeRef } from "./context.js";
 import { createMutationEngine } from "./mutation-engine.js";
+import { createPreparedChangeCoordinator } from "./prepared-change-coordinator.js";
 import { createProjectRegistry } from "./project-registry.js";
 import { createSkillDiscovery } from "./skill-discovery.js";
 import {
@@ -39,11 +40,12 @@ async function fixture() {
   const mutationEngine = await createMutationEngine({
     controlDir: join(homeDir, ".ratel"),
   });
+  const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
   const controlPlane = createSkillImportControlPlane({
     homeDir,
     projectRegistry,
     discovery,
-    mutationEngine,
+    preparedChanges,
   });
 
   return {
@@ -74,7 +76,7 @@ describe("SkillImportControlPlane", () => {
     const candidate = (await f.discovery.discover({ kind: "project", projectRoot: f.projectA }))
       .candidates[0];
 
-    const plan = await f.controlPlane.preview([
+    const plan = await f.controlPlane.prepare([
       {
         candidateId: candidate.candidateId,
         targets: [
@@ -84,17 +86,15 @@ describe("SkillImportControlPlane", () => {
       },
     ]);
 
-    expect(plan.mutationPlan.operations.map(({ kind }) => kind).sort()).toEqual([
-      "copy-directory",
-      "replace-file",
-      "replace-file",
+    expect(plan.preview.files.map(({ kind }) => kind).sort()).toEqual([
+      "directory",
+      "file",
+      "file",
     ]);
 
-    const submittedPlan = JSON.parse(JSON.stringify(plan)) as typeof plan;
-    const commit = await f.controlPlane.apply(submittedPlan, { digest: plan.digest });
+    const commit = await f.controlPlane.commit(plan.changeId);
 
-    expect(commit.transactionId).toBe(plan.mutationPlan.id);
-    expect(commit.imported).toEqual([
+    expect(commit.result.imported).toEqual([
       {
         candidateId: candidate.candidateId,
         id: "demo",
@@ -147,18 +147,15 @@ describe("SkillImportControlPlane", () => {
     );
     if (!candidate) throw new Error("legacy candidate not discovered");
 
-    const plan = await f.controlPlane.preview([
+    const plan = await f.controlPlane.prepare([
       {
         candidateId: candidate.candidateId,
         targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
       },
     ]);
 
-    expect(plan.mutationPlan.operations.map(({ kind }) => kind)).toEqual([
-      "replace-file",
-      "replace-file",
-    ]);
-    await f.controlPlane.apply(plan, { digest: plan.digest });
+    expect(plan.preview.files.map(({ kind }) => kind)).toEqual(["file", "file"]);
+    await f.controlPlane.commit(plan.changeId);
     expect(await readJson(join(source, ".ratel-skill.json"))).toEqual({
       version: 1,
       id: "legacy",
@@ -178,7 +175,7 @@ describe("SkillImportControlPlane", () => {
     );
     if (!candidate) throw new Error("candidate not discovered");
 
-    const plan = await f.controlPlane.preview([
+    const plan = await f.controlPlane.prepare([
       {
         candidateId: candidate.candidateId,
         targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
@@ -186,10 +183,9 @@ describe("SkillImportControlPlane", () => {
     ]);
     await putSkill(source, "stale", "after");
 
-    await expect(f.controlPlane.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    await expect(f.controlPlane.commit(plan.changeId)).rejects.toMatchObject({
       statusCode: 409,
-      reason: "stale_candidate",
-      candidateId: candidate.candidateId,
+      reason: "revision_conflict",
     } satisfies Partial<SkillImportConflictError>);
   });
 
@@ -200,29 +196,17 @@ describe("SkillImportControlPlane", () => {
       ({ id }) => id === "secure",
     );
     if (!candidate) throw new Error("candidate not discovered");
-    const plan = await f.controlPlane.preview([
+    const plan = await f.controlPlane.prepare([
       {
         candidateId: candidate.candidateId,
         targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
       },
     ]);
-    const modified = structuredClone(plan);
-    const replacement = modified.mutationPlan.operations.find(
-      (operation) => operation.kind === "replace-file",
-    );
-    if (!replacement || replacement.kind !== "replace-file") throw new Error("missing config op");
-    replacement.contentsBase64 = Buffer.from("forged", "utf8").toString("base64");
-
-    await expect(f.controlPlane.apply(modified, { digest: modified.digest })).rejects.toMatchObject(
-      {
-        statusCode: 409,
-        reason: "digest_mismatch",
-      },
-    );
-    await f.controlPlane.apply(plan, { digest: plan.digest });
-    await expect(f.controlPlane.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    plan.preview.files.length = 0;
+    await f.controlPlane.commit(plan.changeId);
+    await expect(f.controlPlane.commit(plan.changeId)).rejects.toMatchObject({
       statusCode: 409,
-      reason: "digest_mismatch",
+      code: "PREPARED_CHANGE_UNAVAILABLE",
     });
   });
 
@@ -233,7 +217,7 @@ describe("SkillImportControlPlane", () => {
       .candidates[0];
 
     await expect(
-      f.controlPlane.preview([
+      f.controlPlane.prepare([
         {
           candidateId: candidate.candidateId,
           targets: [{ scopeRef: projectScope(f.projectBId), mode: "reference" }],
@@ -270,13 +254,13 @@ describe("SkillImportControlPlane", () => {
     );
     if (!candidate) throw new Error("candidate not discovered");
 
-    const plan = await f.controlPlane.preview([
+    const plan = await f.controlPlane.prepare([
       {
         candidateId: candidate.candidateId,
         targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
       },
     ]);
-    await f.controlPlane.apply(plan, { digest: plan.digest });
+    await f.controlPlane.commit(plan.changeId);
 
     expect(await readJson(userConfigPath)).toEqual({
       futureTopLevel: { keep: true },
@@ -308,22 +292,25 @@ describe("SkillImportControlPlane", () => {
     );
     if (!candidate) throw new Error("candidate not discovered");
     const engine = await createMutationEngine({ controlDir: join(f.homeDir, ".ratel") });
+    const preparedChanges = createPreparedChangeCoordinator({
+      mutationEngine: {
+        async prepare(operations) {
+          await writeFile(userConfigPath, '{"manual":true,"skills":{"entries":{}}}\n');
+          return engine.prepare(operations);
+        },
+        commit: (plan, options) => engine.commit(plan, options),
+        recover: () => engine.recover(),
+      },
+    });
     const racingControlPlane = createSkillImportControlPlane({
       homeDir: f.homeDir,
       projectRegistry: f.projectRegistry,
       discovery: f.discovery,
-      mutationEngine: {
-        async preview(operations) {
-          await writeFile(userConfigPath, '{"manual":true,"skills":{"entries":{}}}\n');
-          return engine.preview(operations);
-        },
-        apply: (plan, options) => engine.apply(plan, options),
-        recover: () => engine.recover(),
-      },
+      preparedChanges,
     });
 
     await expect(
-      racingControlPlane.preview([
+      racingControlPlane.prepare([
         {
           candidateId: candidate.candidateId,
           targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
@@ -339,7 +326,7 @@ describe("SkillImportControlPlane", () => {
     await putSkill(source, "escape");
     const candidate = (await f.discovery.discover({ kind: "project", projectRoot: f.projectA }))
       .candidates[0];
-    const plan = await f.controlPlane.preview([
+    const plan = await f.controlPlane.prepare([
       {
         candidateId: candidate.candidateId,
         targets: [{ scopeRef: projectScope(f.projectBId), mode: "copy" }],
@@ -349,7 +336,7 @@ describe("SkillImportControlPlane", () => {
     roots.push(outside);
     await symlink(outside, join(f.projectB, ".ratel"));
 
-    await expect(f.controlPlane.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    await expect(f.controlPlane.commit(plan.changeId)).rejects.toMatchObject({
       statusCode: 422,
       code: "PROJECT_PATH_UNSAFE",
     });

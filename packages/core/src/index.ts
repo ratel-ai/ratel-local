@@ -16,7 +16,7 @@ export * from "./locate-bin.js";
 export * from "./mutation-engine.js";
 export * from "./oauth-legacy-migration.js";
 export * from "./operations.js";
-export * from "./plan-exec.js";
+export * from "./prepared-change-coordinator.js";
 export * from "./probe.js";
 export * from "./project-admission.js";
 export * from "./project-path-safety.js";

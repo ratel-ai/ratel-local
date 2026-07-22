@@ -8,6 +8,7 @@ import {
   createConfigControlPlane,
   createLocalGitExcludeManager,
   createMutationEngine,
+  createPreparedChangeCoordinator,
   createProjectAdmissionLock,
   createProjectRegistry,
   findProjectRoot,
@@ -16,6 +17,7 @@ import {
   isSupportedAgentHostKind,
   type JsonFs,
   nodeFs,
+  type PreparedChangeCoordinator,
   type ProjectRegistry,
   type RatelScopeRef,
   ratelConfigPath,
@@ -56,6 +58,7 @@ export interface RunCliOptions {
   stdin?: () => Promise<string>;
   stdout?: (message: string) => void;
   projectRegistryFactory?: (homeDir: string) => ProjectRegistry;
+  preparedChanges?: PreparedChangeCoordinator;
 }
 
 export interface RunCliResult {
@@ -153,6 +156,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     stdin: options.stdin,
     stdout: options.stdout,
   };
+  if (options.preparedChanges) {
+    ctx.preparedChanges = options.preparedChanges;
+  } else if (ctx.fs === nodeFs && commandUsesPreparedChanges(parsed)) {
+    const mutationEngine = await createMutationEngine({
+      controlDir: join(ctx.env.homeDir, ".ratel"),
+    });
+    ctx.preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
+  }
 
   if (parsed.group === "ui") {
     return runUi(parsed, ctx, log);
@@ -249,6 +260,27 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
   throw new ArgError(`unhandled command: ${parsed.group} ${parsed.verb}`);
 }
 
+function commandUsesPreparedChanges(parsed: ParsedArgs): boolean {
+  if (parsed.group === "import" || parsed.group === "link") return true;
+  if (parsed.group === "statusline") {
+    return parsed.verb === "install" || parsed.verb === "uninstall";
+  }
+  if (parsed.group === "mcp") {
+    return parsed.verb === "add" || parsed.verb === "edit" || parsed.verb === "remove";
+  }
+  if (parsed.group === "skill") {
+    return [
+      "import",
+      "add-scope",
+      "remove-scope",
+      "remove",
+      "install-hook",
+      "uninstall-hook",
+    ].includes(parsed.verb ?? "");
+  }
+  return false;
+}
+
 function createCliServerMutator(ctx: HandlerCtx, registry: ProjectRegistry): CliServerMutator {
   return async (request) => {
     const { target, projectRoot } = await cliMutationTarget(ctx, registry, request.scope);
@@ -259,11 +291,17 @@ function createCliServerMutator(ctx: HandlerCtx, registry: ProjectRegistry): Cli
     const daemonResult = await mutateServerThroughRunningDaemon(ctx, request, target);
     if (daemonResult) return { path };
 
-    const engine = await createMutationEngine({ controlDir: join(ctx.env.homeDir, ".ratel") });
+    const preparedChanges =
+      ctx.preparedChanges ??
+      createPreparedChangeCoordinator({
+        mutationEngine: await createMutationEngine({
+          controlDir: join(ctx.env.homeDir, ".ratel"),
+        }),
+      });
     const control = await createConfigControlPlane({
       homeDir: ctx.env.homeDir,
       projectRegistry: registry,
-      mutationEngine: engine,
+      preparedChanges,
       localGitExcludeManager: createLocalGitExcludeManager(),
     });
     try {

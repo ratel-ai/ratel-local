@@ -7,7 +7,7 @@ import {
 } from "../gateway-entry.js";
 import type { HierarchyEnv } from "../hierarchy.js";
 import { ProjectRootNotFoundError } from "../hierarchy.js";
-import type { FileChange } from "../import-plan.js";
+import type { PlannedFileWrite } from "../import-plan.js";
 import type { JsonFs } from "../io.js";
 import { isPlainObject } from "../json.js";
 import type { ServerEntry } from "../lib/index.js";
@@ -62,7 +62,7 @@ export class CodexAgentHostAdapter implements AgentHostAdapter {
   }
 
   async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
-    const changes: FileChange[] = [];
+    const changes: PlannedFileWrite[] = [];
     const installedGatewayScopes: AgentScope[] = [];
     const removedNativeEntries: AgentHostRemovedEntry[] = [];
     const byScope = scopesByName(input.state);

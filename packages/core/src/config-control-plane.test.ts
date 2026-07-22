@@ -34,13 +34,13 @@ describe("ConfigControlPlane", () => {
       projectRegistry: createProjectRegistry({ homeDir }),
     });
 
-    const preview = await control.previewServerMutation({
+    const preview = await control.prepareServerMutation({
       target: { scope: "user" },
       action: "add",
       name: "filesystem",
       entry: { type: "stdio", command: "node" },
     });
-    await control.apply(preview, { digest: preview.digest });
+    await control.commit(preview.changeId);
 
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
       custom: { keep: true },
@@ -103,7 +103,7 @@ describe("ConfigControlPlane", () => {
     await writeFile(configPath, '{"mcpServers":{"manual":{"type":"stdio","command":"x"}}}\n');
 
     await expect(
-      control.previewServerMutation({
+      control.prepareServerMutation({
         target: { scope: "user" },
         expectedRevision: read.documentRevision,
         action: "add",
@@ -133,7 +133,7 @@ describe("ConfigControlPlane", () => {
     const registry = createProjectRegistry({ homeDir });
     const project = await registry.registerRoot(projectRoot);
     const control = await createConfigControlPlane({ homeDir, projectRegistry: registry });
-    const plan = await control.previewServerMutation({
+    const plan = await control.prepareServerMutation({
       target: { scope: "project", projectId: project.id },
       action: "add",
       name: "safe",
@@ -141,7 +141,7 @@ describe("ConfigControlPlane", () => {
     });
     await symlink(outside, join(projectRoot, ".ratel"));
 
-    await expect(control.apply(plan, { digest: plan.digest })).rejects.toMatchObject({
+    await expect(control.commit(plan.changeId)).rejects.toMatchObject({
       statusCode: 422,
       code: "PROJECT_PATH_UNSAFE",
     });
@@ -177,7 +177,7 @@ describe("ConfigControlPlane", () => {
     });
 
     await expect(
-      control.previewServerMutation({
+      control.prepareServerMutation({
         target: { scope: "local", projectId: project.id },
         action: "add",
         name: "local",

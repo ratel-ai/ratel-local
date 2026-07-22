@@ -174,13 +174,12 @@ export async function applySkillImportSelections(
   request: SkillImportRequest,
   selections: readonly SkillImportSelection[],
 ): Promise<unknown> {
-  const plan = await request<{ digest: string } & Record<string, unknown>>(
-    "/api/skills/import/preview",
-    { method: "POST", body: { selections } },
-  );
-  return request("/api/skills/import/apply", {
+  const change = await request<{ changeId: string }>("/api/skills/import/prepare", {
     method: "POST",
-    body: { plan, digest: plan.digest },
+    body: { selections },
+  });
+  return request(`/api/changes/${encodeURIComponent(change.changeId)}/commit`, {
+    method: "POST",
   });
 }
 

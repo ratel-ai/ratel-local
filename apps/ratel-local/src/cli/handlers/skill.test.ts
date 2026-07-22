@@ -158,18 +158,30 @@ describe("runSkill — preload-hook output stream", () => {
 
 describe("runSkill — snapshot-backed reads", () => {
   it("imports a discovered candidate into an explicit target", async () => {
-    const previews: unknown[] = [];
-    const applies: unknown[] = [];
-    const plan = { id: "tx", digest: "import-digest" } as never;
+    const preparations: unknown[] = [];
+    const commits: unknown[] = [];
+    const change = {
+      changeId: "change-import",
+      kind: "skill.import",
+      expiresAt: "2026-07-22T12:00:00.000Z",
+      preview: { selections: [], candidates: [], files: [] },
+    };
     const importControlPlane: SkillImportControlPlane = {
-      async preview(selections) {
-        previews.push(selections);
-        return plan;
+      async prepare(selections) {
+        preparations.push(selections);
+        return change;
       },
-      async apply(submitted, options) {
-        applies.push({ submitted, options });
-        return { transactionId: "tx", changedPaths: [], revisions: {}, imported: [] };
+      async commit(changeId) {
+        commits.push(changeId);
+        return {
+          transactionId: "tx",
+          changedPaths: [],
+          revisions: {},
+          backupManifest: null,
+          result: { imported: [] },
+        };
       },
+      cancel() {},
     };
     const ctx = listCtx(() => {});
     ctx.argv.verb = "import";
@@ -212,7 +224,7 @@ describe("runSkill — snapshot-backed reads", () => {
       importControlPlane,
     });
 
-    expect(previews).toEqual([
+    expect(preparations).toEqual([
       [
         {
           candidateId: "cand_native",
@@ -225,12 +237,17 @@ describe("runSkill — snapshot-backed reads", () => {
         },
       ],
     ]);
-    expect(applies).toEqual([{ submitted: plan, options: { digest: "import-digest" } }]);
+    expect(commits).toEqual(["change-import"]);
   });
 
   it("keeps a daemon-created skill import preview on the daemon for apply", async () => {
     const calls: Array<{ path: string; init: unknown }> = [];
-    const remotePlan = { id: "remote", digest: "remote-digest" } as never;
+    const remoteChange = {
+      changeId: "remote-change",
+      kind: "skill.import",
+      expiresAt: "2026-07-22T12:00:00.000Z",
+      preview: { selections: [], candidates: [], files: [] },
+    };
     const remoteCandidate = {
       candidateId: "cand_remote",
       id: "native-review",
@@ -269,9 +286,15 @@ describe("runSkill — snapshot-backed reads", () => {
           return Response.json({ discovered: [remoteCandidate] });
         }
         return Response.json(
-          path.includes("/preview")
-            ? remotePlan
-            : { transactionId: "remote", changedPaths: [], revisions: {}, imported: [{}] },
+          path.includes("/prepare")
+            ? remoteChange
+            : {
+                transactionId: "remote",
+                changedPaths: [],
+                revisions: {},
+                backupManifest: null,
+                result: { imported: [{}] },
+              },
         );
       },
     });
@@ -282,7 +305,7 @@ describe("runSkill — snapshot-backed reads", () => {
         init: undefined,
       },
       {
-        path: `/api/skills/import/preview?projectId=${PROJECT_ID}`,
+        path: `/api/skills/import/prepare?projectId=${PROJECT_ID}`,
         init: {
           method: "POST",
           body: {
@@ -301,10 +324,9 @@ describe("runSkill — snapshot-backed reads", () => {
         },
       },
       {
-        path: `/api/skills/import/apply?projectId=${PROJECT_ID}`,
+        path: "/api/changes/remote-change/commit",
         init: {
           method: "POST",
-          body: { plan: remotePlan, digest: "remote-digest" },
         },
       },
     ]);
@@ -312,16 +334,28 @@ describe("runSkill — snapshot-backed reads", () => {
 
   it("add-scope uses an existing effective registration without discovery", async () => {
     const calls: unknown[] = [];
-    const plan = { id: "tx", digest: "scope-digest", preview: { files: [] } } as never;
+    const change = {
+      changeId: "change-scope",
+      kind: "skill.add-scope",
+      expiresAt: "2026-07-22T12:00:00.000Z",
+      preview: { action: "add-scope", id: "project-review", files: [] },
+    } as never;
     const registrationControlPlane = {
-      async previewAddScope(request: unknown) {
-        calls.push({ preview: request });
-        return plan;
+      async prepareAddScope(request: unknown) {
+        calls.push({ prepare: request });
+        return change;
       },
-      async apply(submitted: unknown, options: unknown) {
-        calls.push({ apply: { submitted, options } });
-        return { transactionId: "tx", changedPaths: ["/repo/.ratel/config.json"], revisions: {} };
+      async commit(changeId: string) {
+        calls.push({ commit: changeId });
+        return {
+          transactionId: "tx",
+          changedPaths: ["/repo/.ratel/config.json"],
+          revisions: {},
+          backupManifest: null,
+          result: { id: "project-review" },
+        };
       },
+      cancel() {},
     } as unknown as SkillRegistrationControlPlane;
     const ctx = listCtx(() => {});
     ctx.argv.verb = "add-scope";
@@ -340,14 +374,14 @@ describe("runSkill — snapshot-backed reads", () => {
 
     expect(calls).toEqual([
       {
-        preview: {
+        prepare: {
           context: { kind: "project", projectId: PROJECT_ID },
           target: { scope: "project", projectId: PROJECT_ID },
           id: "project-review",
           mode: "reference",
         },
       },
-      { apply: { submitted: plan, options: { digest: "scope-digest" } } },
+      { commit: "change-scope" },
     ]);
   });
 

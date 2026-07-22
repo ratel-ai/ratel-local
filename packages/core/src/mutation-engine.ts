@@ -16,7 +16,7 @@ import { dirname, isAbsolute, join, normalize, sep } from "node:path";
 import lockfile from "proper-lockfile";
 import type { DocumentRevision } from "./context.js";
 
-export type MutationPlanDigest = string & { readonly __brand: "MutationPlanDigest" };
+export type PreparedMutationDigest = string & { readonly __brand: "PreparedMutationDigest" };
 
 export const MISSING_DOCUMENT_REVISION = "missing" as DocumentRevision;
 
@@ -46,7 +46,7 @@ export interface DeleteArtifactInput {
 
 export type MutationInputOperation = ReplaceFileInput | CopyDirectoryInput | DeleteArtifactInput;
 
-/** JSON-safe operation stored in a preview and accepted by HTTP/CLI apply calls. */
+/** Private, normalized operation retained only by trusted control-plane code. */
 export interface ReplaceFileOperation {
   kind: "replace-file";
   path: string;
@@ -88,16 +88,16 @@ export interface MutationPreview {
   files: MutationPreviewFile[];
 }
 
-export interface MutationPlan {
+export interface PreparedMutation {
   id: string;
-  digest: MutationPlanDigest;
+  digest: PreparedMutationDigest;
   baseRevisions: Record<string, DocumentRevision>;
   operations: MutationOperation[];
   preview: MutationPreview;
 }
 
-export interface ApplyMutationOptions {
-  /** Must be copied from the preview response; it is never inferred by apply. */
+export interface CommitMutationOptions {
+  /** Internal digest of the prepared mutation. */
   digest: string;
   /** Internal control-plane invariant checked while the cross-process lock is held. */
   precondition?: () => void | Promise<void>;
@@ -129,8 +129,8 @@ export interface MutationRecoveryResult {
 }
 
 export interface MutationEngine {
-  preview(operations: readonly MutationInputOperation[]): Promise<MutationPlan>;
-  apply(plan: MutationPlan, options: ApplyMutationOptions): Promise<MutationCommit>;
+  prepare(operations: readonly MutationInputOperation[]): Promise<PreparedMutation>;
+  commit(plan: PreparedMutation, options: CommitMutationOptions): Promise<MutationCommit>;
   recover(): Promise<MutationRecoveryResult>;
 }
 
@@ -232,10 +232,7 @@ export class FilesystemMutationEngine implements MutationEngine {
     this.idFactory = options.idFactory ?? randomUUID;
   }
 
-  async preview(inputs: readonly MutationInputOperation[]): Promise<MutationPlan> {
-    if (inputs.length === 0) {
-      throw new MutationValidationError("mutation plan must contain at least one operation");
-    }
+  async prepare(inputs: readonly MutationInputOperation[]): Promise<PreparedMutation> {
     const paths = new Set<string>();
     const operations: MutationOperation[] = [];
     const baseRevisions: Record<string, DocumentRevision> = {};
@@ -327,11 +324,11 @@ export class FilesystemMutationEngine implements MutationEngine {
     };
     return {
       ...planWithoutDigest,
-      digest: mutationPlanDigest(planWithoutDigest),
+      digest: preparedMutationDigest(planWithoutDigest),
     };
   }
 
-  async apply(plan: MutationPlan, options: ApplyMutationOptions): Promise<MutationCommit> {
+  async commit(plan: PreparedMutation, options: CommitMutationOptions): Promise<MutationCommit> {
     this.validateDigest(plan, options.digest);
 
     return this.withLock(async () => {
@@ -346,10 +343,10 @@ export class FilesystemMutationEngine implements MutationEngine {
     return this.withLock(() => this.recoverUnlocked());
   }
 
-  private validateDigest(plan: MutationPlan, suppliedDigest: string): void {
+  private validateDigest(plan: PreparedMutation, suppliedDigest: string): void {
     this.validatePlanShape(plan);
     const { digest: _digest, ...planWithoutDigest } = plan;
-    const actualDigest = mutationPlanDigest(planWithoutDigest);
+    const actualDigest = preparedMutationDigest(planWithoutDigest);
     if (suppliedDigest !== plan.digest || actualDigest !== plan.digest) {
       throw new MutationConflictError(
         "digest_mismatch",
@@ -358,11 +355,11 @@ export class FilesystemMutationEngine implements MutationEngine {
     }
   }
 
-  private validatePlanShape(plan: MutationPlan): void {
+  private validatePlanShape(plan: PreparedMutation): void {
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(plan.id)) {
       throw new MutationValidationError("mutation plan has an unsafe transaction id");
     }
-    if (plan.operations.length === 0 || plan.operations.length !== plan.preview.files.length) {
+    if (plan.operations.length !== plan.preview.files.length) {
       throw new MutationValidationError("mutation plan operations and preview do not align");
     }
 
@@ -431,14 +428,14 @@ export class FilesystemMutationEngine implements MutationEngine {
     }
   }
 
-  private async validateBaseRevisions(plan: MutationPlan): Promise<void> {
+  private async validateBaseRevisions(plan: PreparedMutation): Promise<void> {
     for (const operation of plan.operations) {
       await this.validateOperationBaseRevision(plan, operation);
     }
   }
 
   private async validateOperationBaseRevision(
-    plan: MutationPlan,
+    plan: PreparedMutation,
     operation: MutationOperation,
   ): Promise<void> {
     const expected = plan.baseRevisions[operation.path];
@@ -470,8 +467,8 @@ export class FilesystemMutationEngine implements MutationEngine {
   }
 
   private async commitUnlocked(
-    plan: MutationPlan,
-    options: ApplyMutationOptions,
+    plan: PreparedMutation,
+    options: CommitMutationOptions,
   ): Promise<MutationCommit> {
     const journalPath = this.journalPath(plan.id);
     if (await pathExists(journalPath)) {
@@ -582,7 +579,10 @@ export class FilesystemMutationEngine implements MutationEngine {
     };
   }
 
-  private async prepareArtifacts(plan: MutationPlan, journal: MutationJournalV1): Promise<void> {
+  private async prepareArtifacts(
+    plan: PreparedMutation,
+    journal: MutationJournalV1,
+  ): Promise<void> {
     for (let index = 0; index < plan.operations.length; index += 1) {
       const operation = plan.operations[index];
       const entry = journal.entries[index];
@@ -735,7 +735,7 @@ export class FilesystemMutationEngine implements MutationEngine {
   }
 }
 
-function mutationPlanDigest(plan: Omit<MutationPlan, "digest">): MutationPlanDigest {
+function preparedMutationDigest(plan: Omit<PreparedMutation, "digest">): PreparedMutationDigest {
   const canonical = {
     id: plan.id,
     baseRevisions: Object.fromEntries(
@@ -745,7 +745,7 @@ function mutationPlanDigest(plan: Omit<MutationPlan, "digest">): MutationPlanDig
     preview: plan.preview,
   };
   const digest = createHash("sha256").update(JSON.stringify(canonical)).digest("base64url");
-  return `plan_${digest}` as MutationPlanDigest;
+  return `plan_${digest}` as PreparedMutationDigest;
 }
 
 function toBuffer(contents: string | Uint8Array): Buffer {

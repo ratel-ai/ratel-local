@@ -1,8 +1,10 @@
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { startBackup } from "./backup.js";
 import type { ConfigControlPlane } from "./config-control-plane.js";
 import type { DocumentRevision, RatelScopeRef, RuntimeContextRef } from "./context.js";
 import type { ContextSnapshotResolver } from "./context-snapshot.js";
+import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
 import type { SkillSource } from "./lib/config.js";
 import { parseConfig, parseSkillMd, type SkillEntry } from "./lib/index.js";
@@ -11,13 +13,17 @@ import type { SkillRegistrationView } from "./lib/skills/resolve.js";
 import type { LocalGitExcludeManager } from "./local-git-exclude.js";
 import {
   documentRevision,
-  type MutationCommit,
   MutationConflictError,
-  type MutationEngine,
   type MutationInputOperation,
-  type MutationPlan,
+  type MutationPreview,
+  type PreparedMutation,
   validateCopySourceDirectory,
 } from "./mutation-engine.js";
+import type {
+  PreparedChange,
+  PreparedChangeCommit,
+  PreparedChangeCoordinator,
+} from "./prepared-change-coordinator.js";
 import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { planSkillCopyMaterialization } from "./skill-copy-adoption.js";
@@ -52,19 +58,39 @@ export interface SkillRegistrationControlPlaneOptions {
   projectRegistry: ProjectRegistry;
   configControlPlane: ConfigControlPlane;
   snapshotResolver: ContextSnapshotResolver;
-  mutationEngine: MutationEngine;
+  preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
 }
 
 export interface SkillRegistrationControlPlane {
-  previewAddScope(request: AddSkillScopeRequest): Promise<MutationPlan>;
-  previewEdit(request: EditSkillRegistrationRequest): Promise<MutationPlan>;
-  previewRemove(request: RemoveSkillRegistrationRequest): Promise<MutationPlan>;
-  apply(plan: MutationPlan, options: { digest: string }): Promise<MutationCommit>;
-  addScope(request: AddSkillScopeRequest): Promise<MutationCommit>;
-  edit(request: EditSkillRegistrationRequest): Promise<MutationCommit>;
-  remove(request: RemoveSkillRegistrationRequest): Promise<MutationCommit>;
+  prepareAddScope(request: AddSkillScopeRequest): Promise<PreparedChange<SkillRegistrationReview>>;
+  prepareEdit(
+    request: EditSkillRegistrationRequest,
+  ): Promise<PreparedChange<SkillRegistrationReview>>;
+  prepareRemove(
+    request: RemoveSkillRegistrationRequest,
+  ): Promise<PreparedChange<SkillRegistrationReview>>;
+  commit(changeId: string): Promise<SkillRegistrationCommit>;
+  cancel(changeId: string): void;
+  addScope(request: AddSkillScopeRequest): Promise<SkillRegistrationCommit>;
+  edit(request: EditSkillRegistrationRequest): Promise<SkillRegistrationCommit>;
+  remove(request: RemoveSkillRegistrationRequest): Promise<SkillRegistrationCommit>;
 }
+
+export interface SkillRegistrationReview {
+  action: "add-scope" | "edit" | "remove";
+  target: RatelScopeRef;
+  id: string;
+  files: MutationPreview["files"];
+}
+
+export interface SkillRegistrationResult {
+  action: SkillRegistrationReview["action"];
+  target: RatelScopeRef;
+  id: string;
+}
+
+export type SkillRegistrationCommit = PreparedChangeCommit<SkillRegistrationResult>;
 
 export class SkillRegistrationNotFoundError extends Error {
   readonly statusCode = 404;
@@ -112,23 +138,11 @@ export function createSkillRegistrationControlPlane(
 }
 
 class FilesystemSkillRegistrationControlPlane implements SkillRegistrationControlPlane {
-  private readonly pendingDeletionChecks = new Map<
-    string,
-    { copyPath: string; removedTarget: RatelScopeRef; removedId: string }
-  >();
-  private readonly pendingPathChecks = new Map<
-    string,
-    {
-      allowedPaths: Set<string>;
-      projectRootsByPath: Map<string, string>;
-      serializedPlan: string;
-    }
-  >();
-  private readonly pendingInvariantChecks = new Map<string, () => Promise<void>>();
-
   constructor(private readonly options: SkillRegistrationControlPlaneOptions) {}
 
-  async previewAddScope(request: AddSkillScopeRequest): Promise<MutationPlan> {
+  async prepareAddScope(
+    request: AddSkillScopeRequest,
+  ): Promise<PreparedChange<SkillRegistrationReview>> {
     validateRegistrationId(request.id);
     if (request.mode !== "reference" && request.mode !== "copy") {
       throw new SkillRegistrationValidationError(
@@ -213,62 +227,69 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       }
     }
 
-    const plan = await this.options.mutationEngine.preview(operations);
-    if (plan.baseRevisions[current.path] !== current.documentRevision) {
-      throw new MutationConflictError(
-        "revision_conflict",
-        `config changed while adding scope: ${current.path}`,
-        current.path,
-        current.documentRevision,
-        plan.baseRevisions[current.path],
-      );
-    }
-    if (localGitPath && localGitRevision && plan.baseRevisions[localGitPath] !== localGitRevision) {
-      throw new MutationConflictError(
-        "revision_conflict",
-        `Git exclude changed while adding scope: ${localGitPath}`,
-        localGitPath,
-        localGitRevision,
-        plan.baseRevisions[localGitPath],
-      );
-    }
-
     const projectRootsByPath = new Map<string, string>();
     if (projectRoot) {
       for (const operation of operations) {
         if (operation.path !== localGitPath) projectRootsByPath.set(operation.path, projectRoot);
       }
     }
-    this.pendingPathChecks.set(plan.id, {
-      allowedPaths: new Set(plan.operations.map(({ path }) => path)),
+    return this.prepareRegistrationChange({
+      action: "add-scope",
+      target: request.target,
+      id: request.id,
+      operations,
       projectRootsByPath,
-      serializedPlan: JSON.stringify(plan),
-    });
-    this.pendingInvariantChecks.set(plan.id, async () => {
-      if ((await realpath(canonicalSource)) !== canonicalSource) {
-        throw new MutationConflictError(
-          "revision_conflict",
-          `skill source changed after preview: ${canonicalSource}`,
-        );
-      }
-      await loadSkillBundle(canonicalSource, request.id);
-      if (adoptedCopy) {
-        const revision = await validateCopySourceDirectory(adoptedCopy.path);
-        if (revision !== adoptedCopy.revision) {
+      verifyPreview: (mutation) => {
+        if (mutation.baseRevisions[current.path] !== current.documentRevision) {
           throw new MutationConflictError(
             "revision_conflict",
-            `adopted skill directory changed after preview: ${adoptedCopy.path}`,
-            adoptedCopy.path,
-            adoptedCopy.revision,
-            revision,
+            `config changed while adding scope: ${current.path}`,
+            current.path,
+            current.documentRevision,
+            mutation.baseRevisions[current.path],
           );
         }
-      }
+        if (
+          localGitPath &&
+          localGitRevision &&
+          mutation.baseRevisions[localGitPath] !== localGitRevision
+        ) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `Git exclude changed while adding scope: ${localGitPath}`,
+            localGitPath,
+            localGitRevision,
+            mutation.baseRevisions[localGitPath],
+          );
+        }
+      },
+      precondition: async () => {
+        if ((await realpath(canonicalSource)) !== canonicalSource) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `skill source changed after preview: ${canonicalSource}`,
+          );
+        }
+        await loadSkillBundle(canonicalSource, request.id);
+        if (adoptedCopy) {
+          const revision = await validateCopySourceDirectory(adoptedCopy.path);
+          if (revision !== adoptedCopy.revision) {
+            throw new MutationConflictError(
+              "revision_conflict",
+              `adopted skill directory changed after preview: ${adoptedCopy.path}`,
+              adoptedCopy.path,
+              adoptedCopy.revision,
+              revision,
+            );
+          }
+        }
+      },
     });
-    return plan;
   }
 
-  async previewEdit(request: EditSkillRegistrationRequest): Promise<MutationPlan> {
+  async prepareEdit(
+    request: EditSkillRegistrationRequest,
+  ): Promise<PreparedChange<SkillRegistrationReview>> {
     validateRegistrationId(request.id);
     if (
       typeof request.description !== "string" ||
@@ -316,46 +337,51 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     } catch (error) {
       throw new SkillRegistrationValidationError("invalid_registration", (error as Error).message);
     }
-    const plan = await this.options.mutationEngine.preview([
+    const operations: MutationInputOperation[] = [
       { kind: "replace-file", path: skillPath, contents },
-    ]);
-    if (plan.baseRevisions[skillPath] !== currentRevision) {
-      throw new MutationConflictError(
-        "revision_conflict",
-        `skill changed while creating preview: ${skillPath}`,
-        skillPath,
-        currentRevision,
-        plan.baseRevisions[skillPath],
-      );
-    }
+    ];
     const projectRootsByPath = new Map<string, string>();
     if (request.target.scope !== "user") {
       const project = await this.options.projectRegistry.resolve(request.target.projectId);
       projectRootsByPath.set(skillPath, project.canonicalRoot);
     }
-    this.pendingPathChecks.set(plan.id, {
-      allowedPaths: new Set([skillPath]),
+    return this.prepareRegistrationChange({
+      action: "edit",
+      target: request.target,
+      id: request.id,
+      operations,
       projectRootsByPath,
-      serializedPlan: JSON.stringify(plan),
+      verifyPreview: (mutation) => {
+        if (mutation.baseRevisions[skillPath] !== currentRevision) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `skill changed while creating preview: ${skillPath}`,
+            skillPath,
+            currentRevision,
+            mutation.baseRevisions[skillPath],
+          );
+        }
+      },
+      precondition: async () => {
+        const latest = await this.options.configControlPlane.read(request.target);
+        if (latest.documentRevision !== current.documentRevision) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `skill registration changed after preview: ${current.path}`,
+            current.path,
+            current.documentRevision,
+            latest.documentRevision,
+          );
+        }
+        await assertOwnedCopy(copyPath, request.id);
+        await this.assertNoReverseReferences(copyPath, request.target, request.id);
+      },
     });
-    this.pendingInvariantChecks.set(plan.id, async () => {
-      const latest = await this.options.configControlPlane.read(request.target);
-      if (latest.documentRevision !== current.documentRevision) {
-        throw new MutationConflictError(
-          "revision_conflict",
-          `skill registration changed after preview: ${current.path}`,
-          current.path,
-          current.documentRevision,
-          latest.documentRevision,
-        );
-      }
-      await assertOwnedCopy(copyPath, request.id);
-      await this.assertNoReverseReferences(copyPath, request.target, request.id);
-    });
-    return plan;
   }
 
-  async previewRemove(request: RemoveSkillRegistrationRequest): Promise<MutationPlan> {
+  async prepareRemove(
+    request: RemoveSkillRegistrationRequest,
+  ): Promise<PreparedChange<SkillRegistrationReview>> {
     validateRegistrationId(request.id);
     const current = await this.options.configControlPlane.read(request.target);
     const document = { ...current.document } as Record<string, unknown>;
@@ -374,7 +400,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       throw new SkillRegistrationValidationError("invalid_registration", (error as Error).message);
     }
 
-    const operations: Parameters<MutationEngine["preview"]>[0][number][] = [
+    const operations: MutationInputOperation[] = [
       {
         kind: "replace-file",
         path: current.path,
@@ -386,120 +412,138 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       const project = await this.options.projectRegistry.resolve(request.target.projectId);
       projectRootsByPath.set(current.path, project.canonicalRoot);
     }
+    let deletion: { copyPath: string; removedTarget: RatelScopeRef; removedId: string } | undefined;
     if (request.deleteOwnedCopy && registration.mode === "copy") {
-      const path = await this.ownedCopyPath(request.target, request.id);
-      await assertOwnedCopy(path, request.id);
-      await this.assertNoReverseReferences(path, request.target, request.id);
-      operations.push({ kind: "delete-artifact", path });
+      const copyPath = await this.ownedCopyPath(request.target, request.id);
+      await assertOwnedCopy(copyPath, request.id);
+      await this.assertNoReverseReferences(copyPath, request.target, request.id);
+      operations.push({ kind: "delete-artifact", path: copyPath });
+      deletion = { copyPath, removedTarget: request.target, removedId: request.id };
       if (request.target.scope !== "user") {
         const project = await this.options.projectRegistry.resolve(request.target.projectId);
-        projectRootsByPath.set(path, project.canonicalRoot);
+        projectRootsByPath.set(copyPath, project.canonicalRoot);
       }
     }
-    const plan = await this.options.mutationEngine.preview(operations);
-    if (plan.baseRevisions[current.path] !== current.documentRevision) {
-      throw new MutationConflictError(
-        "revision_conflict",
-        `config changed while previewing ${current.path}`,
-        current.path,
-        current.documentRevision,
-        plan.baseRevisions[current.path],
-      );
-    }
-    if (request.deleteOwnedCopy && registration.mode === "copy") {
-      this.pendingDeletionChecks.set(plan.id, {
-        copyPath: await this.ownedCopyPath(request.target, request.id),
-        removedTarget: request.target,
-        removedId: request.id,
-      });
-    }
-    this.pendingPathChecks.set(plan.id, {
-      allowedPaths: new Set(plan.operations.map(({ path }) => path)),
+    return this.prepareRegistrationChange({
+      action: "remove",
+      target: request.target,
+      id: request.id,
+      operations,
       projectRootsByPath,
-      serializedPlan: JSON.stringify(plan),
-    });
-    return plan;
-  }
-
-  async apply(plan: MutationPlan, options: { digest: string }): Promise<MutationCommit> {
-    const hasDeletion = plan.operations.some(({ kind }) => kind === "delete-artifact");
-    const pending = this.pendingDeletionChecks.get(plan.id);
-    const pathChecks = this.pendingPathChecks.get(plan.id);
-    const invariantCheck = this.pendingInvariantChecks.get(plan.id);
-    if (hasDeletion && !pending) {
-      throw new MutationConflictError(
-        "digest_mismatch",
-        "owned-copy removal preview is unknown, expired, or already consumed",
-      );
-    }
-    this.pendingDeletionChecks.delete(plan.id);
-    this.pendingPathChecks.delete(plan.id);
-    this.pendingInvariantChecks.delete(plan.id);
-    if (!pathChecks) {
-      throw new MutationConflictError(
-        "digest_mismatch",
-        "skill registration preview is unknown, expired, or already consumed",
-      );
-    }
-    if (JSON.stringify(plan) !== pathChecks.serializedPlan) {
-      throw new MutationConflictError(
-        "digest_mismatch",
-        "skill registration preview was modified after it was issued",
-      );
-    }
-    return this.options.mutationEngine.apply(plan, {
-      digest: options.digest,
-      precondition: async () => {
-        if (pending) {
-          await this.assertNoReverseReferences(
-            pending.copyPath,
-            pending.removedTarget,
-            pending.removedId,
-          );
-        }
-        await invariantCheck?.();
-        for (const [path, projectRoot] of pathChecks.projectRootsByPath) {
-          await assertSafeProjectControlPath(projectRoot, path);
-        }
-      },
-      operationPrecondition: async (operation) => {
-        if (!pathChecks.allowedPaths.has(operation.path)) {
+      deletion,
+      verifyPreview: (mutation) => {
+        if (mutation.baseRevisions[current.path] !== current.documentRevision) {
           throw new MutationConflictError(
-            "digest_mismatch",
-            `skill registration mutation contains an unexpected path: ${operation.path}`,
+            "revision_conflict",
+            `config changed while previewing ${current.path}`,
+            current.path,
+            current.documentRevision,
+            mutation.baseRevisions[current.path],
           );
         }
-        if (
-          pending &&
-          operation.kind === "delete-artifact" &&
-          operation.path === pending.copyPath
-        ) {
-          await assertOwnedCopy(pending.copyPath, pending.removedId);
-          await this.assertNoReverseReferences(
-            pending.copyPath,
-            pending.removedTarget,
-            pending.removedId,
-          );
-        }
-        const projectRoot = pathChecks.projectRootsByPath.get(operation.path);
-        if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
       },
     });
   }
 
-  async remove(request: RemoveSkillRegistrationRequest): Promise<MutationCommit> {
-    const plan = await this.previewRemove(request);
-    return this.apply(plan, { digest: plan.digest });
+  commit(changeId: string): Promise<SkillRegistrationCommit> {
+    return this.options.preparedChanges.commit(changeId);
   }
 
-  async addScope(request: AddSkillScopeRequest): Promise<MutationCommit> {
-    const plan = await this.previewAddScope(request);
-    return this.apply(plan, { digest: plan.digest });
+  cancel(changeId: string): void {
+    this.options.preparedChanges.cancel(changeId);
   }
 
-  async edit(request: EditSkillRegistrationRequest): Promise<MutationCommit> {
-    const plan = await this.previewEdit(request);
-    return this.apply(plan, { digest: plan.digest });
+  async remove(request: RemoveSkillRegistrationRequest): Promise<SkillRegistrationCommit> {
+    const change = await this.prepareRemove(request);
+    return this.commit(change.changeId);
+  }
+
+  async addScope(request: AddSkillScopeRequest): Promise<SkillRegistrationCommit> {
+    const change = await this.prepareAddScope(request);
+    return this.commit(change.changeId);
+  }
+
+  async edit(request: EditSkillRegistrationRequest): Promise<SkillRegistrationCommit> {
+    const change = await this.prepareEdit(request);
+    return this.commit(change.changeId);
+  }
+
+  private prepareRegistrationChange(input: {
+    action: SkillRegistrationReview["action"];
+    target: RatelScopeRef;
+    id: string;
+    operations: readonly MutationInputOperation[];
+    projectRootsByPath: ReadonlyMap<string, string>;
+    verifyPreview: (mutation: Readonly<PreparedMutation>) => void;
+    precondition?: () => Promise<void>;
+    deletion?: { copyPath: string; removedTarget: RatelScopeRef; removedId: string };
+  }): Promise<PreparedChange<SkillRegistrationReview>> {
+    const allowedPaths = new Set(input.operations.map(({ path }) => path));
+    return this.options.preparedChanges.prepare({
+      kind: `skill.${input.action}`,
+      operations: input.operations,
+      affectedContexts: [contextForTarget(input.target)],
+      buildPreview: (mutation) => {
+        input.verifyPreview(mutation);
+        return {
+          action: input.action,
+          target: input.target,
+          id: input.id,
+          files: mutation.preview.files,
+        };
+      },
+      invariants: {
+        precondition: async () => {
+          if (input.deletion) {
+            await this.assertNoReverseReferences(
+              input.deletion.copyPath,
+              input.deletion.removedTarget,
+              input.deletion.removedId,
+            );
+          }
+          await input.precondition?.();
+          for (const [path, projectRoot] of input.projectRootsByPath) {
+            await assertSafeProjectControlPath(projectRoot, path);
+          }
+        },
+        operationPrecondition: async (operation) => {
+          if (!allowedPaths.has(operation.path)) {
+            throw new MutationConflictError(
+              "digest_mismatch",
+              `skill registration mutation contains an unexpected path: ${operation.path}`,
+            );
+          }
+          if (
+            input.deletion &&
+            operation.kind === "delete-artifact" &&
+            operation.path === input.deletion.copyPath
+          ) {
+            await assertOwnedCopy(input.deletion.copyPath, input.deletion.removedId);
+            await this.assertNoReverseReferences(
+              input.deletion.copyPath,
+              input.deletion.removedTarget,
+              input.deletion.removedId,
+            );
+          }
+          const projectRoot = input.projectRootsByPath.get(operation.path);
+          if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
+        },
+      },
+      captureBackup: async () => {
+        const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
+        for (const operation of input.operations) {
+          if (operation.kind === "delete-artifact") {
+            for (const path of await regularFilesUnder(operation.path)) await backup.capture(path);
+          } else {
+            await backup.capture(operation.path);
+          }
+        }
+        return backup.finalize(
+          input.action === "add-scope" ? "add" : input.action === "remove" ? "remove" : "edit",
+        );
+      },
+      result: { action: input.action, target: input.target, id: input.id },
+    });
   }
 
   private async ownedCopyPath(target: RatelScopeRef, id: string): Promise<string> {
@@ -649,6 +693,19 @@ async function assertOwnedCopy(path: string, id: string): Promise<void> {
   }
 }
 
+async function regularFilesUnder(path: string): Promise<string[]> {
+  const info = await lstat(path);
+  if (info.isFile()) return [path];
+  if (!info.isDirectory() || info.isSymbolicLink()) return [];
+  const files: string[] = [];
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) files.push(...(await regularFilesUnder(child)));
+    else if (entry.isFile()) files.push(child);
+  }
+  return files;
+}
+
 function sameRegistration(
   registration: SkillRegistrationView,
   target: RatelScopeRef,
@@ -666,6 +723,12 @@ function sameScope(a: RatelScopeRef, b: RatelScopeRef): boolean {
 
 function formatScope(ref: RatelScopeRef): string {
   return ref.scope === "user" ? "user" : `${ref.scope}:${ref.projectId}`;
+}
+
+function contextForTarget(target: RatelScopeRef): RuntimeContextRef {
+  return target.scope === "user"
+    ? { kind: "global" }
+    : { kind: "project", projectId: target.projectId };
 }
 
 function formatRegistration(registration: SkillRegistrationView): string {

@@ -188,6 +188,66 @@ describe("ReconciledGatewayPool", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not create a monitor when reconciling without an active lease", async () => {
+    const resolver = {
+      resolve: vi.fn(async () => snapshot("rev-1")),
+    } satisfies ContextSnapshotResolver;
+    const onRevision = vi.fn();
+    const pool = new ReconciledGatewayPool({
+      generations: new InMemoryScopedGatewayPool(async (generation) =>
+        gateway(generation.runtimeRevision),
+      ),
+      registry: {} as ProjectRegistry,
+      resolver,
+      onRevision,
+      debounceMs: 10,
+    });
+
+    await pool.reconcileContext({ kind: "project", projectId });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(resolver.resolve).toHaveBeenCalledTimes(1);
+    await pool.shutdown();
+  });
+
+  it("stops context reconciliation after the final lease is released", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ratel-reconciled-release-"));
+    const homeDir = join(root, "home");
+    const projectRoot = join(root, "project");
+    const configDir = join(projectRoot, ".ratel");
+    const configPath = join(configDir, "config.json");
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await mkdir(configDir, { recursive: true });
+    await writeFile(configPath, JSON.stringify({ mcpServers: {} }));
+    const registry = createProjectRegistry({ homeDir });
+    await registry.registerRoot(projectRoot);
+    const resolver = createContextSnapshotResolver({ homeDir, projectRegistry: registry });
+    const revisions: string[] = [];
+    const pool = new ReconciledGatewayPool({
+      generations: new InMemoryScopedGatewayPool(async (generation) =>
+        gateway(generation.runtimeRevision),
+      ),
+      registry,
+      resolver,
+      debounceMs: 20,
+      onRevision: (_context, revision) => revisions.push(revision),
+    });
+
+    try {
+      const lease = await pool.acquire({ kind: "project", projectRoot });
+      await lease.release();
+      const countAfterRelease = revisions.length;
+      await writeFile(
+        configPath,
+        JSON.stringify({ mcpServers: { later: { type: "stdio", command: "later" } } }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(revisions).toHaveLength(countAfterRelease);
+    } finally {
+      await pool.shutdown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
