@@ -1,5 +1,6 @@
 import { FolderKanban, RefreshCw } from "lucide-react";
 import { useRatelApp } from "@/App";
+import { EmptyStateIcon } from "@/components/empty-state-icon";
 import {
   PageHeader,
   PageHeaderActions,
@@ -116,7 +117,9 @@ export function AllProjectsPage() {
       {projects.length === 0 && !projectsLoading ? (
         <section className="grid min-h-72 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 text-center">
           <div className="grid max-w-sm gap-2">
-            <FolderKanban className="mx-auto size-7 text-muted-foreground" />
+            <EmptyStateIcon>
+              <FolderKanban />
+            </EmptyStateIcon>
             <h2 className="font-medium">No registered projects</h2>
             <p className="text-muted-foreground text-sm">
               Register a root with ratel-local project add, then refresh this overview.

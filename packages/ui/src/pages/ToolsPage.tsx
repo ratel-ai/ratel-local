@@ -30,6 +30,7 @@ import {
   useRatelApp,
 } from "@/App";
 import { CodeBlock } from "@/components/code-block";
+import { EmptyStateIcon } from "@/components/empty-state-icon";
 import {
   PageHeader,
   PageHeaderActions,
@@ -1555,9 +1556,9 @@ function EmptyTools(props: { action: ReactNode; children: ReactNode; title: stri
   return (
     <section className="grid min-h-64 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 py-8 text-center">
       <div className="grid max-w-md gap-3">
-        <div className="mx-auto rounded-md border border-coral/30 bg-coral/10 p-2 text-coral">
+        <EmptyStateIcon>
           <Server className="size-5" />
-        </div>
+        </EmptyStateIcon>
         <div>
           <h3 className="font-medium">{props.title}</h3>
           <p className="mt-1 text-sm text-muted-foreground">{props.children}</p>

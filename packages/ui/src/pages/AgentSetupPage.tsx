@@ -827,6 +827,7 @@ function PreviewFlow(props: {
   const { context, runAction } = useRatelApp();
   const [preview, setPreview] = useState<AgentPlanPreview | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const endpoint =
@@ -837,6 +838,7 @@ function PreviewFlow(props: {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
         const body = await props.request<PreparedAgentChangeResponse>(previewPath, {
           method: "POST",
@@ -858,6 +860,10 @@ function PreviewFlow(props: {
           }
           return agentPreviewFromPrepared(body);
         });
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not build the setup preview");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -1016,6 +1022,23 @@ function PreviewFlow(props: {
         <div className="rounded-md border border-border px-3 py-6 text-sm text-muted-foreground">
           Building preview...
         </div>
+      ) : null}
+
+      {error && !preview ? (
+        <Alert variant="destructive">
+          <AlertTitle>Could not build {props.flow} preview</AlertTitle>
+          <AlertDescription className="grid justify-items-start gap-3">
+            <span>{error}</span>
+            <Button
+              onClick={() => setRefreshNonce((value) => value + 1)}
+              size="sm"
+              variant="outline"
+            >
+              <RefreshCw />
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       {preview ? (

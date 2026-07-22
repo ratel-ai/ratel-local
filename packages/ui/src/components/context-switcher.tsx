@@ -50,7 +50,7 @@ export function ContextSwitcher({ context, onSelect, projects }: ContextSwitcher
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="min-w-64 rounded-xl border-forest-300 bg-base-deep/95 p-1.5 backdrop-blur"
+        className="min-w-64 rounded-lg"
         side="bottom"
         sideOffset={8}
       >
