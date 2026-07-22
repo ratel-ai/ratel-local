@@ -1,6 +1,7 @@
 import { RefreshCw, TriangleAlert, Unplug } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useRatelApp } from "@/App";
+import { EmptyStateIcon } from "@/components/empty-state-icon";
 import {
   PageHeader,
   PageHeaderActions,
@@ -99,7 +100,7 @@ export function McpClientsPage() {
             Active streamable HTTP sessions connected to this daemon.
           </PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions>
+        <PageHeaderActions className="hidden sm:flex">
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
@@ -134,7 +135,9 @@ export function McpClientsPage() {
       {clients.length === 0 ? (
         <section className="grid min-h-72 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 text-center">
           <div className="grid max-w-sm gap-2">
-            <Unplug className="mx-auto size-7 text-muted-foreground" />
+            <EmptyStateIcon>
+              <Unplug />
+            </EmptyStateIcon>
             <h2 className="font-medium">No active MCP clients</h2>
             <p className="text-sm text-muted-foreground">
               No initialized sessions are currently open.

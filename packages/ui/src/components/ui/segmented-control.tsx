@@ -44,7 +44,7 @@ function SegmentedControl<T extends string>({
         />
         {options.map((option) => (
           <TabsPrimitive.Tab
-            className="relative z-10 rounded-full px-3.5 py-1.5 text-center text-sm font-medium whitespace-nowrap text-warm-muted transition-colors duration-200 hover:text-cream focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/60 data-active:text-ink"
+            className="relative z-10 rounded-full px-3.5 py-1.5 text-center text-sm font-medium whitespace-nowrap text-warm-muted transition-colors duration-200 not-data-active:hover:text-cream focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/60 data-active:text-ink"
             key={option.value}
             value={option.value}
           >

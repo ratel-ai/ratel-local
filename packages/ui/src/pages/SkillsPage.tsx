@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { LinkIcon, Sparkles, TriangleAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { skillPath, useRatelApp } from "@/App";
+import { EmptyStateIcon } from "@/components/empty-state-icon";
 import { ImportSkillsDialog } from "@/components/import-skills-dialog";
 import {
   PageHeader,
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { type Segment, SegmentedControl } from "@/components/ui/segmented-control";
 import {
   Select,
   SelectContent,
@@ -33,7 +35,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { projectLabel } from "@/lib/projects";
 import { scopeTarget } from "@/lib/runtime-context";
@@ -61,6 +62,7 @@ export function SkillsPage() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [importOpen, setImportOpen] = useState(false);
   const [configuredScope, setConfiguredScope] = useState<"user" | "project" | "local">("user");
+  const [sourceFilter, setSourceFilter] = useState<"all" | SkillSource>("all");
 
   const openSkill = (id: string) => {
     void navigate({ to: skillPath(id, token, context) } as never);
@@ -103,6 +105,16 @@ export function SkillsPage() {
   const canImport = available.length > 0;
   const usesScopedResolver = ready?.effectiveSkills !== undefined;
   const registrationGroups = ready ? configuredSkillRegistrationGroups(ready, context) : [];
+  const scopeOptions: Segment<"user" | "project" | "local">[] = registrationGroups.map((group) => ({
+    label: `${scopeLabel(group.scope)} ${group.registrations.length}`,
+    value: group.scope,
+  }));
+  const selectedRegistrationGroup = registrationGroups.find(
+    (group) => group.scope === configuredScope,
+  );
+  const filteredManaged = managed.filter(
+    (skill) => sourceFilter === "all" || skill.source === sourceFilter,
+  );
   const loading = state.status === "loading";
 
   useEffect(() => {
@@ -135,7 +147,7 @@ export function SkillsPage() {
             Code or Codex as invoke-only without moving their native folders.
           </PageHeaderDescription>
         </PageHeaderContent>
-        <PageHeaderActions className="hidden items-center sm:flex">
+        <PageHeaderActions className="items-center">
           <NewSkillDialog onCreated={load} />
           <Button
             className="h-10"
@@ -182,6 +194,28 @@ export function SkillsPage() {
         </section>
       )}
 
+      {ready && usesScopedResolver && registrationGroups.length > 0 && (
+        <section className="flex flex-col gap-3 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <SegmentedControl<"user" | "project" | "local">
+              ariaLabel="Skill registration scope"
+              onChange={setConfiguredScope}
+              options={scopeOptions}
+              value={configuredScope}
+            />
+            <p className="mt-2 text-sm text-muted-foreground">
+              {selectedRegistrationGroup?.registrations.length ?? 0} skill registration
+              {(selectedRegistrationGroup?.registrations.length ?? 0) === 1 ? "" : "s"} configured
+              in this scope.
+            </p>
+          </div>
+          <SkillSourceFilter
+            onValueChange={(value) => setSourceFilter(value as "all" | SkillSource)}
+            value={sourceFilter}
+          />
+        </section>
+      )}
+
       {ready && managed.length === 0 && available.length > 0 && (
         <EmptyState
           title="No skills managed by Ratel yet"
@@ -201,13 +235,24 @@ export function SkillsPage() {
         />
       )}
 
-      {ready && managed.length > 0 && (
+      {ready && managed.length > 0 && filteredManaged.length === 0 && (
+        <EmptyState
+          title="No matching managed skills"
+          description="Adjust the source filter to broaden the current skill list."
+        >
+          <Button onClick={() => setSourceFilter("all")} size="sm">
+            Clear filters
+          </Button>
+        </EmptyState>
+      )}
+
+      {ready && filteredManaged.length > 0 && (
         <SkillSection
           title="Managed by Ratel"
           caption="Served through the gateway. Linked native skills remain in their agent folders."
           iconSource="ratel"
           onView={openSkill}
-          skills={managed}
+          skills={filteredManaged}
           renderAction={(skill) => {
             const registration = skill.registration;
             if (registration?.ref.kind === "entry") {
@@ -225,7 +270,7 @@ export function SkillsPage() {
                   size="sm"
                   variant="outline"
                 >
-                  Remove scope
+                  Stop managing
                 </Button>
               );
             }
@@ -251,38 +296,22 @@ export function SkillsPage() {
         />
       )}
 
-      {ready && usesScopedResolver && registrationGroups.length > 0 && (
+      {ready && usesScopedResolver && selectedRegistrationGroup && (
         <section className="grid gap-3 border-border border-t pt-4">
           <div className="px-1">
-            <h2 className="font-medium text-sm">Configured registrations</h2>
+            <h2 className="font-medium text-sm">
+              {scopeLabel(selectedRegistrationGroup.scope)} registrations
+            </h2>
             <p className="text-muted-foreground text-xs">
-              Inspect effective, shadowed, duplicate, and invalid registrations without changing the
-              runtime precedence view above.
+              Inspect and manage the skills configured directly in this scope.
             </p>
           </div>
-          <Tabs
-            onValueChange={(value) => setConfiguredScope(value as "user" | "project" | "local")}
-            value={configuredScope}
-          >
-            <TabsList variant="line">
-              {registrationGroups.map((group) => (
-                <TabsTrigger key={group.scope} value={group.scope}>
-                  {scopeLabel(group.scope)}
-                  <span className="text-muted-foreground">{group.registrations.length}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            {registrationGroups.map((group) => (
-              <TabsContent key={group.scope} value={group.scope}>
-                <ConfiguredRegistrationList
-                  busy={busy}
-                  onRemove={removeRegistration}
-                  registrations={group.registrations}
-                  scope={group.scope}
-                />
-              </TabsContent>
-            ))}
-          </Tabs>
+          <ConfiguredRegistrationList
+            busy={busy}
+            onRemove={removeRegistration}
+            registrations={selectedRegistrationGroup.registrations}
+            scope={selectedRegistrationGroup.scope}
+          />
         </section>
       )}
 
@@ -293,6 +322,30 @@ export function SkillsPage() {
         open={importOpen}
       />
     </main>
+  );
+}
+
+function SkillSourceFilter(props: {
+  onValueChange: (value: string) => void;
+  value: "all" | SkillSource;
+}) {
+  return (
+    <div className="grid grid-cols-[auto_minmax(9rem,1fr)] items-center gap-3 sm:w-fit">
+      <span className="font-mono text-xs text-muted-foreground uppercase">Source</span>
+      <Select onValueChange={props.onValueChange} value={props.value}>
+        <SelectTrigger aria-label="Filter by source" className="min-w-40">
+          <SelectValue>
+            {props.value === "all" ? "All sources" : sourceLabel(props.value)}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All sources</SelectItem>
+          <SelectItem value="ratel">Ratel</SelectItem>
+          <SelectItem value="claude">Claude Code</SelectItem>
+          <SelectItem value="codex">Codex</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -343,7 +396,7 @@ function ConfiguredRegistrationList(props: {
               size="sm"
               variant="outline"
             >
-              Remove scope
+              Stop managing
             </Button>
           ) : (
             <span className="text-muted-foreground text-xs">Configured by legacy directory</span>
@@ -582,9 +635,9 @@ function EmptyState(props: { title: string; description: string; children?: Reac
   return (
     <section className="grid min-h-72 flex-1 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 py-8 text-center">
       <div className="grid max-w-md gap-3">
-        <div className="mx-auto rounded-md bg-muted p-2 text-brand-green">
+        <EmptyStateIcon>
           <Sparkles className="size-5" />
-        </div>
+        </EmptyStateIcon>
         <div>
           <h3 className="font-medium">{props.title}</h3>
           <p className="mt-1 text-muted-foreground text-sm">{props.description}</p>

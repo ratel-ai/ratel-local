@@ -1,3 +1,16 @@
+import { join } from "node:path";
+import {
+  createConfigControlPlane,
+  createContextSnapshotResolver,
+  createLocalGitExcludeManager,
+  createMutationEngine,
+  createPreparedChangeCoordinator,
+  createProjectAdmissionLock,
+  createProjectRegistry,
+  createSkillDiscovery,
+  createSkillImportControlPlane,
+  createSkillRegistrationControlPlane,
+} from "@ratel-ai/ratel-local-core";
 import { openBrowser } from "../../ui/open-browser.js";
 import { newSessionToken } from "../../ui/security.js";
 import { startUiServer } from "../../ui/server.js";
@@ -18,8 +31,65 @@ export async function runUi(
   const port = parsePort(portFlag);
   const noOpen = parsed.flags.open === false;
 
+  const projectRegistry = createProjectRegistry({ homeDir: ctx.env.homeDir });
+  const projectAdmissionLock = createProjectAdmissionLock({
+    controlDir: join(ctx.env.homeDir, ".ratel"),
+  });
+  const snapshotResolver = createContextSnapshotResolver({
+    homeDir: ctx.env.homeDir,
+    projectRegistry,
+  });
+  const preparedChanges =
+    ctx.preparedChanges ??
+    createPreparedChangeCoordinator({
+      mutationEngine: await createMutationEngine({
+        controlDir: join(ctx.env.homeDir, ".ratel"),
+      }),
+    });
+  const localGitExcludeManager = createLocalGitExcludeManager();
+  const configControlPlane = await createConfigControlPlane({
+    homeDir: ctx.env.homeDir,
+    projectRegistry,
+    preparedChanges,
+    localGitExcludeManager,
+  });
+  const skillDiscovery = createSkillDiscovery({
+    homeDir: ctx.env.homeDir,
+    registeredProjectRoots: async () =>
+      (await projectRegistry.list())
+        .filter((project) => project.status === "available")
+        .map((project) => project.canonicalRoot),
+  });
+  const skillImportControlPlane = createSkillImportControlPlane({
+    homeDir: ctx.env.homeDir,
+    projectRegistry,
+    discovery: skillDiscovery,
+    preparedChanges,
+    localGitExcludeManager,
+  });
+  const skillRegistrationControlPlane = createSkillRegistrationControlPlane({
+    homeDir: ctx.env.homeDir,
+    projectRegistry,
+    configControlPlane,
+    snapshotResolver,
+    preparedChanges,
+    localGitExcludeManager,
+  });
+
   const token = newSessionToken();
-  const handle = await startUiServer({ ctx, token, port });
+  const handle = await startUiServer({
+    ctx,
+    token,
+    port,
+    projectRegistry,
+    projectAdmissionLock,
+    configControlPlane,
+    snapshotResolver,
+    skillDiscovery,
+    skillImportControlPlane,
+    skillRegistrationControlPlane,
+    preparedChanges,
+  });
   log(`[ratel] UI running at ${handle.url}`);
   log("[ratel] Press Ctrl-C to stop.");
 
