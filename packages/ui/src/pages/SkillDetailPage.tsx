@@ -9,7 +9,6 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
@@ -131,9 +130,6 @@ export function SkillDetailPage(props: { id: string }) {
               <ArrowLeft />
               Skills
             </Button>
-            <div className="flex items-center gap-1 sm:hidden">
-              <PageHeaderSidebarTrigger />
-            </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
             {detail && <SourceIcon source={detail.state === "active" ? "ratel" : detail.source} />}
@@ -187,7 +183,6 @@ export function SkillDetailPage(props: { id: string }) {
                 Edit
               </Button>
             ))}
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 

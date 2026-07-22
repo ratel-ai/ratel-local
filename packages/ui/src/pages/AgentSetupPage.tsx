@@ -14,7 +14,6 @@ import {
   GitCompare,
   LinkIcon,
   RefreshCw,
-  SearchIcon,
   Sparkles,
   Wrench,
   X,
@@ -30,7 +29,6 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import {
@@ -41,7 +39,6 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DetailGrid, DetailLabel } from "@/components/ui/detail-grid";
 import {
@@ -263,8 +260,7 @@ export interface AgentSetupRouteData {
 }
 
 export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteData }) {
-  const { clearSetupIntent, config, openCommandMenu, pagePath, refresh, request, setupIntent } =
-    useRatelApp();
+  const { clearSetupIntent, config, pagePath, refresh, request, setupIntent } = useRatelApp();
   const navigate = useNavigate();
   const { available } = useAvailableSkills(initialData?.available);
   const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>(initialData?.hosts ?? []);
@@ -318,30 +314,17 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
           <PageHeaderBackRow>
             <PageHeaderTitle>Agent Setup</PageHeaderTitle>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
+              <Button
+                aria-label="Refresh"
+                disabled={scanning}
+                onClick={() => void Promise.all([refresh(), scanHosts()])}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <span className="sr-only">Refresh</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription className="max-w-sm sm:max-w-2xl">
@@ -352,12 +335,6 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
                 kbd="⌘R"
@@ -366,7 +343,6 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -393,7 +369,7 @@ export function AgentDetailPage(props: {
   kind: AgentHostKind;
   operation?: SetupFlow;
 }) {
-  const { openCommandMenu, pagePath, refresh, request } = useRatelApp();
+  const { pagePath, refresh, request } = useRatelApp();
   const navigate = useNavigate();
   const { available, reload: reloadSkills } = useAvailableSkills(props.initialData?.available);
   const agentAvailable = availableSkillsForKind(available, props.kind);
@@ -440,30 +416,17 @@ export function AgentDetailPage(props: {
               Agents
             </Button>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
+              <Button
+                aria-label="Refresh"
+                disabled={scanning}
+                onClick={() => void Promise.all([refresh(), scanHosts()])}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <span className="sr-only">Refresh</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
@@ -498,12 +461,6 @@ export function AgentDetailPage(props: {
             ) : null}
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
                 kbd="⌘R"
@@ -512,7 +469,6 @@ export function AgentDetailPage(props: {
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -674,7 +630,7 @@ function AgentOperationPanel(props: {
     props.host.connection.kind === "duplicate" || props.host.connection.kind === "explicit";
   const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
-    <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+    <section className="grid gap-5 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
       {props.hostKind === "claude-code" && props.host.statusline ? (
         <ClaudeStatuslineSection
           onScanHosts={props.onScanHosts}

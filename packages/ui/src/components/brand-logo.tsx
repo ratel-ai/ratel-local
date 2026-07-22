@@ -28,15 +28,10 @@ export function BrandLogo({
   suffix?: string;
 }) {
   return (
-    <span
-      className={cn(
-        "inline-flex min-w-0 items-center gap-2.5 group-data-[collapsible=icon]:gap-0",
-        className,
-      )}
-    >
-      <RatelBadger className="h-[22px] w-[48px] shrink-0 bg-brand-green transition-[width,height] dark:bg-brand-cream group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:w-6" />
-      <span className="whitespace-nowrap font-display text-lg font-medium text-foreground tracking-[-0.03em] group-data-[collapsible=icon]:hidden">
-        Ratel <span className="font-normal text-muted-foreground">{suffix}</span>
+    <span className={cn("inline-flex min-w-0 items-center gap-2.5", className)}>
+      <RatelBadger className="h-5 w-11 shrink-0 bg-brand-green dark:bg-cream" />
+      <span className="whitespace-nowrap font-display text-sm font-semibold tracking-tight text-cream">
+        Ratel <span className="font-normal text-warm-muted">{suffix}</span>
       </span>
     </span>
   );

@@ -8,7 +8,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { type ProjectView, projectLabel } from "@/lib/projects";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
 
@@ -36,27 +35,29 @@ export function ContextSwitcher({ context, onSelect, projects }: ContextSwitcher
 
   return (
     <DropdownMenu>
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <DropdownMenuTrigger render={<SidebarMenuButton size="lg" tooltip="Change context" />}>
-            <span className="grid size-8 shrink-0 place-items-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
-              <SelectedIcon className="size-4" />
-            </span>
-            <span className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">{label}</span>
-              <span className="truncate text-xs text-sidebar-foreground/65">
-                {context.kind === "project"
-                  ? (selectedProject?.canonicalRoot ?? "Registered project")
-                  : "Runtime context"}
-              </span>
-            </span>
-            <ChevronsUpDown className="ml-auto size-4" />
-          </DropdownMenuTrigger>
-        </SidebarMenuItem>
-      </SidebarMenu>
-      <DropdownMenuContent align="start" className="min-w-64" side="right" sideOffset={6}>
+      <DropdownMenuTrigger
+        render={
+          <button
+            aria-label="Change context"
+            className="flex min-w-0 items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-cream transition-colors hover:bg-forest/40"
+            type="button"
+          />
+        }
+      >
+        <SelectedIcon className="size-4 shrink-0 text-coral" />
+        <span className="max-w-48 truncate font-semibold max-sm:max-w-28">{label}</span>
+        <ChevronsUpDown className="size-3.5 shrink-0 text-warm-muted" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="min-w-64 rounded-xl border-forest-300 bg-base-deep/95 p-1.5 backdrop-blur"
+        side="bottom"
+        sideOffset={8}
+      >
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Contexts</DropdownMenuLabel>
+          <DropdownMenuLabel className="text-[10px] tracking-wide uppercase text-warm-muted">
+            Contexts
+          </DropdownMenuLabel>
           <DropdownMenuItem onClick={() => onSelect({ kind: "all" })}>
             <LayoutGrid />
             <span className="flex-1">All projects</span>
@@ -70,7 +71,9 @@ export function ContextSwitcher({ context, onSelect, projects }: ContextSwitcher
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Projects</DropdownMenuLabel>
+          <DropdownMenuLabel className="text-[10px] tracking-wide uppercase text-warm-muted">
+            Projects
+          </DropdownMenuLabel>
           {projects.length === 0 ? (
             <DropdownMenuItem disabled>No registered projects</DropdownMenuItem>
           ) : (
