@@ -26,6 +26,11 @@ CI (`.github/workflows/ts.yml`) runs all of these on every PR. Land green.
 - **No tool-attribution lines** in commit messages (no `Co-Authored-By: Claude` etc.).
 - **ADRs are immutable once Accepted** — write a new ADR that supersedes the old one rather than editing.
 
+## Ways of working
+
+- **Avoid breaking changes whenever avoidable.** Prefer additive, backward-compatible changes. When a break is genuinely unavoidable, call it out explicitly (PR description + `CHANGELOG.md`) and provide a migration path.
+- **Develop behind feature flags.** Gate new features — and any change to existing behaviour — behind a flag/config that is off by default, so it can ship dark, be rolled out incrementally, and be reverted without a code change. Remove the flag once the behaviour is the stable default.
+
 ## Pull requests
 
 - Keep PRs focused — one logical change per PR.
