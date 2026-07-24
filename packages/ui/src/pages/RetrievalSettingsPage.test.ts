@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   availableRetrievalScopes,
   retrievalConfigFromDraft,
+  retrievalDraftKey,
   retrievalDraftFromConfig,
   retrievalTarget,
 } from "./RetrievalSettingsPage";
@@ -72,6 +73,26 @@ describe("retrieval settings model", () => {
     });
     expect(() => retrievalConfigFromDraft({ ...draft, url: "" })).toThrow(/URL is required/);
     expect(() => retrievalConfigFromDraft({ ...draft, model: "" })).toThrow(/model is required/);
+  });
+
+  it.each([
+    ["method", "hybrid"],
+    ["source", "endpoint"],
+    ["model", "other-model"],
+    ["url", "https://other.example.test/v1/embeddings"],
+    ["apiKeyEnv", "OTHER_KEY"],
+    ["revision", "v2"],
+    ["download", true],
+    ["queryPrefix", "query: "],
+    ["docPrefix", "passage: "],
+    ["pooling", "mean"],
+  ] as const)("changes the preflight identity when %s changes", (field, value) => {
+    const draft = retrievalDraftFromConfig({
+      method: "semantic",
+      embedding: { ollama: "nomic-embed-text" },
+    });
+
+    expect(retrievalDraftKey({ ...draft, [field]: value })).not.toBe(retrievalDraftKey(draft));
   });
 
   it("allows all scopes only inside a project runtime context", () => {
