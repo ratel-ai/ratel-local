@@ -514,7 +514,7 @@ async function authResolvedServer(
     }
   }
   const failed = results.find(({ status }) => status === "failed" || status === "unsupported");
-  if (failed) {
+  if (name && failed) {
     throw new UiRouteError(
       422,
       `${failed.name} ${failed.status}${failed.reason ? `: ${failed.reason}` : ""}`,

@@ -311,6 +311,63 @@ describe("UI server — auth", () => {
     }
   });
 
+  it("returns every bulk authentication result when an upstream fails", async () => {
+    const authenticateMcpServer = vi.fn(async () => [
+      { name: "stripe", status: "authorized" as const },
+      { name: "linear", status: "failed" as const, reason: "user denied" },
+    ]);
+    const projectSession = await spin(undefined, {
+      snapshotResolver: {
+        resolve: async (context) =>
+          ({
+            context,
+            documents: [],
+            runtimeRevision: "rev-auth",
+            mcpEntries: [
+              {
+                name: "stripe",
+                status: "effective",
+                entry: { type: "http", url: "https://mcp.stripe.example" },
+              },
+              {
+                name: "linear",
+                status: "effective",
+                entry: { type: "http", url: "https://mcp.linear.example" },
+              },
+            ],
+            skills: {
+              effectiveSkills: [],
+              registrations: [],
+              diagnostics: [],
+              fingerprint: "skills",
+              watchInputs: [],
+            },
+            diagnostics: [],
+            watchInputs: [],
+          }) as never,
+      },
+      authenticateMcpServer,
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${projectSession.handle.port}/api/auth`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${projectSession.token}` },
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        results: [
+          { name: "stripe", status: "authorized" },
+          { name: "linear", status: "failed", reason: "user denied" },
+        ],
+      });
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
   it("forgets an available inactive project without deleting its files", async () => {
     const projectId = "prj_removable" as ProjectId;
     const forgotten: ProjectId[] = [];
