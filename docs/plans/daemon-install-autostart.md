@@ -1,5 +1,19 @@
 # Plan: Daemon Install and Autostart
 
+## Status
+
+Superseded and implemented.
+
+This is the historical first-slice plan. The completed architecture also
+includes Linux user services, the authenticated stdio connector, canonical
+project scoping, ref-counted gateway generations, session visualization, and
+live OAuth reconciliation. Those decisions are recorded in
+[ADR 0007](../adr/0007-persistent-daemon-and-scoped-connectors.md),
+[ADR 0008](../adr/0008-canonical-projects-and-scoped-ownership.md), and
+[ADR 0009](../adr/0009-transactional-control-plane-mutations.md). Statements
+below that describe those features as future work or non-goals are retained
+only as planning history.
+
 ## Context
 
 The `dev/deamon` branch already has a foreground daemon entrypoint that starts one Ratel gateway, serves the browser UI, and exposes the MCP streamable HTTP endpoint at `/mcp`.
