@@ -137,10 +137,14 @@ async function prepareRetrieval(
 ): Promise<void> {
   if (!dependencies.preflight) throw new Error("retrieval preflight is unavailable");
   const scopeFlag = ctx.argv.flags.scope;
+  const scope = scopeFlag === undefined ? undefined : resolveScope(scopeFlag);
+  if (scope !== undefined && scope !== "user" && !ctx.env.projectRoot) {
+    throw new ArgError(`scope "${scope}" requires a project root`);
+  }
   const retrieval =
-    scopeFlag === undefined
+    scope === undefined
       ? ((await loadMergedConfig(ctx))?.retrieval ?? { method: "bm25" as const })
-      : ((await readScopedRetrieval(ctx, resolveScope(scopeFlag))) ?? {
+      : ((await readScopedRetrieval(ctx, scope)) ?? {
           method: "bm25" as const,
         });
   const result = await dependencies.preflight(retrieval, { homeDir: ctx.env.homeDir });

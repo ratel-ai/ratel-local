@@ -256,4 +256,18 @@ describe("retrieval CLI", () => {
       { homeDir: HOME },
     );
   });
+
+  it.each(["project", "local"])(
+    "rejects an explicit %s preflight outside a project context",
+    async (scope) => {
+      const { ctx } = context(["retrieval", "prepare", "--scope", scope]);
+      ctx.env = { homeDir: HOME };
+      const preflight = vi.fn();
+
+      await expect(runRetrieval(ctx, { preflight })).rejects.toThrow(
+        `scope "${scope}" requires a project root`,
+      );
+      expect(preflight).not.toHaveBeenCalled();
+    },
+  );
 });
