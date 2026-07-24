@@ -2,6 +2,11 @@
 
 All notable changes to this package are documented here. The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
+
 ## [0.6.0-rc.0] - 2026-07-17
 
 ### Added
