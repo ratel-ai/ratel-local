@@ -231,12 +231,7 @@ function embeddingFromFlags(ctx: HandlerCtx, source: string): EmbeddingSpec | un
     };
   }
   if (source === "local") {
-    assertEmbeddingFlagsForSource(ctx, source, [
-      "model",
-      "query-prefix",
-      "doc-prefix",
-      "pooling",
-    ]);
+    assertEmbeddingFlagsForSource(ctx, source, ["model", "query-prefix", "doc-prefix", "pooling"]);
     const pooling = optionalPooling(ctx);
     return {
       local: requiredFlag(ctx, "model"),
