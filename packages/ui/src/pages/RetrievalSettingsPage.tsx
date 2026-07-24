@@ -51,6 +51,11 @@ interface RetrievalWriteVariables {
   target: ReturnType<typeof retrievalTarget>;
 }
 
+interface RetrievalPreflightState {
+  draftKey: string;
+  result: RetrievalPreflightView;
+}
+
 export function RetrievalSettingsPage() {
   const { config, configError, configLoading, context } = useRatelApp();
   const scopes = availableRetrievalScopes(context);
@@ -131,7 +136,9 @@ function RetrievalEditor({
 }) {
   const { context, request } = useRatelApp();
   const [draft, setDraft] = useState(() => retrievalDraftFromConfig(initial));
-  const [preflight, setPreflight] = useState<RetrievalPreflightView | null>(null);
+  const [preflight, setPreflight] = useState<RetrievalPreflightState | null>(null);
+  const draftKey = retrievalDraftKey(draft);
+  const visiblePreflight = preflight?.draftKey === draftKey ? preflight.result : null;
   const target = retrievalTarget(scope, context);
   const hasOverride = config?.scopes[scope]?.available
     ? config.scopes[scope].config.retrieval !== undefined
@@ -161,7 +168,9 @@ function RetrievalEditor({
         method: "POST",
         body: { retrieval: retrievalConfigFromDraft(nextDraft) },
       }),
-    onSuccess: setPreflight,
+    onSuccess: (result, preparedDraft) => {
+      setPreflight({ draftKey: retrievalDraftKey(preparedDraft), result });
+    },
     successMessage: (result) => result.message,
   });
   const disabled = writeMutation.isPending || preflightMutation.isPending || loading;
@@ -197,10 +206,9 @@ function RetrievalEditor({
             id="retrieval-method"
             label="Method"
             value={draft.method}
-            onChange={(method) => {
-              setDraft((current) => ({ ...current, method: method as RetrievalMethod }));
-              setPreflight(null);
-            }}
+            onChange={(method) =>
+              setDraft((current) => ({ ...current, method: method as RetrievalMethod }))
+            }
             options={[
               ["bm25", "BM25"],
               ["semantic", "Semantic"],
@@ -212,10 +220,9 @@ function RetrievalEditor({
               id="retrieval-source"
               label="Embedding source"
               value={draft.source}
-              onChange={(source) => {
-                setDraft((current) => ({ ...current, source: source as RetrievalSource }));
-                setPreflight(null);
-              }}
+              onChange={(source) =>
+                setDraft((current) => ({ ...current, source: source as RetrievalSource }))
+              }
               options={[
                 ["built-in", "Built-in"],
                 ["huggingface", "Hugging Face"],
@@ -231,11 +238,11 @@ function RetrievalEditor({
 
         <RetrievalDisclosures draft={draft} />
 
-        {preflight ? (
+        {visiblePreflight ? (
           <Alert>
             <CheckCircle2 />
-            <AlertTitle>Preflight {preflight.status}</AlertTitle>
-            <AlertDescription>{preflight.message}</AlertDescription>
+            <AlertTitle>Preflight {visiblePreflight.status}</AlertTitle>
+            <AlertDescription>{visiblePreflight.message}</AlertDescription>
           </Alert>
         ) : null}
 
@@ -533,6 +540,10 @@ export function retrievalDraftFromConfig(config: RetrievalConfig | undefined): R
     url: embedding.url ?? "",
     apiKeyEnv: embedding.apiKeyEnv ?? "",
   };
+}
+
+export function retrievalDraftKey(draft: RetrievalDraft): string {
+  return JSON.stringify(draft);
 }
 
 export function retrievalConfigFromDraft(draft: RetrievalDraft): RetrievalConfig {
