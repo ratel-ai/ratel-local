@@ -59,6 +59,11 @@ export async function runLink(
   if (!detection.present) {
     const pluginHost = await findAgentHostRatelPluginConnection(ctx, opts.agentKind);
     if (pluginHost) {
+      await reconcileExistingPlugin(
+        ctx,
+        opts,
+        resolveHostKind(opts.agentKind, pluginHost.state.host.kind),
+      );
       ctx.prompts.outro(
         pluginLinkNoOpMessage(pluginHost.state.host.displayName, pluginHost.connection),
       );
@@ -72,6 +77,7 @@ export async function runLink(
   const hostKind = resolveHostKind(opts.agentKind, agentState.host.kind);
   const connection = await getAgentHostRatelConnection(hostKind, agentState, ctx);
   if (connection.plugin) {
+    await reconcileExistingPlugin(ctx, opts, hostKind);
     ctx.prompts.outro(pluginLinkNoOpMessage(agentState.host.displayName, connection));
     return null;
   }
@@ -231,18 +237,41 @@ async function prepareCliLinkChange(
             options.hostKind,
             options.installPlugin,
           );
-          return plugin.installed
-            ? {
-                action: "cancel" as const,
-                result: { mode: "plugin" as const, message: plugin.message },
-              }
-            : {
-                action: "commit" as const,
-                result: { mode: "mcp-fallback" as const, message: plugin.message },
-              };
+          if (plugin.installed) {
+            return {
+              action: "cancel" as const,
+              result: { mode: "plugin" as const, message: plugin.message },
+            };
+          }
+          if (plugin.pluginAvailable) {
+            throw new Error(plugin.message);
+          }
+          return {
+            action: "commit" as const,
+            result: { mode: "mcp-fallback" as const, message: plugin.message },
+          };
         },
     result: { mode: "config" as const },
   });
+}
+
+async function reconcileExistingPlugin(
+  ctx: HandlerCtx,
+  opts: LinkOptions,
+  hostKind: SupportedAgentHostKind,
+): Promise<void> {
+  const installPlugin =
+    opts.installPlugin ?? ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+  const plugin = await attemptRatelAgentPluginInstall(hostKind, installPlugin, {
+    reconcileMarketplace: true,
+  });
+  ctx.prompts.note(
+    plugin.message,
+    plugin.installed ? "Plugin channel ready" : "Plugin channel unchanged",
+  );
+  if (!plugin.installed) {
+    throw new Error(plugin.message);
+  }
 }
 
 function resolveHostKind(

@@ -612,6 +612,9 @@ export async function prepareLink(
             },
           };
         }
+        if (pluginResult.pluginAvailable) {
+          throw new Error(pluginResult.message);
+        }
         return {
           action: "commit",
           result: {
@@ -648,13 +651,13 @@ export async function repairAgentConnection(
   }
 
   const log: string[] = [];
-  if (host.connection.kind === "explicit") {
-    const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
-    const pluginResult = await attemptRatelAgentPluginInstall(hostKind, installPlugin);
-    log.push(pluginResult.message);
-    if (!pluginResult.installed) {
-      throw new Error(`${pluginResult.message}\nYour existing MCP connection was left unchanged.`);
-    }
+  const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+  const pluginResult = await attemptRatelAgentPluginInstall(hostKind, installPlugin, {
+    reconcileMarketplace: host.connection.kind === "duplicate",
+  });
+  log.push(pluginResult.message);
+  if (!pluginResult.installed) {
+    throw new Error(`${pluginResult.message}\nYour existing MCP connection was left unchanged.`);
   }
 
   const prepared = await prepareAgentRatelMcpFallbackRemoval(

@@ -16,6 +16,7 @@ All notable changes to this package are documented here. The format is based on 
 - Expanded `ratel-local setup` into complete onboarding: after making the daemon ready it detects Claude Code and Codex, connects selected agents through the existing plugin-first link flow, and separately offers the transactional MCP/skill import preview. Repeatable `--agent`, `--agent auto`, and `--daemon-only` support explicit automation; plain `--yes` remains daemon-only and never imports native configuration.
 
 ### Changed
+- Prerelease `link` and setup flows now pin the single Ratel marketplace to the immutable tag matching the package version for both Codex and Claude Code, reconcile existing plugin installs onto that channel, and attempt to restore the stable plugin when an RC switch fails.
 - New agent links use `ratel-local connect`; `serve --config` remains as the legacy explicit-config runtime.
 - Skills now support explicit user/project/local reference or copy registrations. `skill activate` and `skill deactivate` remain deprecated user-scope compatibility wrappers.
 - The daemon reconciles disk state on every gateway acquire and uses targeted parent/resource watchers for near-immediate invalidation.

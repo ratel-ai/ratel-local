@@ -1061,6 +1061,58 @@ describe("UI server — prepared agent changes", () => {
       await rm(assetDir, { recursive: true, force: true });
     }
   });
+
+  it("reports a failed RC channel without writing an MCP fallback when stable is restored", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ratel-ui-agent-plugin-channel-"));
+    const homeDir = join(root, "home");
+    const assetDir = await makeAssetDir();
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    const claudePath = join(homeDir, ".claude.json");
+    const before = JSON.stringify({ mcpServers: {} });
+    await writeFile(claudePath, before);
+    const mutationEngine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
+    const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
+    const ctx: HandlerCtx = {
+      ...makeCtx(new MemFs(), { homeDir }),
+      fs: nodeFs,
+      installAgentPlugin: async () => ({
+        installed: false,
+        pluginAvailable: true,
+        message: "Stable plugin restored; requested RC channel is not active.",
+      }),
+    };
+    const token = newSessionToken();
+    const handle = await startUiServer({ ctx, token, assetDir, preparedChanges });
+
+    try {
+      const base = `http://127.0.0.1:${handle.port}`;
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+      const prepared = (await (
+        await fetch(`${base}/api/agents/link/prepare`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ hostKind: "claude-code" }),
+        })
+      ).json()) as { changeId: string };
+      const response = await fetch(`${base}/api/changes/${prepared.changeId}/commit`, {
+        method: "POST",
+        headers,
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: "Stable plugin restored; requested RC channel is not active.",
+      });
+      expect(await readFile(claudePath, "utf8")).toBe(before);
+    } finally {
+      await handle.shutdown();
+      await rm(root, { recursive: true, force: true });
+      await rm(assetDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("UI server — Claude statusline", () => {

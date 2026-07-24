@@ -183,26 +183,99 @@ describe("runLink", () => {
     expect(messages.join("\n")).toMatch(/falling back/i);
   });
 
-  it("does nothing when Claude is already linked through the plugin", async () => {
+  it("reconciles the marketplace channel when Claude is already linked through the plugin", async () => {
     const fs = new MemFs();
     fs.files.set(
       CLAUDE_SETTINGS,
       JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
     );
     const messages: string[] = [];
+    const installs: unknown[] = [];
     const prompts: PromptAdapter = {
       ...silentPromptAdapter(),
+      note(message) {
+        messages.push(message);
+      },
       outro(message) {
         messages.push(message);
       },
     };
     const { ctx } = ctxOf(fs, prompts, false);
 
-    const manifest = await runLink(ctx, { yes: true, agentKind: "claude-code" });
+    const manifest = await runLink(ctx, {
+      yes: true,
+      agentKind: "claude-code",
+      installPlugin: async (hostKind, request) => {
+        installs.push({ hostKind, request });
+        return {
+          installed: true,
+          message: "Ratel Local plugin installed for Claude Code from v0.6.0-rc.0.",
+        };
+      },
+    });
 
     expect(manifest).toBeNull();
     expect(fs.files.has(HOME_CLAUDE)).toBe(false);
+    expect(installs).toEqual([
+      {
+        hostKind: "claude-code",
+        request: { reconcileMarketplace: true },
+      },
+    ]);
+    expect(messages.join("\n")).toMatch(/v0\.6\.0-rc\.0/);
     expect(messages.join("\n")).toMatch(/linked through the Ratel Local plugin/i);
+  });
+
+  it("reports a failed RC switch without adding an MCP fallback when stable is restored", async () => {
+    const fs = new MemFs();
+    const claudeBefore = JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } });
+    fs.files.set(HOME_CLAUDE, claudeBefore);
+    const messages: string[] = [];
+    const prompts: PromptAdapter = {
+      ...autoConfirm(),
+      note(message) {
+        messages.push(message);
+      },
+    };
+    const { ctx } = ctxOf(fs, prompts, false);
+
+    await expect(
+      runLink(ctx, {
+        bin: BIN,
+        yes: true,
+        agentKind: "claude-code",
+        installPlugin: async () => ({
+          installed: false,
+          pluginAvailable: true,
+          message:
+            "RC install failed. Restored the stable Ratel Local plugin; the RC channel is not active.",
+        }),
+      }),
+    ).rejects.toThrow(/RC channel is not active/i);
+
+    expect(fs.files.get(HOME_CLAUDE)).toBe(claudeBefore);
+    expect(messages.join("\n")).not.toMatch(/MCP fallback link complete|plugin link complete/i);
+  });
+
+  it("fails an existing plugin reconciliation when no usable plugin remains", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      CLAUDE_SETTINGS,
+      JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
+    );
+    const { ctx } = ctxOf(fs, silentPromptAdapter(), false);
+
+    await expect(
+      runLink(ctx, {
+        yes: true,
+        agentKind: "claude-code",
+        installPlugin: async () => ({
+          installed: false,
+          pluginAvailable: false,
+          message: "RC switch and stable restoration both failed",
+        }),
+      }),
+    ).rejects.toThrow("RC switch and stable restoration both failed");
   });
 
   it("re-enables a disabled Codex plugin MCP instead of adding an explicit gateway", async () => {
