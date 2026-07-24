@@ -348,6 +348,7 @@ textarea {
  */
 .dark {
   color-scheme: dark;
+  --color-base-deep: var(--color-ratel-base-deep);
   --background: var(--color-ratel-base);
   --foreground: var(--color-cream);
   --card: var(--color-forest-600);
