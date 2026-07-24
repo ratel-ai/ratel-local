@@ -4,7 +4,7 @@ Date: 2026-05-12
 
 ## Status
 
-Superseded by [ADR 0006](0006-private-workspaces-single-public-package.md)
+Accepted
 
 ## Context
 
