@@ -177,7 +177,7 @@ function configuredRetrieval(ctx: HandlerCtx): RetrievalConfig {
   }
   const source = optionalFlag(ctx, "source");
   if (method === "bm25") {
-    if (source !== undefined || hasEmbeddingFlags(ctx)) {
+    if (source !== undefined || unsupportedEmbeddingFlag(ctx, [])) {
       throw new ArgError("BM25 is model-free; remove embedding source/model flags");
     }
     return { method };
@@ -201,12 +201,20 @@ function embeddingFromFlags(ctx: HandlerCtx, source: string): EmbeddingSpec | un
     ...(docPrefix !== undefined ? { docPrefix } : {}),
   };
   if (source === "built-in") {
-    if (hasEmbeddingFlags(ctx)) {
+    if (unsupportedEmbeddingFlag(ctx, [])) {
       throw new ArgError("built-in source does not accept model, URL, revision, or pooling flags");
     }
     return undefined;
   }
   if (source === "huggingface") {
+    assertEmbeddingFlagsForSource(ctx, source, [
+      "model",
+      "revision",
+      "download",
+      "query-prefix",
+      "doc-prefix",
+      "pooling",
+    ]);
     const pooling = optionalPooling(ctx);
     const revision = optionalFlag(ctx, "revision");
     const download = optionalBooleanFlag(ctx, "download");
@@ -219,6 +227,12 @@ function embeddingFromFlags(ctx: HandlerCtx, source: string): EmbeddingSpec | un
     };
   }
   if (source === "local") {
+    assertEmbeddingFlagsForSource(ctx, source, [
+      "model",
+      "query-prefix",
+      "doc-prefix",
+      "pooling",
+    ]);
     const pooling = optionalPooling(ctx);
     return {
       local: requiredFlag(ctx, "model"),
@@ -227,9 +241,17 @@ function embeddingFromFlags(ctx: HandlerCtx, source: string): EmbeddingSpec | un
     };
   }
   if (source === "ollama") {
+    assertEmbeddingFlagsForSource(ctx, source, ["model", "query-prefix", "doc-prefix"]);
     return { ollama: requiredFlag(ctx, "model"), ...prefixes };
   }
   if (source === "endpoint") {
+    assertEmbeddingFlagsForSource(ctx, source, [
+      "model",
+      "url",
+      "api-key-env",
+      "query-prefix",
+      "doc-prefix",
+    ]);
     const apiKeyEnv = optionalFlag(ctx, "api-key-env");
     return {
       url: requiredFlag(ctx, "url"),
@@ -319,9 +341,23 @@ const EMBEDDING_FLAGS = [
   "pooling",
 ] as const;
 
-function hasEmbeddingFlags(ctx: HandlerCtx, except: readonly string[] = []): boolean {
-  return EMBEDDING_FLAGS.some(
-    (flag) => !except.includes(flag) && ctx.argv.flags[flag] !== undefined,
+function assertEmbeddingFlagsForSource(
+  ctx: HandlerCtx,
+  source: string,
+  allowed: readonly (typeof EMBEDDING_FLAGS)[number][],
+): void {
+  const unsupported = unsupportedEmbeddingFlag(ctx, allowed);
+  if (unsupported) {
+    throw new ArgError(`--${unsupported} is not valid with --source ${source}`);
+  }
+}
+
+function unsupportedEmbeddingFlag(
+  ctx: HandlerCtx,
+  allowed: readonly (typeof EMBEDDING_FLAGS)[number][],
+): (typeof EMBEDDING_FLAGS)[number] | undefined {
+  return EMBEDDING_FLAGS.find(
+    (flag) => !allowed.includes(flag) && ctx.argv.flags[flag] !== undefined,
   );
 }
 
