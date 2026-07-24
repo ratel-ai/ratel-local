@@ -77,7 +77,7 @@ export async function suggestSkills(
   if (skills.length === 0) return [];
 
   const catalog = new SkillCatalog();
-  for (const s of skills) catalog.register(s);
+  await catalog.register(skills);
 
   // Project context is a boost set, not a query term.
   const signals = input.cwd

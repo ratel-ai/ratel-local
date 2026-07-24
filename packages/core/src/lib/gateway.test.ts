@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { type Skill, SkillCatalog } from "@ratel-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGatewayFromConfig,
@@ -47,6 +48,55 @@ async function startUpstream(tools: UpstreamSpec[], instructions?: string) {
 }
 
 describe("buildGatewayFromConfig", () => {
+  it("awaits one batched registration for resolved gateway skills", async () => {
+    const skills: Skill[] = [
+      {
+        id: "api-design",
+        name: "API design",
+        description: "Design stable HTTP APIs.",
+      },
+      {
+        id: "database-migrations",
+        name: "Database migrations",
+        description: "Plan safe database schema changes.",
+      },
+    ];
+    const originalRegister = SkillCatalog.prototype.register;
+    let releaseRegistration: (() => void) | undefined;
+    const registrationGate = new Promise<void>((resolve) => {
+      releaseRegistration = resolve;
+    });
+    const register = vi
+      .spyOn(SkillCatalog.prototype, "register")
+      .mockImplementation(async function (registeredSkills) {
+        await registrationGate;
+        await originalRegister.call(this, registeredSkills);
+      });
+    let settled = false;
+    const pending = buildGatewayFromConfig({ mcpServers: {} }, { resolvedSkills: skills }).then(
+      (handle) => {
+        settled = true;
+        return handle;
+      },
+    );
+
+    try {
+      await Promise.resolve();
+      expect(register).toHaveBeenCalledTimes(1);
+      expect(register).toHaveBeenCalledWith(skills);
+      expect(settled).toBe(false);
+
+      releaseRegistration?.();
+      const handle = await pending;
+      expect(handle.skillCatalog.has("api-design")).toBe(true);
+      expect(handle.skillCatalog.has("database-migrations")).toBe(true);
+      await handle.close();
+    } finally {
+      releaseRegistration?.();
+      register.mockRestore();
+    }
+  });
+
   it("registers tools from every upstream the factory wires up, namespaced by entry key", async () => {
     const fs = await startUpstream([
       { name: "read_file", description: "Read a file from local disk." },

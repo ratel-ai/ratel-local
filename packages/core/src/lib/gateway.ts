@@ -268,15 +268,17 @@ async function buildSkillCatalog(
 ): Promise<SkillCatalog> {
   const skillCatalog = new SkillCatalog(options.trace ? { trace: options.trace } : {});
   if (options.resolvedSkills) {
-    for (const skill of options.resolvedSkills) skillCatalog.register(skill);
+    if (options.resolvedSkills.length > 0) {
+      await skillCatalog.register(options.resolvedSkills);
+    }
     return skillCatalog;
   }
   const dirs = options.skillDirs ?? config.skills?.dirs ?? defaultSkillDirs();
   const load = options.loadSkills ?? loadSkills;
   try {
     const skills = await load(dirs, { logger: log });
-    for (const skill of skills) skillCatalog.register(skill);
     if (skills.length > 0) {
+      await skillCatalog.register(skills);
       log(`[ratel] loaded ${skills.length} skill(s)`);
     }
   } catch (err) {

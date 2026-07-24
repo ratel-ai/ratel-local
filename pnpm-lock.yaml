@@ -28,7 +28,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.5
-        version: 4.1.6(@types/node@24.12.4)(msw@2.14.6(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.3))
+        version: 4.1.6(@opentelemetry/api@1.9.1)(@types/node@24.12.4)(msw@2.14.6(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.3))
 
   apps/ratel-local:
     dependencies:
@@ -39,8 +39,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@ratel-ai/sdk':
-        specifier: ^0.2.0
-        version: 0.2.0(zod@4.4.3)
+        specifier: ^0.5.2
+        version: 0.5.2(zod@4.4.3)
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -61,8 +61,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@ratel-ai/sdk':
-        specifier: ^0.2.0
-        version: 0.2.0(zod@4.4.3)
+        specifier: ^0.5.2
+        version: 0.5.2(zod@4.4.3)
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -895,6 +895,10 @@ packages:
   '@open-draft/until@2.1.0':
     resolution: {integrity: sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg==}
 
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
+    engines: {node: '>=8.0.0'}
+
   '@oxc-project/types@0.129.0':
     resolution: {integrity: sha512-3oz8m3FGdr2nDXVqmFUw7jolKliC4MoyXYIG2c7gpjBnzUWQpUGIYcXYKxTdTi+N2jusvt610ckTMkxdwHkYEg==}
 
@@ -1091,41 +1095,50 @@ packages:
       '@types/react':
         optional: true
 
-  '@ratel-ai/sdk-darwin-arm64@0.2.0':
-    resolution: {integrity: sha512-RIXMLc46GlJqCBgoifVPEw8+NPPtj8VzIDG12n0EW96OOmdKQzzXRAfYr5qZ+sdY3T1zD8FmH0EFYszc1Fu4Yw==}
+  '@ratel-ai/sdk-darwin-arm64@0.5.2':
+    resolution: {integrity: sha512-BgJphJTARgGvHQDuh5KHXYXGauO/DgzWYLI4i8s9cvF6yWHGFHo/7Njc8XpnxIAvoe7WP6cI9mj7YDHWUWFWwg==}
     engines: {node: '>=20.0.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@ratel-ai/sdk-darwin-x64@0.2.0':
-    resolution: {integrity: sha512-xguey9AT8TmH++gK0Ol4ryghlZtKBb4GhbW+mJHHHZLTThMXbT63dcgxA3jYZnwZ5CadY7UZsXzh+0iowbE5Yg==}
+  '@ratel-ai/sdk-darwin-x64@0.5.2':
+    resolution: {integrity: sha512-Saye9vaTK98uF5yxC+7BOmZMKI6m4ZOi7BwpGIJs6l1TbTQEA0Ne29pExNIxy+gqGB5uIVU34pTrRxNHZbs/hg==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@ratel-ai/sdk-linux-arm64-gnu@0.2.0':
-    resolution: {integrity: sha512-k2U815Xn/s9ShA9OyaeQl67XBCQz4Tp3HDinuKfW8Xp4mNex0I2ObkZhbYwEzPcdKjBuCxvnBORQQHiYzAvkQg==}
+  '@ratel-ai/sdk-linux-arm64-gnu@0.5.2':
+    resolution: {integrity: sha512-OisEdMJH83lNMiyZ9XtouWNzw0Y3vkKHhQzW9j9z9tVrHfSHo36xJhdFn/J6qqobHnB1p1wHX1TIdaNLNYSqsQ==}
     engines: {node: '>=20.0.0'}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@ratel-ai/sdk-linux-x64-gnu@0.2.0':
-    resolution: {integrity: sha512-W6oaCK1a9mcCJjTZkqH8drbSqhKdGOyHsRsz36Bs7RMmWzfWfWKr5nQlv2ym/tT/clGXwReQb9FYOH+VBbm/xw==}
+  '@ratel-ai/sdk-linux-x64-gnu@0.5.2':
+    resolution: {integrity: sha512-RGXDMMjN/IPaxQEzOW3GWs6/SRBf3lUlrejo9nPKOaBf+OlNrrpPp82KqPqGRXoyUUzLFIBlhRi+0zBkPQ9a0A==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@ratel-ai/sdk-win32-x64-msvc@0.2.0':
-    resolution: {integrity: sha512-Uz5jtKNC7t2ki9ThwatNZS+tzi6XPbOrhNcUUj7Hp3Ttw3lZn9LzpoEbhodL3Dl5g2ntIXP01Viyh++rJSZzTg==}
+  '@ratel-ai/sdk-win32-x64-msvc@0.5.2':
+    resolution: {integrity: sha512-7r7QmIVAkYN+1jW4j7ZxPtl2wWhm4AFb7IS8c5GFWYbX3Ci5TcQYiBnWNYekD0wTsENnngY0fY6hZAyN7F9KXw==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [win32]
 
-  '@ratel-ai/sdk@0.2.0':
-    resolution: {integrity: sha512-U357euk4lQUUXooHWcGYUCNGmHDFo6myJWrM8sy1YtZaQWGSN7TMFwMn1TfNL6dIUTv0TqShcx6fw7RPXdx3kw==}
+  '@ratel-ai/sdk@0.5.2':
+    resolution: {integrity: sha512-tslEGA8llSNzqkLCaW7PWyz+ScNmzZHN4gKSGEsLRL73pulAc77InqbLrV0yqMEbfhyi4sVWN+yXihxr1GoH6g==}
     engines: {node: '>=20.0.0'}
+    peerDependencies:
+      '@ratel-ai/telemetry-otlp': ^0.1.1
+    peerDependenciesMeta:
+      '@ratel-ai/telemetry-otlp':
+        optional: true
+
+  '@ratel-ai/telemetry@0.1.2':
+    resolution: {integrity: sha512-8P/2E9U74dbjB1WRT5H2K8KDHoRMxDEl77sv53kGKeQCvSxO0WbtnvHLkYXjUDm83zm3p45ww80Jym+g+xsJ7A==}
+    engines: {node: '>=20.6.0'}
 
   '@reduxjs/toolkit@2.12.0':
     resolution: {integrity: sha512-KiT+RzZbp6mQET+Mg+h2c97+9j1sNflUxQkIHI7Yuzf6Peu+OYpmkn6nbHWmLLWj+1ZODUJFwGZ7gx3L9R9EOw==}
@@ -4443,6 +4456,8 @@ snapshots:
 
   '@open-draft/until@2.1.0': {}
 
+  '@opentelemetry/api@1.9.1': {}
+
   '@oxc-project/types@0.129.0': {}
 
   '@radix-ui/primitive@1.1.3': {}
@@ -4604,35 +4619,39 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.15
 
-  '@ratel-ai/sdk-darwin-arm64@0.2.0':
+  '@ratel-ai/sdk-darwin-arm64@0.5.2':
     optional: true
 
-  '@ratel-ai/sdk-darwin-x64@0.2.0':
+  '@ratel-ai/sdk-darwin-x64@0.5.2':
     optional: true
 
-  '@ratel-ai/sdk-linux-arm64-gnu@0.2.0':
+  '@ratel-ai/sdk-linux-arm64-gnu@0.5.2':
     optional: true
 
-  '@ratel-ai/sdk-linux-x64-gnu@0.2.0':
+  '@ratel-ai/sdk-linux-x64-gnu@0.5.2':
     optional: true
 
-  '@ratel-ai/sdk-win32-x64-msvc@0.2.0':
+  '@ratel-ai/sdk-win32-x64-msvc@0.5.2':
     optional: true
 
-  '@ratel-ai/sdk@0.2.0(zod@4.4.3)':
+  '@ratel-ai/sdk@0.5.2(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@opentelemetry/api': 1.9.1
+      '@ratel-ai/telemetry': 0.1.2
       '@types/json-schema': 7.0.15
     optionalDependencies:
-      '@ratel-ai/sdk-darwin-arm64': 0.2.0
-      '@ratel-ai/sdk-darwin-x64': 0.2.0
-      '@ratel-ai/sdk-linux-arm64-gnu': 0.2.0
-      '@ratel-ai/sdk-linux-x64-gnu': 0.2.0
-      '@ratel-ai/sdk-win32-x64-msvc': 0.2.0
+      '@ratel-ai/sdk-darwin-arm64': 0.5.2
+      '@ratel-ai/sdk-darwin-x64': 0.5.2
+      '@ratel-ai/sdk-linux-arm64-gnu': 0.5.2
+      '@ratel-ai/sdk-linux-x64-gnu': 0.5.2
+      '@ratel-ai/sdk-win32-x64-msvc': 0.5.2
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
       - zod
+
+  '@ratel-ai/telemetry@0.1.2': {}
 
   '@reduxjs/toolkit@2.12.0(react-redux@9.3.0(@types/react@19.2.15)(react@19.2.6)(redux@5.0.1))(react@19.2.6)':
     dependencies:
@@ -7294,7 +7313,7 @@ snapshots:
       jiti: 2.7.0
       tsx: 4.22.3
 
-  vitest@4.1.6(@types/node@24.12.4)(msw@2.14.6(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.3)):
+  vitest@4.1.6(@opentelemetry/api@1.9.1)(@types/node@24.12.4)(msw@2.14.6(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.3)):
     dependencies:
       '@vitest/expect': 4.1.6
       '@vitest/mocker': 4.1.6(msw@2.14.6(@types/node@24.12.4)(typescript@5.9.3))(vite@8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.3))
@@ -7317,6 +7336,7 @@ snapshots:
       vite: 8.0.12(@types/node@24.12.4)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.3)
       why-is-node-running: 2.3.0
     optionalDependencies:
+      '@opentelemetry/api': 1.9.1
       '@types/node': 24.12.4
     transitivePeerDependencies:
       - msw
