@@ -343,6 +343,15 @@ describe("runCli — help and routing", () => {
     ).rejects.toThrow(/--daemon-only cannot be combined with --agent/);
   });
 
+  it("rejects a valued setup --yes flag instead of becoming interactive", async () => {
+    await expect(
+      runCli(["setup", "--yes=false"], {
+        fs: new MemFs(),
+        logger: () => {},
+      }),
+    ).rejects.toThrow(/--yes does not accept a value/);
+  });
+
   it("rejects an unknown command with ArgError", async () => {
     await expect(runCli(["mcps"], { logger: () => {} })).rejects.toThrow(/mcps/);
   });

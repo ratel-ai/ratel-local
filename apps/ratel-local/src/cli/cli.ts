@@ -178,6 +178,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     const version = options.cliVersion ?? options.serverVersion;
     const setupAgents = resolveSetupAgents(parsed.flags.agent);
     const daemonOnly = resolveBooleanFlag(parsed.flags["daemon-only"], "--daemon-only");
+    const yes = resolveBooleanFlag(parsed.flags.yes, "--yes");
     if (daemonOnly && setupAgents.provided) {
       throw new ArgError("--daemon-only cannot be combined with --agent");
     }
@@ -185,7 +186,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
       ...options,
       serverVersion: options.serverVersion ?? version,
       expectedVersion: version,
-      yes: parsed.flags.yes === true,
+      yes,
       agentKinds: setupAgents.kinds,
       agentsProvided: setupAgents.provided,
       daemonOnly,
@@ -460,14 +461,15 @@ function resolveSetupAgents(value: unknown): {
   if (values.some((candidate) => typeof candidate !== "string")) {
     throw new ArgError("--agent must be repeatable auto|claude-code|codex");
   }
-  if (values.includes("auto")) {
-    if (values.length !== 1) {
+  const uniqueValues = [...new Set(values as string[])];
+  if (uniqueValues.includes("auto")) {
+    if (uniqueValues.length !== 1) {
       throw new ArgError("--agent auto cannot be combined with another --agent value");
     }
     return { provided: true };
   }
   const kinds: SupportedAgentHostKind[] = [];
-  for (const candidate of values) {
+  for (const candidate of uniqueValues) {
     if (!isSupportedAgentHostKind(candidate)) {
       throw new ArgError(`--agent must be repeatable auto|claude-code|codex, got "${candidate}"`);
     }
