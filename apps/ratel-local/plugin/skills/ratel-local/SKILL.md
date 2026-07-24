@@ -32,6 +32,10 @@ Run the setup wizard once from a terminal:
 npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
 ```
 
+This is the default onboarding path: it makes the daemon ready, detects Claude
+Code and Codex, connects selected agents through the plugin-first link flow,
+then separately offers a previewed and confirmed MCP/skill import.
+
 When the daemon is unavailable, the connector exposes
 `ratel_daemon_status`, `ratel_daemon_start`, and `ratel_daemon_setup`. The
 setup tool returns the terminal command; interactive setup must never be run on
@@ -79,7 +83,7 @@ the existing config shape, and validate the JSON afterwards.
 
 Top-level commands:
 
-- `ratel-local setup` installs or starts the persistent daemon interactively; use `--yes` for automation.
+- `ratel-local setup` performs complete daemon and agent onboarding. Repeat `--agent` for explicit agent automation; use `--daemon-only` to skip agent onboarding.
 - `ratel-local connect` bridges one agent session to its scoped daemon gateway.
 - `ratel-local daemon` provides lower-level `install`, `start`, `stop`, `restart`, `status`, `uninstall`, and foreground `run` controls.
 - `ratel-local serve` starts the MCP gateway over stdio.
@@ -128,18 +132,36 @@ Top-level commands:
 
 ## Common Workflows
 
-Install or repair the persistent daemon:
+Run complete interactive onboarding:
 
 ```bash
 ratel-local setup
-ratel-local setup --yes
-ratel-local setup --port 7331
 ```
 
-`setup` is idempotent: it succeeds immediately when the matching daemon is
-running, starts an installed service, offers to replace an incompatible daemon
-version, or asks before installing a missing service. Keep MCP import/link as
-separate workflows.
+`setup` is idempotent. It installs, updates, or starts the daemon; detects
+Claude Code and Codex; asks which agents to connect through the plugin-first
+link flow; and separately offers native MCP servers and skills for preview and
+confirmation.
+
+Safe automation:
+
+```bash
+# Preserve the historical daemon-only --yes behavior
+ratel-local setup --yes
+ratel-local setup --daemon-only --yes
+
+# Explicitly connect one or more agents; imports are still skipped
+ratel-local setup --yes --agent claude-code --agent codex
+ratel-local setup --yes --agent auto
+
+# First installation on a custom daemon port
+ratel-local setup --daemon-only --yes --port 7331
+```
+
+Never assume `setup --yes` imports native configuration. Use the expert
+`ratel-local import --yes --agent <agent>` command only when automated migration
+was explicitly requested. `ratel-local daemon`, `ratel-local link`, and
+`ratel-local import` remain available for targeted workflows.
 
 Inspect configured upstreams:
 

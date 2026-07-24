@@ -11,6 +11,7 @@ All notable changes to this package are documented here. The format is based on 
 - Added `ratel-local doctor` for transaction recovery plus project, snapshot, and legacy OAuth diagnostics with stable actionable codes.
 - Added `ratel-local connect`, a lightweight stdio MCP bridge that carries the agent's resolved project root to the persistent daemon and exposes actionable daemon status/start/setup tools while the daemon is unavailable.
 - Added the idempotent `ratel-local setup` wizard, which installs a missing daemon login service, starts an installed service, replaces an incompatible daemon version, or reports an already-running matching daemon. It supports `--yes` automation and a custom first-install `--port`.
+- Expanded `ratel-local setup` into complete onboarding: after making the daemon ready it detects Claude Code and Codex, connects selected agents through the existing plugin-first link flow, and separately offers the transactional MCP/skill import preview. Repeatable `--agent`, `--agent auto`, and `--daemon-only` support explicit automation; plain `--yes` remains daemon-only and never imports native configuration.
 
 ### Changed
 - New agent links use `ratel-local connect`; `serve --config` remains as the legacy explicit-config runtime.

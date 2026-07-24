@@ -32,14 +32,20 @@ loopback daemon. The daemon loads `~/.ratel/config.json` plus that project's
 `.ratel/config.json` and `.ratel/config.local.json`, sharing upstream
 connections only between sessions in the same canonical project.
 
-Set up the persistent login service once on macOS or Linux:
+Run complete onboarding once on macOS or Linux:
 
 ```bash
 npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
 ```
 
-Re-running setup is safe: it starts a stopped service and offers to replace a
-service from an incompatible Ratel version.
+The wizard installs, updates, or starts the daemon; detects Claude Code and
+Codex; connects selected agents through this plugin; and separately offers a
+previewed, confirmed import of native MCP servers and skills. Re-running setup
+is safe.
+
+For unattended daemon setup, use `setup --daemon-only --yes`. Agent automation
+requires explicit repeatable `--agent` flags, and `--yes` never imports native
+configuration automatically.
 
 If the daemon is missing or stopped, the connector still starts and exposes
 status, start, and setup-guidance MCP tools. The setup tool returns the terminal

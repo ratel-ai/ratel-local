@@ -30,10 +30,10 @@ It ships as the npm package `@ratel-ai/ratel-local` and the `ratel-local` CLI. T
 
 ## Quickstart
 
-Choose the setup that matches where you are starting:
-
-- **Migrate existing MCP servers:** install the CLI and import the servers already configured in Claude Code or Codex.
-- **Start fresh with the plugin:** install the agent connector, set up the persistent daemon once, then add upstreams directly to Ratel Local configuration.
+The recommended entrypoint is the complete `setup` wizard. It prepares the
+persistent daemon, detects Claude Code and Codex, connects the agents you
+select, and offers existing MCP servers and skills as a separate reviewed
+import.
 
 This README tracks the `0.6.0-rc.0` release candidate, matching the package
 version pinned by the bundled plugin. Use that exact version while validating
@@ -41,7 +41,7 @@ this release; stable releases use the `latest` npm tag.
 
 The CLI and UI prefer the `ratel-local` plugin when linking because it bundles the gateway and agent skills. If plugin installation fails, Ratel Local reports the failure and applies the reviewed explicit MCP gateway fallback instead. An enabled plugin is recognized as an existing Ratel connection, so importing does not add a second gateway and `link` becomes a no-op. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server. Agent Setup offers **Fix duplicate installation** when both the plugin and an explicit Ratel MCP entry are present, and **Switch to plugin** for MCP-only installations. Both actions preserve the existing MCP connection unless plugin installation succeeds, and only recognized Ratel entries are removed.
 
-### Migrate an existing MCP setup
+### Complete interactive onboarding
 
 #### 1. Install the CLI
 
@@ -52,44 +52,32 @@ npm install --global @ratel-ai/ratel-local@0.6.0-rc.0
 ratel-local --version
 ```
 
-#### 2. Import the agent's MCP servers
-
-Run the command for your agent from the project where you use those servers:
-
-```bash
-# Claude Code
-ratel-local import --agent claude-code
-
-# Codex
-ratel-local import --agent codex
-```
-
-The CLI and UI use the same import sequence. If the source agent is not linked, the first step offers to link and continue, continue without linking, or cancel. The confirmed import writes selected entries to Ratel, removes those MCP entries from the source agent, and marks selected native skills invoke-only. Skipping the link is useful when importing for another linked agent, but the imported MCPs and skills are no longer directly usable from the unlinked source agent. The wizard preserves MCP scopes and backs up every changed MCP or agent config file. Skill management is reversible: use **Stop managing** in the UI or `ratel-local skill deactivate` to remove Ratel's link and restore its metadata changes.
-
-Claude Code then offers a separate, skippable Ratel statusline step. Linking installs the agent plugin when possible and otherwise writes the explicit Ratel gateway fallback. Install or reinstall the statusline manually with `ratel-local statusline install`.
-
-If your upstreams are already in Ratel Local configuration, `link` installs the Ratel plugin without importing or removing native entries. If plugin installation fails, it clearly reports the failure before writing the reviewed MCP fallback:
-
-```bash
-ratel-local link --agent claude-code
-ratel-local link --agent codex
-```
-
-Native entries remain directly exposed, so their schemas still enter the agent's context without capability search.
-
-#### 3. Set up the persistent daemon
-
-The plugin connection is a lightweight connector. On macOS or Linux, install
-and start the per-user login service once:
+#### 2. Run setup
 
 ```bash
 ratel-local setup
 ```
 
-Re-running setup is safe. It starts a stopped service and offers to replace a
-service installed from an incompatible Ratel Local version.
+The wizard:
 
-#### 4. Confirm Ratel Local and restart
+- installs, upgrades, or starts the per-user daemon;
+- detects Claude Code and Codex and asks which agents to connect;
+- installs the Ratel Local plugin for each selected agent, using the reviewed
+  explicit MCP connector only if plugin installation fails;
+- separately offers to preview MCP servers and skills from selected agents;
+- asks for confirmation before committing an import and backs up changed
+  configuration.
+
+Re-running setup is safe. A matching daemon and existing agent links are
+reported as no-ops.
+
+If you do not have a global installation, run the release-pinned package:
+
+```bash
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
+```
+
+#### 3. Confirm Ratel Local and restart
 
 ```bash
 # Claude Code
@@ -101,44 +89,60 @@ codex mcp get ratel-local --json
 
 Confirm that `ratel-local` is connected or enabled, then restart Claude Code or start a new Codex session.
 
-### Start fresh with the plugin
+### Safe automation
 
-#### 1. Install Ratel Local
-
-```bash
-# Claude Code
-claude plugin marketplace add ratel-ai/ratel-local
-claude plugin install ratel-local@ratel
-
-# Codex
-codex plugin marketplace add ratel-ai/ratel-local
-codex plugin add ratel-local@ratel
-```
-
-The plugin installs the agent-side connector; it does not install the daemon.
-
-#### 2. Set up the persistent daemon
-
-On macOS or Linux, run the setup wizard once. The plugin does not install a
-global CLI, so use the exact package version bundled by this release:
+Plain `--yes` retains the old safe behavior and changes only the daemon:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
+ratel-local setup --yes
+ratel-local setup --daemon-only --yes
 ```
 
-#### 3. Add an upstream
+Agent changes require explicit selection. Repeat `--agent`, or use `auto` to
+connect every detected supported agent:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.6.0-rc.0 mcp add \
-  --scope user context7 -- npx -y @upstash/context7-mcp
-
-npx -y @ratel-ai/ratel-local@0.6.0-rc.0 mcp list
+ratel-local setup --yes --agent claude-code --agent codex
+ratel-local setup --yes --agent auto
 ```
 
-#### 4. Restart the agent
+Automated setup never imports native MCP servers or skills. Use the explicit
+expert command when migration is intended:
 
-Reload or restart Claude Code, then start a new Codex session. The connector
-will attach to the daemon and expose the capability tools.
+```bash
+ratel-local import --yes --agent claude-code
+ratel-local import --yes --agent codex
+```
+
+`--port N` selects the first-install daemon port. `--daemon-only` cannot be
+combined with `--agent`.
+
+### Expert commands
+
+The lower-level workflows remain available for targeted repair, scripting, and
+debugging:
+
+```bash
+# Daemon lifecycle
+ratel-local daemon install
+ratel-local daemon start
+ratel-local daemon status
+
+# Connect without importing native entries
+ratel-local link --agent claude-code
+ratel-local link --agent codex
+
+# Preview and confirm one agent migration
+ratel-local import --agent claude-code
+ratel-local import --agent codex
+```
+
+Add new upstreams directly after onboarding:
+
+```bash
+ratel-local mcp add --scope user context7 -- npx -y @upstash/context7-mcp
+ratel-local mcp list
+```
 
 ### Verify capability search
 
