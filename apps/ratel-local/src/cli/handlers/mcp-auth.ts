@@ -11,6 +11,7 @@ import {
   readJson,
   resolveMcpEntries,
 } from "@ratel-ai/ratel-local-core";
+import { type DaemonApiRequest, requestRunningDaemon, requireDaemonJson } from "../daemon-api.js";
 import type { HandlerCtx } from "./types.js";
 
 export type AuthRunner = (opts: AuthFlowOptions) => Promise<AuthFlowResult[]>;
@@ -18,6 +19,7 @@ export type AuthRunner = (opts: AuthFlowOptions) => Promise<AuthFlowResult[]>;
 export interface RunMcpAuthOptions {
   /** Override the orchestrator. Tests stub this to avoid spinning up a live gateway. */
   authRunner?: AuthRunner;
+  daemonRequest?: DaemonApiRequest;
 }
 
 export async function runMcpAuth(ctx: HandlerCtx, opts: RunMcpAuthOptions = {}): Promise<void> {
@@ -41,17 +43,38 @@ export async function runMcpAuth(ctx: HandlerCtx, opts: RunMcpAuthOptions = {}):
   if (opts.authRunner) {
     results = await opts.authRunner(authOptions);
   } else {
-    const gateway = await buildGatewayFromConfig(
-      { mcpServers: {} },
-      { logger: ctx.log, resolvedMcpEntries: entries },
-    );
-    try {
-      results = await gateway.runAuthFlow(authOptions);
-    } finally {
-      await gateway.close();
+    const daemonRequest =
+      opts.daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
+    const daemonResponse = await daemonRequest(await daemonAuthPath(ctx, positional), {
+      method: "POST",
+    });
+    if (daemonResponse) {
+      const body = await requireDaemonJson<{ results: AuthFlowResult[] }>(
+        daemonResponse,
+        "MCP authentication",
+      );
+      results = body.results;
+    } else {
+      const gateway = await buildGatewayFromConfig(
+        { mcpServers: {} },
+        { logger: ctx.log, resolvedMcpEntries: entries },
+      );
+      try {
+        results = await gateway.runAuthFlow(authOptions);
+      } finally {
+        await gateway.close();
+      }
     }
   }
   printResults(ctx, results);
+}
+
+async function daemonAuthPath(ctx: HandlerCtx, name: string | undefined): Promise<string> {
+  const path = name ? `/api/auth/${encodeURIComponent(name)}` : "/api/auth";
+  const configuredRoot = ctx.env.projectRoot;
+  if (!configuredRoot) return path;
+  const projectRoot = await realpath(configuredRoot).catch(() => configuredRoot);
+  return `${path}?projectRoot=${encodeURIComponent(projectRoot)}`;
 }
 
 function printResults(ctx: HandlerCtx, results: AuthFlowResult[]): void {

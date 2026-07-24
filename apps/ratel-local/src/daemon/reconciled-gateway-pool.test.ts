@@ -125,6 +125,35 @@ describe("ReconciledGatewayPool", () => {
     await second.release();
   });
 
+  it("authenticates through the shared active generation", async () => {
+    const global = {
+      ...snapshot("global-auth-rev"),
+      context: { kind: "global" as const },
+      projectRoot: undefined,
+    };
+    const builtGateway = gateway("global-auth-rev");
+    vi.mocked(builtGateway.runAuthFlow).mockResolvedValue([
+      { name: "linear", status: "authorized", mode: "interactive" },
+    ]);
+    const pool = new ReconciledGatewayPool({
+      generations: new InMemoryScopedGatewayPool(async () => builtGateway),
+      registry: {} as ProjectRegistry,
+      resolver: { resolve: async () => global },
+      watch: false,
+    });
+    const activeLease = await pool.acquire({ kind: "user" });
+
+    const results = await pool.authenticate({ kind: "global" }, { name: "linear" });
+
+    expect(results).toEqual([{ name: "linear", status: "authorized", mode: "interactive" }]);
+    expect(builtGateway.runAuthFlow).toHaveBeenCalledWith({ name: "linear" });
+    expect(pool.stats().generations).toEqual([
+      expect.objectContaining({ activeLeaseCount: 1, runtimeRevision: "global-auth-rev" }),
+    ]);
+    await activeLease.release();
+    await pool.shutdown();
+  });
+
   it("detects atomic config replacement and keeps the last valid generation on invalid input", async () => {
     const root = await mkdtemp(join(tmpdir(), "ratel-reconciled-watch-"));
     const homeDir = join(root, "home");

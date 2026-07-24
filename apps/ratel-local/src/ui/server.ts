@@ -10,6 +10,8 @@ import type { AddressInfo } from "node:net";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type AuthFlowOptions,
+  type AuthFlowResult,
   buildGatewayFromConfig,
   type ConfigControlPlane,
   type ContextSnapshotResolver,
@@ -81,8 +83,14 @@ export interface StartUiServerOptions {
   /** Long-lived local daemon credential used by CLI API clients. */
   daemonToken?: string;
   canForgetProject?: CanForgetProject;
+  authenticateMcpServer?: ContextAuthRunner;
   publicRoute?: (req: IncomingMessage, res: ServerResponse, path: string) => Promise<boolean>;
 }
+
+export type ContextAuthRunner = (
+  context: RuntimeContextRef,
+  options: AuthFlowOptions,
+) => Promise<AuthFlowResult[]>;
 
 interface RequestHandlerOptions extends StartUiServerOptions {
   projectRegistry: ProjectRegistry;
@@ -149,6 +157,7 @@ async function handleRequest(
   const url = req.url ?? "/";
   const path = url.split("?")[0];
   const projectId = projectIdFromUrl(url);
+  const projectRoot = projectRootFromUrl(url);
 
   if (opts.publicRoute && (await opts.publicRoute(req, res, path))) {
     return;
@@ -180,7 +189,7 @@ async function handleRequest(
   }
 
   try {
-    const requestContext = await contextForRequest(opts, projectId);
+    const requestContext = await contextForRequest(opts, projectId, projectRoot);
     const response = await route(
       req,
       path,
@@ -199,6 +208,7 @@ async function handleRequest(
       opts.skillImportControlPlane,
       opts.skillRegistrationControlPlane,
       opts.preparedChanges,
+      opts.authenticateMcpServer,
     );
     if (!response) {
       writeJson(res, 404, { error: "not found" });
@@ -230,6 +240,7 @@ async function route(
   skillImportControlPlane?: SkillImportControlPlane,
   skillRegistrationControlPlane?: SkillRegistrationControlPlane,
   preparedChanges?: PreparedChangeCoordinator,
+  authenticateMcpServer?: ContextAuthRunner,
 ): Promise<ApiResponse | null> {
   const method = req.method ?? "GET";
 
@@ -402,12 +413,14 @@ async function route(
     }
   }
 
-  const authMatch = /^\/api\/auth\/([^/]+)$/.exec(path);
+  const authMatch = /^\/api\/auth(?:\/([^/]+))?$/.exec(path);
   if (method === "POST" && authMatch) {
-    const name = decodeURIComponent(authMatch[1]);
-    return snapshotResolver
-      ? authResolvedServer(snapshotResolver, runtimeContext, name)
-      : authServer(ctx, name);
+    const name = authMatch[1] ? decodeURIComponent(authMatch[1]) : undefined;
+    if (snapshotResolver) {
+      return authResolvedServer(snapshotResolver, runtimeContext, name, authenticateMcpServer);
+    }
+    if (!name) throw new UiRouteError(422, "an MCP server name is required");
+    return authServer(ctx, name);
   }
 
   if (method === "POST" && path === "/api/agents/import/prepare" && preparedChanges) {
@@ -471,41 +484,51 @@ async function getResolvedSkill(
 async function authResolvedServer(
   resolver: ContextSnapshotResolver,
   context: RuntimeContextRef,
-  name: string,
+  name: string | undefined,
+  authenticateMcpServer?: ContextAuthRunner,
 ): Promise<ApiResponse> {
   const snapshot = await resolver.resolve(context);
-  const resolved = snapshot.mcpEntries.find(
-    (candidate) => candidate.status === "effective" && candidate.name === name,
-  );
-  if (!resolved) throw new UiRouteError(404, `unknown effective MCP server: ${name}`);
-  const gateway = await buildGatewayFromConfig(
-    { mcpServers: {} },
-    {
-      resolvedMcpEntries: snapshot.mcpEntries,
-      resolvedSkills: snapshot.skills.effectiveSkills,
-    },
-  );
-  try {
-    const results = await gateway.runAuthFlow({ name });
-    const failed = results.find(({ status }) => status === "failed" || status === "unsupported");
-    if (failed) {
-      throw new UiRouteError(
-        422,
-        `${failed.name} ${failed.status}${failed.reason ? `: ${failed.reason}` : ""}`,
-      );
-    }
-    return {
-      status: 200,
-      body: {
-        results,
-        log: results.map(
-          (result) => `${result.name} ${result.status}${result.reason ? `: ${result.reason}` : ""}`,
-        ),
-      },
-    };
-  } finally {
-    await gateway.close();
+  if (
+    name &&
+    !snapshot.mcpEntries.some(
+      (candidate) => candidate.status === "effective" && candidate.name === name,
+    )
+  ) {
+    throw new UiRouteError(404, `unknown effective MCP server: ${name}`);
   }
+  let results: AuthFlowResult[];
+  if (authenticateMcpServer) {
+    results = await authenticateMcpServer(context, name ? { name } : {});
+  } else {
+    const gateway = await buildGatewayFromConfig(
+      { mcpServers: {} },
+      {
+        resolvedMcpEntries: snapshot.mcpEntries,
+        resolvedSkills: snapshot.skills.effectiveSkills,
+      },
+    );
+    try {
+      results = await gateway.runAuthFlow(name ? { name } : {});
+    } finally {
+      await gateway.close();
+    }
+  }
+  const failed = results.find(({ status }) => status === "failed" || status === "unsupported");
+  if (failed) {
+    throw new UiRouteError(
+      422,
+      `${failed.name} ${failed.status}${failed.reason ? `: ${failed.reason}` : ""}`,
+    );
+  }
+  return {
+    status: 200,
+    body: {
+      results,
+      log: results.map(
+        (result) => `${result.name} ${result.status}${result.reason ? `: ${result.reason}` : ""}`,
+      ),
+    },
+  };
 }
 
 interface RequestContext {
@@ -725,12 +748,27 @@ function projectIdFromUrl(url: string): ProjectId | undefined {
   return value ? (value as ProjectId) : undefined;
 }
 
+function projectRootFromUrl(url: string): string | undefined {
+  return new URL(url, "http://127.0.0.1").searchParams.get("projectRoot") ?? undefined;
+}
+
 async function contextForRequest(
   options: RequestHandlerOptions,
   projectId: ProjectId | undefined,
+  projectRoot: string | undefined,
 ): Promise<RequestContext> {
   if (!options.projectAware) {
     return { ctx: options.ctx, runtimeContext: { kind: "global" } };
+  }
+  if (projectRoot) {
+    const project = await options.projectRegistry.registerRoot(projectRoot);
+    return {
+      ctx: {
+        ...options.ctx,
+        env: { homeDir: options.ctx.env.homeDir, projectRoot: project.canonicalRoot },
+      },
+      runtimeContext: { kind: "project", projectId: project.id },
+    };
   }
   if (!projectId) {
     return {

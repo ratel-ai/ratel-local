@@ -1,6 +1,8 @@
 import { type FSWatcher, watch as nodeWatch } from "node:fs";
 import { dirname } from "node:path";
 import type {
+  AuthFlowOptions,
+  AuthFlowResult,
   ContextSnapshotResolver,
   ProjectAdmissionLock,
   ProjectRegistry,
@@ -81,6 +83,22 @@ export class ReconciledGatewayPool implements ScopedGatewayPool {
   /** Publish the latest revision after a committed control-plane mutation. */
   async reconcileContext(context: RuntimeContextRef): Promise<ResolvedContextSnapshot> {
     return this.resolveAndPublish(context);
+  }
+
+  /**
+   * Authenticate through the current shared generation so its catalog and every
+   * subscribed MCP session observe the newly available tools immediately.
+   */
+  async authenticate(
+    context: RuntimeContextRef,
+    options: AuthFlowOptions = {},
+  ): Promise<AuthFlowResult[]> {
+    const lease = await this.acquireContext(context);
+    try {
+      return await lease.gateway.runAuthFlow(options);
+    } finally {
+      await lease.release();
+    }
   }
 
   stats(): ScopedGatewayPoolStats {

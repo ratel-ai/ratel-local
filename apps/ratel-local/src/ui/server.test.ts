@@ -20,7 +20,7 @@ import {
   projectBucketDir,
   type RuntimeRevision,
 } from "@ratel-ai/ratel-local-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import { silentPromptAdapter } from "../cli/prompts.js";
 import { newSessionToken } from "./security.js";
@@ -99,6 +99,7 @@ async function spin(
     | "skillDiscovery"
     | "skillImportControlPlane"
     | "skillRegistrationControlPlane"
+    | "authenticateMcpServer"
     | "daemonToken"
     | "projectAdmissionLock"
   > = {},
@@ -238,6 +239,71 @@ describe("UI server — auth", () => {
           displayName: "Ratel Project",
           lastSeenAt: "2026-07-15T12:00:00.000Z",
         },
+      });
+    } finally {
+      await projectSession.handle.shutdown();
+      await rm(projectSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("authenticates through the daemon context runner and registers CLI project roots", async () => {
+    const projectId = "prj_auth" as ProjectId;
+    const registerRoot = vi.fn(async () => ({
+      id: projectId,
+      canonicalRoot: "/canonical/repo",
+      displayName: "repo",
+      lastSeenAt: "2026-07-24T00:00:00.000Z",
+    }));
+    const authenticateMcpServer = vi.fn(async () => [
+      { name: "linear", status: "authorized" as const, mode: "interactive" as const },
+    ]);
+    const projectSession = await spin(undefined, {
+      projectRegistry: projectRegistry({ registerRoot }),
+      snapshotResolver: {
+        resolve: async (context) =>
+          ({
+            context,
+            projectRoot: "/canonical/repo",
+            documents: [],
+            runtimeRevision: "rev-auth",
+            mcpEntries: [
+              {
+                name: "linear",
+                status: "effective",
+                entry: { type: "http", url: "https://mcp.linear.example" },
+              },
+            ],
+            skills: {
+              effectiveSkills: [],
+              registrations: [],
+              diagnostics: [],
+              fingerprint: "skills",
+              watchInputs: [],
+            },
+            diagnostics: [],
+            watchInputs: [],
+          }) as never,
+      },
+      authenticateMcpServer,
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${projectSession.handle.port}/api/auth/linear?projectRoot=${encodeURIComponent("/repo")}`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${projectSession.token}` },
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(registerRoot).toHaveBeenCalledWith("/repo");
+      expect(authenticateMcpServer).toHaveBeenCalledWith(
+        { kind: "project", projectId },
+        { name: "linear" },
+      );
+      expect(await response.json()).toMatchObject({
+        results: [{ name: "linear", status: "authorized" }],
       });
     } finally {
       await projectSession.handle.shutdown();

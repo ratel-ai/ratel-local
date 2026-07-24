@@ -125,6 +125,43 @@ describe("runMcpAuth", () => {
     expect(captured).toEqual([{ name: "stripe" }]);
   });
 
+  it("delegates authentication to the running daemon with the canonical context", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER_PATH,
+      JSON.stringify({
+        mcpServers: { stripe: { type: "http", url: "https://mcp.stripe.example" } },
+      }),
+    );
+    const requests: Array<{ path: string; method?: string }> = [];
+    const logs: string[] = [];
+    const ctx = makeCtx(fs, {
+      env: { homeDir: HOME, projectRoot: "/repo" },
+      rest: ["stripe"],
+      log: (line) => logs.push(line),
+    });
+
+    await runMcpAuth(ctx, {
+      daemonRequest: async (path, init) => {
+        requests.push({ path, method: init?.method });
+        return new Response(
+          JSON.stringify({
+            results: [{ name: "stripe", status: "authorized", mode: "interactive" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    });
+
+    expect(requests).toEqual([
+      {
+        path: "/api/auth/stripe?projectRoot=%2Frepo",
+        method: "POST",
+      },
+    ]);
+    expect(logs.join("\n")).toMatch(/stripe.*authorized.*re-authed/);
+  });
+
   it("logs a per-upstream summary with status", async () => {
     const fs = new MemFs();
     fs.files.set(

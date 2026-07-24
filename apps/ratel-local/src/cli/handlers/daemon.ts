@@ -392,6 +392,9 @@ export async function runDaemonServer(
     skillImportControlPlane,
     skillRegistrationControlPlane,
     preparedChanges,
+    authenticateMcpServer: reconciledGatewayPool
+      ? (context, authOptions) => reconciledGatewayPool.authenticate(context, authOptions)
+      : undefined,
     daemonToken,
     sessionTokens: uiSessions,
     publicRoute: async (req, res, path) => {
