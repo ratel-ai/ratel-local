@@ -40,6 +40,34 @@ if (!Array.isArray(pluginArgs) || !pluginArgs.includes(expectedRuntime)) {
   throw new Error(`plugin/.mcp.json must pin the runtime to ${expectedRuntime}`);
 }
 
+const runtimePinPattern =
+  /@ratel-ai\/ratel-local@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)/g;
+for (const documentationPath of [
+  "../../README.md",
+  "plugin/README.md",
+  "plugin/skills/ratel-local/SKILL.md",
+]) {
+  const documentation = await readFile(resolve(appRoot, documentationPath), "utf8");
+  const pins = [...documentation.matchAll(runtimePinPattern)].map((match) => match[1]);
+  if (pins.length === 0) {
+    throw new Error(`${documentationPath} must contain at least one published runtime pin`);
+  }
+  const stalePins = pins.filter((version) => version !== packageJson.version);
+  if (stalePins.length > 0) {
+    throw new Error(
+      `${documentationPath} contains stale runtime version(s) ${[...new Set(stalePins)].join(", ")}; expected ${String(packageJson.version)}`,
+    );
+  }
+}
+
+const rootReadme = await readFile(resolve(appRoot, "../../README.md"), "utf8");
+const trackedVersion = /This README tracks the `([^`]+)`/.exec(rootReadme)?.[1];
+if (trackedVersion !== packageJson.version) {
+  throw new Error(
+    `../../README.md tracks version ${trackedVersion ?? "(missing)"}; expected ${String(packageJson.version)}`,
+  );
+}
+
 await mustExist(resolve(dist, "bin.js"));
 await mustExist(resolve(dist, "index.js"));
 await mustExist(resolve(dist, "index.d.ts"));

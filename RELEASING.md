@@ -12,7 +12,7 @@ How a new version is published to npm. Read end-to-end before cutting a release.
 
 ### Per-release flow
 
-1. **Bump every synchronized version and runtime pin** to the new value (e.g. `0.2.1-rc.1`, then later `0.2.1`): the root, app, core, and UI `package.json` files; both plugin manifests; and the plugin `.mcp.json` package pin. `pnpm check:pack` verifies that they match.
+1. **Bump every synchronized version and runtime pin** to the new value (e.g. `0.2.1-rc.1`, then later `0.2.1`): the root, app, core, and UI `package.json` files; both plugin manifests; the plugin `.mcp.json` package pin; and matching pins in the root README, plugin README, and bundled `ratel-local` skill. `pnpm check:pack` verifies that they stay aligned.
 2. **Update `CHANGELOG.md`** — add a `## [<version>] - YYYY-MM-DD` section above the previous one. For GA versions, collapse any matching `## [X.Y.Z-rc.*]` sections into the new `## [X.Y.Z]`.
 3. **Verify locally:**
    - `pnpm install --frozen-lockfile`
