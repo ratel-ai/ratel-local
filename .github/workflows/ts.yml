@@ -29,3 +29,60 @@ jobs:
         run: pnpm lint
       - name: Test
         run: pnpm test
+
+  package-smoke:
+    name: Package smoke (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - target: darwin-x64
+            runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - target: darwin-arm64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+          - target: win32-x64
+            runner: windows-2025
+            platform: win32
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build and validate package
+        run: pnpm build && pnpm check:pack
+      - name: Smoke packed native target
+        shell: bash
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          pack_dir="$RUNNER_TEMP/ratel-pack"
+          smoke_dir="$RUNNER_TEMP/ratel-smoke"
+          mkdir -p "$pack_dir" "$smoke_dir"
+          pnpm --filter @ratel-ai/ratel-local pack --pack-destination "$pack_dir"
+          (
+            cd "$smoke_dir"
+            pnpm init
+            pnpm add "$pack_dir"/*.tgz
+            node --input-type=module -e "import assert from 'node:assert/strict'; assert.equal(process.platform, process.env.EXPECTED_PLATFORM); assert.equal(process.arch, process.env.EXPECTED_ARCH); const pkg = await import('@ratel-ai/ratel-local'); const gateway = await pkg.buildGatewayFromConfig({ mcpServers: {} }, { resolvedSkills: [] }); await gateway.close();"
+            node node_modules/@ratel-ai/ratel-local/dist/bin.js --help
+          )

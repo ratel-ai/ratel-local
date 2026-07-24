@@ -52,6 +52,21 @@ export interface ScopedGatewayPoolStats {
   activeProjectGatewayCount: number;
   upstreamCount: number;
   generations: GatewayGenerationStats[];
+  retrievalHealth: RetrievalHealthStats;
+}
+
+export type RetrievalHealthStatus = "building" | "ready";
+
+export interface RetrievalGenerationHealth extends GatewayGenerationIdentity {
+  context: GatewayContext;
+  projectRoot?: string;
+  method: "bm25" | "semantic" | "hybrid";
+  status: RetrievalHealthStatus;
+}
+
+export interface RetrievalHealthStats {
+  status: RetrievalHealthStatus;
+  generations: RetrievalGenerationHealth[];
 }
 
 export interface ScopedGatewayPool {
@@ -71,6 +86,7 @@ interface PoolRecord {
   snapshot: ResolvedGatewaySnapshot;
   promise: Promise<PoolEntry>;
   entry?: PoolEntry;
+  retrievalHealth: RetrievalGenerationHealth;
 }
 
 export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
@@ -96,6 +112,7 @@ export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
         const next: PoolRecord = {
           snapshot,
           promise: Promise.resolve(undefined as never),
+          retrievalHealth: generationHealth(snapshot, "building"),
         };
         next.promise = this.buildEntry(snapshot, key, next);
         record = next;
@@ -158,6 +175,7 @@ export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
         .length,
       upstreamCount: generations.reduce((sum, generation) => sum + generation.upstreamCount, 0),
       generations,
+      retrievalHealth: this.retrievalHealth(),
     };
   }
 
@@ -203,11 +221,20 @@ export class InMemoryScopedGatewayPool implements ScopedGatewayPool {
         }
       });
       record.entry = entry;
+      record.retrievalHealth = generationHealth(snapshot, "ready");
       return entry;
     } catch (err) {
       if (this.records.get(key) === record) this.records.delete(key);
       throw err;
     }
+  }
+
+  private retrievalHealth(): RetrievalHealthStats {
+    const generations = Array.from(this.records.values(), (record) => record.retrievalHealth);
+    return {
+      status: aggregateRetrievalHealth(generations),
+      generations,
+    };
   }
 }
 
@@ -240,4 +267,25 @@ function gatewayContext(snapshot: ResolvedGatewaySnapshot): GatewayContext {
   return snapshot.kind === "global"
     ? { kind: "global" }
     : { kind: "project", projectId: snapshot.projectId };
+}
+
+function generationHealth(
+  snapshot: ResolvedGatewaySnapshot,
+  status: RetrievalHealthStatus,
+): RetrievalGenerationHealth {
+  return {
+    context: gatewayContext(snapshot),
+    ...(snapshot.kind === "project" ? { projectRoot: snapshot.projectRoot } : {}),
+    contextKey: snapshot.contextKey,
+    runtimeRevision: snapshot.runtimeRevision,
+    method: snapshot.resolvedContext?.retrieval?.method ?? "bm25",
+    status,
+  };
+}
+
+function aggregateRetrievalHealth(
+  generations: readonly RetrievalGenerationHealth[],
+): RetrievalHealthStatus {
+  if (generations.some((generation) => generation.status === "building")) return "building";
+  return "ready";
 }

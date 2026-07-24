@@ -79,6 +79,35 @@ function makeCtx(fs: MemFs, env: HierarchyEnv = { homeDir: HOME, projectRoot: RO
 }
 
 describe("runDaemon", () => {
+  it("exposes retrieval build health only when the experimental health flag is enabled", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {}, retrieval: { method: "bm25" } }),
+        processEnv: { RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH: "1" },
+      },
+      (message) => logs.push(message),
+      { open: () => {}, ensureToken: async () => "daemon-test-token" },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const health = await fetch(new URL("/healthz", daemonUrl));
+      expect(health.status).toBe(200);
+      expect(await health.text()).toBe("ok retrieval=ready\n");
+
+      const status = await fetch(new URL("/api/daemon/status", daemonUrl));
+      expect(await status.json()).toMatchObject({
+        retrievalHealth: { status: "ready", generations: [] },
+      });
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("reports an installed service as stopped when its health probe is offline", async () => {
     const fs = new MemFs();
     fs.files.set(daemonPaths(HOME).plist, "<plist />");
@@ -172,11 +201,13 @@ describe("runDaemon", () => {
       mcpUrl: string;
       upstreamCount: number;
       activeClientCount: number;
+      retrievalHealth?: unknown;
     };
     expect(status.port).toBe(new URL(uiUrl).port ? Number(new URL(uiUrl).port) : 0);
     expect(status.mcpUrl).toBe(new URL("/mcp", uiUrl).toString());
     expect(status.upstreamCount).toBe(0);
     expect(status.activeClientCount).toBe(0);
+    expect(status).not.toHaveProperty("retrievalHealth");
 
     let openedSessionUrl = "";
     await runDaemon(daemonArgs({ verb: "open", flags: {} }), makeCtx(fs), {}, () => {}, {
