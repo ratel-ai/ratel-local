@@ -14,6 +14,9 @@ import { wrapTransportWithSendMutex } from "./transport-mutex.js";
 
 export type AuthMode = "refresh" | "interactive";
 
+export const DENSE_AUTH_RECONNECT_REASON =
+  "authorization stored; reconnect this agent/context to activate the upstream in a new retrieval generation";
+
 export interface AuthFlowOptions {
   /** Restrict the run to a single named upstream. Without it, every upstream marked needsAuth runs. */
   name?: string;
@@ -25,6 +28,14 @@ export interface AuthFlowResult {
   reason?: string;
   /** Which path produced this row (only meaningful when status === "authorized"). */
   mode?: AuthMode;
+}
+
+export function markDenseAuthReconnectRequired(
+  results: readonly AuthFlowResult[],
+): AuthFlowResult[] {
+  return results.map((result) =>
+    result.status === "authorized" ? { ...result, reason: DENSE_AUTH_RECONNECT_REASON } : result,
+  );
 }
 
 export interface AuthStepSuccess {
