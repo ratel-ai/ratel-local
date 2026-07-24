@@ -9,7 +9,7 @@ function Checkbox({ className, ...props }: CheckboxPrimitive.Root.Props) {
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer relative flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input bg-card/35 transition-colors outline-none group-has-disabled/field:opacity-50 after:absolute after:-inset-x-3 after:-inset-y-2 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20 aria-invalid:aria-checked:border-coral dark:bg-background/40 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/30 data-checked:border-cream data-checked:bg-cream data-checked:text-[var(--brand-ink)]",
+        "peer relative flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input bg-card/35 transition-colors outline-none group-has-disabled/field:opacity-50 after:absolute after:-inset-x-3 after:-inset-y-2 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/35 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20 aria-invalid:aria-checked:border-coral dark:data-unchecked:bg-background/40 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/30 data-checked:border-cream data-checked:bg-cream data-checked:text-[var(--brand-ink)]",
         className,
       )}
       {...props}
