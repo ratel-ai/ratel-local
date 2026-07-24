@@ -91,7 +91,7 @@ Top-level commands:
 - `ratel-local skill` manages Claude Code and Codex skills through Ratel.
 - `ratel-local doctor` recovers interrupted mutations and diagnoses scoped config/OAuth state.
 - `ratel-local daemon open` opens the persistent daemon UI with live client and gateway state.
-- `ratel-local ui --port <port>` launches a standalone config editor without live daemon state.
+- `ratel-local ui` opens the persistent daemon UI.
 - `ratel-local statusline` renders or manages the Claude Code Ratel statusline.
 - `ratel-local --version` or `ratel-local version` prints the CLI version.
 - `ratel-local help` prints top-level usage.
@@ -159,8 +159,8 @@ Open the local UI:
 ratel-local daemon open
 ```
 
-Use `ratel-local ui --port 7331 --no-open` only when a standalone config editor
-is explicitly needed; its daemon client and gateway counts are unavailable.
+`ratel-local ui --no-open` prints a persistent daemon UI session URL without
+opening a browser.
 
 Required workflow for adding a stdio upstream:
 

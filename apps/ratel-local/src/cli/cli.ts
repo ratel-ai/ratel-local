@@ -81,7 +81,7 @@ Commands:
   skill    manage scoped skills (skill import/list, add-scope, remove-scope, remove)
   doctor   recover interrupted mutations and diagnose scoped configuration/OAuth state
   statusline render or install the Claude Code Ratel statusline
-  ui       open the daemon UI; --port launches a standalone config editor [--no-open]
+  ui       open the persistent daemon UI [--no-open]
 
 Run \`ratel-local <group>\` for the verbs available in a group.`;
 
