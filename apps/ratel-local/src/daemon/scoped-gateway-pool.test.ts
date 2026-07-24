@@ -16,6 +16,62 @@ function gateway(name: string): GatewayHandle {
 }
 
 describe("InMemoryScopedGatewayPool", () => {
+  it("reports current generation builds without retaining failed generations", async () => {
+    let finishBuild: (() => void) | undefined;
+    const buildGate = new Promise<void>((resolve) => {
+      finishBuild = resolve;
+    });
+    const snapshot = {
+      kind: "project",
+      projectId: REPO_ID,
+      projectRoot: "/repo",
+      contextKey: `project:${REPO_ID}`,
+      runtimeRevision: "rev-health",
+      resolvedContext: {
+        retrieval: { method: "semantic" },
+      },
+    } as unknown as ResolvedGatewaySnapshot;
+    const pool = new InMemoryScopedGatewayPool(async (generation) => {
+      await buildGate;
+      return gateway(generation.runtimeRevision);
+    });
+
+    const pending = pool.acquire(snapshot);
+    expect(pool.stats().retrievalHealth).toMatchObject({
+      status: "building",
+      generations: [
+        {
+          contextKey: `project:${REPO_ID}`,
+          runtimeRevision: "rev-health",
+          method: "semantic",
+          status: "building",
+        },
+      ],
+    });
+
+    finishBuild?.();
+    const lease = await pending;
+    expect(pool.stats().retrievalHealth).toMatchObject({
+      status: "ready",
+      generations: [
+        {
+          contextKey: `project:${REPO_ID}`,
+          runtimeRevision: "rev-health",
+          method: "semantic",
+          status: "ready",
+        },
+      ],
+    });
+    await lease.release();
+    expect(pool.stats().retrievalHealth).toEqual({ status: "ready", generations: [] });
+
+    const failed = new InMemoryScopedGatewayPool(async () => {
+      throw new Error("endpoint timed out");
+    });
+    await expect(failed.acquire(snapshot)).rejects.toThrow("endpoint timed out");
+    expect(failed.stats().retrievalHealth).toEqual({ status: "ready", generations: [] });
+  });
+
   it("shares a gateway for one resolved generation and exposes its identity", async () => {
     const built: ResolvedGatewaySnapshot[] = [];
     const pool = new InMemoryScopedGatewayPool(async (snapshot) => {

@@ -140,3 +140,18 @@ The browser UI exposes the same source choices and preflight action under **Retr
   including process startup or a retrieval revision.
 - Local retrieval traces remain under `~/.ratel/telemetry`.
 - BM25 is always the zero-download, zero-embedding-request path.
+
+## Health and rollback
+
+Set `RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH=1` on the daemon to include `retrievalHealth` in
+`/api/daemon/status`. The status is `building` while a scoped gateway generation is being created
+and `ready` otherwise. `/healthz` returns `503` only while a generation is actively building; a
+failed build is returned to its requesting client and does not leave the daemon globally unhealthy.
+
+To roll back dense retrieval, reset the affected scope to BM25 and reconnect the affected client:
+
+```bash
+ratel-local retrieval configure --scope user --method bm25
+```
+
+Use `--scope project` or `--scope local` when that is where the dense override lives.

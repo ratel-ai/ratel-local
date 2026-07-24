@@ -7,6 +7,7 @@ All notable changes to this package are documented here. The format is based on 
 ### Added
 - Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
 - Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
+- Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
 
 ### Changed
 - Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
