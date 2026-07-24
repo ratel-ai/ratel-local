@@ -48,6 +48,8 @@ import type { HandlerCtx } from "./types.js";
 export const DEFAULT_DAEMON_PORT = 5731;
 export const DAEMON_LABEL = "ai.ratel.local.daemon";
 export const SYSTEMD_SERVICE = "ratel-local-daemon.service";
+export const DAEMON_SERVICE_ID = "ratel-local-daemon";
+export const DAEMON_PROTOCOL_VERSION = 1;
 
 export const DAEMON_USAGE = `usage: ratel-local daemon [verb] [args...]
 
@@ -80,6 +82,8 @@ export interface DaemonState {
 }
 
 export interface DaemonStatusBody extends DaemonState {
+  service: typeof DAEMON_SERVICE_ID;
+  protocolVersion: typeof DAEMON_PROTOCOL_VERSION;
   uptimeSeconds: number;
   upstreamCount: number;
   activeClientCount: number;
@@ -96,7 +100,7 @@ interface CommandResult {
 type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>;
 type ProbeDaemon = (
   port: number,
-) => Promise<{ ok: boolean; status?: DaemonStatusBody; error?: string }>;
+) => Promise<{ ok: boolean; reachable?: boolean; status?: DaemonStatusBody; error?: string }>;
 
 interface DaemonHandlerDeps {
   open?: typeof openBrowser;
@@ -142,7 +146,7 @@ export async function runDaemon(
     return runDaemonServer(parsed, ctx, options, log, opts);
   }
   if (verb === "install") {
-    await installDaemon(parsed, ctx, log, opts);
+    await installDaemon(parsed, ctx, options, log, opts);
     return {};
   }
   if (verb === "uninstall") {
@@ -154,7 +158,7 @@ export async function runDaemon(
     return {};
   }
   if (verb === "start") {
-    await startDaemon(parsed, ctx, log, opts);
+    await startDaemon(parsed, ctx, options, log, opts);
     return {};
   }
   if (verb === "stop") {
@@ -163,7 +167,7 @@ export async function runDaemon(
   }
   if (verb === "restart") {
     await stopDaemon(ctx, log, opts);
-    await startDaemon(parsed, ctx, log, opts);
+    await startDaemon(parsed, ctx, options, log, opts);
     return {};
   }
   if (verb === "open") {
@@ -407,6 +411,8 @@ export async function runDaemonServer(
         const poolStats = gatewayPool.stats();
         writeJsonResponse(res, 200, {
           ...stateForPort(requestPort),
+          service: DAEMON_SERVICE_ID,
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
           uptimeSeconds: Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 1000)),
           upstreamCount: poolStats.upstreamCount,
           activeClientCount: registry.listActiveClients().length,
@@ -651,16 +657,18 @@ WantedBy=default.target
 async function installDaemon(
   parsed: ParsedArgs,
   ctx: HandlerCtx,
+  options: ServeOptions,
   log: (m: string) => void,
   opts: DaemonHandlerDeps,
 ): Promise<void> {
   const platform = daemonPlatform(opts);
   if (platform === "linux") {
-    await installLinuxDaemon(parsed, ctx, log, opts);
+    await installLinuxDaemon(parsed, ctx, options, log, opts);
     return;
   }
   ensureMacos("daemon install", opts);
-  const port = parseDaemonPort(parsed.flags.port);
+  const port = parsePersistentDaemonPort(parsed.flags.port);
+  await assertDaemonPortAvailable(port, opts.probe ?? probeDaemon);
   const paths = daemonPaths(ctx.env.homeDir);
   await ctx.fs.mkdirp(paths.logsDir);
   await ctx.fs.mkdirp(paths.launchAgentsDir);
@@ -676,7 +684,7 @@ async function installDaemon(
   );
   await bootstrapDaemon(ctx, opts);
   await kickstartDaemon(ctx, opts);
-  await waitForDaemon(port, opts.probe ?? probeDaemon);
+  await waitForDaemon(port, opts.probe ?? probeDaemon, options.serverVersion);
   log(`[ratel] daemon installed: ${paths.plist}`);
   log(`[ratel] daemon UI: http://127.0.0.1:${port}`);
   log(`[ratel] MCP HTTP endpoint: http://127.0.0.1:${port}/mcp`);
@@ -702,12 +710,13 @@ async function uninstallDaemon(
 async function startDaemon(
   parsed: ParsedArgs,
   ctx: HandlerCtx,
+  options: ServeOptions,
   log: (m: string) => void,
   opts: DaemonHandlerDeps,
 ): Promise<void> {
   const platform = daemonPlatform(opts);
   if (platform === "linux") {
-    await startLinuxDaemon(parsed, ctx, log, opts);
+    await startLinuxDaemon(parsed, ctx, options, log, opts);
     return;
   }
   ensureMacos("daemon start", opts);
@@ -718,7 +727,7 @@ async function startDaemon(
   await bootstrapDaemon(ctx, opts, { ignoreFailure: true });
   await kickstartDaemon(ctx, opts);
   const port = await daemonPort(parsed, ctx);
-  await waitForDaemon(port, opts.probe ?? probeDaemon);
+  await waitForDaemon(port, opts.probe ?? probeDaemon, options.serverVersion);
   log(`[ratel] daemon started at http://127.0.0.1:${port}`);
 }
 
@@ -740,10 +749,12 @@ async function stopDaemon(
 async function installLinuxDaemon(
   parsed: ParsedArgs,
   ctx: HandlerCtx,
+  options: ServeOptions,
   log: (m: string) => void,
   opts: DaemonHandlerDeps,
 ): Promise<void> {
-  const port = parseDaemonPort(parsed.flags.port);
+  const port = parsePersistentDaemonPort(parsed.flags.port);
+  await assertDaemonPortAvailable(port, opts.probe ?? probeDaemon);
   const paths = daemonPaths(ctx.env.homeDir);
   await ctx.fs.mkdirp(paths.logsDir);
   await ctx.fs.mkdirp(paths.systemdUserDir);
@@ -759,7 +770,7 @@ async function installLinuxDaemon(
   );
   await systemctl(opts, ["daemon-reload"]);
   await systemctl(opts, ["enable", "--now", SYSTEMD_SERVICE]);
-  await waitForDaemon(port, opts.probe ?? probeDaemon);
+  await waitForDaemon(port, opts.probe ?? probeDaemon, options.serverVersion);
   log(`[ratel] daemon installed: ${paths.systemdService}`);
   log(`[ratel] daemon UI: http://127.0.0.1:${port}`);
   log(`[ratel] MCP HTTP endpoint: http://127.0.0.1:${port}/mcp`);
@@ -780,6 +791,7 @@ async function uninstallLinuxDaemon(
 async function startLinuxDaemon(
   parsed: ParsedArgs,
   ctx: HandlerCtx,
+  options: ServeOptions,
   log: (m: string) => void,
   opts: DaemonHandlerDeps,
 ): Promise<void> {
@@ -789,7 +801,7 @@ async function startLinuxDaemon(
   }
   await systemctl(opts, ["start", SYSTEMD_SERVICE]);
   const port = await daemonPort(parsed, ctx);
-  await waitForDaemon(port, opts.probe ?? probeDaemon);
+  await waitForDaemon(port, opts.probe ?? probeDaemon, options.serverVersion);
   log(`[ratel] daemon started at http://127.0.0.1:${port}`);
 }
 
@@ -905,12 +917,37 @@ async function systemctl(
   }
 }
 
-async function waitForDaemon(port: number, probe: ProbeDaemon): Promise<void> {
+async function assertDaemonPortAvailable(port: number, probe: ProbeDaemon): Promise<void> {
+  const result = await probe(port);
+  if (result.ok) {
+    throw new Error(
+      `port ${port} already serves a Ratel daemon${
+        result.status?.version ? ` version ${result.status.version}` : ""
+      }; stop it before installing the login service`,
+    );
+  }
+  if (result.reachable) {
+    throw new Error(
+      `port ${port} is occupied by a service that is not a compatible Ratel daemon: ${
+        result.error ?? "identity check failed"
+      }`,
+    );
+  }
+}
+
+async function waitForDaemon(
+  port: number,
+  probe: ProbeDaemon,
+  expectedVersion?: string,
+): Promise<void> {
   const deadline = Date.now() + 5_000;
   let lastError = "not responding";
   while (Date.now() < deadline) {
     const result = await probe(port);
-    if (result.ok) return;
+    if (result.ok && (!expectedVersion || result.status?.version === expectedVersion)) return;
+    if (result.ok && expectedVersion) {
+      lastError = `expected version ${expectedVersion}, got ${result.status?.version ?? "unknown"}`;
+    }
     lastError = result.error ?? lastError;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
@@ -919,21 +956,46 @@ async function waitForDaemon(port: number, probe: ProbeDaemon): Promise<void> {
   );
 }
 
-async function probeDaemon(
-  port: number,
-): Promise<{ ok: boolean; status?: DaemonStatusBody; error?: string }> {
+async function probeDaemon(port: number): Promise<{
+  ok: boolean;
+  reachable?: boolean;
+  status?: DaemonStatusBody;
+  error?: string;
+}> {
   const statusUrl = `http://127.0.0.1:${port}/api/daemon/status`;
-  const healthUrl = `http://127.0.0.1:${port}/healthz`;
   try {
     const statusRes = await fetchWithTimeout(statusUrl);
-    if (statusRes.ok) {
-      return { ok: true, status: (await statusRes.json()) as DaemonStatusBody };
+    if (!statusRes.ok) {
+      return {
+        ok: false,
+        reachable: true,
+        error: `status endpoint returned HTTP ${statusRes.status}`,
+      };
     }
-    const healthRes = await fetchWithTimeout(healthUrl);
-    return healthRes.ok ? { ok: true } : { ok: false, error: `HTTP ${healthRes.status}` };
+    const body = (await statusRes.json().catch(() => null)) as unknown;
+    if (!isDaemonStatusBody(body, port)) {
+      return {
+        ok: false,
+        reachable: true,
+        error: "status endpoint did not return the Ratel daemon identity",
+      };
+    }
+    return { ok: true, reachable: true, status: body };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+function isDaemonStatusBody(value: unknown, port: number): value is DaemonStatusBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return (
+    body.service === DAEMON_SERVICE_ID &&
+    body.protocolVersion === DAEMON_PROTOCOL_VERSION &&
+    body.port === port &&
+    typeof body.pid === "number" &&
+    typeof body.version === "string"
+  );
 }
 
 async function fetchWithTimeout(url: string): Promise<Response> {
@@ -991,6 +1053,16 @@ function parseDaemonPort(raw: unknown): number {
     throw new Error(`--port must be an integer in [0, 65535], got "${raw}"`);
   }
   return n;
+}
+
+function parsePersistentDaemonPort(raw: unknown): number {
+  const port = parseDaemonPort(raw);
+  if (port === 0) {
+    throw new Error(
+      "--port 0 is only valid for foreground daemon runs; login services need a stable port",
+    );
+  }
+  return port;
 }
 
 function configMode(parsed: ParsedArgs): DaemonState["configMode"] {

@@ -1,4 +1,6 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -15,6 +17,8 @@ import { silentPromptAdapter } from "../prompts.js";
 import {
   createLaunchAgentPlist,
   createSystemdUserService,
+  DAEMON_PROTOCOL_VERSION,
+  DAEMON_SERVICE_ID,
   DEFAULT_DAEMON_PORT,
   daemonPaths,
   inspectDaemonService,
@@ -101,6 +105,8 @@ describe("runDaemon", () => {
         probe: async (port) => ({
           ok: true,
           status: {
+            service: DAEMON_SERVICE_ID,
+            protocolVersion: DAEMON_PROTOCOL_VERSION,
             pid: 123,
             port,
             uiUrl: `http://127.0.0.1:${port}`,
@@ -168,11 +174,15 @@ describe("runDaemon", () => {
     const statusRes = await fetch(new URL("/api/daemon/status", uiUrl));
     expect(statusRes.status).toBe(200);
     const status = (await statusRes.json()) as {
+      service: string;
+      protocolVersion: number;
       port: number;
       mcpUrl: string;
       upstreamCount: number;
       activeClientCount: number;
     };
+    expect(status.service).toBe(DAEMON_SERVICE_ID);
+    expect(status.protocolVersion).toBe(DAEMON_PROTOCOL_VERSION);
     expect(status.port).toBe(new URL(uiUrl).port ? Number(new URL(uiUrl).port) : 0);
     expect(status.mcpUrl).toBe(new URL("/mcp", uiUrl).toString());
     expect(status.upstreamCount).toBe(0);
@@ -528,7 +538,7 @@ describe("runDaemon", () => {
           commands.push({ command, args });
           return { stdout: "", stderr: "" };
         },
-        probe: async (port) => ({ ok: port === DEFAULT_DAEMON_PORT }),
+        probe: offlineThenHealthyProbe(),
       },
     );
 
@@ -539,6 +549,50 @@ describe("runDaemon", () => {
       { command: "launchctl", args: ["kickstart", "-k", "gui/501/ai.ratel.local.daemon"] },
     ]);
     expect(logs.join("\n")).toContain("http://127.0.0.1:5731/mcp");
+  });
+
+  it("rejects ephemeral ports for persistent login services", async () => {
+    const fs = new MemFs();
+
+    await expect(
+      runDaemon(daemonArgs({ verb: "install", flags: { port: "0" } }), makeCtx(fs), {}, () => {}, {
+        platform: "darwin",
+      }),
+    ).rejects.toThrow(/stable port/);
+  });
+
+  it("fails installation before service writes when another HTTP service owns the port", async () => {
+    const foreign = createHttpServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      foreign.once("error", reject);
+      foreign.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (foreign.address() as AddressInfo).port;
+    const fs = new MemFs();
+
+    try {
+      await expect(
+        runDaemon(
+          daemonArgs({ verb: "install", flags: { port: String(port) } }),
+          makeCtx(fs),
+          {},
+          () => {},
+          {
+            platform: "darwin",
+            executablePath: "/opt/bin/ratel-local",
+            getUid: () => 501,
+          },
+        ),
+      ).rejects.toThrow(/occupied.*not a compatible Ratel daemon/);
+      expect(fs.files.has(daemonPaths(HOME).plist)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        foreign.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("generates the Linux user systemd service for the stable daemon port", () => {
@@ -601,7 +655,7 @@ describe("runDaemon", () => {
           commands.push({ command, args });
           return { stdout: "", stderr: "" };
         },
-        probe: async (port) => ({ ok: port === DEFAULT_DAEMON_PORT }),
+        probe: offlineThenHealthyProbe(),
       },
     );
 
@@ -639,6 +693,8 @@ describe("runDaemon", () => {
         probe: async (port) => ({
           ok: true,
           status: {
+            service: DAEMON_SERVICE_ID,
+            protocolVersion: DAEMON_PROTOCOL_VERSION,
             pid: 123,
             port,
             uiUrl: "http://127.0.0.1:5731",
@@ -661,6 +717,16 @@ describe("runDaemon", () => {
     expect(logs.join("\n")).toContain("2 upstream server(s), 1 active MCP client(s)");
   });
 });
+
+function offlineThenHealthyProbe() {
+  let calls = 0;
+  return async (port: number) => {
+    calls += 1;
+    return calls === 1
+      ? { ok: false, error: "connection refused" }
+      : { ok: port === DEFAULT_DAEMON_PORT };
+  };
+}
 
 function daemonUrlFromLogs(logs: string[]): string {
   const line = logs.find((message) => message.includes("daemon running at"));
