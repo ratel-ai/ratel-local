@@ -4,7 +4,7 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
-## [0.5.0-rc.0] - 2026-07-17
+## [0.5.0] - 2026-07-24
 
 ### Changed
 - Made the Ratel Local plugin the preferred link path in both CLI and UI flows so Codex and Claude Code receive the bundled agent skills; when plugin installation fails, linking reports the failure and applies the reviewed, backed-up explicit MCP gateway fallback.
