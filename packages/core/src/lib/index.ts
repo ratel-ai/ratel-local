@@ -1,10 +1,18 @@
-export type { RatelConfig, ServerEntry, SkillsConfig } from "./config.js";
+export type {
+  RatelConfig,
+  RatelConfigDocument,
+  ServerEntry,
+  SkillEntry,
+  SkillsConfig,
+} from "./config.js";
 export { ConfigError, mergeConfigs, parseConfig } from "./config.js";
+export { expandEnvPlaceholders } from "./env-placeholders.js";
 export { isDirectoryEntry } from "./fs.js";
 export type {
   BuildGatewayOptions,
   GatewayHandle,
   TransportFactory,
+  TransportRuntimeInputs,
 } from "./gateway.js";
 export {
   buildGatewayFromConfig,
@@ -23,6 +31,7 @@ export type { CreateMcpServerOptions, McpServerHandle } from "./server.js";
 export { createMcpServer } from "./server.js";
 export type { LoadSkillsOptions } from "./skills/load.js";
 export { defaultSkillDirs, loadSkills, parseSkillMd, SkillLoadError } from "./skills/load.js";
+export * from "./skills/resolve.js";
 export { AUTH_TOOL_ID } from "./tools/auth.js";
 export type { ToolTokenEstimate, UsageEstimatorOptions } from "./usage.js";
 export {

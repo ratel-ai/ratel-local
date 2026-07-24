@@ -1,8 +1,13 @@
 import { join } from "node:path";
 import {
   type BackupFs,
+  documentRevision,
   type HierarchyEnv,
   type JsonFs,
+  MISSING_DOCUMENT_REVISION,
+  MutationConflictError,
+  type PreparedChange,
+  type PreparedChangeCoordinator,
   type ResolvedBin,
   readJson,
   startBackup,
@@ -101,6 +106,88 @@ export async function uninstallHook(
   deps: HookFsDeps,
 ): Promise<{ changed: boolean }> {
   return applyHookEdit(settingsPath, removePreloadHook, deps);
+}
+
+export async function prepareInstallHook(
+  settingsPath: string,
+  command: string,
+  deps: HookFsDeps,
+  preparedChanges: PreparedChangeCoordinator,
+): Promise<PreparedChange<{ changed: boolean; path: string }>> {
+  return prepareHookEdit(
+    settingsPath,
+    (settings) => addPreloadHook(settings, command),
+    deps,
+    preparedChanges,
+    "install",
+  );
+}
+
+export async function prepareUninstallHook(
+  settingsPath: string,
+  deps: HookFsDeps,
+  preparedChanges: PreparedChangeCoordinator,
+): Promise<PreparedChange<{ changed: boolean; path: string }>> {
+  return prepareHookEdit(settingsPath, removePreloadHook, deps, preparedChanges, "uninstall");
+}
+
+async function prepareHookEdit(
+  settingsPath: string,
+  transform: (settings: Record<string, unknown>) => Record<string, unknown>,
+  deps: HookFsDeps,
+  preparedChanges: PreparedChangeCoordinator,
+  action: "install" | "uninstall",
+): Promise<PreparedChange<{ changed: boolean; path: string }>> {
+  const beforeText = await deps.fs.read(settingsPath);
+  let before: Record<string, unknown> = {};
+  if (beforeText !== null) {
+    try {
+      const parsed: unknown = JSON.parse(beforeText);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("root must be a JSON object");
+      }
+      before = parsed as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(
+        `${settingsPath} is not valid JSON (${(error as Error).message}). ` +
+          "Fix or remove it, then re-run — Claude Code settings must be plain JSON without comments.",
+      );
+    }
+  }
+  const after = transform(before);
+  const changed = after !== before;
+  const afterText = changed ? `${JSON.stringify(after, null, 2)}\n` : null;
+  return preparedChanges.prepare({
+    kind: `hook.${action}`,
+    operations:
+      afterText === null ? [] : [{ kind: "replace-file", path: settingsPath, contents: afterText }],
+    buildPreview: (mutation) => {
+      if (changed) {
+        const expected =
+          beforeText === null ? MISSING_DOCUMENT_REVISION : documentRevision(beforeText);
+        const actual = mutation.baseRevisions[settingsPath];
+        if (actual !== expected) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `document changed while preparing hook change: ${settingsPath}`,
+            settingsPath,
+            expected,
+            actual,
+          );
+        }
+      }
+      return { changed, path: settingsPath };
+    },
+    captureBackup: changed
+      ? async () => {
+          const backup = startBackup(deps.env, deps.fs, deps.now);
+          await backup.capture(settingsPath);
+          return backup.finalize("edit");
+        }
+      : undefined,
+    affectedContexts: [{ kind: "global" }],
+    result: { changed },
+  });
 }
 
 async function applyHookEdit(

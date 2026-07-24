@@ -14,7 +14,6 @@ import {
   GitCompare,
   LinkIcon,
   RefreshCw,
-  SearchIcon,
   Sparkles,
   Wrench,
   X,
@@ -30,7 +29,6 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import {
@@ -41,7 +39,6 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DetailGrid, DetailLabel } from "@/components/ui/detail-grid";
 import {
@@ -52,7 +49,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { importStatuslineAction, linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
-import { availableSkillsForKind, fetchSkills, type SkillSummary } from "@/lib/skills";
+import {
+  applySkillImportSelections,
+  availableSkillsForKind,
+  buildSkillImportSelections,
+  defaultSkillImportTarget,
+  discoveredSkillSummaries,
+  fetchSkills,
+  type SkillSummary,
+} from "@/lib/skills";
 import { cn } from "@/lib/utils";
 
 type AgentHostKind = "claude-code" | "codex";
@@ -100,7 +105,7 @@ interface RatelConnectionState {
   plugin: boolean;
 }
 
-interface DetectedAgentHostSummary {
+export interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
   detection: AgentHostDetection;
@@ -120,7 +125,7 @@ interface AgentHostsResponse {
   hosts: DetectedAgentHostSummary[];
 }
 
-function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
+export function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
   if (
     typeof body === "object" &&
     body !== null &&
@@ -137,8 +142,7 @@ interface AgentCandidate {
   entry: ServerEntry;
 }
 
-interface FileChange {
-  kind: "write";
+interface PlannedFileWrite {
   path: string;
   before: string | null;
   after: string;
@@ -152,13 +156,14 @@ interface ImportConflict {
 }
 
 interface AgentPlanPreview {
+  changeId: string;
   flow: SetupFlow;
   host: DetectedAgentHostSummary;
   candidates: AgentCandidate[];
   selected: string[];
   plan: {
-    ratelChanges: FileChange[];
-    agentChanges: FileChange[];
+    ratelChanges: PlannedFileWrite[];
+    agentChanges: PlannedFileWrite[];
     summary: {
       movedFromUser: string[];
       movedFromProject: string[];
@@ -172,8 +177,18 @@ interface AgentPlanPreview {
       overwrittenRatelEntries: AgentScope[];
     };
   };
-  stageHashes: { ratel: string; agent: string };
   emptyReason: string | null;
+}
+
+interface PreparedAgentChangeResponse {
+  changeId: string;
+  kind: string;
+  expiresAt: string;
+  preview: Omit<AgentPlanPreview, "changeId">;
+}
+
+function agentPreviewFromPrepared(change: PreparedAgentChangeResponse): AgentPlanPreview {
+  return { ...change.preview, changeId: change.changeId };
 }
 
 const POSTURE_COPY: Record<
@@ -216,32 +231,43 @@ const CLAUDE_CODE_ICON_SRC = new URL("../assets/claudecode-color.svg", import.me
  * page (for the import section). Fail-soft to an empty list so a skills hiccup
  * never blocks the MCP setup flows.
  */
-function useAvailableSkills() {
+function useAvailableSkills(initialAvailable?: SkillSummary[]) {
   const { request } = useRatelApp();
-  const [available, setAvailable] = useState<SkillSummary[]>([]);
+  const [available, setAvailable] = useState<SkillSummary[]>(initialAvailable ?? []);
+  const skipInitialReload = useRef(initialAvailable !== undefined);
   const reload = useCallback(async () => {
     try {
       const data = await fetchSkills(request);
-      setAvailable(data.available);
+      setAvailable(discoveredSkillSummaries(data));
     } catch {
       setAvailable([]);
     }
   }, [request]);
   useEffect(() => {
+    if (skipInitialReload.current) {
+      skipInitialReload.current = false;
+      return;
+    }
     void reload();
   }, [reload]);
   return { available, reload };
 }
 
-export function AgentSetupPage() {
-  const { clearSetupIntent, config, openCommandMenu, refresh, request, setupIntent, token } =
-    useRatelApp();
+export interface AgentSetupRouteData {
+  available: SkillSummary[];
+  backups: BackupManifest[];
+  hosts: DetectedAgentHostSummary[];
+}
+
+export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteData }) {
+  const { clearSetupIntent, config, pagePath, refresh, request, setupIntent } = useRatelApp();
   const navigate = useNavigate();
-  const { available } = useAvailableSkills();
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
+  const { available } = useAvailableSkills(initialData?.available);
+  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>(initialData?.hosts ?? []);
+  const skipInitialHostScan = useRef(initialData !== undefined);
   const [scanning, setScanning] = useState(false);
   const handledIntent = useRef<number | null>(null);
-  const backups = config?.backups ?? [];
+  const backups = config?.backups ?? initialData?.backups ?? [];
 
   const scanHosts = useCallback(async () => {
     setScanning(true);
@@ -257,14 +283,19 @@ export function AgentSetupPage() {
 
   const openAgent = useCallback(
     (kind: AgentHostKind, operation?: SetupFlow) => {
-      const search = new URLSearchParams();
-      if (token) search.set("t", token);
-      if (operation) search.set("operation", operation);
-      void navigate({ to: `/agent-setup/${kind}?${search.toString()}` } as never);
+      const path = pagePath(`/agent-setup/${kind}`);
+      const separator = path.includes("?") ? "&" : "?";
+      void navigate({
+        to: operation ? `${path}${separator}operation=${operation}` : path,
+      } as never);
     },
-    [navigate, token],
+    [navigate, pagePath],
   );
   useEffect(() => {
+    if (skipInitialHostScan.current) {
+      skipInitialHostScan.current = false;
+      return;
+    }
     void scanHosts();
   }, [scanHosts]);
 
@@ -283,30 +314,17 @@ export function AgentSetupPage() {
           <PageHeaderBackRow>
             <PageHeaderTitle>Agent Setup</PageHeaderTitle>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
+              <Button
+                aria-label="Refresh"
+                disabled={scanning}
+                onClick={() => void Promise.all([refresh(), scanHosts()])}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <span className="sr-only">Refresh</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription className="max-w-sm sm:max-w-2xl">
@@ -317,12 +335,6 @@ export function AgentSetupPage() {
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
                 kbd="⌘R"
@@ -331,7 +343,6 @@ export function AgentSetupPage() {
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -353,12 +364,17 @@ export function AgentSetupPage() {
   );
 }
 
-export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupFlow }) {
-  const { openCommandMenu, refresh, request, token } = useRatelApp();
+export function AgentDetailPage(props: {
+  initialData?: AgentSetupRouteData;
+  kind: AgentHostKind;
+  operation?: SetupFlow;
+}) {
+  const { pagePath, refresh, request } = useRatelApp();
   const navigate = useNavigate();
-  const { available, reload: reloadSkills } = useAvailableSkills();
+  const { available, reload: reloadSkills } = useAvailableSkills(props.initialData?.available);
   const agentAvailable = availableSkillsForKind(available, props.kind);
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
+  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>(props.initialData?.hosts ?? []);
+  const skipInitialHostScan = useRef(props.initialData !== undefined);
   const [scanning, setScanning] = useState(false);
 
   const scanHosts = useCallback(async () => {
@@ -374,18 +390,19 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
   }, [request]);
 
   useEffect(() => {
+    if (skipInitialHostScan.current) {
+      skipInitialHostScan.current = false;
+      return;
+    }
     void scanHosts();
   }, [scanHosts]);
 
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
-    const target = token ? `/agent-setup?t=${encodeURIComponent(token)}` : "/agent-setup";
-    void navigate({ to: target } as never);
+    void navigate({ to: pagePath("/agent-setup") } as never);
   };
   const switchHost = (kind: AgentHostKind) => {
-    const search = new URLSearchParams();
-    if (token) search.set("t", token);
-    void navigate({ to: `/agent-setup/${kind}?${search.toString()}` } as never);
+    void navigate({ to: pagePath(`/agent-setup/${kind}`) } as never);
   };
   const primaryPath = host?.scopes.find((scope) => scope.available)?.path ?? host?.scopes[0]?.path;
 
@@ -399,30 +416,17 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
               Agents
             </Button>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
+              <Button
+                aria-label="Refresh"
+                disabled={scanning}
+                onClick={() => void Promise.all([refresh(), scanHosts()])}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <span className="sr-only">Refresh</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
@@ -457,12 +461,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
             ) : null}
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
                 kbd="⌘R"
@@ -471,7 +469,6 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -633,7 +630,7 @@ function AgentOperationPanel(props: {
     props.host.connection.kind === "duplicate" || props.host.connection.kind === "explicit";
   const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
-    <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+    <section className="grid gap-5 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
       {props.hostKind === "claude-code" && props.host.statusline ? (
         <ClaudeStatuslineSection
           onScanHosts={props.onScanHosts}
@@ -827,28 +824,46 @@ function PreviewFlow(props: {
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
-  const { runAction } = useRatelApp();
+  const { context, runAction } = useRatelApp();
   const [preview, setPreview] = useState<AgentPlanPreview | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const endpoint =
-    props.flow === "import" ? "/api/agent-preview/import" : "/api/agent-preview/link";
+    props.flow === "import" ? "/api/agents/import/prepare" : "/api/agents/link/prepare";
   const previewPath = `${endpoint}?r=${refreshNonce}`;
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
-        const body = await props.request<AgentPlanPreview>(previewPath, {
+        const body = await props.request<PreparedAgentChangeResponse>(previewPath, {
           method: "POST",
           body: {
             hostKind: props.hostKind,
           },
         });
-        if (cancelled) return;
-        setPreview(body);
+        if (cancelled) {
+          await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+            method: "DELETE",
+          });
+          return;
+        }
+        setPreview((current) => {
+          if (current) {
+            void props.request(`/api/changes/${encodeURIComponent(current.changeId)}`, {
+              method: "DELETE",
+            });
+          }
+          return agentPreviewFromPrepared(body);
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not build the setup preview");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -875,21 +890,25 @@ function PreviewFlow(props: {
     [props.host.connection.linked, props.host.statusline?.status, props.hostKind],
   );
 
-  const applyRatel = async (
+  const setPreparedDialogOpen = (open: boolean) => {
+    setDialogOpen(open);
+    if (!open && preview) {
+      void props.request(`/api/changes/${encodeURIComponent(preview.changeId)}`, {
+        method: "DELETE",
+      });
+      setPreview(null);
+      setRefreshNonce((value) => value + 1);
+    }
+  };
+
+  const applyImport = async (
     importPreview: AgentPlanPreview,
-    conflictStrategy: ConflictStrategy,
-    replaceConflicts: string[],
+    _conflictStrategy: ConflictStrategy,
+    _replaceConflicts: string[],
   ) => {
-    const applied = await runAction("Ratel config changes applied", () =>
-      props.request("/api/agent-apply/import/ratel", {
+    const applied = await runAction("Ratel and agent config changes applied", () =>
+      props.request(`/api/changes/${encodeURIComponent(importPreview.changeId)}/commit`, {
         method: "POST",
-        body: {
-          hostKind: props.hostKind,
-          selection: importPreview.selected,
-          conflictStrategy,
-          replaceConflicts,
-          planHash: importPreview.stageHashes.ratel,
-        },
       }),
     );
     if (!applied) return false;
@@ -898,27 +917,15 @@ function PreviewFlow(props: {
     return true;
   };
 
-  const applyAgent = async (
+  const commitAgentChange = async (
     activePreview: AgentPlanPreview,
-    options?: {
-      conflictStrategy?: ConflictStrategy;
-      replaceConflicts?: string[];
-    },
+    _options?: { conflictStrategy?: ConflictStrategy; replaceConflicts?: string[] },
   ) => {
-    const path =
-      props.flow === "import" ? "/api/agent-apply/import/agent" : "/api/agent-apply/link";
     const applied = await runAction(
       props.flow === "import" ? "Source agent cleanup applied" : "Link complete",
       () =>
-        props.request(path, {
+        props.request(`/api/changes/${encodeURIComponent(activePreview.changeId)}/commit`, {
           method: "POST",
-          body: {
-            hostKind: props.hostKind,
-            selection: props.flow === "import" ? activePreview.selected : undefined,
-            conflictStrategy: props.flow === "import" ? options?.conflictStrategy : undefined,
-            replaceConflicts: props.flow === "import" ? options?.replaceConflicts : undefined,
-            planHash: activePreview.stageHashes.agent,
-          },
         }),
     );
     if (!applied) return false;
@@ -928,21 +935,22 @@ function PreviewFlow(props: {
   };
 
   const applyLinkFromImport = async () => {
-    const linkPreview = await props.request<AgentPlanPreview>("/api/agent-preview/link", {
+    const prepared = await props.request<PreparedAgentChangeResponse>("/api/agents/link/prepare", {
       method: "POST",
       body: { hostKind: props.hostKind },
     });
+    const linkPreview = agentPreviewFromPrepared(prepared);
     if (linkPreview.plan.agentChanges.length > 0) {
       const linked = await runAction("Link complete", () =>
-        props.request("/api/agent-apply/link", {
+        props.request(`/api/changes/${encodeURIComponent(linkPreview.changeId)}/commit`, {
           method: "POST",
-          body: {
-            hostKind: props.hostKind,
-            planHash: linkPreview.stageHashes.agent,
-          },
         }),
       );
       if (!linked) return false;
+    } else {
+      await props.request(`/api/changes/${encodeURIComponent(linkPreview.changeId)}`, {
+        method: "DELETE",
+      });
     }
     await props.onScanHosts();
     setRefreshNonce((value) => value + 1);
@@ -967,54 +975,31 @@ function PreviewFlow(props: {
     replaceConflicts: string[],
     selectedSkills: SkillSummary[],
   ) => {
-    if (importPreview.plan.ratelChanges.length > 0) {
-      const ratelApplied = await applyRatel(importPreview, conflictStrategy, replaceConflicts);
-      if (!ratelApplied) return false;
-    }
-    if (importPreview.plan.agentChanges.length > 0) {
-      const agentApplied = await applyAgent(importPreview, {
-        conflictStrategy,
-        replaceConflicts,
+    if (importPreview.plan.ratelChanges.length > 0 || importPreview.plan.agentChanges.length > 0) {
+      const configsApplied = await applyImport(importPreview, conflictStrategy, replaceConflicts);
+      if (!configsApplied) return false;
+    } else {
+      await props.request(`/api/changes/${encodeURIComponent(importPreview.changeId)}`, {
+        method: "DELETE",
       });
-      if (!agentApplied) return false;
     }
     if (selectedSkills.length > 0) {
-      const skillsApplied = await activateSelectedSkills(selectedSkills);
+      const skillsApplied = await importSelectedSkills(selectedSkills);
       if (!skillsApplied) return false;
     }
     return true;
   };
 
-  const activateSelectedSkills = async (selectedSkills: SkillSummary[]) => {
-    type ActivateSkillsResponse = {
-      managed: Array<{ id: string; mode: string }>;
-      skipped?: Array<{ id: string; reason: string }>;
-    };
-    const idsBySource = new Map<SkillSummary["source"], string[]>();
-    for (const skill of selectedSkills) {
-      if (skill.source !== "claude" && skill.source !== "codex") continue;
-      const ids = idsBySource.get(skill.source) ?? [];
-      ids.push(skill.id);
-      idsBySource.set(skill.source, ids);
-    }
-    const managed: ActivateSkillsResponse["managed"] = [];
-    const skipped: NonNullable<ActivateSkillsResponse["skipped"]> = [];
-    const applied = await runAction("Skill management complete", async () => {
-      for (const [source, ids] of idsBySource) {
-        const result = await props.request<ActivateSkillsResponse>("/api/skills/activate", {
-          method: "POST",
-          body: { ids, source },
-        });
-        managed.push(...result.managed);
-        skipped.push(...(result.skipped ?? []));
-      }
-      return {
-        log: [
-          `Now managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
-          ...(skipped.length > 0 ? [skippedSkillsMessage(skipped)] : []),
-        ],
-      };
-    });
+  const importSelectedSkills = async (selectedSkills: SkillSummary[]) => {
+    const applied = await runAction(
+      `Now managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"}`,
+      async () => {
+        const target = defaultSkillImportTarget(context);
+        if (!target) throw new Error("Select Global or a project before importing skills");
+        const selections = buildSkillImportSelections(selectedSkills, context, target);
+        await applySkillImportSelections(props.request, selections);
+      },
+    );
     if (!applied) return false;
     await props.onSkillsImported();
     setRefreshNonce((value) => value + 1);
@@ -1024,7 +1009,7 @@ function PreviewFlow(props: {
   const commitLink = async () => {
     if (!preview) return false;
     if (agentChanges.length > 0) {
-      const linked = await applyAgent(preview);
+      const linked = await commitAgentChange(preview);
       if (!linked) return false;
     }
     setDialogOpen(false);
@@ -1039,6 +1024,23 @@ function PreviewFlow(props: {
         </div>
       ) : null}
 
+      {error && !preview ? (
+        <Alert variant="destructive">
+          <AlertTitle>Could not build {props.flow} preview</AlertTitle>
+          <AlertDescription className="grid justify-items-start gap-3">
+            <span>{error}</span>
+            <Button
+              onClick={() => setRefreshNonce((value) => value + 1)}
+              size="sm"
+              variant="outline"
+            >
+              <RefreshCw />
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {preview ? (
         <>
           {friendlyNoOp ? (
@@ -1047,7 +1049,7 @@ function PreviewFlow(props: {
             <SetupRecap
               availableSkills={props.availableSkills}
               flow={props.flow}
-              onOpen={() => setDialogOpen(true)}
+              onOpen={() => setPreparedDialogOpen(true)}
               preview={preview}
             />
           )}
@@ -1062,7 +1064,7 @@ function PreviewFlow(props: {
               onCommit={commitImport}
               onInstallStatusline={installStatuslineFromImport}
               onLink={applyLinkFromImport}
-              onOpenChange={setDialogOpen}
+              onOpenChange={setPreparedDialogOpen}
               open={dialogOpen}
               preview={preview}
               request={props.request}
@@ -1075,7 +1077,7 @@ function PreviewFlow(props: {
           {!friendlyNoOp && props.flow === "link" ? (
             <LinkSceneDialog
               onCommit={commitLink}
-              onOpenChange={setDialogOpen}
+              onOpenChange={setPreparedDialogOpen}
               open={dialogOpen}
               preview={preview}
             />
@@ -1218,11 +1220,6 @@ function importAvailabilityLabel(mcpCount: number, skillCount: number) {
   return `${parts.join(" and ")} available.`;
 }
 
-function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>) {
-  const details = skipped.map((skill) => `${skill.id}: ${skill.reason}`).join("; ");
-  return `Could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
-}
-
 type ImportScene =
   | "link"
   | "skills"
@@ -1263,6 +1260,7 @@ function ImportSceneDialog(props: {
   const statuslineAction = importStatuslineAction(props.statuslineStatus);
   const wasOpenRef = useRef(false);
   const previewRequestIdRef = useRef(0);
+  const activeChangeIdRef = useRef(draftPreview.changeId);
   const selected = new Set(draftSelection);
   const selectedSkills = props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill)));
   const conflicts = draftPreview.plan.summary.conflicts;
@@ -1303,9 +1301,29 @@ function ImportSceneDialog(props: {
     setReplaceConflicts([]);
   }, [props.open, props.preview, props.workflow]);
 
+  useEffect(() => {
+    activeChangeIdRef.current = draftPreview.changeId;
+  }, [draftPreview.changeId]);
+
+  useEffect(() => {
+    if (props.open) return;
+    void props.request(`/api/changes/${encodeURIComponent(activeChangeIdRef.current)}`, {
+      method: "DELETE",
+    });
+  }, [props.open, props.request]);
+
+  useEffect(
+    () => () => {
+      void props.request(`/api/changes/${encodeURIComponent(activeChangeIdRef.current)}`, {
+        method: "DELETE",
+      });
+    },
+    [props.request],
+  );
+
   const loadDraftPreview = useCallback(async () => {
     const requestId = ++previewRequestIdRef.current;
-    const body = await props.request<AgentPlanPreview>("/api/agent-preview/import", {
+    const body = await props.request<PreparedAgentChangeResponse>("/api/agents/import/prepare", {
       method: "POST",
       body: {
         hostKind: props.hostKind,
@@ -1314,7 +1332,13 @@ function ImportSceneDialog(props: {
         replaceConflicts,
       },
     });
-    return requestId === previewRequestIdRef.current ? body : null;
+    if (requestId !== previewRequestIdRef.current) {
+      await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+        method: "DELETE",
+      });
+      return null;
+    }
+    return agentPreviewFromPrepared(body);
   }, [conflictStrategy, draftSelection, props.hostKind, props.request, replaceConflicts]);
 
   useEffect(() => {
@@ -1322,13 +1346,26 @@ function ImportSceneDialog(props: {
     let cancelled = false;
     const refreshDraftPreview = async () => {
       const body = await loadDraftPreview();
-      if (!cancelled && body) setDraftPreview(body);
+      if (!cancelled && body) {
+        setDraftPreview((current) => {
+          if (current.changeId !== body.changeId) {
+            void props.request(`/api/changes/${encodeURIComponent(current.changeId)}`, {
+              method: "DELETE",
+            });
+          }
+          return body;
+        });
+      } else if (body) {
+        await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+          method: "DELETE",
+        });
+      }
     };
     void refreshDraftPreview();
     return () => {
       cancelled = true;
     };
-  }, [loadDraftPreview, props.open]);
+  }, [loadDraftPreview, props.open, props.request]);
 
   const commit = async () => {
     setCommitting(true);
@@ -1998,7 +2035,7 @@ function LinkedCoveredPreview(props: { flow: SetupFlow; host: DetectedAgentHostS
   );
 }
 
-function ChangeList(props: { changes: FileChange[]; defaultOpen?: boolean; title: string }) {
+function ChangeList(props: { changes: PlannedFileWrite[]; defaultOpen?: boolean; title: string }) {
   if (props.changes.length === 0) return null;
   const stats = props.changes.reduce(
     (total, change) => {
@@ -2048,7 +2085,7 @@ type DiffRow =
       oldLine: number | null;
     };
 
-function UnifiedDiff(props: { change: FileChange }) {
+function UnifiedDiff(props: { change: PlannedFileWrite }) {
   const before = props.change.before ?? "";
   const patch = structuredPatch(
     props.change.path,
@@ -2144,7 +2181,7 @@ function DiffRowsTable(props: { conflictSelection?: "agent" | "ratel"; rows: Dif
   );
 }
 
-function DiffStatBadge(props: { change: FileChange }) {
+function DiffStatBadge(props: { change: PlannedFileWrite }) {
   const stats = diffStats(props.change);
   return (
     <span className="shrink-0 font-mono text-xs">
@@ -2186,7 +2223,7 @@ function diffRowsFromHunk(hunk: StructuredPatchHunk): DiffRow[] {
   return rows;
 }
 
-function diffStats(change: FileChange) {
+function diffStats(change: PlannedFileWrite) {
   const patch = structuredPatch(
     change.path,
     change.path,

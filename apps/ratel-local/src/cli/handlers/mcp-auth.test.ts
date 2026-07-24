@@ -4,7 +4,9 @@ import type {
   BackupFs,
   HierarchyEnv,
   JsonFs,
+  ServerEntry,
 } from "@ratel-ai/ratel-local-core";
+import { parseConfig, resolveMcpEntries } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
@@ -63,6 +65,20 @@ function makeCtx(
 
 const RATEL_USER_PATH = "/home/u/.ratel/config.json";
 
+function userOAuthPath(name: string, entry: ServerEntry): string {
+  const resolved = resolveMcpEntries({
+    homeDir: HOME,
+    documents: [
+      {
+        ref: { scope: "user" },
+        config: parseConfig({ mcpServers: { [name]: entry } }),
+      },
+    ],
+  }).find((candidate) => candidate.name === name);
+  if (!resolved) throw new Error(`unable to resolve ${name}`);
+  return resolved.oauthKey.path;
+}
+
 describe("runMcpAuth", () => {
   it("calls the orchestrator without name when none is given on the command line", async () => {
     const fs = new MemFs();
@@ -107,6 +123,43 @@ describe("runMcpAuth", () => {
     });
 
     expect(captured).toEqual([{ name: "stripe" }]);
+  });
+
+  it("delegates authentication to the running daemon with the canonical context", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER_PATH,
+      JSON.stringify({
+        mcpServers: { stripe: { type: "http", url: "https://mcp.stripe.example" } },
+      }),
+    );
+    const requests: Array<{ path: string; method?: string }> = [];
+    const logs: string[] = [];
+    const ctx = makeCtx(fs, {
+      env: { homeDir: HOME, projectRoot: "/repo" },
+      rest: ["stripe"],
+      log: (line) => logs.push(line),
+    });
+
+    await runMcpAuth(ctx, {
+      daemonRequest: async (path, init) => {
+        requests.push({ path, method: init?.method });
+        return new Response(
+          JSON.stringify({
+            results: [{ name: "stripe", status: "authorized", mode: "interactive" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    });
+
+    expect(requests).toEqual([
+      {
+        path: "/api/auth/stripe?projectRoot=%2Frepo",
+        method: "POST",
+      },
+    ]);
+    expect(logs.join("\n")).toMatch(/stripe.*authorized.*re-authed/);
   });
 
   it("logs a per-upstream summary with status", async () => {
@@ -181,7 +234,7 @@ describe("runMcpAuth", () => {
       );
       // linear: expired token, refresh available
       fs.files.set(
-        "/home/u/.ratel/oauth/linear.json",
+        userOAuthPath("linear", { type: "http", url: "https://mcp.linear.example" }),
         JSON.stringify({
           tokens: { access_token: "old", refresh_token: "rtk", token_type: "Bearer" },
           expires_at: Date.now() - 5 * 60 * 1000,
@@ -189,14 +242,14 @@ describe("runMcpAuth", () => {
       );
       // fresh: comfortably valid
       fs.files.set(
-        "/home/u/.ratel/oauth/fresh.json",
+        userOAuthPath("fresh", { type: "http", url: "https://fresh.example" }),
         JSON.stringify({
           tokens: { access_token: "ok", refresh_token: "rtk", token_type: "Bearer" },
           expires_at: Date.now() + 23 * 3600 * 1000,
         }),
       );
       fs.files.set(
-        "/home/u/.ratel/oauth/unsupported.json",
+        userOAuthPath("unsupported", { type: "http", url: "https://unsupported.example" }),
         JSON.stringify({
           unsupported: {
             reason: "OAuth client registration was rejected",

@@ -1,4 +1,9 @@
-import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
+import {
+  type BackupFs,
+  type HierarchyEnv,
+  type JsonFs,
+  projectIdFromCanonicalRoot,
+} from "@ratel-ai/ratel-local-core";
 import { describe, expect, it } from "vitest";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
@@ -481,6 +486,30 @@ describe("runAdd — fetch-description default (stdio)", () => {
 });
 
 describe("runAdd — auth-probe at add-time (http/sse)", () => {
+  it("passes the scoped OAuth store key and resource fingerprint to the auth probe", async () => {
+    const fs = new MemFs();
+    const ctx = makeCtx(fs, {
+      flags: { scope: "project", "client-id": "project-client" },
+      rest: ["stripe", "https://mcp.stripe.com"],
+    });
+    let seenPath: string | undefined;
+    let seenFingerprint: string | undefined;
+
+    await runAdd(ctx, {
+      authProbe: async (_name, _entry, oauthKey) => {
+        seenPath = oauthKey.path;
+        seenFingerprint = oauthKey.fingerprint;
+        return { status: "skipped", reason: "test" };
+      },
+    });
+
+    const projectId = projectIdFromCanonicalRoot(ROOT);
+    expect(seenPath).toMatch(
+      new RegExp(`/oauth/projects/${projectId}/project/[A-Za-z0-9_-]+\\.json$`),
+    );
+    expect(seenFingerprint).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
   it("calls authProbe (not the silent probe) for an http entry and stores returned instructions", async () => {
     const fs = new MemFs();
     const ctx = makeCtx(fs, {

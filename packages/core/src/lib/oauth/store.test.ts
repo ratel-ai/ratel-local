@@ -66,6 +66,16 @@ describe("RatelOAuthStore", () => {
     expect(state.tokens?.access_token).toBe("atk");
   });
 
+  it("persists and enforces the configured OAuth resource fingerprint", async () => {
+    const path = join(dir, "oauth", "scoped.json");
+    const store = new RatelOAuthStore(path, "resource-v1");
+    await store.save({ tokens: { access_token: "atk", token_type: "Bearer" } });
+    expect((await store.load()).resource_fingerprint).toBe("resource-v1");
+
+    const changed = new RatelOAuthStore(path, "resource-v2");
+    await expect(changed.load()).rejects.toThrow(/fingerprint/i);
+  });
+
   it("saveTokens clears a previous unsupported marker", async () => {
     const store = newStore();
     await store.save({

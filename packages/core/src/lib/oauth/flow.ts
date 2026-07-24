@@ -9,7 +9,7 @@ import type { ServerEntry } from "../config.js";
 import { type CallbackHandle, startOAuthCallback } from "./callback-server.js";
 import { RatelOAuthProvider } from "./provider.js";
 import { refreshIfNeeded } from "./refresh.js";
-import { RatelOAuthStore } from "./store.js";
+import { OAuthFingerprintMismatchError, type OAuthStoreState, RatelOAuthStore } from "./store.js";
 import { wrapTransportWithSendMutex } from "./transport-mutex.js";
 
 export type AuthMode = "refresh" | "interactive";
@@ -164,6 +164,8 @@ export function defaultOAuthStorePath(serverName: string): string {
 export interface DefaultAuthStepDeps {
   /** Override the OAuth store path. Defaults to `~/.ratel/oauth/<name>.json`. */
   storePath?: (serverName: string) => string;
+  /** Expected OAuth resource fingerprint for scoped credential isolation. */
+  storeFingerprint?: (serverName: string) => string | undefined;
   /** Override the browser launcher. Defaults to dynamic-import of the `open` package. */
   browserLauncher?: (url: URL) => void | Promise<void>;
   /** Override the callback server. Tests can stub. */
@@ -194,6 +196,7 @@ export interface DefaultAuthStepDeps {
 
 export interface PkceFlowDeps {
   storePath: (name: string) => string;
+  storeFingerprint?: (name: string) => string | undefined;
   browserLauncher: (url: URL) => void | Promise<void>;
   callbackFactory: typeof startOAuthCallback;
   logger: (m: string) => void;
@@ -217,6 +220,7 @@ export type PkceFlowFn = (
  */
 export function defaultAuthStep(deps: DefaultAuthStepDeps = {}): AuthStep {
   const storePath = deps.storePath ?? defaultOAuthStorePath;
+  const storeFingerprint = deps.storeFingerprint;
   const callbackFactory = deps.callbackFactory ?? startOAuthCallback;
   const launcher = deps.browserLauncher ?? defaultBrowserLauncher;
   const log = deps.logger ?? ((m: string) => console.error(m));
@@ -232,8 +236,17 @@ export function defaultAuthStep(deps: DefaultAuthStepDeps = {}): AuthStep {
 
     // Refresh-first: attempt a silent refresh with the stored refresh_token. If it
     // succeeds, connect with fresh credentials and register — no browser involved.
-    const store = new RatelOAuthStore(storePath(name));
-    const tokens = (await store.load()).tokens;
+    const store = new RatelOAuthStore(storePath(name), storeFingerprint?.(name));
+    let state: OAuthStoreState;
+    try {
+      state = await store.load();
+    } catch (error) {
+      if (!(error instanceof OAuthFingerprintMismatchError)) throw error;
+      log(`[ratel] ${name}: OAuth target changed; clearing stored credentials`);
+      await store.clear("all");
+      state = {};
+    }
+    const tokens = state.tokens;
     const canRefresh = tokens?.refresh_token !== undefined;
     if (canRefresh) {
       try {
@@ -268,6 +281,7 @@ export function defaultAuthStep(deps: DefaultAuthStepDeps = {}): AuthStep {
 
     return pkceFlow(name, entry, ctx, {
       storePath,
+      ...(storeFingerprint ? { storeFingerprint } : {}),
       browserLauncher: launcher,
       callbackFactory,
       logger: log,
@@ -318,7 +332,7 @@ export async function runPkceFlow(
   }
 
   try {
-    const store = new RatelOAuthStore(storePath(name));
+    const store = new RatelOAuthStore(storePath(name), deps.storeFingerprint?.(name));
     const oauthFetchTracker = createOAuthFetchTracker(store, deps.fetch ?? fetch);
     const provider = new RatelOAuthProvider({
       store,

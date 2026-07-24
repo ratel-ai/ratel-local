@@ -11,10 +11,11 @@ import type {
   AgentScope,
 } from "./agent-host/index.js";
 import {
-  buildAgentImportPlan,
-  buildImportPlan,
-  type FileChange,
+  buildAgentAgentImportDraft,
+  buildAgentImportDraft,
+  buildAgentLinkPlan,
   type ImportInputs,
+  type PlannedFileWrite,
 } from "./import-plan.js";
 import type { ServerEntry } from "./lib/index.js";
 import type { ResolvedBin } from "./locate-bin.js";
@@ -63,15 +64,15 @@ function emptyInputs(overrides: Partial<ImportInputs> = {}): ImportInputs {
   };
 }
 
-function allChanges(plan: ReturnType<typeof buildImportPlan>) {
+function allChanges(plan: ReturnType<typeof buildAgentImportDraft>) {
   return [...plan.ratelChanges, ...plan.agentChanges];
 }
 
-function findWrite(plan: ReturnType<typeof buildImportPlan>, path: string) {
+function findWrite(plan: ReturnType<typeof buildAgentImportDraft>, path: string) {
   return allChanges(plan).find((c) => c.kind === "write" && c.path === path);
 }
 
-function parseAfter(plan: ReturnType<typeof buildImportPlan>, path: string) {
+function parseAfter(plan: ReturnType<typeof buildAgentImportDraft>, path: string) {
   const c = findWrite(plan, path);
   if (!c || c.kind !== "write") throw new Error(`no write to ${path}`);
   return JSON.parse(c.after);
@@ -79,6 +80,8 @@ function parseAfter(plan: ReturnType<typeof buildImportPlan>, path: string) {
 
 class RecordingAgentHost implements AgentHostAdapter {
   input: AgentHostPlanInput | null = null;
+
+  constructor(readonly supportedScopes: readonly AgentScope[] = ["user", "project", "local"]) {}
 
   async detect(_ctx: AgentHostContext): Promise<AgentHostDetection> {
     return { displayName: "Test Agent", present: true, reasons: [], warnings: [] };
@@ -90,7 +93,7 @@ class RecordingAgentHost implements AgentHostAdapter {
 
   async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
     this.input = input;
-    const changes: FileChange[] = [];
+    const changes: PlannedFileWrite[] = [];
     for (const [scope, names] of input.removeEntriesByScope) {
       changes.push({
         kind: "write",
@@ -111,9 +114,9 @@ class RecordingAgentHost implements AgentHostAdapter {
   }
 }
 
-describe("buildImportPlan", () => {
+describe("buildAgentImportDraft", () => {
   it("user-only: moves entries into Ratel user config and records gateway args", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, remote: REMOTE_ENTRY } }),
       }),
@@ -130,8 +133,25 @@ describe("buildImportPlan", () => {
     expect(plan.agentChanges).toEqual([]);
   });
 
+  it("preserves skills while importing MCP entries into the same scope", () => {
+    const plan = buildAgentImportDraft(
+      emptyInputs({
+        agentState: agentState({ user: { fs: FS_ENTRY } }),
+        ratelUser: {
+          mcpServers: {},
+          skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+        },
+      }),
+    );
+
+    expect(parseAfter(plan, RATEL_USER)).toEqual({
+      mcpServers: { fs: FS_ENTRY },
+      skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+    });
+  });
+
   it("project entries use the user+project config chain", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY }, project: { proj: PROJ_ENTRY } }),
       }),
@@ -146,7 +166,7 @@ describe("buildImportPlan", () => {
   });
 
   it("local entries use all three configs", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({
           user: { fs: FS_ENTRY },
@@ -167,7 +187,7 @@ describe("buildImportPlan", () => {
   });
 
   it("local-only: writes only the local Ratel target", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ local: { local: LOCAL_ENTRY } }),
       }),
@@ -184,7 +204,7 @@ describe("buildImportPlan", () => {
       command: "ratel-local",
       args: ["serve", "--config", RATEL_USER],
     };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({
           user: { "ratel-local": ratelStub },
@@ -206,7 +226,7 @@ describe("buildImportPlan", () => {
       command: "ratel-mcp",
       args: ["serve", "--config", RATEL_USER],
     };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { "ratel-mcp": legacyGateway } }),
       }),
@@ -218,7 +238,7 @@ describe("buildImportPlan", () => {
 
   it("keeps Ratel entries on conflicts by default and exposes structured conflict data", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, other: REMOTE_ENTRY } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -248,7 +268,7 @@ describe("buildImportPlan", () => {
       args: ["fs"],
       command: "echo",
     };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: incoming } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -262,7 +282,7 @@ describe("buildImportPlan", () => {
     expect(plan.summary.replacedFromUser).toEqual(["fs"]);
 
     const agentHost = new RecordingAgentHost();
-    const agentPlan = await buildAgentImportPlan({
+    const agentPlan = await buildAgentAgentImportDraft({
       ...emptyInputs({
         agentState: agentState({ user: { fs: incoming } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -275,7 +295,7 @@ describe("buildImportPlan", () => {
 
   it("replaces Ratel entries on conflicts when requested", () => {
     const existingRatelEntry: ServerEntry = { type: "stdio", command: "kept" };
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, other: REMOTE_ENTRY } }),
         ratelUser: { mcpServers: { fs: existingRatelEntry } },
@@ -288,21 +308,23 @@ describe("buildImportPlan", () => {
     expect(ratelUser.mcpServers.other).toEqual(REMOTE_ENTRY);
   });
 
-  it("dedups across scopes: most-specific wins", () => {
-    const plan = buildImportPlan(
+  it("preserves same-name registrations at user and project scopes", () => {
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY }, project: { fs: PROJ_ENTRY } }),
       }),
     );
+    const ratelUser = parseAfter(plan, RATEL_USER);
     const ratelProject = parseAfter(plan, RATEL_PROJECT);
+    expect(ratelUser.mcpServers.fs).toEqual(FS_ENTRY);
     expect(ratelProject.mcpServers.fs).toEqual(PROJ_ENTRY);
-    expect(findWrite(plan, RATEL_USER)).toBeUndefined();
     expect(plan.summary.movedFromProject).toEqual(["fs"]);
-    expect(plan.summary.movedFromUser).toEqual([]);
+    expect(plan.summary.movedFromUser).toEqual(["fs"]);
+    expect(plan.summary.skipped).toEqual([]);
   });
 
   it("filters movable entries by selection", () => {
-    const plan = buildImportPlan(
+    const plan = buildAgentImportDraft(
       emptyInputs({
         agentState: agentState({ user: { fs: FS_ENTRY, remote: REMOTE_ENTRY } }),
       }),
@@ -317,7 +339,7 @@ describe("buildImportPlan", () => {
 
   it("delegates native rewrites to the selected agent adapter", async () => {
     const agentHost = new RecordingAgentHost();
-    const plan = await buildAgentImportPlan(
+    const plan = await buildAgentAgentImportDraft(
       { ...emptyInputs({ agentState: agentState({ user: { fs: FS_ENTRY } }) }), agentHost },
       { selection: new Set(["fs"]) },
     );
@@ -349,7 +371,7 @@ describe("buildImportPlan", () => {
       ],
     };
 
-    const plan = await buildAgentImportPlan(
+    const plan = await buildAgentAgentImportDraft(
       {
         ...emptyInputs({ agentState: state }),
         agentHost: new ClaudeCodeAgentHostAdapter(),
@@ -366,7 +388,7 @@ describe("buildImportPlan", () => {
       "ratel-local": {
         type: "stdio",
         command: "ratel-local",
-        args: ["serve", "--config", RATEL_USER],
+        args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
       },
     });
   });
@@ -399,7 +421,7 @@ args = ["fs"]
       ],
     };
 
-    const plan = await buildAgentImportPlan(
+    const plan = await buildAgentAgentImportDraft(
       {
         ...emptyInputs({ agentState: state }),
         agentHost: new CodexAgentHostAdapter(),
@@ -415,9 +437,40 @@ args = ["fs"]
       "ratel-local": {
         type: "stdio",
         command: "ratel-local",
-        args: ["serve", "--config", RATEL_USER],
+        args: ["connect", "--agent-host", "codex", "--link-scope", "user"],
         env: undefined,
       },
     });
+  });
+
+  it("links only scopes declared by the selected agent adapter", async () => {
+    const agentHost = new RecordingAgentHost(["user", "project"]);
+
+    await buildAgentLinkPlan({
+      ...emptyInputs({
+        ratelUser: { mcpServers: { user: FS_ENTRY } },
+        ratelProject: { mcpServers: { project: PROJ_ENTRY } },
+        ratelLocal: { mcpServers: { local: LOCAL_ENTRY } },
+      }),
+      agentHost,
+    });
+
+    expect(agentHost.input?.installGatewayScopes).toEqual(new Set(["user", "project"]));
+  });
+
+  it("links a scope whose Ratel document contains only skills", async () => {
+    const agentHost = new RecordingAgentHost();
+
+    await buildAgentLinkPlan({
+      ...emptyInputs({
+        ratelUser: {
+          mcpServers: {},
+          skills: { entries: { review: { mode: "reference", path: "/skills/review" } } },
+        },
+      }),
+      agentHost,
+    });
+
+    expect(agentHost.input?.installGatewayScopes).toEqual(new Set(["user"]));
   });
 });

@@ -4,6 +4,30 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.6.0-rc.0] - 2026-07-24
+
+### Added
+- Added a versioned canonical-root project registry, project-aware HTTP/CLI/UI flows, URL-scoped daemon pages, connector v2 metadata, and an active-client read model.
+- Added a single provenance-preserving MCP/skill snapshot resolver, scoped OAuth stores, deterministic runtime revisions, and generational gateways that keep existing sessions on their acquired revision.
+- Added recoverable scoped mutations with cross-process locking, CAS previews, journals, rollback/recovery, opaque skill discovery candidates, owned-copy markers, and safe local Git excludes.
+- Added `ratel-local doctor` for transaction recovery plus project, snapshot, and legacy OAuth diagnostics with stable actionable codes.
+- Added `ratel-local connect`, a lightweight stdio MCP bridge that carries the agent's resolved project root to the persistent daemon and exposes actionable daemon status/start/setup tools while the daemon is unavailable.
+- Added the idempotent `ratel-local setup` wizard, which installs a missing daemon login service, starts an installed service, replaces an incompatible daemon version, or reports an already-running matching daemon. It supports `--yes` automation and a custom first-install `--port`.
+- Expanded `ratel-local setup` into complete onboarding: after making the daemon ready it detects Claude Code and Codex, connects selected agents through the existing plugin-first link flow, and separately offers the transactional MCP/skill import preview. Repeatable `--agent`, `--agent auto`, and `--daemon-only` support explicit automation; plain `--yes` remains daemon-only and never imports native configuration.
+
+### Changed
+- Prerelease `link` and setup flows now pin the single Ratel marketplace to the immutable tag matching the package version for both Codex and Claude Code, reconcile existing plugin installs onto that channel, and attempt to restore the stable plugin when an RC switch fails.
+- New agent links use `ratel-local connect`; `serve --config` remains as the legacy explicit-config runtime.
+- Skills now support explicit user/project/local reference or copy registrations. `skill activate` and `skill deactivate` remain deprecated user-scope compatibility wrappers.
+- The daemon reconciles disk state on every gateway acquire and uses targeted parent/resource watchers for near-immediate invalidation.
+- CLI and UI agent imports apply Ratel and native-agent config rewrites as one recoverable transaction.
+- Rebuilt the browser UI around the persistent daemon with global and project-scoped routes, dedicated project and MCP-client views, and a cloud-aligned visual system across tools, skills, and agent setup.
+
+### Fixed
+- Hardened the daemon and UI control plane with loopback-only authenticated requests, validated installed-service identity, safe canonical project admission, and serialized project-root mutations.
+- Routed OAuth through live daemon gateways, preserving results across bulk authentication while keeping scoped stores isolated.
+- Restored the legacy skill lifecycle aliases and tightened automated setup argument validation so existing workflows fail clearly instead of being silently misinterpreted.
+
 ## [0.5.0] - 2026-07-24
 
 ### Changed

@@ -1,8 +1,11 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
+import type { BackupFs, JsonFs, ProjectRegistry } from "@ratel-ai/ratel-local-core";
 import { AUTH_TOOL_ID } from "@ratel-ai/ratel-local-core";
 import { INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID } from "@ratel-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,7 +84,7 @@ describe("runCli — serve", () => {
     const [downstreamServerTransport, downstreamClientTransport] =
       InMemoryTransport.createLinkedPair();
 
-    const { shutdown } = await runCli(["serve", "/fake/config.json"], {
+    const { shutdown } = await runCli(["serve", "/fake/config.json", "--telemetry", "off"], {
       readConfig: async () => ({
         mcpServers: { up: { type: "stdio", command: "noop" } },
         // Isolate from the machine's real ~/.ratel/skills so get_skill_content
@@ -121,7 +124,7 @@ describe("runCli — serve", () => {
     const [downstreamServerTransport, downstreamClientTransport] =
       InMemoryTransport.createLinkedPair();
 
-    const { shutdown } = await runCli(["serve", "/fake/config.json"], {
+    const { shutdown } = await runCli(["serve", "/fake/config.json", "--telemetry", "off"], {
       readConfig: async () => ({
         mcpServers: {
           up: { type: "stdio", command: "noop", description: "ping server" },
@@ -173,7 +176,7 @@ describe("runCli — serve", () => {
     const [serverTransport] = InMemoryTransport.createLinkedPair();
     const logs: string[] = [];
 
-    const { shutdown } = await runCli(["serve", "/x"], {
+    const { shutdown } = await runCli(["serve", "/x", "--telemetry", "off"], {
       readConfig: async () => ({
         mcpServers: { up: { type: "stdio", command: "noop" } },
         // Isolate from the machine's real ~/.ratel/skills so get_skill_content
@@ -196,18 +199,21 @@ describe("runCli — serve", () => {
     const [serverTransport] = InMemoryTransport.createLinkedPair();
     const reads: string[] = [];
 
-    const { shutdown } = await runCli(["serve", "--config", "/a.json", "--config", "/b.json"], {
-      readConfig: async (path) => {
-        reads.push(path);
-        if (path === "/a.json") {
-          return { mcpServers: { up: { type: "stdio", command: "from-a" } } };
-        }
-        return { mcpServers: { up: { type: "stdio", command: "from-b" } } };
+    const { shutdown } = await runCli(
+      ["serve", "--config", "/a.json", "--config", "/b.json", "--telemetry", "off"],
+      {
+        readConfig: async (path) => {
+          reads.push(path);
+          if (path === "/a.json") {
+            return { mcpServers: { up: { type: "stdio", command: "from-a" } } };
+          }
+          return { mcpServers: { up: { type: "stdio", command: "from-b" } } };
+        },
+        transportFactory: () => upstream.clientTransport,
+        serverTransport,
+        logger: () => {},
       },
-      transportFactory: () => upstream.clientTransport,
-      serverTransport,
-      logger: () => {},
-    });
+    );
 
     expect(reads).toEqual(["/a.json", "/b.json"]);
 
@@ -217,7 +223,7 @@ describe("runCli — serve", () => {
 });
 
 describe("runCli — help and routing", () => {
-  it("--help advertises import and link as top-level commands", async () => {
+  it("--help advertises the scoped daemon, project, and skill control plane", async () => {
     const logs: string[] = [];
     await runCli(["--help"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
@@ -225,6 +231,12 @@ describe("runCli — help and routing", () => {
     expect(out).toMatch(/backup/);
     expect(out).toMatch(/^\s*import\s/m);
     expect(out).toMatch(/^\s*link\s/m);
+    expect(out).toMatch(/^\s*setup\s/m);
+    expect(out).toMatch(/^\s*project\s/m);
+    expect(out).toMatch(/^\s*doctor\s/m);
+    expect(out).toMatch(/daemon open/);
+    expect(out).toMatch(/skill import/);
+    expect(out).toMatch(/remove-scope/);
   });
 
   it("prints command-specific help for import and link without running either workflow", async () => {
@@ -264,6 +276,80 @@ describe("runCli — help and routing", () => {
     const out = logs.join("\n");
     expect(out).toMatch(/list/);
     expect(out).not.toMatch(/undo/);
+  });
+
+  it("routes project commands through the injected registry factory", async () => {
+    const logs: string[] = [];
+    const homes: string[] = [];
+    const registry: ProjectRegistry = {
+      registerRoot: async () => {
+        throw new Error("unexpected registerRoot");
+      },
+      resolve: async () => {
+        throw new Error("unexpected resolve");
+      },
+      list: async () => [],
+      touch: async () => {},
+      forget: async () => {
+        throw new Error("unexpected forget");
+      },
+    };
+
+    await runCli(["project", "list"], {
+      env: { homeDir: HOME },
+      logger: (message) => logs.push(message),
+      projectRegistryFactory: (homeDir) => {
+        homes.push(homeDir);
+        return registry;
+      },
+    });
+
+    expect(homes).toEqual([HOME]);
+    expect(logs).toEqual(["no projects registered"]);
+  });
+
+  it("routes doctor through recovery and scoped diagnostics", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-cli-doctor-"));
+    const logs: string[] = [];
+    try {
+      await runCli(["doctor"], {
+        env: { homeDir },
+        logger: (message) => logs.push(message),
+      });
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+
+    expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
+  });
+
+  it("`ratel-local setup --help` describes complete and automated onboarding", async () => {
+    const logs: string[] = [];
+    await runCli(["setup", "--help"], { logger: (message) => logs.push(message) });
+    const out = logs.join("\n");
+    expect(out).toContain("--agent auto|claude-code|codex");
+    expect(out).toContain("--daemon-only");
+    expect(out).toContain("--yes");
+    expect(out).toContain("--port N");
+    expect(out).toContain("never imports MCPs automatically");
+  });
+
+  it("rejects combining setup --daemon-only with agent selection", async () => {
+    await expect(
+      runCli(["setup", "--daemon-only", "--agent", "codex"], {
+        fs: new MemFs(),
+        logger: () => {},
+      }),
+    ).rejects.toThrow(/--daemon-only cannot be combined with --agent/);
+  });
+
+  it("rejects a valued setup --yes flag instead of becoming interactive", async () => {
+    await expect(
+      runCli(["setup", "--yes=false"], {
+        fs: new MemFs(),
+        logger: () => {},
+      }),
+    ).rejects.toThrow(/--yes does not accept a value/);
   });
 
   it("rejects an unknown command with ArgError", async () => {

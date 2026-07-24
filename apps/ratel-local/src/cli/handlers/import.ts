@@ -1,28 +1,31 @@
 import type { BackupManifest, RatelConfig, ServerEntry } from "@ratel-ai/ratel-local-core";
 import {
   type AgentHostState,
+  type AgentImportDraft,
   type AgentImportWorkflowState,
   type AgentScope,
   AutomaticAgentHostAdapter,
   advanceAgentImportWorkflow,
   beginAgentImportWorkflow,
-  buildAgentImportPlan,
+  buildAgentAgentImportDraft,
   conflictKey,
-  executePlan,
-  type FileChange,
+  documentRevision,
   getAgentHostRatelConnection,
   getClaudeCodeStatuslineState,
   type ImportConflict,
   type ImportConflictStrategy,
-  type ImportPlan,
   isRatelGatewayEntry,
+  MISSING_DOCUMENT_REVISION,
+  MutationConflictError,
   NamedAgentHostAdapter,
+  type PlannedFileWrite,
   pluginLinkNoOpMessage,
   probeEntryInstructions,
+  projectIdFromCanonicalRoot,
   type ResolvedBin,
   ratelConfigPath,
-  readJson,
   type SupportedAgentHostKind,
+  startBackup,
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core";
 import { ArgError } from "../args.js";
@@ -118,7 +121,7 @@ export async function runImport(
     now: opts.now,
   });
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
-  const connection =
+  let connection =
     workflowHostKind && agentState
       ? await getAgentHostRatelConnection(workflowHostKind, agentState, ctx)
       : null;
@@ -170,9 +173,10 @@ export async function runImport(
           exists: opts.exists,
         });
         linkCommitted = linkManifest !== null;
-        if (agentState) {
+        if (agentState && workflowHostKind) {
           agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
           candidates = collectCandidates(agentState);
+          connection = await getAgentHostRatelConnection(workflowHostKind, agentState, ctx);
         }
       }
       workflow = advanceAgentImportWorkflow(workflow, { type: "link-completed" });
@@ -199,7 +203,7 @@ export async function runImport(
     return null;
   }
 
-  let plan: ImportPlan = emptyImportPlan();
+  let plan: AgentImportDraft = emptyAgentImportDraft();
   let bin: ResolvedBin | null = null;
 
   if (agentState && selection.length > 0) {
@@ -211,11 +215,12 @@ export async function runImport(
 
     bin = opts.bin ?? (await resolveBin(ctx, opts));
 
-    const ratelUser = await readJson<RatelConfig>(ctx.fs, ratelUserPath);
-    const ratelProject = ratelProjectPath
-      ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath)
-      : null;
-    const ratelLocal = ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null;
+    const ratelUserText = await ctx.fs.read(ratelUserPath);
+    const ratelProjectText = ratelProjectPath ? await ctx.fs.read(ratelProjectPath) : null;
+    const ratelLocalText = ratelLocalPath ? await ctx.fs.read(ratelLocalPath) : null;
+    const ratelUser = ratelUserText ? (JSON.parse(ratelUserText) as RatelConfig) : null;
+    const ratelProject = ratelProjectText ? (JSON.parse(ratelProjectText) as RatelConfig) : null;
+    const ratelLocal = ratelLocalText ? (JSON.parse(ratelLocalText) as RatelConfig) : null;
 
     const planInputs = {
       agentHost,
@@ -223,14 +228,20 @@ export async function runImport(
       ratelUser,
       ratelProject,
       ratelLocal,
+      ratelUserText,
+      ratelProjectText,
+      ratelLocalText,
       bin,
       ratelUserPath,
       ratelProjectPath,
       ratelLocalPath,
       projectRoot: ctx.env.projectRoot,
     };
-    const planOptions = { selection: new Set(selection.map((c) => c.name)) };
-    const initialPlan = await buildAgentImportPlan(planInputs, planOptions);
+    const planOptions = {
+      selection: new Set(selection.map((c) => c.name)),
+      installGateway: connection?.explicit === true,
+    };
+    const initialPlan = await buildAgentAgentImportDraft(planInputs, planOptions);
     const conflictResolution = await resolveConflictStrategy(
       ctx,
       initialPlan,
@@ -242,7 +253,7 @@ export async function runImport(
       return null;
     }
 
-    plan = await buildAgentImportPlan(planInputs, {
+    plan = await buildAgentAgentImportDraft(planInputs, {
       ...planOptions,
       ...conflictResolution.resolution,
     });
@@ -262,10 +273,15 @@ export async function runImport(
     return null;
   }
 
+  const acceptedChanges = [...plan.ratelChanges, ...plan.agentChanges];
+  const preparedChange =
+    acceptedChanges.length > 0 ? await prepareCliAgentWrites(ctx, acceptedChanges) : null;
+
   if (opts.dryRun) {
     for (const c of [...plan.ratelChanges, ...plan.agentChanges]) {
       if (c.kind === "write") ctx.log(`would write ${c.path}`);
     }
+    if (preparedChange) ctx.preparedChanges?.cancel(preparedChange.changeId);
     for (const skill of selectedSkills) {
       ctx.log(`would manage skill ${skill.id} (${skill.source}) as invoke-only`);
     }
@@ -280,17 +296,16 @@ export async function runImport(
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
+      if (preparedChange) ctx.preparedChanges?.cancel(preparedChange.changeId);
       ctx.prompts.cancel(importCancellationMessage(linkCommitted));
       return null;
     }
   }
 
   let latestManifest: BackupManifest | null = null;
-  if (plan.ratelChanges.length > 0) {
-    latestManifest = await tryExecute(ctx, plan.ratelChanges, "import");
-  }
-  if (plan.agentChanges.length > 0) {
-    latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
+  if (preparedChange) {
+    if (!ctx.preparedChanges) throw new Error("prepared change coordinator is unavailable");
+    latestManifest = (await ctx.preparedChanges.commit(preparedChange.changeId)).backupManifest;
   }
 
   let skillImportResult: SkillImportResult = { managed: 0, skipped: [] };
@@ -314,6 +329,54 @@ export async function runImport(
   }
   ctx.prompts.outro(renderCompletion(agentState, plan, skillImportResult.managed));
   return latestManifest;
+}
+
+async function prepareCliAgentWrites(ctx: HandlerCtx, changes: readonly PlannedFileWrite[]) {
+  if (!ctx.preparedChanges) throw new Error("prepared change coordinator is unavailable");
+  return ctx.preparedChanges.prepare({
+    kind: "agent.import",
+    operations: changes.map((change) => ({
+      kind: "replace-file" as const,
+      path: change.path,
+      contents: change.after,
+    })),
+    buildPreview: (mutation) => {
+      for (const change of changes) {
+        const expected =
+          change.before === null ? MISSING_DOCUMENT_REVISION : documentRevision(change.before);
+        const actual = mutation.baseRevisions[change.path];
+        if (actual !== expected) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `document changed while preparing agent import: ${change.path}`,
+            change.path,
+            expected,
+            actual,
+          );
+        }
+      }
+      return {
+        files: changes.map(({ path, before, after }) => ({ path, before, after })),
+      };
+    },
+    captureBackup: async () => {
+      const backup = startBackup(ctx.env, ctx.fs);
+      for (const change of changes) await backup.capture(change.path);
+      return backup.finalize("import");
+    },
+    affectedContexts: [
+      { kind: "global" as const },
+      ...(ctx.env.projectRoot
+        ? [
+            {
+              kind: "project" as const,
+              projectId: projectIdFromCanonicalRoot(ctx.env.projectRoot),
+            },
+          ]
+        : []),
+    ],
+    result: { importedFiles: changes.length },
+  });
 }
 
 async function beginCliImportWorkflow(
@@ -366,7 +429,7 @@ async function selectUnlinkedAgentAction(
 
 async function resolveConflictStrategy(
   ctx: HandlerCtx,
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   opts: ImportFlowOptions,
   agentHostName: string,
 ): Promise<ConflictResolutionResult> {
@@ -404,7 +467,7 @@ async function resolveConflictStrategy(
 
 async function resolveSelectedConflicts(
   ctx: HandlerCtx,
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   conflictStrategy: ImportConflictStrategy,
   agentHostName: string,
 ): Promise<ConflictResolutionResult> {
@@ -713,20 +776,6 @@ function previewInstructions(s: string): string {
   return `${trimmedEnd.slice(0, 119).trimEnd()}…`;
 }
 
-async function tryExecute(
-  ctx: HandlerCtx,
-  changes: readonly FileChange[],
-  action: BackupManifest["action"],
-): Promise<BackupManifest> {
-  try {
-    return await executePlan(changes, { fs: ctx.fs, env: ctx.env, action });
-  } catch (err) {
-    ctx.log(`error during execution: ${(err as Error).message}`);
-    ctx.log(`partial backup may exist under ~/.ratel/backups/.`);
-    throw err;
-  }
-}
-
 async function resolveBin(ctx: HandlerCtx, opts: ImportFlowOptions): Promise<ResolvedBin> {
   return resolveCliRatelBin(ctx, {
     envVar: opts.envVar ?? process.env.RATEL_LOCAL_BIN,
@@ -736,7 +785,7 @@ async function resolveBin(ctx: HandlerCtx, opts: ImportFlowOptions): Promise<Res
   });
 }
 
-function emptyImportPlan(): ImportPlan {
+function emptyAgentImportDraft(): AgentImportDraft {
   return {
     ratelChanges: [],
     agentChanges: [],
@@ -757,7 +806,7 @@ function emptyImportPlan(): ImportPlan {
 }
 
 function renderSummary(
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   agentHostName: string,
   selectedSkills: readonly SkillCandidate[],
 ): string {
@@ -836,7 +885,7 @@ function renderConflictStrategyName(
   return "keep existing Ratel definitions";
 }
 
-function renderDiff(changes: readonly FileChange[]): string {
+function renderDiff(changes: readonly PlannedFileWrite[]): string {
   return changes
     .map((c) => {
       if (c.kind !== "write") return `delete ${c.path}`;
@@ -845,7 +894,7 @@ function renderDiff(changes: readonly FileChange[]): string {
     .join("\n");
 }
 
-function renderImportCommit(plan: ImportPlan, skills: readonly SkillCandidate[]): string {
+function renderImportCommit(plan: AgentImportDraft, skills: readonly SkillCandidate[]): string {
   const sections: string[] = [];
   if (plan.ratelChanges.length > 0) {
     sections.push(`Ratel config\n${renderDiff(plan.ratelChanges)}`);
@@ -865,7 +914,7 @@ function renderSkillStage(skills: readonly SkillCandidate[]): string {
 
 function renderCompletion(
   agentState: AgentHostState | null,
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   managedSkillCount: number,
 ): string {
   const parts: string[] = ["import complete"];

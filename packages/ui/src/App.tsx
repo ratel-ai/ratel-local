@@ -1,20 +1,31 @@
 import { useHotkey } from "@tanstack/react-hotkeys";
-import { Outlet, useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import {
-  ChevronsUpDown,
   Download,
   FolderOpen,
   House,
+  LayoutGrid,
   LinkIcon,
   Plus,
+  RadioTower,
+  Search,
   Server,
   Settings2,
   Sparkles,
   UserCircle,
 } from "lucide-react";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand-logo";
+import { ContextSwitcher } from "@/components/context-switcher";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -39,22 +50,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarHeader,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-  SidebarRail,
-  useSidebar,
-} from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { type ProjectView, projectsFromResponse } from "@/lib/projects";
+import {
+  contextPagePath,
+  contextualizeApiPath,
+  legacyGlobalPath,
+  pageSuffixFromPathname,
+  type RuntimeUiContext,
+  runtimeContextFromPathname,
+  safeRememberedRoute,
+} from "@/lib/runtime-context";
 import { cn } from "@/lib/utils";
 import "./App.css";
 
@@ -105,6 +111,12 @@ export interface ConfigResponse {
   scopes: Record<RatelScope, ScopeState>;
   backups: BackupManifest[];
   toolTokenEstimatesByServer: Record<string, ServerToolTokenEstimate>;
+  documents?: Array<{
+    ref: { scope: RatelScope; projectId?: string };
+    documentRevision: string;
+    path: string;
+  }>;
+  runtimeRevision?: string;
 }
 
 export interface ServerToolTokenEstimate {
@@ -178,8 +190,16 @@ type SetupIntent = { id: number; kind: "import" | "link" };
 interface RatelAppContextValue {
   busy: boolean;
   config: ConfigResponse | null;
+  configError: string | null;
+  configLoading: boolean;
+  context: RuntimeUiContext;
+  pagePath: (page: string) => string;
+  projects: ProjectView[];
+  projectsError: string | null;
+  projectsLoading: boolean;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   refresh: () => Promise<void>;
+  refreshProjects: () => Promise<void>;
   runAction: (
     label: string,
     action: () => Promise<{ log?: string[] } | unknown>,
@@ -187,20 +207,52 @@ interface RatelAppContextValue {
   setupIntent: SetupIntent | null;
   token: string;
   clearSetupIntent: () => void;
-  openCommandMenu: () => void;
   triggerSetupIntent: (kind: SetupIntent["kind"]) => void;
 }
 
 const RatelAppContext = createContext<RatelAppContextValue | null>(null);
 
 export const SCOPES: RatelScope[] = ["user", "project", "local"];
+const LAST_ROUTE_STORAGE_KEY = "ratel:last-route:v1";
 
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const token = tokenFromSearch(location.searchStr);
-  const [config, setConfig] = useState<ConfigResponse | null>(null);
-  const [agentHosts, setAgentHosts] = useState<DetectedAgentHostSummary[]>([]);
+  const parsedRuntimeContext = runtimeContextFromPathname(location.pathname);
+  const runtimeContextKind = parsedRuntimeContext.kind;
+  const runtimeProjectId =
+    parsedRuntimeContext.kind === "project" ? parsedRuntimeContext.projectId : null;
+  const runtimeContext = useMemo<RuntimeUiContext>(
+    () =>
+      runtimeContextKind === "project"
+        ? { kind: "project", projectId: runtimeProjectId ?? "" }
+        : { kind: runtimeContextKind },
+    [runtimeContextKind, runtimeProjectId],
+  );
+  const runtimeContextKey =
+    runtimeContext.kind === "project" ? `project:${runtimeContext.projectId}` : runtimeContext.kind;
+  const [configState, setConfigState] = useState<{
+    contextKey: string;
+    error: string | null;
+    loading: boolean;
+    value: ConfigResponse | null;
+  }>({ contextKey: "", error: null, loading: false, value: null });
+  const [agentHostsState, setAgentHostsState] = useState<{
+    contextKey: string;
+    value: DetectedAgentHostSummary[];
+  }>({ contextKey: "", value: [] });
+  const config = configState.contextKey === runtimeContextKey ? configState.value : null;
+  const configError = configState.contextKey === runtimeContextKey ? configState.error : null;
+  const configLoading =
+    Boolean(token) &&
+    runtimeContext.kind !== "all" &&
+    (configState.contextKey !== runtimeContextKey ||
+      (configState.loading && configState.value === null));
+  const agentHosts = agentHostsState.contextKey === runtimeContextKey ? agentHostsState.value : [];
+  const [projects, setProjects] = useState<ProjectView[]>([]);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [setupIntent, setSetupIntent] = useState<SetupIntent | null>(null);
@@ -228,7 +280,8 @@ export function AppShell() {
       if (body !== undefined && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
-      const res = await fetch(path, { ...init, headers, body });
+      const requestPath = contextualizeApiPath(path, runtimeContext, init.method ?? "GET");
+      const res = await fetch(requestPath, { ...init, headers, body });
       const payload = await readJson(res);
       if (!res.ok) {
         const message =
@@ -239,38 +292,90 @@ export function AppShell() {
       }
       return payload as T;
     },
-    [token],
+    [runtimeContext, token],
   );
 
   const refresh = useCallback(async () => {
-    try {
-      setConfig(await request<ConfigResponse>("/api/config"));
-    } catch (err) {
-      notify((err as Error).message, "error");
+    if (runtimeContext.kind === "all") {
+      setConfigState({ contextKey: runtimeContextKey, error: null, loading: false, value: null });
+      return;
     }
-  }, [notify, request]);
+    setConfigState((current) => ({
+      contextKey: runtimeContextKey,
+      error: null,
+      loading: true,
+      value: current.contextKey === runtimeContextKey ? current.value : null,
+    }));
+    try {
+      const value = await request<ConfigResponse>("/api/config");
+      setConfigState((current) =>
+        current.contextKey === runtimeContextKey
+          ? { contextKey: runtimeContextKey, error: null, loading: false, value }
+          : current,
+      );
+    } catch (err) {
+      const message = (err as Error).message;
+      setConfigState((current) =>
+        current.contextKey === runtimeContextKey
+          ? { ...current, error: message, loading: false }
+          : current,
+      );
+      notify(message, "error");
+    }
+  }, [notify, request, runtimeContext.kind, runtimeContextKey]);
 
   useEffect(() => {
-    if (token) void refresh();
-  }, [refresh, token]);
+    if (token && runtimeContext.kind !== "all") void refresh();
+  }, [refresh, runtimeContext.kind, token]);
 
   const refreshAgentHosts = useCallback(async () => {
-    if (!token) return;
+    if (!token || runtimeContext.kind === "all") return;
     try {
       const body = await request<AgentHostsResponse>("/api/agent-hosts");
-      setAgentHosts(body.hosts);
+      setAgentHostsState({ contextKey: runtimeContextKey, value: body.hosts });
     } catch (err) {
       notify((err as Error).message, "error");
     }
-  }, [notify, request, token]);
+  }, [notify, request, runtimeContext.kind, runtimeContextKey, token]);
 
   useEffect(() => {
-    if (token) void refreshAgentHosts();
-  }, [refreshAgentHosts, token]);
+    if (token && runtimeContext.kind !== "all") void refreshAgentHosts();
+  }, [refreshAgentHosts, runtimeContext.kind, token]);
 
   useEffect(() => {
     if (commandOpen && token) void refreshAgentHosts();
   }, [commandOpen, refreshAgentHosts, token]);
+
+  const refreshProjects = useCallback(async () => {
+    if (!token) return;
+    setProjectsLoading(true);
+    try {
+      const body = await request<unknown>("/api/projects");
+      setProjects(projectsFromResponse(body));
+      setProjectsError(null);
+    } catch (err) {
+      setProjectsError(err instanceof Error ? err.message : "Failed to load projects");
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, [request, token]);
+
+  useEffect(() => {
+    if (token) void refreshProjects();
+  }, [refreshProjects, token]);
+
+  useEffect(() => {
+    const rememberedPath =
+      location.pathname === "/"
+        ? safeRememberedRoute(window.localStorage.getItem(LAST_ROUTE_STORAGE_KEY))
+        : null;
+    const redirectPath = rememberedPath ?? legacyGlobalPath(location.pathname);
+    if (redirectPath) {
+      void navigate({ replace: true, to: `${redirectPath}${location.searchStr}` } as never);
+      return;
+    }
+    window.localStorage.setItem(LAST_ROUTE_STORAGE_KEY, location.pathname);
+  }, [location.pathname, location.searchStr, navigate]);
 
   const runAction = useCallback(
     async (label: string, action: () => Promise<{ log?: string[] } | unknown>) => {
@@ -292,28 +397,45 @@ export function AppShell() {
     [notify, refresh],
   );
 
+  const pagePath = useCallback(
+    (page: string) => withToken(contextPagePath(runtimeContext, page), token),
+    [runtimeContext, token],
+  );
+
   const goTo = useCallback(
-    (to: "/" | "/agent-setup" | "/skills") => {
-      const tokenizedPath = token ? `${to}?t=${encodeURIComponent(token)}` : to;
-      void navigate({ to: tokenizedPath } as never);
+    (to: "/" | "/agent-setup" | "/skills" | "/clients") => {
+      void navigate({ to: pagePath(to) } as never);
     },
-    [navigate, token],
+    [navigate, pagePath],
   );
 
   const goToToolSource = useCallback(
     (scope: RatelScope, name: string) => {
-      const path = toolSourcePath(scope, name, token);
+      const path = toolSourcePath(scope, name, token, runtimeContext);
       void navigate({ to: path } as never);
     },
-    [navigate, token],
+    [navigate, runtimeContext, token],
   );
 
   const goToAgent = useCallback(
     (kind: AgentHostKind) => {
-      const path = agentSetupHostPath(kind, token);
+      const path = agentSetupHostPath(kind, token, runtimeContext);
       void navigate({ to: path } as never);
     },
-    [navigate, token],
+    [navigate, runtimeContext, token],
+  );
+
+  const selectContext = useCallback(
+    (nextContext: RuntimeUiContext) => {
+      const suffix = runtimeContextKind === "all" ? "/" : pageSuffixFromPathname(location.pathname);
+      const path = contextPagePath(nextContext, suffix);
+      void navigate({ to: withToken(path, token) } as never);
+    },
+    [location.pathname, navigate, runtimeContextKind, token],
+  );
+  const refreshCurrentContext = useCallback(
+    () => (runtimeContext.kind === "all" ? refreshProjects() : refresh()),
+    [refresh, refreshProjects, runtimeContext.kind],
   );
 
   useHotkey("Mod+K", () => setCommandOpen((open) => !open), {
@@ -322,10 +444,10 @@ export function AppShell() {
       description: "Toggle the Ratel command menu.",
     },
   });
-  useHotkey("Mod+R", () => void refresh(), {
+  useHotkey("Mod+R", () => void refreshCurrentContext(), {
     meta: {
-      name: "Refresh configuration",
-      description: "Reload the current Ratel Local configuration.",
+      name: "Refresh current view",
+      description: "Reload the selected Ratel Local context.",
     },
     preventDefault: true,
   });
@@ -333,40 +455,61 @@ export function AppShell() {
   const context: RatelAppContextValue = {
     busy,
     config,
+    configError,
+    configLoading,
+    context: runtimeContext,
+    pagePath,
+    projects,
+    projectsError,
+    projectsLoading,
     request,
     refresh,
+    refreshProjects,
     runAction,
     setupIntent,
     token,
     clearSetupIntent: () => setSetupIntent(null),
-    openCommandMenu: () => setCommandOpen(true),
     triggerSetupIntent: (kind) => setSetupIntent({ id: Date.now(), kind }),
   };
 
   return (
     <RatelAppContext.Provider value={context}>
-      <SidebarProvider>
-        <ProductSidebar config={config} onNavigate={goTo} pathname={location.pathname} />
-        <SidebarInset>
-          {!token ? (
-            <main className="w-full px-4 py-6 sm:px-6">
-              <Alert>
-                <AlertTitle>Missing session token</AlertTitle>
-                <AlertDescription>Open the URL printed by ratel-local ui.</AlertDescription>
-              </Alert>
-            </main>
-          ) : (
-            <Outlet />
-          )}
-        </SidebarInset>
-      </SidebarProvider>
+      <div className="min-h-dvh">
+        <AppHeader
+          config={config}
+          context={runtimeContext}
+          homePath={pagePath("/")}
+          onSearch={() => setCommandOpen(true)}
+          onSelectContext={selectContext}
+          projects={projects}
+        />
+        <div className="mx-auto flex max-w-7xl flex-col md:flex-row">
+          <ProductSidebar
+            context={runtimeContext}
+            pagePath={pagePath}
+            pathname={location.pathname}
+          />
+          <div className="min-w-0 flex-1 [&>main]:!px-6 [&>main]:!py-8">
+            {!token ? (
+              <main className="w-full">
+                <Alert>
+                  <AlertTitle>Missing session token</AlertTitle>
+                  <AlertDescription>Open the URL printed by ratel-local ui.</AlertDescription>
+                </Alert>
+              </main>
+            ) : (
+              <Outlet />
+            )}
+          </div>
+        </div>
+      </div>
 
       <CommandMenu
         agentHosts={agentHosts}
         config={config}
         onAddToolSource={() => {
           setCommandOpen(false);
-          void navigate({ to: toolSourceCreatePath("user", token) } as never);
+          void navigate({ to: toolSourceCreatePath("user", token, runtimeContext) } as never);
         }}
         onImport={() => {
           setCommandOpen(false);
@@ -391,6 +534,7 @@ export function AppShell() {
           goToAgent(kind);
         }}
         open={commandOpen}
+        readOnly={runtimeContext.kind === "all"}
         setOpen={setCommandOpen}
       />
       <Toaster />
@@ -398,126 +542,154 @@ export function AppShell() {
   );
 }
 
-function ProductSidebar(props: {
-  config: ConfigResponse | null;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
+function ProductSidebar({
+  context,
+  pagePath,
+  pathname,
+}: {
+  context: RuntimeUiContext;
+  pagePath: (page: string) => string;
   pathname: string;
 }) {
+  const pageSuffix = pageSuffixFromPathname(pathname);
   return (
-    <Sidebar collapsible="icon" variant="inset">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton className="cursor-default hover:bg-transparent" size="lg">
-              <BrandLogo className="h-5 w-fit max-w-[92px] transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-1.5">
-              <ProductSidebarItem
-                active={props.pathname === "/" || props.pathname.startsWith("/tools/")}
-                icon={<Server />}
-                label="Tools"
-                onClick={() => props.onNavigate("/")}
-              />
-              <ProductSidebarItem
-                active={props.pathname === "/agent-setup"}
-                icon={<Settings2 />}
-                label="Agent Setup"
-                onClick={() => props.onNavigate("/agent-setup")}
-              />
-              <ProductSidebarItem
-                active={props.pathname === "/skills"}
-                icon={<Sparkles />}
-                label="Skills"
-                onClick={() => props.onNavigate("/skills")}
-              />
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <SessionMenu config={props.config} />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+    <aside className="flex gap-1 overflow-x-auto border-forest-300 border-b px-4 py-2 md:sticky md:top-16 md:h-[calc(100dvh-4rem)] md:w-56 md:shrink-0 md:flex-col md:overflow-visible md:border-r md:border-b-0 md:px-3 md:py-6">
+      <nav aria-label="Primary" className="flex gap-1 md:flex-col">
+        {context.kind === "all" ? (
+          <ProductSidebarItem active icon={<LayoutGrid />} label="Overview" to={pagePath("/")} />
+        ) : (
+          <>
+            <ProductSidebarItem
+              active={pageSuffix === "/" || pageSuffix.startsWith("/tools/")}
+              icon={<Server />}
+              label="Tools"
+              to={pagePath("/")}
+            />
+            <ProductSidebarItem
+              active={pageSuffix.startsWith("/agent-setup")}
+              icon={<Settings2 />}
+              label="Agent Setup"
+              to={pagePath("/agent-setup")}
+            />
+            <ProductSidebarItem
+              active={pageSuffix === "/clients"}
+              icon={<RadioTower />}
+              label="Clients"
+              to={pagePath("/clients")}
+            />
+            <ProductSidebarItem
+              active={pageSuffix.startsWith("/skills")}
+              icon={<Sparkles />}
+              label="Skills"
+              to={pagePath("/skills")}
+            />
+          </>
+        )}
+      </nav>
+    </aside>
   );
 }
 
-function ProductSidebarItem(props: {
+function AppHeader({
+  config,
+  context,
+  homePath,
+  onSearch,
+  onSelectContext,
+  projects,
+}: {
+  config: ConfigResponse | null;
+  context: RuntimeUiContext;
+  homePath: string;
+  onSearch: () => void;
+  onSelectContext: (context: RuntimeUiContext) => void;
+  projects: readonly ProjectView[];
+}) {
+  return (
+    <header className="sticky top-0 z-20 border-forest-300 border-b bg-background/80 backdrop-blur">
+      <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-6">
+        <Link
+          aria-label="Ratel Local home"
+          className="flex shrink-0 items-center text-cream"
+          preload="intent"
+          to={homePath}
+        >
+          <BrandLogo />
+        </Link>
+        <span aria-hidden className="h-5 w-px bg-forest-300" />
+        <ContextSwitcher context={context} onSelect={onSelectContext} projects={projects} />
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            className="hidden h-9 gap-2 border-0 bg-transparent px-2.5 text-cream-dim hover:bg-forest/40 hover:text-cream sm:inline-flex"
+            onClick={onSearch}
+            type="button"
+            variant="ghost"
+          >
+            <Search className="size-4" />
+            <span className="text-sm">Search</span>
+            <span className="ml-1 rounded border border-forest-300 px-1.5 font-mono text-[10px] leading-5 text-warm-muted">
+              ⌘K
+            </span>
+          </Button>
+          <Button
+            aria-label="Search"
+            className="sm:hidden"
+            onClick={onSearch}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <Search />
+          </Button>
+          <SessionMenu config={config} />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function ProductSidebarItem({
+  active,
+  icon,
+  label,
+  suffix,
+  to,
+}: {
   active: boolean;
   icon: ReactNode;
   label: string;
-  onClick: () => void;
   suffix?: ReactNode;
+  to: string;
 }) {
-  const { isMobile, setOpenMobile } = useSidebar();
-  const handleClick = () => {
-    props.onClick();
-    if (isMobile) setOpenMobile(false);
-  };
-
   return (
-    <SidebarMenuItem>
-      <SidebarMenuButton isActive={props.active} onClick={handleClick} tooltip={props.label}>
-        {props.icon}
-        <span className="transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
-          {props.label}
-        </span>
-        {props.suffix}
-      </SidebarMenuButton>
-    </SidebarMenuItem>
+    <Link
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors [&_svg]:size-[18px] [&_svg]:shrink-0",
+        active ? "bg-forest text-cream" : "text-cream-dim hover:bg-forest/40 hover:text-cream",
+      )}
+      preload="intent"
+      to={to}
+    >
+      {icon}
+      <span className="whitespace-nowrap">{label}</span>
+      {suffix}
+    </Link>
   );
 }
 
-function SessionMenu(props: { compact?: boolean; config: ConfigResponse | null }) {
-  const { isMobile } = useSidebar();
-  const homeLabel = compactPathLabel(props.config?.homeDir) ?? "Local machine";
-  const projectLabel = compactPathLabel(props.config?.projectRoot) ?? "No project root";
+function SessionMenu({ config }: { config: ConfigResponse | null }) {
+  const homeLabel = compactPathLabel(config?.homeDir) ?? "Local machine";
+  const projectLabel = compactPathLabel(config?.projectRoot) ?? "No project root";
 
   return (
     <DropdownMenu>
-      {props.compact ? (
-        <DropdownMenuTrigger
-          render={<Button aria-label="Session menu" size="icon-sm" variant="ghost" />}
-        >
-          <UserCircle />
-        </DropdownMenuTrigger>
-      ) : (
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <DropdownMenuTrigger
-              render={
-                <SidebarMenuButton
-                  className="data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground group-data-[collapsible=icon]:w-10! group-data-[collapsible=icon]:justify-start! group-data-[collapsible=icon]:p-2!"
-                  size="lg"
-                />
-              }
-            >
-              <Avatar size="sm">
-                <AvatarFallback className="bg-sidebar-accent text-sidebar-accent-foreground [&>svg]:size-3.5">
-                  <UserCircle />
-                </AvatarFallback>
-              </Avatar>
-              <div className="grid flex-1 text-left text-sm leading-tight transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]">
-                <span className="truncate font-medium">Session</span>
-                <span className="truncate text-xs">{homeLabel}</span>
-              </div>
-              <ChevronsUpDown className="ml-auto size-4 transition-[opacity,filter,transform] duration-200 ease-out group-data-[collapsible=icon]:translate-x-1 group-data-[collapsible=icon]:opacity-0 group-data-[collapsible=icon]:blur-[2px]" />
-            </DropdownMenuTrigger>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      )}
-      <DropdownMenuContent
-        align="end"
-        className="min-w-64 rounded-lg"
-        side={props.compact || isMobile ? "bottom" : "right"}
-        sideOffset={4}
+      <DropdownMenuTrigger
+        render={<Button aria-label="Session menu" size="icon-sm" variant="ghost" />}
       >
+        <UserCircle />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-64 rounded-lg" side="bottom" sideOffset={8}>
         <DropdownMenuGroup>
           <DropdownMenuLabel className="p-0 font-normal">
             <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
@@ -539,7 +711,7 @@ function SessionMenu(props: { compact?: boolean; config: ConfigResponse | null }
             <House className="mt-0.5 text-muted-foreground" />
             <span className="text-xs text-muted-foreground">Home</span>
             <span className="col-start-2 truncate font-mono text-xs">
-              {props.config?.homeDir ?? "Not loaded"}
+              {config?.homeDir ?? "Not loaded"}
             </span>
           </DropdownMenuItem>
           <DropdownMenuItem className="grid cursor-default grid-cols-[1rem_minmax(0,1fr)] gap-x-2 gap-y-0.5 p-2 hover:bg-transparent focus:bg-transparent">
@@ -565,10 +737,11 @@ function CommandMenu(props: {
   onAddToolSource: () => void;
   onImport: () => void;
   onLink: () => void;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills") => void;
+  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/clients") => void;
   onSelectAgent: (kind: AgentHostKind) => void;
   onSelectToolSource: (scope: RatelScope, name: string) => void;
   open: boolean;
+  readOnly: boolean;
   setOpen: (open: boolean) => void;
 }) {
   const agentItems = commandAgentItems(props.agentHosts);
@@ -595,6 +768,10 @@ function CommandMenu(props: {
                 <Settings2 />
                 Agent Setup
                 <CommandShortcut>G A</CommandShortcut>
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/clients")}>
+                <RadioTower />
+                Clients
               </CommandItem>
               <CommandItem onSelect={() => props.onNavigate("/skills")}>
                 <Sparkles />
@@ -662,21 +839,25 @@ function CommandMenu(props: {
                 </CommandGroup>
               </>
             )}
-            <CommandSeparator />
-            <CommandGroup heading="Actions">
-              <CommandItem onSelect={props.onAddToolSource}>
-                <Plus />
-                Add tool source
-              </CommandItem>
-              <CommandItem onSelect={props.onImport}>
-                <Download />
-                Import from agent
-              </CommandItem>
-              <CommandItem onSelect={props.onLink}>
-                <LinkIcon />
-                Link agent to Ratel
-              </CommandItem>
-            </CommandGroup>
+            {!props.readOnly && (
+              <>
+                <CommandSeparator />
+                <CommandGroup heading="Actions">
+                  <CommandItem onSelect={props.onAddToolSource}>
+                    <Plus />
+                    Add tool source
+                  </CommandItem>
+                  <CommandItem onSelect={props.onImport}>
+                    <Download />
+                    Import from agent
+                  </CommandItem>
+                  <CommandItem onSelect={props.onLink}>
+                    <LinkIcon />
+                    Link agent to Ratel
+                  </CommandItem>
+                </CommandGroup>
+              </>
+            )}
           </CommandList>
         </Command>
       </DialogContent>
@@ -788,25 +969,50 @@ export function authBadgeVariant(status?: AuthStatus) {
   return "outline" as const;
 }
 
-export function toolSourcePath(scope: RatelScope, name: string, token?: string) {
-  const path = `/tools/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`;
-  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+export function toolSourcePath(
+  scope: RatelScope,
+  name: string,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
+  const path = contextPagePath(
+    context,
+    `/tools/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`,
+  );
+  return withToken(path, token);
 }
 
-export function skillPath(id: string, token?: string) {
-  const path = `/skills/${encodeURIComponent(id)}`;
-  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+export function skillPath(
+  id: string,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
+  const path = contextPagePath(context, `/skills/${encodeURIComponent(id)}`);
+  return withToken(path, token);
 }
 
-export function toolSourceCreatePath(scope: RatelScope, token?: string) {
+export function toolSourceCreatePath(
+  scope: RatelScope,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
   const search = new URLSearchParams({ scope });
   if (token) search.set("t", token);
-  return `/tools/new?${search.toString()}`;
+  return `${contextPagePath(context, "/tools/new")}?${search.toString()}`;
 }
 
-function agentSetupHostPath(kind: AgentHostKind, token?: string) {
-  const path = `/agent-setup/${kind}`;
-  return token ? `${path}?t=${encodeURIComponent(token)}` : path;
+function agentSetupHostPath(
+  kind: AgentHostKind,
+  token?: string,
+  context: RuntimeUiContext = { kind: "global" },
+) {
+  return withToken(contextPagePath(context, `/agent-setup/${kind}`), token);
+}
+
+function withToken(path: string, token?: string): string {
+  if (!token) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}t=${encodeURIComponent(token)}`;
 }
 
 export function summaryOf(entry: ServerEntry): string {

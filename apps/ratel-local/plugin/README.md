@@ -21,13 +21,35 @@ Claude Code currently supports display names in plugin and marketplace metadata,
 but its documented manifest schema does not include icon or logo fields. The
 shared `assets/icon.svg` remains referenced by the Codex manifest.
 
-The plugin MCP config starts Ratel over stdio through `npx`:
+The plugin MCP config starts the lightweight scoped connector through `npx`:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.5.0 serve --auto-config
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 connect
 ```
 
-`--auto-config` loads `~/.ratel/config.json` plus project and local Ratel configs when a project root is discoverable.
+The connector forwards the agent's resolved project root to the authenticated
+loopback daemon. The daemon loads `~/.ratel/config.json` plus that project's
+`.ratel/config.json` and `.ratel/config.local.json`, sharing upstream
+connections only between sessions in the same canonical project.
+
+Run complete onboarding once on macOS or Linux:
+
+```bash
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
+```
+
+The wizard installs, updates, or starts the daemon; detects Claude Code and
+Codex; connects selected agents through this plugin; and separately offers a
+previewed, confirmed import of native MCP servers and skills. Re-running setup
+is safe.
+
+For unattended daemon setup, use `setup --daemon-only --yes`. Agent automation
+requires explicit repeatable `--agent` flags, and `--yes` never imports native
+configuration automatically.
+
+If the daemon is missing or stopped, the connector still starts and exposes
+status, start, and setup-guidance MCP tools. The setup tool returns the terminal
+command above; it never launches interactive prompts on MCP stdio.
 
 ## Hooks
 

@@ -2,14 +2,11 @@ import { useForm } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
-  Check,
-  Copy,
   ExternalLink,
   Pencil,
   Plus,
   RefreshCw,
   Save,
-  SearchIcon,
   Server,
   Trash2,
   Wand2,
@@ -20,6 +17,7 @@ import * as z from "zod";
 import {
   type AuthStatus,
   authBadgeVariant,
+  type ConfigResponse,
   keyValsToText,
   parseKeyValueLines,
   type RatelScope,
@@ -31,13 +29,14 @@ import {
   toolSourcePath,
   useRatelApp,
 } from "@/App";
+import { CodeBlock } from "@/components/code-block";
+import { EmptyStateIcon } from "@/components/empty-state-icon";
 import {
   PageHeader,
   PageHeaderActions,
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import {
@@ -72,6 +71,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupTextarea } from "@/components/ui/input-group";
+import { type Segment, SegmentedControl } from "@/components/ui/segmented-control";
 import {
   Select,
   SelectContent,
@@ -79,9 +79,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { scopeTarget } from "@/lib/runtime-context";
 import {
   AUTH_STATUS_LABELS,
   authStatusLabel as getAuthStatusLabel,
@@ -112,6 +113,8 @@ type EntryFormValues = {
 };
 
 const TOOL_SOURCE_GRID = "lg:grid-cols-[minmax(12rem,1.05fr)_7rem_minmax(13rem,1fr)_10rem_12rem]";
+const TOOL_SKELETON_HEADINGS = ["source", "type", "target", "tools", "auth"] as const;
+const TOOL_SKELETON_ROWS = ["first", "second", "third"] as const;
 const ENTRY_INPUT_CLASS = "bg-background placeholder:text-muted-foreground/45";
 const ENTRY_TEXTAREA_CLASS =
   "min-h-28 bg-background font-mono text-sm placeholder:text-muted-foreground/45";
@@ -219,11 +222,28 @@ const entrySubmitSchema = entryFormSchema.transform((value, context) => {
 
 export function ToolsPage() {
   const navigate = useNavigate();
-  const { busy, config, openCommandMenu, refresh, request, runAction, token, triggerSetupIntent } =
-    useRatelApp();
-  const [scope, setScope] = useState<RatelScope>("user");
+  const {
+    busy,
+    config,
+    configError,
+    configLoading,
+    context,
+    pagePath,
+    refresh,
+    request,
+    runAction,
+    token,
+    triggerSetupIntent,
+  } = useRatelApp();
+  const [selectedScope, setSelectedScope] = useState<RatelScope>("user");
   const [authFilter, setAuthFilter] = useState<AuthFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const scope = context.kind === "project" ? selectedScope : "user";
+  const visibleScopes = context.kind === "project" ? SCOPES : SCOPES.slice(0, 1);
+  const scopeOptions: Segment<RatelScope>[] = visibleScopes.map((value) => ({
+    label: scopeLabel(value),
+    value,
+  }));
 
   const scopeData = config?.scopes[scope];
   const servers = scopeData?.available ? scopeData.config.mcpServers : {};
@@ -249,8 +269,19 @@ export function ToolsPage() {
     .sort((a, b) => a.name.localeCompare(b.name));
   const hasActiveFilters = typeFilter !== "all" || authFilter !== "all";
   const goToCreateSource = (targetScope: RatelScope = scope) => {
-    void navigate({ to: toolSourceCreatePath(targetScope, token) } as never);
+    void navigate({ to: toolSourceCreatePath(targetScope, token, context) } as never);
   };
+
+  if (configLoading) return <ToolSourcesPageSkeleton />;
+
+  if (!config) {
+    return (
+      <ToolSourcesLoadError
+        message={configError ?? "The current Ratel configuration is unavailable."}
+        onRetry={refresh}
+      />
+    );
+  }
 
   return (
     <main className="grid w-full gap-4 px-4 py-5 sm:px-6">
@@ -259,28 +290,16 @@ export function ToolsPage() {
           <PageHeaderBackRow>
             <PageHeaderTitle>Tool Sources</PageHeaderTitle>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  onClick={() => void refresh()}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
+              <Button
+                aria-label="Refresh"
+                onClick={() => void refresh()}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw />
+                <span className="sr-only">Refresh</span>
+              </Button>
               <Button
                 aria-label="Add source"
                 disabled={!scopeData?.available}
@@ -291,7 +310,6 @@ export function ToolsPage() {
                 <Plus />
                 <span className="sr-only">Add source</span>
               </Button>
-              <PageHeaderSidebarTrigger />
             </div>
           </PageHeaderBackRow>
           <PageHeaderDescription>
@@ -301,12 +319,6 @@ export function ToolsPage() {
         <PageHeaderActions className="hidden sm:flex">
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
-              <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
               <ResponsiveToolbarButton
                 icon={<RefreshCw />}
                 kbd="⌘R"
@@ -322,25 +334,17 @@ export function ToolsPage() {
               variant="default"
             />
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
-      <section className="-mx-4 flex flex-col gap-3 border-border border-y bg-muted/20 px-4 py-3 sm:-mx-6 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+      <section className="flex flex-col gap-3 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <Tabs value={scope} onValueChange={(value) => setScope(value as RatelScope)}>
-            <TabsList variant="line" className="justify-start">
-              {SCOPES.map((item) => (
-                <TabsTrigger
-                  className="font-mono text-[11px] tracking-[0.14em] uppercase data-active:text-brand-green"
-                  key={item}
-                  value={item}
-                >
-                  {item}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+          <SegmentedControl<RatelScope>
+            ariaLabel="Tool source scope"
+            onChange={setSelectedScope}
+            options={scopeOptions}
+            value={scope}
+          />
           <p className="mt-2 truncate font-mono text-xs text-muted-foreground">
             {scopeData?.available ? scopeData.path : "scope unavailable"}
           </p>
@@ -420,10 +424,7 @@ export function ToolsPage() {
                 <Button
                   onClick={() => {
                     triggerSetupIntent("import");
-                    const path = token
-                      ? `/agent-setup?t=${encodeURIComponent(token)}`
-                      : "/agent-setup";
-                    void navigate({ to: path } as never);
+                    void navigate({ to: pagePath("/agent-setup") } as never);
                   }}
                   size="sm"
                   variant="outline"
@@ -441,10 +442,10 @@ export function ToolsPage() {
             : "Add a source directly, or import detected entries from an agent config."}
         </EmptyTools>
       ) : (
-        <section className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
+        <section className="overflow-hidden rounded-2xl border border-forest-300 bg-forest-600/40">
           <div
             className={cn(
-              "hidden gap-3 border-border border-b bg-muted/35 px-4 py-2 font-mono text-[11px] text-muted-foreground uppercase sm:px-6 lg:grid",
+              "hidden gap-3 border-border border-b px-4 py-2.5 font-mono text-[11px] font-normal tracking-[0.08em] text-muted-foreground uppercase sm:px-6 lg:grid",
               TOOL_SOURCE_GRID,
             )}
           >
@@ -454,7 +455,7 @@ export function ToolsPage() {
             <span>Tools</span>
             <span>Auth</span>
           </div>
-          <div className="divide-border divide-y">
+          <div className="divide-y divide-border/60">
             {rows.map(({ authStatus, entry, name, usage }) => (
               <ToolSourceRow
                 authStatus={authStatus}
@@ -472,7 +473,7 @@ export function ToolsPage() {
                   );
                 }}
                 onOpen={() => {
-                  void navigate({ to: toolSourcePath(scope, name, token) } as never);
+                  void navigate({ to: toolSourcePath(scope, name, token, context) } as never);
                 }}
               />
             ))}
@@ -499,17 +500,17 @@ function ToolSourceRow(props: {
   return (
     <div
       className={cn(
-        "relative grid grid-cols-2 gap-x-3 gap-y-3 px-4 py-4 transition-colors hover:bg-muted/35 sm:px-6 lg:grid lg:items-center lg:py-3",
+        "relative grid grid-cols-2 gap-x-3 gap-y-3 px-4 py-4 transition-colors hover:bg-forest/30 focus-within:bg-forest/30 sm:px-6 lg:grid lg:items-center lg:py-3",
         TOOL_SOURCE_GRID,
       )}
     >
       <button
         aria-label={`Open ${props.name}`}
-        className="absolute inset-0 z-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
+        className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/35"
         onClick={props.onOpen}
         type="button"
       />
-      <div className="pointer-events-none relative z-10 order-1 col-span-2 min-w-0 lg:order-none lg:col-span-1">
+      <div className="pointer-events-none relative z-20 order-1 col-span-2 min-w-0 lg:order-none lg:col-span-1">
         <div className="flex min-w-0 items-center gap-2">
           <strong className="truncate font-medium">{props.name}</strong>
           <Badge className="shrink-0" variant="outline">
@@ -520,7 +521,7 @@ function ToolSourceRow(props: {
           {props.entry.description || "No description stored for this tool source."}
         </p>
       </div>
-      <div className="pointer-events-none relative z-10 order-2 col-span-1 grid gap-1.5 lg:order-none lg:col-span-1 lg:block">
+      <div className="pointer-events-none relative z-20 order-2 col-span-1 grid gap-1.5 lg:order-none lg:col-span-1 lg:block">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Transport
         </span>
@@ -528,7 +529,7 @@ function ToolSourceRow(props: {
           {toolSourceTypeLabel(entryTypeOf(props.entry))}
         </Badge>
       </div>
-      <div className="pointer-events-none relative z-10 order-4 col-span-2 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
+      <div className="pointer-events-none relative z-20 order-4 col-span-2 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Target
         </span>
@@ -536,13 +537,13 @@ function ToolSourceRow(props: {
           {summaryOf(props.entry)}
         </code>
       </div>
-      <div className="pointer-events-none relative z-10 order-3 col-span-1 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
+      <div className="pointer-events-none relative z-20 order-3 col-span-1 grid min-w-0 gap-1.5 lg:order-none lg:col-span-1">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Tools
         </span>
         <ToolCountLabel usage={props.usage} />
       </div>
-      <div className="relative z-10 order-5 col-span-2 grid gap-1.5 sm:col-span-1 lg:order-none lg:col-span-1 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
+      <div className="relative z-30 order-5 col-span-2 grid gap-1.5 sm:col-span-1 lg:order-none lg:col-span-1 lg:flex lg:flex-wrap lg:items-center lg:gap-2">
         <span className="font-mono text-[10px] text-muted-foreground uppercase lg:hidden">
           Auth
         </span>
@@ -601,6 +602,10 @@ function trimCompactNumber(value: number): string {
   return value >= 10 ? value.toFixed(0) : value.toFixed(1).replace(/\.0$/, "");
 }
 
+function expectedRevision(config: ConfigResponse, scope: RatelScope): string | undefined {
+  return config.documents?.find(({ ref }) => ref.scope === scope)?.documentRevision;
+}
+
 function ToolSourceFilterSelect(props: {
   children: ReactNode;
   label: string;
@@ -623,31 +628,44 @@ function ToolSourceFilterSelect(props: {
 
 export function ToolSourceCreatePage(props: { scope: string }) {
   const navigate = useNavigate();
-  const { config, request, runAction, token } = useRatelApp();
-  const scope = isRatelScope(props.scope) ? props.scope : "user";
+  const { config, configError, configLoading, context, pagePath, request, runAction, token } =
+    useRatelApp();
+  const requestedScope = isRatelScope(props.scope) ? props.scope : "user";
+  const scope = context.kind === "project" ? requestedScope : "user";
   const scopeData = config?.scopes[scope];
-  const backPath = token ? `/?t=${encodeURIComponent(token)}` : "/";
+  const backPath = pagePath("/");
 
   const goBack = () => {
     void navigate({ to: backPath } as never);
   };
 
   const addEntry = async (name: string, entry: ServerEntry) => {
+    if (!config) throw new Error("Ratel configuration is not loaded");
     const saved = await runAction(`Added ${name}`, () =>
       request("/api/servers", {
         method: "POST",
-        body: { scope, name, entry },
+        body: {
+          target: scopeTarget(context, scope),
+          scope,
+          name,
+          entry,
+          expectedRevision: expectedRevision(config, scope),
+        },
       }),
     );
     if (saved) {
-      void navigate({ to: toolSourcePath(scope, name, token) } as never);
+      void navigate({ to: toolSourcePath(scope, name, token, context) } as never);
     }
   };
 
+  if (configLoading) return <ToolDetailPageSkeleton onBack={goBack} />;
+
   if (!config) {
     return (
-      <ToolDetailShell onBack={goBack} title="Add tool source">
-        <p className="text-sm text-muted-foreground">Reading the current Ratel configuration.</p>
+      <ToolDetailShell onBack={goBack} title="Configuration unavailable">
+        <p className="text-sm text-muted-foreground">
+          {configError ?? "The current Ratel configuration could not be loaded."}
+        </p>
       </ToolDetailShell>
     );
   }
@@ -671,7 +689,6 @@ export function ToolSourceCreatePage(props: { scope: string }) {
               <ArrowLeft />
               Tool Sources
             </Button>
-            <PageHeaderSidebarTrigger />
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
             <Badge variant="outline">MCP</Badge>
@@ -686,7 +703,7 @@ export function ToolSourceCreatePage(props: { scope: string }) {
         </PageHeaderContent>
       </PageHeader>
 
-      <section className="-mx-4 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+      <section className="rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
         <EntryForm layout="page" onCancel={goBack} onSubmit={addEntry} />
       </section>
     </main>
@@ -695,24 +712,29 @@ export function ToolSourceCreatePage(props: { scope: string }) {
 
 export function ToolSourceDetailPage(props: { name: string; scope: string }) {
   const navigate = useNavigate();
-  const { busy, config, request, runAction, token } = useRatelApp();
+  const { busy, config, configError, configLoading, context, pagePath, request, runAction } =
+    useRatelApp();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const scope = isRatelScope(props.scope) ? props.scope : null;
+  const parsedScope = isRatelScope(props.scope) ? props.scope : null;
+  const scope = context.kind === "project" || parsedScope === "user" ? parsedScope : null;
   const scopeData = scope ? config?.scopes[scope] : undefined;
   const entry = scopeData?.available ? scopeData.config.mcpServers[props.name] : undefined;
   const authStatus = scopeData?.available ? scopeData.authStatus[props.name] : undefined;
-  const backPath = token ? `/?t=${encodeURIComponent(token)}` : "/";
+  const backPath = pagePath("/");
 
   const goBack = () => {
     void navigate({ to: backPath } as never);
   };
 
+  if (configLoading) return <ToolDetailPageSkeleton onBack={goBack} />;
+
   if (!config) {
     return (
-      <ToolDetailShell onBack={goBack} title="Loading tool source">
-        <p className="text-sm text-muted-foreground">Reading the current Ratel configuration.</p>
+      <ToolDetailShell onBack={goBack} title="Configuration unavailable">
+        <p className="text-sm text-muted-foreground">
+          {configError ?? "The current Ratel configuration could not be loaded."}
+        </p>
       </ToolDetailShell>
     );
   }
@@ -747,7 +769,12 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
     await runAction(`Updated ${props.name}`, () =>
       request(`/api/servers/${encodeURIComponent(props.name)}`, {
         method: "PATCH",
-        body: { entry: nextEntry, scope },
+        body: {
+          entry: nextEntry,
+          target: scopeTarget(context, scope),
+          scope,
+          expectedRevision: expectedRevision(config, scope),
+        },
       }),
     );
     setIsEditing(false);
@@ -757,17 +784,15 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
     await runAction(`Removed ${props.name}`, () =>
       request(`/api/servers/${encodeURIComponent(props.name)}`, {
         method: "DELETE",
-        body: { scope },
+        body: {
+          target: scopeTarget(context, scope),
+          scope,
+          expectedRevision: expectedRevision(config, scope),
+        },
       }),
     );
     setDeleteOpen(false);
     goBack();
-  };
-
-  const copyCode = async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
   };
 
   return (
@@ -823,7 +848,6 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                     <span className="sr-only">Remove</span>
                   </Button>
                 </ButtonGroup>
-                <PageHeaderSidebarTrigger />
               </div>
             </PageHeaderBackRow>
             <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
@@ -873,7 +897,6 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                 />
               </ResponsiveToolbarGroup>
             </ResponsiveToolbar>
-            <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
           </PageHeaderActions>
         </PageHeader>
 
@@ -905,7 +928,7 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
       </AlertDialog>
 
       {isEditing ? (
-        <section className="-mx-4 border-border border-b bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+        <section className="rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
           <EntryForm
             entry={entry}
             formId={editFormId}
@@ -945,25 +968,117 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
             </p>
           </DetailGrid>
 
-          <section className="-mx-4 overflow-hidden border-border border-y sm:-mx-6">
-            <div className="flex items-center justify-between gap-3 border-border border-b bg-muted/35 px-4 py-2 sm:px-6">
-              <span className="font-mono text-xs text-muted-foreground">config.json</span>
-              <Button onClick={() => void copyCode()} size="sm" type="button" variant="outline">
-                {copied ? <Check /> : <Copy />}
-                {copied ? "Copied" : "Copy"}
-              </Button>
-            </div>
-            <pre className="max-h-[min(70vh,720px)] overflow-auto bg-brand-green p-4 font-mono text-xs text-brand-green-foreground scroll-mask-y scroll-mask-y-from-88% sm:p-6">
-              {code}
-            </pre>
-          </section>
+          <CodeBlock code={code} label="config.json" />
         </section>
       )}
     </main>
   );
 }
 
-function ToolDetailShell(props: { children: ReactNode; onBack: () => void; title: string }) {
+function ToolSourcesPageSkeleton() {
+  return (
+    <main
+      aria-busy="true"
+      aria-label="Loading tool sources"
+      className="grid w-full gap-4 px-4 py-5 sm:px-6"
+    >
+      <PageHeader className="sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+        <PageHeaderContent>
+          <PageHeaderTitle>Tool Sources</PageHeaderTitle>
+          <PageHeaderDescription>
+            Current MCP server entries, grouped by local Ratel scope.
+          </PageHeaderDescription>
+        </PageHeaderContent>
+        <PageHeaderActions className="hidden sm:flex">
+          <Skeleton className="h-9 w-36" />
+        </PageHeaderActions>
+      </PageHeader>
+
+      <section className="flex flex-col gap-4 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="grid gap-2">
+          <Skeleton className="h-9 w-28" />
+          <Skeleton className="h-3 w-56 max-w-full" />
+          <Skeleton className="h-3 w-72 max-w-full" />
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:w-fit">
+          <Skeleton className="h-8 w-32" />
+          <Skeleton className="h-8 w-32" />
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-forest-300 bg-forest-600/40">
+        <div className="hidden gap-3 border-border border-b px-4 py-2.5 sm:px-6 lg:grid lg:grid-cols-5">
+          {TOOL_SKELETON_HEADINGS.map((heading) => (
+            <Skeleton className="h-3 w-16" key={heading} />
+          ))}
+        </div>
+        <div className="divide-y divide-border/60">
+          {TOOL_SKELETON_ROWS.map((row) => (
+            <div
+              className="grid gap-3 px-4 py-5 sm:px-6 lg:grid-cols-[minmax(12rem,1.05fr)_7rem_minmax(13rem,1fr)_10rem_12rem]"
+              key={row}
+            >
+              <Skeleton className="h-5 w-36" />
+              <Skeleton className="h-5 w-16" />
+              <Skeleton className="h-5 w-44 max-w-full" />
+              <Skeleton className="h-5 w-20" />
+              <Skeleton className="h-5 w-24" />
+            </div>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function ToolSourcesLoadError(props: { message: string; onRetry: () => Promise<void> }) {
+  return (
+    <main className="grid w-full gap-4 px-4 py-5 sm:px-6">
+      <PageHeader>
+        <PageHeaderContent>
+          <PageHeaderTitle>Tool Sources</PageHeaderTitle>
+          <PageHeaderDescription>
+            Current MCP server entries, grouped by local Ratel scope.
+          </PageHeaderDescription>
+        </PageHeaderContent>
+      </PageHeader>
+      <EmptyTools
+        action={
+          <Button onClick={() => void props.onRetry()} size="sm" variant="outline">
+            <RefreshCw />
+            Retry
+          </Button>
+        }
+        title="Couldn't load tool sources"
+      >
+        {props.message}
+      </EmptyTools>
+    </main>
+  );
+}
+
+function ToolDetailPageSkeleton({ onBack }: { onBack: () => void }) {
+  return (
+    <ToolDetailShell onBack={onBack} title={<Skeleton className="h-8 w-64 max-w-full" />}>
+      <section
+        aria-busy="true"
+        aria-label="Loading tool source"
+        className="grid gap-5 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6"
+      >
+        <Skeleton className="h-5 w-36" />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+        </div>
+        <Skeleton className="h-36 w-full" />
+      </section>
+    </ToolDetailShell>
+  );
+}
+
+function ToolDetailShell(props: { children: ReactNode; onBack: () => void; title: ReactNode }) {
   return (
     <main className="grid w-full gap-5 px-4 py-5 sm:px-6">
       <PageHeader className="lg:items-start">
@@ -973,7 +1088,6 @@ function ToolDetailShell(props: { children: ReactNode; onBack: () => void; title
               <ArrowLeft />
               Tool Sources
             </Button>
-            <PageHeaderSidebarTrigger />
           </PageHeaderBackRow>
           <PageHeaderTitle className="mt-4 text-2xl">{props.title}</PageHeaderTitle>
         </PageHeaderContent>
@@ -985,6 +1099,10 @@ function ToolDetailShell(props: { children: ReactNode; onBack: () => void; title
 
 function isRatelScope(value: string): value is RatelScope {
   return SCOPES.includes(value as RatelScope);
+}
+
+function scopeLabel(scope: RatelScope): string {
+  return scope[0].toUpperCase() + scope.slice(1);
 }
 
 function EntryForm(props: {
@@ -1566,11 +1684,11 @@ function authControlButtonClassName(status?: AuthStatus) {
 
 function EmptyTools(props: { action: ReactNode; children: ReactNode; title: string }) {
   return (
-    <section className="-mx-4 grid min-h-64 place-items-center border-border border-y bg-muted/15 px-4 py-8 text-center sm:-mx-6 sm:px-6">
+    <section className="grid min-h-64 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 py-8 text-center">
       <div className="grid max-w-md gap-3">
-        <div className="mx-auto rounded-md bg-muted p-2 text-brand-green">
+        <EmptyStateIcon>
           <Server className="size-5" />
-        </div>
+        </EmptyStateIcon>
         <div>
           <h3 className="font-medium">{props.title}</h3>
           <p className="mt-1 text-sm text-muted-foreground">{props.children}</p>

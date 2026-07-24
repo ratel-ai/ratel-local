@@ -7,7 +7,7 @@ import {
 } from "../gateway-entry.js";
 import type { HierarchyEnv } from "../hierarchy.js";
 import { ProjectRootNotFoundError } from "../hierarchy.js";
-import type { FileChange } from "../import-plan.js";
+import type { PlannedFileWrite } from "../import-plan.js";
 import type { JsonFs } from "../io.js";
 import { isPlainObject } from "../json.js";
 import type { ServerEntry } from "../lib/index.js";
@@ -26,11 +26,16 @@ import type {
 
 // ADR 0003 records the smol-toml tradeoff and the future NAPI/WASM parser option.
 export class CodexAgentHostAdapter implements AgentHostAdapter {
+  readonly supportedScopes = ["user", "project"] as const;
+
   async detect(ctx: AgentHostContext): Promise<AgentHostDetection> {
     const paths = [codexConfigPath("user", ctx.env)];
     if (ctx.env.projectRoot) paths.push(codexConfigPath("project", ctx.env));
     const present: string[] = [];
     for (const path of paths) {
+      if (ctx.env.projectRoot && path === codexConfigPath("project", ctx.env)) {
+        await ctx.assertProjectPath?.(ctx.env.projectRoot, path);
+      }
       if ((await ctx.fs.read(path)) !== null) present.push(path);
     }
     return {
@@ -50,25 +55,31 @@ export class CodexAgentHostAdapter implements AgentHostAdapter {
     scopes.push(await readCodexScope("user", "User", userPath, ctx.fs));
     if (ctx.env.projectRoot) {
       const projectPath = codexConfigPath("project", ctx.env);
+      await ctx.assertProjectPath?.(ctx.env.projectRoot, projectPath);
       scopes.push(await readCodexScope("project", "Project", projectPath, ctx.fs));
     }
     return { host: { kind: "codex", displayName: "Codex" }, scopes };
   }
 
   async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
-    const changes: FileChange[] = [];
+    const changes: PlannedFileWrite[] = [];
     const installedGatewayScopes: AgentScope[] = [];
     const removedNativeEntries: AgentHostRemovedEntry[] = [];
     const byScope = scopesByName(input.state);
+    const projectRoot = deriveProjectRoot(input.ratelConfigPaths);
     for (const scope of ["user", "project", "local"] as const) {
       const names = input.removeEntriesByScope.get(scope);
       const state = byScope[scope];
-      const configPaths = configChainForScope(scope, input.ratelConfigPaths);
       const shouldInstall = input.installGatewayScopes?.has(scope) ?? false;
       const shouldWrite = Boolean(names?.size || shouldInstall);
-      if (!state || !shouldWrite || configPaths.length === 0) continue;
+      if (!state || !shouldWrite || (scope !== "user" && !projectRoot)) continue;
       const gateway = shouldInstall
-        ? makeRatelGatewayEntry({ bin: input.bin, configPaths })
+        ? makeRatelGatewayEntry({
+            bin: input.bin,
+            agentHost: "codex",
+            linkScope: scope,
+            projectRoot,
+          })
         : undefined;
       const next = rewriteCodexConfig(state.rawText ?? "", names ?? new Set(), gateway);
       if (next !== state.rawText) {
@@ -369,13 +380,10 @@ function scopesByName(state: AgentHostState): Partial<Record<AgentScope, AgentSc
   >;
 }
 
-function configChainForScope(scope: AgentScope, paths: RatelConfigPaths): string[] {
-  if (scope === "user") return [paths.user];
-  if (scope === "project" && paths.project) return [paths.user, paths.project];
-  if (scope === "local" && paths.project && paths.local) {
-    return [paths.user, paths.project, paths.local];
-  }
-  return [];
+function deriveProjectRoot(paths: RatelConfigPaths): string | undefined {
+  if (paths.project) return paths.project.replace(/[/\\]\.ratel[/\\]config\.json$/, "");
+  if (paths.local) return paths.local.replace(/[/\\]\.ratel[/\\]config\.local\.json$/, "");
+  return undefined;
 }
 
 function asStringArray(v: unknown): string[] | null {

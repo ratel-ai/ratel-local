@@ -1,7 +1,7 @@
 {
   "name": "ratel-local",
-  "version": "0.5.0",
-  "description": "Ratel Local gateway plugin for exposing curated upstream MCP tools through search_capabilities and invoke_tool.",
+  "version": "0.6.0-rc.0",
+  "description": "Persistent project-scoped Ratel gateway for exposing curated upstream MCP tools through search_capabilities and invoke_tool.",
   "author": {
     "name": "Agentified",
     "email": "support@agentified.com",
@@ -23,8 +23,8 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Ratel Local",
-    "shortDescription": "Expose upstream MCP servers through the local Ratel gateway",
-    "longDescription": "Ratel Local lets Codex use one gateway server that searches and invokes tools from configured upstream MCP servers. Use it to keep agent tool surfaces small while preserving access to specialized tools.",
+    "shortDescription": "Expose scoped MCP tools through one persistent local daemon",
+    "longDescription": "Ratel Local connects each Codex project to an isolated gateway hosted by one persistent local daemon. It searches and invokes configured upstream MCP tools while keeping agent tool surfaces small and upstream connections reusable.",
     "developerName": "Agentified",
     "category": "Developer Tools",
     "capabilities": [
@@ -36,6 +36,7 @@
     "websiteURL": "https://github.com/ratel-ai/ratel-local",
     "defaultPrompt": [
       "Use Ratel Local to find the right tool for this task",
+      "Set up or check my Ratel Local daemon",
       "Import my Codex MCP servers into Ratel",
       "Review my Ratel tool usage and suggest improvements",
       "Open the Ratel UI"

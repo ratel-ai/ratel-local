@@ -37,6 +37,19 @@ const CATALOG: Skill[] = [
 const deps = { loadSkills: async () => CATALOG };
 
 describe("suggestSkills — triggers", () => {
+  it("can rank an already-resolved effective catalog without directory discovery", async () => {
+    const out = await suggestSkills(
+      { prompt: "set up login", skills: CATALOG },
+      {
+        loadSkills: async () => {
+          throw new Error("directory loader must not run");
+        },
+      },
+    );
+
+    expect(out[0]?.skillId).toBe("supabase-auth");
+  });
+
   it("matches a terse intent prompt via the skill's trigger phrase", async () => {
     // "set up login" shares no words with the description, but matches the trigger.
     const out = await suggestSkills({ prompt: "set up login", dirs: ["x"] }, deps);

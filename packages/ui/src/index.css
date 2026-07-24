@@ -1,17 +1,50 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/inter-tight";
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "./brand/tokens.css";
+@import "./brand/theme.css";
 @import "./components/dotmatrix-loader.css";
+
+/*
+ * Ratel Local surface overrides. The shared palette, data-viz colors, and
+ * self-hosted brand faces come from ./brand, synced from ratel-websites.
+ * Local keeps a quieter instrument-panel surface ramp while consuming those
+ * canonical accents and typography tokens.
+ */
+@theme {
+  --color-ratel-base: #0a0e0c;
+  --color-ratel-base-deep: #070a08;
+  --color-forest: #181f1a;
+  --color-forest-600: #111613;
+  --color-forest-300: #29312c;
+  --color-cream: #eee3ce;
+  --color-cream-dim: #d9cdb4;
+  --color-coral: #ed5126;
+  --color-coral-deep: #c4431f;
+  --color-green: #239452;
+  --color-teal: #7ba0a0;
+  --color-warm-muted: #9e9788;
+
+  /* Context-source data-viz palette (skills · tools · history · memory · user input) */
+  --color-ctx-skills: #ed5126;
+  --color-ctx-tools: #e0922f;
+  --color-ctx-history: #9b8cff;
+  --color-ctx-memory: #5b9bd5;
+  --color-ctx-user-input: #239452;
+  --color-ctx-tools-used: #e0922f;
+  --color-ctx-tools-unused: #f4cd9c;
+  --color-ctx-history-cached: #9b8cff;
+  --color-ctx-history-uncached: #cfc6ff;
+}
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
   color-scheme: light;
   font-family:
-    "Inter Tight Variable", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Geist Variable", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
   font-synthesis: none;
   line-height: 1.5;
@@ -47,11 +80,11 @@
   --border: color-mix(in srgb, var(--brand-azure) 24%, var(--brand-cream));
   --input: color-mix(in srgb, var(--brand-azure) 28%, white);
   --ring: var(--brand-orange);
-  --chart-1: var(--brand-orange);
-  --chart-2: var(--brand-green);
-  --chart-3: var(--brand-azure);
-  --chart-4: color-mix(in srgb, var(--brand-cream) 76%, var(--brand-orange));
-  --chart-5: color-mix(in srgb, var(--brand-green) 76%, var(--brand-azure));
+  --chart-1: var(--color-ctx-skills);
+  --chart-2: var(--color-ctx-tools);
+  --chart-3: var(--color-ctx-history);
+  --chart-4: var(--color-ctx-memory);
+  --chart-5: var(--color-ctx-user-input);
   --radius: 0.5rem;
   --sidebar: color-mix(in srgb, var(--brand-cream) 34%, white);
   --sidebar-foreground: var(--brand-green);
@@ -85,8 +118,8 @@ textarea {
 }
 
 ::selection {
-  background: var(--brand-orange);
-  color: var(--brand-orange-foreground);
+  background: var(--color-coral);
+  color: #fff;
 }
 
 @property --scroll-mask-t-from {
@@ -253,9 +286,11 @@ textarea {
 }
 
 @theme inline {
-  --font-heading: "Inter Tight Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "Inter Tight Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-heading: "Acid Grotesk", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Acid Grotesk", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-pixel: "Geist Pixel Square", "Geist Mono Variable", ui-monospace, monospace;
   --color-brand-green: var(--brand-green);
   --color-brand-green-foreground: var(--brand-green-foreground);
   --color-brand-cream: var(--brand-cream);
@@ -305,40 +340,47 @@ textarea {
   --radius-4xl: calc(var(--radius) * 1.75);
 }
 
+/*
+ * Dark = the Ratel Cloud "instrument panel": a near-black forest surface ramp
+ * (base → forest-600 cards → forest hover → forest-300 hairlines), cream text,
+ * and a single coral accent. The brand identity rides on the accents + the
+ * ctx-* data palette; the surfaces stay deliberately neutral.
+ */
 .dark {
   color-scheme: dark;
-  --background: var(--brand-green);
-  --foreground: var(--brand-cream);
-  --card: color-mix(in srgb, var(--brand-green) 86%, black);
-  --card-foreground: var(--brand-cream);
-  --popover: color-mix(in srgb, var(--brand-green) 86%, black);
-  --popover-foreground: var(--brand-cream);
-  --primary: var(--brand-orange);
-  --primary-foreground: var(--brand-orange-foreground);
-  --secondary: var(--brand-azure);
-  --secondary-foreground: var(--brand-azure-foreground);
-  --muted: color-mix(in srgb, var(--brand-green) 72%, var(--brand-azure));
-  --muted-foreground: color-mix(in srgb, var(--brand-cream) 78%, var(--brand-azure));
-  --accent: color-mix(in srgb, var(--brand-orange) 22%, var(--brand-green));
-  --accent-foreground: var(--brand-cream);
+  --color-base-deep: var(--color-ratel-base-deep);
+  --background: var(--color-ratel-base);
+  --foreground: var(--color-cream);
+  --card: var(--color-forest-600);
+  --card-foreground: var(--color-cream);
+  --popover: var(--color-forest-600);
+  --popover-foreground: var(--color-cream);
+  --primary: var(--color-coral);
+  --primary-foreground: #ffffff;
+  --secondary: var(--color-forest);
+  --secondary-foreground: var(--color-cream);
+  --muted: var(--color-ratel-base-deep);
+  --muted-foreground: var(--color-warm-muted);
+  --accent: var(--color-forest);
+  --accent-foreground: var(--color-cream);
   --destructive: #ff7657;
   --destructive-foreground: #1b1b1b;
-  --border: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
-  --input: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
-  --ring: var(--brand-orange);
-  --chart-1: var(--brand-orange);
-  --chart-2: var(--brand-azure);
-  --chart-3: var(--brand-cream);
-  --chart-4: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
-  --chart-5: color-mix(in srgb, var(--brand-green) 86%, black);
-  --sidebar: var(--brand-green);
-  --sidebar-foreground: var(--brand-cream);
-  --sidebar-primary: var(--brand-orange);
-  --sidebar-primary-foreground: var(--brand-orange-foreground);
-  --sidebar-accent: color-mix(in srgb, var(--brand-green) 82%, var(--brand-azure));
-  --sidebar-accent-foreground: var(--brand-cream);
-  --sidebar-border: color-mix(in srgb, var(--brand-green) 70%, var(--brand-azure));
-  --sidebar-ring: var(--brand-orange);
+  --border: var(--color-forest-300);
+  --input: var(--color-forest-300);
+  --ring: var(--color-coral);
+  --chart-1: var(--color-ctx-skills);
+  --chart-2: var(--color-ctx-tools);
+  --chart-3: var(--color-ctx-history);
+  --chart-4: var(--color-ctx-memory);
+  --chart-5: var(--color-ctx-user-input);
+  --sidebar: var(--color-ratel-base-deep);
+  --sidebar-foreground: var(--color-cream-dim);
+  --sidebar-primary: var(--color-coral);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--color-forest);
+  --sidebar-accent-foreground: var(--color-cream);
+  --sidebar-border: var(--color-forest-300);
+  --sidebar-ring: var(--color-coral);
 }
 
 @layer base {
@@ -354,4 +396,32 @@ textarea {
   html {
     @apply font-sans;
   }
+}
+
+/* Thin, neutral scrollbars so chrome doesn't reintroduce bright surfaces. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Data reads as data: monospace figures line up in columns. */
+.font-mono,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pixel face wants crisp, non-smoothed edges. */
+.font-pixel {
+  -webkit-font-smoothing: none;
+  letter-spacing: -0.02em;
+}
+
+/* Uppercase pixel micro-labels — the terminal-instrument signature. */
+.eyebrow {
+  font-family: var(--font-pixel);
+  -webkit-font-smoothing: none;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.6875rem;
+  color: var(--color-warm-muted);
 }

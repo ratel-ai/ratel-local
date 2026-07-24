@@ -15,8 +15,10 @@ export interface Suggestion {
 export interface SuggestInput {
   prompt: string;
   cwd?: string;
-  /** Directories to load skills from (resolve with {@link resolveSkillDirs}). */
-  dirs: string[];
+  /** Pre-resolved effective catalog. Preferred by daemon-aware callers. */
+  skills?: Skill[];
+  /** Compatibility directory override for legacy callers. */
+  dirs?: string[];
   /** Max suggestions (default 2). */
   limit?: number;
   /** Drop hits below this BM25 score (default 0 — keep all matches). */
@@ -71,7 +73,7 @@ export async function suggestSkills(
   const prompt = input.prompt.trim();
   if (prompt.length === 0) return [];
 
-  const skills = await load(input.dirs, {});
+  const skills = input.skills ?? (await load(input.dirs ?? [], {}));
   if (skills.length === 0) return [];
 
   const catalog = new SkillCatalog();

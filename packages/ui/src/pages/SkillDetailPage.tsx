@@ -9,7 +9,6 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
 import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
@@ -27,6 +26,11 @@ interface SkillDetail {
   body: string;
   state: "active" | "available";
   source: SkillSource;
+  editable?: boolean;
+  skillDocumentRevision?: string;
+  registration?: {
+    scopeRef: { scope: "user" } | { scope: "project" | "local"; projectId: string };
+  };
 }
 
 type LoadState =
@@ -36,14 +40,14 @@ type LoadState =
 
 export function SkillDetailPage(props: { id: string }) {
   const navigate = useNavigate();
-  const { request, runAction, busy, token } = useRatelApp();
+  const { request, runAction, busy, pagePath } = useRatelApp();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [isEditing, setIsEditing] = useState(false);
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
   const [body, setBody] = useState("");
 
-  const backPath = token ? `/skills?t=${encodeURIComponent(token)}` : "/skills";
+  const backPath = pagePath("/skills");
   const goBack = () => {
     void navigate({ to: backPath } as never);
   };
@@ -86,6 +90,7 @@ export function SkillDetailPage(props: { id: string }) {
   };
 
   const save = async () => {
+    if (state.status !== "ready") return;
     const tagList = tags
       .split(",")
       .map((t) => t.trim())
@@ -93,7 +98,15 @@ export function SkillDetailPage(props: { id: string }) {
     const saved = await runAction(`Updated ${props.id}`, () =>
       request(`/api/skills/${encodeURIComponent(props.id)}`, {
         method: "PATCH",
-        body: { description: description.trim(), tags: tagList, body },
+        body: {
+          ...(state.data.registration ? { target: state.data.registration.scopeRef } : {}),
+          description: description.trim(),
+          tags: tagList,
+          body,
+          ...(state.data.skillDocumentRevision
+            ? { expectedRevision: state.data.skillDocumentRevision }
+            : {}),
+        },
       }),
     );
     if (saved) {
@@ -105,7 +118,7 @@ export function SkillDetailPage(props: { id: string }) {
   const detail = state.status === "ready" ? state.data : null;
   // Unmanaged skills live in an agent's own folder (Claude / Codex); they're
   // read-only here until managed through Ratel (the backend rejects the PATCH too).
-  const canEdit = detail?.state === "active";
+  const canEdit = detail?.editable === true;
   const canSave = description.trim() !== "" && !busy;
 
   return (
@@ -117,9 +130,6 @@ export function SkillDetailPage(props: { id: string }) {
               <ArrowLeft />
               Skills
             </Button>
-            <div className="flex items-center gap-1 sm:hidden">
-              <PageHeaderSidebarTrigger />
-            </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
             {detail && <SourceIcon source={detail.state === "active" ? "ratel" : detail.source} />}
@@ -173,7 +183,6 @@ export function SkillDetailPage(props: { id: string }) {
                 Edit
               </Button>
             ))}
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
@@ -223,8 +232,9 @@ export function SkillDetailPage(props: { id: string }) {
           ) : (
             detail && (
               <p className="text-muted-foreground text-xs">
-                This skill is owned by {sourceLabel(detail.source)} and is read-only here. Manage it
-                through Ratel from the Skills page to edit it.
+                {detail.state === "active"
+                  ? "This registration is a reference and its source is read-only here."
+                  : `This skill is owned by ${sourceLabel(detail.source)} and is read-only here. Manage it through Ratel from the Skills page to edit it.`}
               </p>
             )
           )}

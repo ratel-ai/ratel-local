@@ -1,9 +1,18 @@
 // A real upstream MCP server for the end-to-end test. Exposes several
 // supabase-ish tools (to test that a matching SKILL is not starved by matching
 // TOOLS) plus a couple of unrelated ones. Speaks real MCP over stdio.
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { createRequire } from "node:module";
+
+const requireFromApp = createRequire(
+  new URL("../apps/ratel-local/package.json", import.meta.url),
+);
+const { Server } = requireFromApp("@modelcontextprotocol/sdk/server/index.js");
+const { StdioServerTransport } = requireFromApp(
+  "@modelcontextprotocol/sdk/server/stdio.js",
+);
+const { CallToolRequestSchema, ListToolsRequestSchema } = requireFromApp(
+  "@modelcontextprotocol/sdk/types.js",
+);
 
 const TOOLS = [
   { name: "supabase_query", description: "Run a SQL query against a Supabase Postgres database." },
