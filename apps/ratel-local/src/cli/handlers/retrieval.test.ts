@@ -132,6 +132,53 @@ describe("retrieval CLI", () => {
     );
   });
 
+  it.each([
+    {
+      source: "huggingface",
+      sourceArgs: ["--model", "intfloat/e5-small-v2"],
+      unsupportedArgs: ["--url", "https://embed.example.test/v1/embeddings"],
+      flag: "url",
+    },
+    {
+      source: "local",
+      sourceArgs: ["--model", "/models/bge"],
+      unsupportedArgs: ["--revision", "main"],
+      flag: "revision",
+    },
+    {
+      source: "ollama",
+      sourceArgs: ["--model", "nomic-embed-text"],
+      unsupportedArgs: ["--url", "https://ollama.example.test"],
+      flag: "url",
+    },
+    {
+      source: "endpoint",
+      sourceArgs: [
+        "--model",
+        "text-embedding-3-small",
+        "--url",
+        "https://embed.example.test/v1/embeddings",
+      ],
+      unsupportedArgs: ["--pooling", "mean"],
+      flag: "pooling",
+    },
+  ])("rejects --$flag for the $source source", async ({ flag, source, sourceArgs, unsupportedArgs }) => {
+    const { ctx } = context([
+      "retrieval",
+      "configure",
+      "--method",
+      "semantic",
+      "--source",
+      source,
+      ...sourceArgs,
+      ...unsupportedArgs,
+    ]);
+
+    await expect(runRetrieval(ctx, { mutateRetrieval: vi.fn() })).rejects.toThrow(
+      `--${flag} is not valid with --source ${source}`,
+    );
+  });
+
   it("resets only the selected scope", async () => {
     const { ctx, log } = context(["retrieval", "reset", "--scope", "project"]);
     const mutateRetrieval = vi.fn<CliRetrievalMutator>().mockResolvedValue({
