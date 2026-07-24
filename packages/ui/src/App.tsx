@@ -12,6 +12,7 @@ import {
   Search,
   Server,
   Settings2,
+  SlidersHorizontal,
   Sparkles,
   UserCircle,
 } from "lucide-react";
@@ -95,7 +96,40 @@ export interface ServerEntry {
 
 export interface RatelConfig {
   mcpServers: Record<string, ServerEntry>;
+  retrieval?: RetrievalConfig;
 }
+
+export type RetrievalConfig = {
+  method: "bm25" | "semantic" | "hybrid";
+  embedding?:
+    | string
+    | {
+        huggingface: string;
+        revision?: string;
+        queryPrefix?: string;
+        docPrefix?: string;
+        pooling?: "cls" | "mean";
+        download?: boolean;
+      }
+    | {
+        local: string;
+        queryPrefix?: string;
+        docPrefix?: string;
+        pooling?: "cls" | "mean";
+      }
+    | {
+        ollama: string;
+        queryPrefix?: string;
+        docPrefix?: string;
+      }
+    | {
+        url: string;
+        model: string;
+        apiKeyEnv?: string;
+        queryPrefix?: string;
+        docPrefix?: string;
+      };
+};
 
 export interface BackupManifest {
   createdAt: string;
@@ -124,6 +158,7 @@ export interface ConfigResponse {
     path: string;
   }>;
   runtimeRevision?: string;
+  effectiveRetrieval?: RetrievalConfig;
 }
 
 export interface ServerToolTokenEstimate {
@@ -490,6 +525,12 @@ function ProductSidebar({
               label="Clients"
               to={pagePath("/clients")}
             />
+            <ProductSidebarItem
+              active={pageSuffix === "/retrieval"}
+              icon={<SlidersHorizontal />}
+              label="Retrieval"
+              to={pagePath("/retrieval")}
+            />
           </>
         )}
       </nav>
@@ -683,6 +724,10 @@ function CommandMenu(props: {
               <CommandItem onSelect={() => props.onNavigate("/clients")}>
                 <RadioTower />
                 Clients
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/retrieval")}>
+                <SlidersHorizontal />
+                Retrieval
               </CommandItem>
             </CommandGroup>
             {agentItems.length > 0 && (

@@ -100,6 +100,7 @@ async function spin(
     | "skillImportControlPlane"
     | "skillRegistrationControlPlane"
     | "authenticateMcpServer"
+    | "retrievalPreflight"
     | "daemonToken"
     | "projectAdmissionLock"
   > = {},
@@ -1175,6 +1176,7 @@ describe("UI server — add / edit / remove", () => {
     const skillDiscovery = createSkillDiscovery({ homeDir });
     const mutationEngine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
     const committedContexts: unknown[] = [];
+    const preflightedRetrieval: unknown[] = [];
     const preparedChanges = createPreparedChangeCoordinator({
       mutationEngine,
       publish: (contexts) => {
@@ -1213,6 +1215,20 @@ describe("UI server — add / edit / remove", () => {
       skillImportControlPlane,
       skillRegistrationControlPlane,
       preparedChanges,
+      retrievalPreflight: async (retrieval) => {
+        preflightedRetrieval.push(retrieval);
+        return {
+          status: "ready",
+          method: retrieval.method,
+          source: "ollama",
+          model: "nomic-embed-text",
+          downloadedIfMissing: false,
+          runtimeMemoryMb: null,
+          remoteDataTransfer: false,
+          reconnectRequired: true,
+          message: "Ollama model is ready.",
+        };
+      },
     });
 
     try {
@@ -1249,6 +1265,78 @@ describe("UI server — add / edit / remove", () => {
       expect(config.resolvedMcpEntries).toContainEqual(
         expect.objectContaining({ name: "filesystem", status: "effective" }),
       );
+
+      const configuredRetrieval = await fetch(`${base}/api/retrieval?projectId=${project.id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          target: { scope: "local", projectId: project.id },
+          retrieval: {
+            method: "hybrid",
+            embedding: { ollama: "nomic-embed-text" },
+          },
+        }),
+      });
+      expect(configuredRetrieval.status).toBe(200);
+      expect(await configuredRetrieval.json()).toMatchObject({
+        action: "configure",
+        target: { scope: "local", projectId: project.id },
+        reconnectRequired: true,
+      });
+      expect(JSON.parse(await readFile(localPath, "utf8"))).toMatchObject({
+        custom: { keep: true },
+        skills: { dirs: [] },
+        mcpServers: { filesystem: { type: "stdio", command: "node" } },
+        retrieval: {
+          method: "hybrid",
+          embedding: { ollama: "nomic-embed-text" },
+        },
+      });
+      const retrievalConfig = (await (
+        await fetch(`${base}/api/config?projectId=${project.id}`, { headers })
+      ).json()) as {
+        effectiveRetrieval: { method: string; embedding?: { ollama?: string } };
+      };
+      expect(retrievalConfig.effectiveRetrieval).toEqual({
+        method: "hybrid",
+        embedding: { ollama: "nomic-embed-text" },
+      });
+
+      const preparedRetrieval = await fetch(
+        `${base}/api/retrieval/prepare?projectId=${project.id}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            retrieval: {
+              method: "hybrid",
+              embedding: { ollama: "nomic-embed-text" },
+            },
+          }),
+        },
+      );
+      expect(preparedRetrieval.status).toBe(200);
+      expect(await preparedRetrieval.json()).toMatchObject({
+        status: "ready",
+        source: "ollama",
+        reconnectRequired: true,
+      });
+      expect(preflightedRetrieval).toEqual([
+        {
+          method: "hybrid",
+          embedding: { ollama: "nomic-embed-text" },
+        },
+      ]);
+
+      const resetRetrieval = await fetch(`${base}/api/retrieval?projectId=${project.id}`, {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({
+          target: { scope: "local", projectId: project.id },
+        }),
+      });
+      expect(resetRetrieval.status).toBe(200);
+      expect(JSON.parse(await readFile(localPath, "utf8")).retrieval).toBeUndefined();
 
       const createdSkill = await fetch(`${base}/api/skills?projectId=${project.id}`, {
         method: "POST",

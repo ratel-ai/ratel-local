@@ -35,6 +35,24 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it.each([
+    "status",
+    "configure",
+    "reset",
+    "prepare",
+  ] as const)("recognizes retrieval %s", (verb) => {
+    const result = parseArgs(["retrieval", verb, "--scope", "project"]);
+    expect(result).toMatchObject({
+      group: "retrieval",
+      verb,
+      flags: { scope: "project" },
+    });
+  });
+
+  it("rejects an unknown retrieval verb", () => {
+    expect(() => parseArgs(["retrieval", "download"])).toThrow(/unknown retrieval verb: download/);
+  });
+
   it.each(["list", "add", "remove"] as const)("recognizes project %s", (verb) => {
     const result = parseArgs(["project", verb, "/repo"]);
 

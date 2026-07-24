@@ -1,4 +1,4 @@
-export type PrimaryDestination = "/" | "/skills" | "/agent-setup" | "/clients";
+export type PrimaryDestination = "/" | "/skills" | "/agent-setup" | "/clients" | "/retrieval";
 export type ShortcutPlatform = "mac" | "other";
 
 export const COMMAND_MENU_SHORTCUT = {

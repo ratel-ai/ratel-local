@@ -22,6 +22,7 @@ export * from "./project-admission.js";
 export * from "./project-path-safety.js";
 export * from "./project-registry.js";
 export * from "./resolved-mcp.js";
+export * from "./retrieval-preflight.js";
 export * from "./skill-copy-adoption.js";
 export * from "./skill-discovery.js";
 export * from "./skill-document.js";
