@@ -248,6 +248,7 @@ describe("UI server — auth", () => {
 
   it("authenticates through the daemon context runner and registers CLI project roots", async () => {
     const projectId = "prj_auth" as ProjectId;
+    const admissions: string[] = [];
     const registerRoot = vi.fn(async () => ({
       id: projectId,
       canonicalRoot: "/canonical/repo",
@@ -259,6 +260,12 @@ describe("UI server — auth", () => {
     ]);
     const projectSession = await spin(undefined, {
       projectRegistry: projectRegistry({ registerRoot }),
+      projectAdmissionLock: {
+        run: async <T>(action: () => Promise<T>) => {
+          admissions.push("entered");
+          return action();
+        },
+      },
       snapshotResolver: {
         resolve: async (context) =>
           ({
@@ -297,6 +304,7 @@ describe("UI server — auth", () => {
       );
 
       expect(response.status).toBe(200);
+      expect(admissions).toEqual(["entered"]);
       expect(registerRoot).toHaveBeenCalledWith("/repo");
       expect(authenticateMcpServer).toHaveBeenCalledWith(
         { kind: "project", projectId },

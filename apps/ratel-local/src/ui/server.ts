@@ -761,7 +761,10 @@ async function contextForRequest(
     return { ctx: options.ctx, runtimeContext: { kind: "global" } };
   }
   if (projectRoot) {
-    const project = await options.projectRegistry.registerRoot(projectRoot);
+    const register = () => options.projectRegistry.registerRoot(projectRoot);
+    const project = options.projectAdmissionLock
+      ? await options.projectAdmissionLock.run(register)
+      : await register();
     return {
       ctx: {
         ...options.ctx,
