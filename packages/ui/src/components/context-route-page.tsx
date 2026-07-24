@@ -9,6 +9,7 @@ import {
   agentHostsFromResponse,
 } from "@/pages/AgentSetupPage";
 import { McpClientsPage } from "@/pages/McpClientsPage";
+import { RetrievalSettingsPage } from "@/pages/RetrievalSettingsPage";
 import { SkillDetailPage } from "@/pages/SkillDetailPage";
 import { SkillsPage } from "@/pages/SkillsPage";
 import { ToolSourceCreatePage, ToolSourceDetailPage, ToolsPage } from "@/pages/ToolsPage";
@@ -30,6 +31,9 @@ export function ContextRoutePage({ routeData, subpath = "" }: ContextRoutePagePr
   if (segments.length === 0) return <ToolsPage />;
   if (segments[0] === "clients" && segments.length === 1) return <McpClientsPage />;
   if (segments[0] === "skills" && segments.length === 1) return <SkillsPage />;
+  if (segments[0] === "retrieval" && segments.length === 1) {
+    return <RetrievalSettingsPage />;
+  }
   if (segments[0] === "skills" && segments.length === 2) {
     return <SkillDetailPage id={segments[1]} />;
   }
