@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -6,7 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, JsonFs, ProjectRegistry } from "@ratel-ai/ratel-local-core";
-import { AUTH_TOOL_ID } from "@ratel-ai/ratel-local-core";
+import { AUTH_TOOL_ID, nodeFs } from "@ratel-ai/ratel-local-core";
 import { INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID } from "@ratel-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
@@ -63,6 +63,65 @@ beforeEach(() => {
 afterEach(() => {
   if (previousTelemetry === undefined) delete process.env.RATEL_TELEMETRY;
   else process.env.RATEL_TELEMETRY = previousTelemetry;
+});
+
+describe("runCli — retrieval", () => {
+  it("configures, reports, prepares, and resets through the production scoped control plane", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ratel-retrieval-cli-"));
+    const homeDir = join(root, "home");
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    const logs: string[] = [];
+    const preflighted: unknown[] = [];
+
+    try {
+      await runCli(["retrieval", "configure", "--method", "semantic", "--source", "built-in"], {
+        env: { homeDir },
+        fs: nodeFs,
+        logger: (message) => logs.push(message),
+      });
+      const configPath = join(homeDir, ".ratel", "config.json");
+      expect(JSON.parse(await readFile(configPath, "utf8")).retrieval).toEqual({
+        method: "semantic",
+      });
+
+      await runCli(["retrieval", "status"], {
+        env: { homeDir },
+        fs: nodeFs,
+        logger: (message) => logs.push(message),
+      });
+      expect(logs.join("\n")).toContain("effective semantic");
+
+      await runCli(["retrieval", "prepare"], {
+        env: { homeDir },
+        fs: nodeFs,
+        logger: (message) => logs.push(message),
+        retrievalPreflight: async (retrieval) => {
+          preflighted.push(retrieval);
+          return {
+            status: "ready",
+            method: retrieval.method,
+            source: "built-in",
+            model: "BAAI/bge-small-en-v1.5",
+            downloadedIfMissing: true,
+            runtimeMemoryMb: 130,
+            remoteDataTransfer: false,
+            reconnectRequired: true,
+            message: "built-in model ready",
+          };
+        },
+      });
+      expect(preflighted).toEqual([{ method: "semantic" }]);
+
+      await runCli(["retrieval", "reset"], {
+        env: { homeDir },
+        fs: nodeFs,
+        logger: (message) => logs.push(message),
+      });
+      expect(JSON.parse(await readFile(configPath, "utf8")).retrieval).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 async function fakeUpstream() {

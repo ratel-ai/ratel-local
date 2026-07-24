@@ -8,6 +8,7 @@ import {
   ConfigError,
   parseConfig,
   type RatelConfigDocument,
+  type RetrievalConfig,
   type ServerEntry,
 } from "./lib/config.js";
 import type { LocalGitExcludeManager } from "./local-git-exclude.js";
@@ -49,16 +50,33 @@ export interface ScopedConfigRead {
   documentRevision: DocumentRevision;
 }
 
+export type RetrievalMutationAction = "configure" | "reset";
+
+export interface ScopedRetrievalMutationRequest {
+  target: RatelScopeRef;
+  expectedRevision?: DocumentRevision;
+  action: RetrievalMutationAction;
+  retrieval?: RetrievalConfig;
+}
+
 export interface ConfigControlPlane {
   read(target: RatelScopeRef): Promise<ScopedConfigRead>;
   prepareServerMutation(
     request: ScopedServerMutationRequest,
   ): Promise<PreparedChange<ServerMutationReview>>;
-  commit(changeId: string): Promise<PreparedChangeCommit<ServerMutationResult>>;
+  prepareRetrievalMutation(
+    request: ScopedRetrievalMutationRequest,
+  ): Promise<PreparedChange<RetrievalMutationReview>>;
+  commit<DomainResult = ServerMutationResult>(
+    changeId: string,
+  ): Promise<PreparedChangeCommit<DomainResult>>;
   cancel(changeId: string): void;
   mutateServer(
     request: ScopedServerMutationRequest,
   ): Promise<PreparedChangeCommit<ServerMutationResult>>;
+  mutateRetrieval(
+    request: ScopedRetrievalMutationRequest,
+  ): Promise<PreparedChangeCommit<RetrievalMutationResult>>;
 }
 
 export interface ServerMutationReview {
@@ -72,6 +90,19 @@ export interface ServerMutationResult {
   action: ServerMutationAction;
   target: RatelScopeRef;
   name: string;
+}
+
+export interface RetrievalMutationReview {
+  action: RetrievalMutationAction;
+  target: RatelScopeRef;
+  retrieval?: RetrievalConfig;
+  files: MutationPreview["files"];
+}
+
+export interface RetrievalMutationResult {
+  action: RetrievalMutationAction;
+  target: RatelScopeRef;
+  retrieval?: RetrievalConfig;
 }
 
 export interface ConfigControlPlaneOptions {
@@ -321,7 +352,144 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
     return this.preparedChanges.commit(change.changeId);
   }
 
-  commit(changeId: string): Promise<PreparedChangeCommit<ServerMutationResult>> {
+  async prepareRetrievalMutation(
+    request: ScopedRetrievalMutationRequest,
+  ): Promise<PreparedChange<RetrievalMutationReview>> {
+    if (request.action === "configure" && request.retrieval === undefined) {
+      throw new MutationValidationError("configure requires a retrieval configuration");
+    }
+    let localGitOperation: { kind: "replace-file"; path: string; contents: string } | undefined;
+    let localGitRevision: DocumentRevision | undefined;
+    if (request.target.scope === "local" && this.options.localGitExcludeManager) {
+      const project = await this.resolveAvailableProject(request.target.projectId);
+      const preview = await this.options.localGitExcludeManager.preview(project.canonicalRoot);
+      if (preview.changed) {
+        localGitOperation = {
+          kind: "replace-file",
+          path: preview.excludePath,
+          contents: preview.contents,
+        };
+        localGitRevision = preview.documentRevision;
+      }
+    }
+
+    const current = await this.read(request.target);
+    if (
+      request.expectedRevision !== undefined &&
+      request.expectedRevision !== current.documentRevision
+    ) {
+      throw new MutationConflictError(
+        "revision_conflict",
+        `document changed before preview: ${current.path}`,
+        current.path,
+        request.expectedRevision,
+        current.documentRevision,
+      );
+    }
+
+    const document: RatelConfigDocument = { ...current.document };
+    if (request.action === "reset") {
+      delete document.retrieval;
+    } else {
+      document.retrieval = request.retrieval;
+    }
+    try {
+      parseConfig(document);
+    } catch (error) {
+      if (error instanceof ConfigError) {
+        throw new MutationValidationError(error.message);
+      }
+      throw error;
+    }
+
+    const operations = [
+      {
+        kind: "replace-file" as const,
+        path: current.path,
+        contents: `${JSON.stringify(document, null, 2)}\n`,
+      },
+      ...(localGitOperation ? [localGitOperation] : []),
+    ];
+    const projectRootsByPath = new Map<string, string>();
+    if (request.target.scope !== "user") {
+      const project = await this.resolveAvailableProject(request.target.projectId);
+      projectRootsByPath.set(current.path, project.canonicalRoot);
+    }
+    const allowedPaths = new Set(operations.map(({ path }) => path));
+    const result: RetrievalMutationResult = {
+      action: request.action,
+      target: request.target,
+      ...(request.retrieval ? { retrieval: request.retrieval } : {}),
+    };
+    return this.preparedChanges.prepare({
+      kind: `retrieval.${request.action}`,
+      operations,
+      affectedContexts: [contextForTarget(request.target)],
+      buildPreview: (mutation) => {
+        const previewRevision = mutation.baseRevisions[current.path];
+        if (previewRevision !== current.documentRevision) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `document changed while creating preview: ${current.path}`,
+            current.path,
+            current.documentRevision,
+            previewRevision,
+          );
+        }
+        if (
+          localGitOperation &&
+          localGitRevision !== undefined &&
+          mutation.baseRevisions[localGitOperation.path] !== localGitRevision
+        ) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `Git exclude changed while creating preview: ${localGitOperation.path}`,
+            localGitOperation.path,
+            localGitRevision,
+            mutation.baseRevisions[localGitOperation.path],
+          );
+        }
+        return {
+          ...result,
+          files: mutation.preview.files,
+        };
+      },
+      invariants: {
+        precondition: async () => {
+          for (const [path, projectRoot] of projectRootsByPath) {
+            await assertSafeProjectControlPath(projectRoot, path);
+          }
+        },
+        operationPrecondition: async (operation) => {
+          if (!allowedPaths.has(operation.path)) {
+            throw new MutationConflictError(
+              "digest_mismatch",
+              `retrieval mutation contains an unexpected path: ${operation.path}`,
+            );
+          }
+          const projectRoot = projectRootsByPath.get(operation.path);
+          if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
+        },
+      },
+      captureBackup: async () => {
+        const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
+        for (const { path } of operations) await backup.capture(path);
+        return backup.finalize(request.action === "reset" ? "remove" : "edit");
+      },
+      result,
+    });
+  }
+
+  async mutateRetrieval(
+    request: ScopedRetrievalMutationRequest,
+  ): Promise<PreparedChangeCommit<RetrievalMutationResult>> {
+    const change = await this.prepareRetrievalMutation(request);
+    return this.preparedChanges.commit(change.changeId);
+  }
+
+  commit<DomainResult = ServerMutationResult>(
+    changeId: string,
+  ): Promise<PreparedChangeCommit<DomainResult>> {
     return this.preparedChanges.commit(changeId);
   }
 
