@@ -1,20 +1,26 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
+  EmbedderError,
+  type EmbeddingSpec,
   type McpServerHandle,
   registerMcpServer,
+  type SearchMethod,
   type Skill,
   SkillCatalog,
   ToolCatalog,
+  type ToolCatalogOptions,
   type TraceSinkConfig,
   type UpstreamServerInfo,
 } from "@ratel-ai/sdk";
 import type { ResolvedMcpEntry } from "../resolved-mcp.js";
 import { recordToolTokenEstimate } from "../telemetry.js";
-import type { RatelConfig, ServerEntry } from "./config.js";
+import type { RatelConfig, RetrievalConfig, ServerEntry } from "./config.js";
 import { expandEnvPlaceholders } from "./env-placeholders.js";
 import {
   type AuthFlowOptions,
@@ -22,6 +28,7 @@ import {
   type AuthStep,
   defaultAuthStep,
   defaultOAuthStorePath,
+  markDenseAuthReconnectRequired,
   runAuthFlow,
 } from "./oauth/flow.js";
 import { RatelOAuthProvider } from "./oauth/provider.js";
@@ -73,6 +80,8 @@ export interface BuildGatewayOptions {
   loadSkills?: (dirs: string[], opts: { logger?: (message: string) => void }) => Promise<Skill[]>;
   /** Pre-resolved effective skills. When supplied, the gateway performs no discovery of its own. */
   resolvedSkills?: Skill[];
+  /** Resolved scoped retrieval block. Overrides config.retrieval when supplied. */
+  retrieval?: RetrievalConfig;
 }
 
 const PLACEHOLDER_REDIRECT_URL = "http://127.0.0.1:0/cb";
@@ -148,8 +157,13 @@ export async function buildGatewayFromConfig(
   const step = options.authStep ?? defaultAuthStep({ logger: log, storePath, storeFingerprint });
   const refreshTokens = options.refreshTokens ?? defaultRefreshTokens;
 
-  const catalog = new ToolCatalog(options.trace ? { trace: options.trace } : {});
-  const skillCatalog = await buildSkillCatalog(config, options, log);
+  const catalogOptions = resolveCatalogOptions(
+    options.retrieval ?? config.retrieval,
+    options.trace,
+  );
+  const denseRetrieval = isDenseMethod(catalogOptions.method);
+  const catalog = new ToolCatalog(catalogOptions);
+  const skillCatalog = await buildSkillCatalog(config, options, catalogOptions, log);
   const handles = new Map<string, McpServerHandle>();
   const upstreamServers: UpstreamServerInfo[] = [];
   const configEntries: Record<string, ServerEntry> = Object.fromEntries(
@@ -198,8 +212,9 @@ export async function buildGatewayFromConfig(
       }
     }
 
+    let transport: Transport | undefined;
     try {
-      const transport = factory(name, entry, runtime);
+      transport = factory(name, entry, runtime);
       if (!transport) {
         log(`[ratel] skipping ${name}: unsupported transport type "${entry.type}"`);
         continue;
@@ -215,6 +230,11 @@ export async function buildGatewayFromConfig(
       if (handle.serverInstructions) info.instructions = handle.serverInstructions;
       upstreamServers.push(info);
     } catch (err) {
+      if (denseRetrieval && err instanceof EmbedderError) {
+        await transport?.close().catch(() => undefined);
+        await closeGatewayHandles(handles, log);
+        throw err;
+      }
       if (isHttpOrSse(entry) && isAuthRequiredError(err)) {
         markNeedsAuth(upstreamServers, name, entry);
         catalog.recordEvent({ type: "auth_needs", upstream: name });
@@ -231,25 +251,43 @@ export async function buildGatewayFromConfig(
     catalog,
     skillCatalog,
     upstreamServers,
-    close: async () => {
-      const results = await Promise.allSettled(Array.from(handles.values()).map((h) => h.close()));
-      for (const r of results) {
-        if (r.status === "rejected") {
-          log(`[ratel] error during shutdown: ${(r.reason as Error)?.message ?? r.reason}`);
-        }
+    close: () => closeGatewayHandles(handles, log),
+    runAuthFlow: async (opts: AuthFlowOptions = {}) => {
+      if (!denseRetrieval) {
+        return runAuthFlow({
+          catalog,
+          upstreams: upstreamServers,
+          handles,
+          configEntries,
+          step,
+          opts,
+          onListChanged: () => listChangedNotifier?.(),
+          logger: log,
+        });
+      }
+
+      // Dense catalogs are immutable for the lifetime of one scoped gateway
+      // generation. Complete OAuth against an isolated BM25 catalog so tokens
+      // are persisted without hot-registering partially embedded tools into the
+      // active generation. Reconnecting acquires a freshly built generation.
+      const authCatalog = new ToolCatalog(options.trace ? { trace: options.trace } : {});
+      const authHandles = new Map<string, McpServerHandle>();
+      const authUpstreams = upstreamServers.map((upstream) => ({ ...upstream }));
+      try {
+        const results = await runAuthFlow({
+          catalog: authCatalog,
+          upstreams: authUpstreams,
+          handles: authHandles,
+          configEntries,
+          step,
+          opts,
+          logger: log,
+        });
+        return markDenseAuthReconnectRequired(results);
+      } finally {
+        await closeGatewayHandles(authHandles, log);
       }
     },
-    runAuthFlow: (opts: AuthFlowOptions = {}) =>
-      runAuthFlow({
-        catalog,
-        upstreams: upstreamServers,
-        handles,
-        configEntries,
-        step,
-        opts,
-        onListChanged: () => listChangedNotifier?.(),
-        logger: log,
-      }),
     setListChangedNotifier: (fn) => {
       listChangedNotifier = fn;
     },
@@ -264,9 +302,10 @@ export async function buildGatewayFromConfig(
 async function buildSkillCatalog(
   config: RatelConfig,
   options: BuildGatewayOptions,
+  catalogOptions: ToolCatalogOptions,
   log: (message: string) => void,
 ): Promise<SkillCatalog> {
-  const skillCatalog = new SkillCatalog(options.trace ? { trace: options.trace } : {});
+  const skillCatalog = new SkillCatalog(catalogOptions);
   if (options.resolvedSkills) {
     if (options.resolvedSkills.length > 0) {
       await skillCatalog.register(options.resolvedSkills);
@@ -275,16 +314,65 @@ async function buildSkillCatalog(
   }
   const dirs = options.skillDirs ?? config.skills?.dirs ?? defaultSkillDirs();
   const load = options.loadSkills ?? loadSkills;
+  let skills: Skill[];
   try {
-    const skills = await load(dirs, { logger: log });
-    if (skills.length > 0) {
-      await skillCatalog.register(skills);
-      log(`[ratel] loaded ${skills.length} skill(s)`);
-    }
+    skills = await load(dirs, { logger: log });
   } catch (err) {
     log(`[ratel] skill loading failed: ${(err as Error).message}`);
+    return skillCatalog;
+  }
+  if (skills.length > 0) {
+    // Dense registration failures deliberately escape and abort readiness.
+    await skillCatalog.register(skills);
+    log(`[ratel] loaded ${skills.length} skill(s)`);
   }
   return skillCatalog;
+}
+
+function resolveCatalogOptions(
+  retrieval: RetrievalConfig | undefined,
+  trace: TraceSinkConfig | undefined,
+): ToolCatalogOptions {
+  const method = retrieval?.method ?? "bm25";
+  const embedding = resolveEmbeddingSpec(retrieval?.embedding);
+  return {
+    ...(trace ? { trace } : {}),
+    ...(method !== "bm25" ? { method } : {}),
+    ...(embedding !== undefined ? { embedding } : {}),
+  };
+}
+
+function resolveEmbeddingSpec(embedding: EmbeddingSpec | undefined): EmbeddingSpec | undefined {
+  if (typeof embedding === "string") return expandHomeModelPath(embedding);
+  if (embedding && typeof embedding.local === "string") {
+    return { ...embedding, local: expandHomeModelPath(embedding.local) } as EmbeddingSpec;
+  }
+  return embedding;
+}
+
+function expandHomeModelPath(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
+  return path;
+}
+
+function isDenseMethod(method: SearchMethod | undefined): boolean {
+  return method === "semantic" || method === "hybrid";
+}
+
+async function closeGatewayHandles(
+  handles: Map<string, McpServerHandle>,
+  log: (message: string) => void,
+): Promise<void> {
+  const results = await Promise.allSettled(
+    Array.from(handles.values()).map((handle) => handle.close()),
+  );
+  handles.clear();
+  for (const result of results) {
+    if (result.status === "rejected") {
+      log(`[ratel] error during shutdown: ${(result.reason as Error)?.message ?? result.reason}`);
+    }
+  }
 }
 
 export const defaultTransportFactory: TransportFactory = (name, entry, runtime) => {

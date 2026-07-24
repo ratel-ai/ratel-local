@@ -19,6 +19,7 @@ import {
   type DocumentRevision,
   documentRevision,
   InvalidContextSnapshotError,
+  markDenseAuthReconnectRequired,
   type PreparedChangeCoordinator,
   type ProjectAdmissionLock,
   type ProjectId,
@@ -512,6 +513,9 @@ async function authResolvedServer(
     } finally {
       await gateway.close();
     }
+  }
+  if (snapshot.retrieval?.method === "semantic" || snapshot.retrieval?.method === "hybrid") {
+    results = markDenseAuthReconnectRequired(results);
   }
   const failed = results.find(({ status }) => status === "failed" || status === "unsupported");
   if (name && failed) {

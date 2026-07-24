@@ -473,4 +473,19 @@ args = ["fs"]
 
     expect(agentHost.input?.installGatewayScopes).toEqual(new Set(["user"]));
   });
+
+  it("links project and local scopes that contain only retrieval overrides", async () => {
+    const agentHost = new RecordingAgentHost();
+
+    await buildAgentLinkPlan({
+      ...emptyInputs({
+        ratelUser: { mcpServers: { user: FS_ENTRY } },
+        ratelProject: { mcpServers: {}, retrieval: { method: "semantic" } },
+        ratelLocal: { mcpServers: {}, retrieval: { method: "bm25" } },
+      }),
+      agentHost,
+    });
+
+    expect(agentHost.input?.installGatewayScopes).toEqual(new Set(["user", "project", "local"]));
+  });
 });
