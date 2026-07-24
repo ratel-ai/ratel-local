@@ -38,6 +38,7 @@ import {
   settingsPathForScope,
   uninstallHook,
 } from "../skills/install-hook.js";
+import { activateSkills, deactivateSkills, defaultSkillManagePaths } from "../skills/manage.js";
 import {
   loadNudged,
   parseHookInput,
@@ -53,6 +54,8 @@ import type { HandlerCtx } from "./types.js";
 export const SKILL_USAGE = `usage: ratel-local skill <verb>
 
 Verbs:
+  activate         deprecated user-scope wrapper: manage native skills as invoke-only
+  deactivate       deprecated user-scope wrapper: stop managing linked native skills
   import           import discovered skills into a scoped registration
   add-scope        add another scoped registration for a skill
   remove-scope     remove only the selected registration
@@ -88,6 +91,62 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
   const assumeYes = ctx.argv.flags.yes === true;
 
   switch (verb) {
+    case "activate": {
+      const paths = defaultSkillManagePaths(ctx.env.homeDir);
+      const pending = await activateSkills(paths, { dryRun: true });
+      if (pending.managed.length === 0) {
+        ctx.log("no skills to activate (nothing new in native skill folders)");
+        return;
+      }
+      if (dryRun) {
+        for (const managed of pending.managed) {
+          ctx.log(`would manage ${managed.id} as invoke-only`);
+        }
+        return;
+      }
+      if (!assumeYes) {
+        const answer = await ctx.prompts.confirm({
+          message: `Manage ${pending.managed.length} skill(s) through Ratel as invoke-only? (reversible with "skill deactivate")`,
+          initialValue: true,
+        });
+        if (ctx.prompts.isCancel(answer) || answer === false) {
+          ctx.log("activate cancelled");
+          return;
+        }
+      }
+      const result = await activateSkills(paths, { logger: ctx.log });
+      ctx.log(`managing ${result.managed.length} skill(s) as invoke-only`);
+      return;
+    }
+
+    case "deactivate": {
+      const paths = defaultSkillManagePaths(ctx.env.homeDir);
+      const pending = await deactivateSkills(paths, { dryRun: true });
+      if (pending.unmanaged.length === 0) {
+        ctx.log("no managed skills to deactivate");
+        return;
+      }
+      if (dryRun) {
+        for (const managed of pending.unmanaged) {
+          ctx.log(`would stop managing ${managed.id}`);
+        }
+        return;
+      }
+      if (!assumeYes) {
+        const answer = await ctx.prompts.confirm({
+          message: `Stop managing ${pending.unmanaged.length} skill(s) through Ratel?`,
+          initialValue: true,
+        });
+        if (ctx.prompts.isCancel(answer) || answer === false) {
+          ctx.log("deactivate cancelled");
+          return;
+        }
+      }
+      const result = await deactivateSkills(paths, { logger: ctx.log });
+      ctx.log(`deactivated ${result.unmanaged.length} skill(s)`);
+      return;
+    }
+
     case "import": {
       const runtime = createSkillReadRuntime(ctx, options);
       const context = await resolveSkillContext(

@@ -52,6 +52,8 @@ describe("parseArgs — group/verb routing", () => {
   });
 
   it.each([
+    "activate",
+    "deactivate",
     "import",
     "add-scope",
     "remove-scope",

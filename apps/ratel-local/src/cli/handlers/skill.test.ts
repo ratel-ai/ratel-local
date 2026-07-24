@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -106,6 +106,39 @@ function hookCtx(homeDir: string, log: (m: string) => void): HandlerCtx {
     prompts: silentPromptAdapter(),
   };
 }
+
+describe("runSkill — deprecated user-scope wrappers", () => {
+  it("activates and deactivates native skills without moving their source", async () => {
+    const home = await mkdtemp(join(tmpdir(), "ratel-skill-compat-"));
+    try {
+      const source = join(home, ".claude", "skills", "alpha");
+      const sourceFile = join(source, "SKILL.md");
+      const managed = join(home, ".ratel", "skills", "alpha");
+      await mkdir(source, { recursive: true });
+      await writeFile(
+        sourceFile,
+        "---\nname: alpha\ndescription: Alpha workflow\n---\nALPHA-BODY\n",
+      );
+      const ctx = hookCtx(home, () => {});
+      ctx.argv.verb = "activate";
+      ctx.argv.flags = { yes: true };
+
+      await runSkill(ctx);
+
+      expect((await lstat(managed)).isSymbolicLink()).toBe(true);
+      expect(await readFile(sourceFile, "utf8")).toContain("disable-model-invocation: true");
+
+      ctx.argv.verb = "deactivate";
+      await runSkill(ctx);
+
+      await expect(lstat(managed)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(sourceFile, "utf8")).not.toContain("disable-model-invocation");
+      expect(await readFile(sourceFile, "utf8")).toContain("ALPHA-BODY");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("runSkill — preload-hook output stream", () => {
   const origStdin = Object.getOwnPropertyDescriptor(process, "stdin");
