@@ -4,6 +4,8 @@ import {
   type AuthFlowResult,
   buildGatewayFromConfig,
   type McpConfigDocument,
+  markDenseAuthReconnectRequired,
+  mergeConfigs,
   parseConfig,
   projectIdFromCanonicalRoot,
   type ResolvedMcpEntry,
@@ -21,7 +23,8 @@ export interface RunMcpAuthOptions {
 }
 
 export async function runMcpAuth(ctx: HandlerCtx, opts: RunMcpAuthOptions = {}): Promise<void> {
-  const entries = (await loadResolvedEntries(ctx)).filter(({ status }) => status === "effective");
+  const resolved = await loadResolvedContext(ctx);
+  const entries = resolved.entries.filter(({ status }) => status === "effective");
   if (entries.length === 0) {
     ctx.log("[ratel] no Ratel config found in user/project/local scope; nothing to auth");
     return;
@@ -50,6 +53,9 @@ export async function runMcpAuth(ctx: HandlerCtx, opts: RunMcpAuthOptions = {}):
     } finally {
       await gateway.close();
     }
+  }
+  if (resolved.denseRetrieval) {
+    results = markDenseAuthReconnectRequired(results);
   }
   printResults(ctx, results);
 }
@@ -122,7 +128,9 @@ async function checkUpstream(
   return { status: "ok" };
 }
 
-async function loadResolvedEntries(ctx: HandlerCtx): Promise<ResolvedMcpEntry[]> {
+async function loadResolvedContext(
+  ctx: HandlerCtx,
+): Promise<{ entries: ResolvedMcpEntry[]; denseRetrieval: boolean }> {
   const projectRoot = ctx.env.projectRoot
     ? await realpath(ctx.env.projectRoot).catch(() => ctx.env.projectRoot)
     : undefined;
@@ -139,11 +147,15 @@ async function loadResolvedEntries(ctx: HandlerCtx): Promise<ResolvedMcpEntry[]>
       documents.push({ ref: { scope, projectId }, config: parseConfig(document) });
     }
   }
-  return resolveMcpEntries({
-    homeDir: ctx.env.homeDir,
-    ...(projectRoot ? { projectRoot } : {}),
-    documents,
-  });
+  const retrieval = mergeConfigs(documents.map(({ config }) => config)).retrieval;
+  return {
+    entries: resolveMcpEntries({
+      homeDir: ctx.env.homeDir,
+      ...(projectRoot ? { projectRoot } : {}),
+      documents,
+    }),
+    denseRetrieval: retrieval?.method === "semantic" || retrieval?.method === "hybrid",
+  };
 }
 
 function humanizeDuration(ms: number): string {

@@ -1,6 +1,7 @@
 export type {
   RatelConfig,
   RatelConfigDocument,
+  RetrievalConfig,
   ServerEntry,
   SkillEntry,
   SkillsConfig,
@@ -24,7 +25,13 @@ export type {
   AuthStep,
   AuthStepResult,
 } from "./oauth/flow.js";
-export { defaultAuthStep, defaultOAuthStorePath, runAuthFlow } from "./oauth/flow.js";
+export {
+  DENSE_AUTH_RECONNECT_REASON,
+  defaultAuthStep,
+  defaultOAuthStorePath,
+  markDenseAuthReconnectRequired,
+  runAuthFlow,
+} from "./oauth/flow.js";
 export { RatelOAuthProvider } from "./oauth/provider.js";
 export { RatelOAuthStore } from "./oauth/store.js";
 export type { CreateMcpServerOptions, McpServerHandle } from "./server.js";

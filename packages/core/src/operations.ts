@@ -34,6 +34,7 @@ import {
   type AuthFlowOptions,
   type AuthFlowResult,
   buildGatewayFromConfig,
+  markDenseAuthReconnectRequired,
   mergeConfigs,
   parseConfig,
   type RatelConfig,
@@ -710,10 +711,19 @@ export async function prepareAgentRatelMcpFallbackRemoval(
 }
 
 async function defaultAuthRunner(config: RatelConfig, ctx: CoreContext) {
-  const gateway = await buildGatewayFromConfig(config, { logger: ctx.log });
+  // Authorization only needs upstream transports and the OAuth store. Building
+  // the configured dense tool/skill catalogs here would load the embedding
+  // model before the user can authenticate.
+  const gateway = await buildGatewayFromConfig(
+    { mcpServers: config.mcpServers },
+    { logger: ctx.log },
+  );
+  const denseRetrieval =
+    config.retrieval?.method === "semantic" || config.retrieval?.method === "hybrid";
   return async (opts: AuthFlowOptions) => {
     try {
-      return await gateway.runAuthFlow(opts);
+      const results = await gateway.runAuthFlow(opts);
+      return denseRetrieval ? markDenseAuthReconnectRequired(results) : results;
     } finally {
       await gateway.close();
     }

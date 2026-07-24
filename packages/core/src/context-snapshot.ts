@@ -10,7 +10,13 @@ import type {
 } from "./context.js";
 import { ratelConfigPath } from "./hierarchy.js";
 import { isPlainObject } from "./json.js";
-import { parseConfig, type RatelConfig, type RatelConfigDocument } from "./lib/config.js";
+import {
+  mergeConfigs,
+  parseConfig,
+  type RatelConfig,
+  type RatelConfigDocument,
+  type RetrievalConfig,
+} from "./lib/config.js";
 import {
   type ResolvedSkillCatalog,
   resolveConfiguredSkills,
@@ -21,7 +27,7 @@ import { assertSafeProjectControlPath, ProjectPathSafetyError } from "./project-
 import type { ProjectRegistry } from "./project-registry.js";
 import { type ResolvedMcpEntry, resolveMcpEntries } from "./resolved-mcp.js";
 
-export const CONTEXT_SNAPSHOT_RESOLVER_VERSION = 2;
+export const CONTEXT_SNAPSHOT_RESOLVER_VERSION = 4;
 
 export interface Diagnostic {
   code: string;
@@ -50,6 +56,8 @@ export interface ResolvedContextSnapshot {
   runtimeRevision: RuntimeRevision;
   mcpEntries: ResolvedMcpEntry[];
   skills: ResolvedSkillCatalog;
+  /** Atomic right-most retrieval block for this resolved context. */
+  retrieval?: RetrievalConfig;
   diagnostics: Diagnostic[];
   watchInputs: WatchInput[];
 }
@@ -95,6 +103,11 @@ interface ReadResult {
   target: DocumentTarget;
   snapshot?: ScopedDocumentSnapshot;
   revision?: DocumentRevision;
+}
+
+interface OAuthStoreRevision {
+  path: string;
+  revision: string;
 }
 
 export function createContextSnapshotResolver(
@@ -156,6 +169,10 @@ export function createContextSnapshotResolver(
           documents: documents.map(({ ref, config }) => ({ ref, config })),
           ...(options.env ? { env: options.env } : {}),
         });
+        const oauthStoreRevisions = await readOAuthStoreRevisions(mcpEntries);
+        const confirmedOAuthStoreRevisions = await readOAuthStoreRevisions(mcpEntries);
+        if (!sameOAuthStoreRevisions(oauthStoreRevisions, confirmedOAuthStoreRevisions)) continue;
+        const retrieval = mergeConfigs(documents.map(({ config }) => config)).retrieval;
         const diagnostics: Diagnostic[] = [
           ...skills.diagnostics.map(({ code, severity, message, path }) => ({
             code,
@@ -171,7 +188,12 @@ export function createContextSnapshotResolver(
             })),
           ),
         ];
-        const runtimeRevision = digestRuntimeRevision(documents, mcpEntries, skills.fingerprint);
+        const runtimeRevision = digestRuntimeRevision(
+          documents,
+          mcpEntries,
+          skills.fingerprint,
+          oauthStoreRevisions,
+        );
         const skillWatchInputs = await Promise.all(
           skills.watchInputs.map(async (path): Promise<WatchInput> => {
             try {
@@ -189,6 +211,7 @@ export function createContextSnapshotResolver(
         const watchInputs = uniqueWatchInputs([
           ...targets.map(({ path }) => ({ path: dirname(path), kind: "directory" as const })),
           ...skillWatchInputs,
+          ...oauthStoreRevisions.map(({ path }) => ({ path, kind: "file" as const })),
         ]);
 
         return {
@@ -198,6 +221,7 @@ export function createContextSnapshotResolver(
           runtimeRevision,
           mcpEntries,
           skills,
+          ...(retrieval ? { retrieval } : {}),
           diagnostics,
           watchInputs,
         };
@@ -296,6 +320,68 @@ function sameReadSet(before: ReadResult[], after: ReadResult[]): boolean {
   return before.every((read, index) => read.revision === after[index]?.revision);
 }
 
+async function readOAuthStoreRevisions(
+  entries: readonly ResolvedMcpEntry[],
+): Promise<OAuthStoreRevision[]> {
+  const targets = Array.from(
+    new Map(
+      entries
+        .filter(
+          ({ entry, status }) =>
+            status === "effective" && (entry.type === "http" || entry.type === "sse"),
+        )
+        .map(({ oauthKey }) => [oauthKey.path, oauthKey.fingerprint] as const),
+    ),
+  ).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return Promise.all(
+    targets.map(async ([path, expectedFingerprint]) => {
+      try {
+        const parsed = JSON.parse((await readFile(path)).toString("utf8")) as unknown;
+        const state = isPlainObject(parsed) ? parsed : {};
+        return {
+          path,
+          revision: oauthActivationRevision(state, expectedFingerprint),
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return { path, revision: oauthActivationRevision({}, expectedFingerprint) };
+        }
+        throw error;
+      }
+    }),
+  );
+}
+
+function oauthActivationRevision(
+  state: Record<string, unknown>,
+  expectedFingerprint: string,
+): string {
+  const storedFingerprint =
+    typeof state.resource_fingerprint === "string" ? state.resource_fingerprint : undefined;
+  return createHash("sha256")
+    .update(
+      stableStringify({
+        fingerprintMismatch:
+          storedFingerprint !== undefined && storedFingerprint !== expectedFingerprint,
+        tokens: state.tokens ?? null,
+      }),
+    )
+    .digest("base64url");
+}
+
+function sameOAuthStoreRevisions(
+  before: readonly OAuthStoreRevision[],
+  after: readonly OAuthStoreRevision[],
+): boolean {
+  return (
+    before.length === after.length &&
+    before.every(
+      (revision, index) =>
+        revision.path === after[index]?.path && revision.revision === after[index]?.revision,
+    )
+  );
+}
+
 function sameScope(a: RatelScopeRef, b: RatelScopeRef): boolean {
   return (
     a.scope === b.scope &&
@@ -307,6 +393,7 @@ function digestRuntimeRevision(
   documents: ScopedDocumentSnapshot[],
   mcpEntries: ResolvedMcpEntry[],
   skillFingerprint: string,
+  oauthStoreRevisions: readonly OAuthStoreRevision[],
 ): RuntimeRevision {
   const normalizedDocuments = documents.map(({ ref, config }) => ({ ref, config }));
   const runtimeMcpEntries = mcpEntries.map(({ name, owner, status, runtimeCwd, oauthKey }) => ({
@@ -323,6 +410,8 @@ function digestRuntimeRevision(
     .update(stableStringify(runtimeMcpEntries))
     .update("\0")
     .update(skillFingerprint)
+    .update("\0")
+    .update(stableStringify(oauthStoreRevisions))
     .digest("base64url") as RuntimeRevision;
 }
 

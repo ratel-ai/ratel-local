@@ -180,6 +180,31 @@ describe("runMcpAuth", () => {
     expect(all).toMatch(/linear.*authorized.*re-authed/);
   });
 
+  it("reports reconnect-required after authorizing a dense scoped context", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      RATEL_USER_PATH,
+      JSON.stringify({
+        mcpServers: { stripe: { type: "http", url: "https://x" } },
+        retrieval: {
+          method: "semantic",
+          embedding: {
+            url: "https://embeddings.example/v1/embeddings",
+            model: "embed",
+          },
+        },
+      }),
+    );
+    const logs: string[] = [];
+    const ctx = makeCtx(fs, { log: (message) => logs.push(message) });
+
+    await runMcpAuth(ctx, {
+      authRunner: async () => [{ name: "stripe", status: "authorized", mode: "interactive" }],
+    });
+
+    expect(logs.join("\n")).toMatch(/stripe.*authorized.*reconnect.*new retrieval generation/i);
+  });
+
   describe("--check mode", () => {
     it("does not call the runner; reads OAuth stores and prints per-upstream status", async () => {
       const fs = new MemFs();

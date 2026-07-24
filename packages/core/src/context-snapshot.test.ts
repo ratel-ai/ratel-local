@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createContextSnapshotResolver, InvalidContextSnapshotError } from "./context-snapshot.js";
 import { createProjectRegistry } from "./project-registry.js";
@@ -111,6 +111,82 @@ describe("ContextSnapshotResolver", () => {
     const second = await secondResolver.resolve({ kind: "project", projectId: project.id });
 
     expect(first.runtimeRevision).not.toBe(second.runtimeRevision);
+  });
+
+  it("resolves retrieval atomically by scope and includes it in the runtime revision", async () => {
+    const { homeDir, projectRoot, project, resolver } = await fixture();
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      JSON.stringify({
+        retrieval: {
+          method: "semantic",
+          embedding: { huggingface: "intfloat/e5-small-v2", download: false },
+        },
+      }),
+    );
+
+    const inherited = await resolver.resolve({ kind: "project", projectId: project.id });
+    expect(inherited.retrieval).toEqual({
+      method: "semantic",
+      embedding: { huggingface: "intfloat/e5-small-v2", download: false },
+    });
+
+    await writeFile(
+      join(projectRoot, ".ratel", "config.json"),
+      JSON.stringify({
+        retrieval: {
+          method: "hybrid",
+          embedding: { ollama: "nomic-embed-text" },
+        },
+      }),
+    );
+    const overridden = await resolver.resolve({ kind: "project", projectId: project.id });
+
+    expect(overridden.retrieval).toEqual({
+      method: "hybrid",
+      embedding: { ollama: "nomic-embed-text" },
+    });
+    expect(overridden.runtimeRevision).not.toBe(inherited.runtimeRevision);
+  });
+
+  it("changes runtime revision when effective OAuth state changes", async () => {
+    const { homeDir, resolver } = await fixture();
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      JSON.stringify({
+        mcpServers: {
+          remote: { type: "http", url: "https://remote.example/mcp" },
+        },
+      }),
+    );
+
+    const before = await resolver.resolve({ kind: "global" });
+    const remote = before.mcpEntries.find(({ name }) => name === "remote");
+    if (!remote) throw new Error("expected resolved OAuth entry");
+    const { path: oauthPath, fingerprint: resourceFingerprint } = remote.oauthKey;
+    expect(before.watchInputs).toContainEqual({ path: oauthPath, kind: "file" });
+
+    await mkdir(dirname(oauthPath), { recursive: true });
+    await writeFile(
+      oauthPath,
+      JSON.stringify({
+        resource_fingerprint: resourceFingerprint,
+        code_verifier: "authorization-in-progress",
+      }),
+    );
+    const inProgress = await resolver.resolve({ kind: "global" });
+    expect(inProgress.runtimeRevision).toBe(before.runtimeRevision);
+
+    await writeFile(
+      oauthPath,
+      JSON.stringify({
+        resource_fingerprint: resourceFingerprint,
+        tokens: { access_token: "authorized", token_type: "Bearer" },
+      }),
+    );
+
+    const after = await resolver.resolve({ kind: "global" });
+    expect(after.runtimeRevision).not.toBe(before.runtimeRevision);
   });
 
   it("fails a new snapshot explicitly when a scoped config is invalid", async () => {

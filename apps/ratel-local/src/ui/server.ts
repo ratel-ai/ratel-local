@@ -17,6 +17,7 @@ import {
   type DocumentRevision,
   documentRevision,
   InvalidContextSnapshotError,
+  markDenseAuthReconnectRequired,
   type PreparedChangeCoordinator,
   type ProjectAdmissionLock,
   type ProjectId,
@@ -481,12 +482,16 @@ async function authResolvedServer(
   const gateway = await buildGatewayFromConfig(
     { mcpServers: {} },
     {
-      resolvedMcpEntries: snapshot.mcpEntries,
-      resolvedSkills: snapshot.skills.effectiveSkills,
+      // This route authorizes one server; it does not need to connect or index
+      // the rest of the resolved context.
+      resolvedMcpEntries: [resolved],
     },
   );
   try {
-    const results = await gateway.runAuthFlow({ name });
+    let results = await gateway.runAuthFlow({ name });
+    if (snapshot.retrieval?.method === "semantic" || snapshot.retrieval?.method === "hybrid") {
+      results = markDenseAuthReconnectRequired(results);
+    }
     const failed = results.find(({ status }) => status === "failed" || status === "unsupported");
     if (failed) {
       throw new UiRouteError(

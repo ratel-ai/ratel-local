@@ -7,6 +7,7 @@ import {
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
+  EmbedderError,
   GET_SKILL_CONTENT_ID,
   INVOKE_TOOL_ID,
   registerMcpServer,
@@ -176,6 +177,41 @@ describe("createMcpServer", () => {
 
     await client.close();
     await handle.close();
+  });
+
+  it("keeps the advertised capability-tool schemas stable in dense mode", async () => {
+    const bm25 = await buildClientAgainst(new ToolCatalog());
+    const semantic = await buildClientAgainst(
+      new ToolCatalog({
+        method: "semantic",
+        embedding: {
+          url: "http://127.0.0.1:9/v1/embeddings",
+          model: "schema-only",
+        },
+      }),
+    );
+    try {
+      const bm25Tools = (await bm25.client.listTools()).tools;
+      const semanticTools = (await semantic.client.listTools()).tools;
+      expect(
+        semanticTools.map(({ name, inputSchema, outputSchema }) => ({
+          name,
+          inputSchema,
+          outputSchema,
+        })),
+      ).toEqual(
+        bm25Tools.map(({ name, inputSchema, outputSchema }) => ({
+          name,
+          inputSchema,
+          outputSchema,
+        })),
+      );
+    } finally {
+      await bm25.client.close();
+      await bm25.handle.close();
+      await semantic.client.close();
+      await semantic.handle.close();
+    }
   });
 
   it("search_tools (deprecated) still returns the pre-0.2.0 tools-only {groups} shape", async () => {
@@ -691,6 +727,50 @@ describe("createMcpServer skills", () => {
 
     await client.close();
     await handle.close();
+  });
+
+  it("returns typed embedding failures as structured MCP errors", async () => {
+    const catalog = new ToolCatalog();
+    const search = vi
+      .spyOn(catalog, "searchAsync")
+      .mockRejectedValue(new EmbedderError("endpoint unavailable", "Inference"));
+    const { client, handle } = await buildClientAgainst(catalog);
+    try {
+      const result = await client.callTool({
+        name: SEARCH_CAPABILITIES_ID,
+        arguments: { query: "weather forecast" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toEqual({
+        error: "retrieval_failed",
+        code: "Inference",
+        message: "endpoint unavailable",
+        isError: true,
+      });
+
+      const listed = await client.listTools();
+      for (const name of [SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID]) {
+        const outputSchema = listed.tools.find((tool) => tool.name === name)?.outputSchema as {
+          type?: string;
+          oneOf?: Array<{ required?: string[] }>;
+        };
+        expect(outputSchema.type).toBe("object");
+        expect(outputSchema.oneOf).toHaveLength(2);
+        expect(outputSchema.oneOf?.[1]?.required).toEqual(["error", "code", "message", "isError"]);
+      }
+
+      const legacyResult = await client.callTool({
+        name: SEARCH_TOOLS_ID,
+        arguments: { query: "weather forecast" },
+      });
+      expect(legacyResult.isError).toBe(true);
+      expect(legacyResult.structuredContent).toEqual(result.structuredContent);
+    } finally {
+      search.mockRestore();
+      await client.close();
+      await handle.close();
+    }
   });
 
   it("get_skill_content loads the body; instructions mention get_skill_content", async () => {
