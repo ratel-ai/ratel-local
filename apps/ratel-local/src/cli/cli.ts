@@ -72,7 +72,7 @@ Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
            or --auto-config to load user/project/local Ratel configs)
   connect  bridge this agent session to the scoped local daemon [--project-root <path>]
-  setup    interactively install or start the persistent daemon [--yes] [--port N]
+  setup    onboard the daemon and supported agents [--agent NAME] [--daemon-only] [--yes]
   daemon   manage the loopback HTTP daemon and UI (run, install, status, daemon open)
   import   migrate agent MCP configs and native skills into Ratel
   link     install the agent plugin, falling back to MCP config when needed
@@ -176,11 +176,19 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "setup") {
     const version = options.cliVersion ?? options.serverVersion;
+    const setupAgents = resolveSetupAgents(parsed.flags.agent);
+    const daemonOnly = resolveBooleanFlag(parsed.flags["daemon-only"], "--daemon-only");
+    if (daemonOnly && setupAgents.provided) {
+      throw new ArgError("--daemon-only cannot be combined with --agent");
+    }
     await runSetup(ctx, {
       ...options,
       serverVersion: options.serverVersion ?? version,
       expectedVersion: version,
       yes: parsed.flags.yes === true,
+      agentKinds: setupAgents.kinds,
+      agentsProvided: setupAgents.provided,
+      daemonOnly,
     });
     return {};
   }
@@ -262,7 +270,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 }
 
 function commandUsesPreparedChanges(parsed: ParsedArgs): boolean {
-  if (parsed.group === "import" || parsed.group === "link") return true;
+  if (parsed.group === "setup" || parsed.group === "import" || parsed.group === "link") return true;
   if (parsed.group === "statusline") {
     return parsed.verb === "install" || parsed.verb === "uninstall";
   }
@@ -441,6 +449,37 @@ function resolveAgentKind(value: unknown): SupportedAgentHostKind | undefined {
     throw new ArgError(`--agent must be one of auto|claude-code|codex, got "${value}"`);
   }
   return value;
+}
+
+function resolveSetupAgents(value: unknown): {
+  kinds?: SupportedAgentHostKind[];
+  provided: boolean;
+} {
+  if (value === undefined || value === false) return { provided: false };
+  const values = Array.isArray(value) ? value : [value];
+  if (values.some((candidate) => typeof candidate !== "string")) {
+    throw new ArgError("--agent must be repeatable auto|claude-code|codex");
+  }
+  if (values.includes("auto")) {
+    if (values.length !== 1) {
+      throw new ArgError("--agent auto cannot be combined with another --agent value");
+    }
+    return { provided: true };
+  }
+  const kinds: SupportedAgentHostKind[] = [];
+  for (const candidate of values) {
+    if (!isSupportedAgentHostKind(candidate)) {
+      throw new ArgError(`--agent must be repeatable auto|claude-code|codex, got "${candidate}"`);
+    }
+    if (!kinds.includes(candidate)) kinds.push(candidate);
+  }
+  return { kinds, provided: true };
+}
+
+function resolveBooleanFlag(value: unknown, flag: string): boolean {
+  if (value === undefined || value === false) return false;
+  if (value === true) return true;
+  throw new ArgError(`${flag} does not accept a value`);
 }
 
 function resolveImportConflictStrategy(value: unknown): ImportConflictStrategy | undefined {

@@ -1,16 +1,30 @@
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
+import {
+  findAgentHostRatelPluginConnection,
+  NamedAgentHostAdapter,
+  SUPPORTED_AGENT_HOSTS,
+  type SupportedAgentHostKind,
+} from "@ratel-ai/ratel-local-core";
 import type { ParsedArgs } from "../args.js";
 import { inspectDaemonService, runDaemon } from "./daemon.js";
+import { runImport } from "./import.js";
+import { runLink } from "./link.js";
 import type { ServeOptions } from "./serve.js";
 import type { HandlerCtx } from "./types.js";
 
 export const SETUP_USAGE = `usage: ratel-local setup [options]
 
-Install or start the persistent Ratel daemon for plugin connectors.
+Install or update the daemon, connect supported agents, and optionally import
+their existing MCP servers and skills.
 
 Options:
-  --yes       accept the install/start action without prompting
+  --agent auto|claude-code|codex
+              connect an agent; repeat for multiple agents
+  --daemon-only
+              install/update/start only; skip agent onboarding
+  --yes       accept daemon actions and explicitly selected agent links;
+              never imports MCPs automatically
   --port N    choose the daemon port for first installation (default: 5731)
   --help      show this help`;
 
@@ -28,12 +42,26 @@ export interface SetupResult extends SetupDaemonStatus {
 
 export interface SetupOptions extends ServeOptions {
   yes?: boolean;
+  agentKinds?: readonly SupportedAgentHostKind[];
+  agentsProvided?: boolean;
+  daemonOnly?: boolean;
   expectedVersion?: string;
   inspect?: (parsed: ParsedArgs) => Promise<SetupDaemonStatus>;
   install?: () => Promise<void>;
   start?: () => Promise<void>;
   upgrade?: (port: number) => Promise<void>;
   serviceExecutable?: SetupServiceExecutable;
+  detectAgents?: (ctx: HandlerCtx) => Promise<SetupAgentDetection[]>;
+  linkAgent?: (ctx: HandlerCtx, agentKind: SupportedAgentHostKind) => Promise<void>;
+  importAgent?: (ctx: HandlerCtx, agentKind: SupportedAgentHostKind) => Promise<void>;
+}
+
+export interface SetupAgentDetection {
+  kind: SupportedAgentHostKind;
+  displayName: string;
+  present: boolean;
+  reasons: string[];
+  warnings: string[];
 }
 
 export interface SetupServiceExecutable {
@@ -66,8 +94,35 @@ export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Pro
       await runDaemonCommand("uninstall", ctx, options);
       await runDaemonCommand("install", ctx, options, port);
     });
-  const status = await inspect();
+  const daemon = await ensureDaemon(ctx, options, { inspect, install, start, upgrade });
+  if (!daemon.ready) return daemon.result;
 
+  if (options.daemonOnly) {
+    ctx.prompts.outro("setup complete · daemon ready");
+    return daemon.result;
+  }
+
+  const onboarding = await onboardAgents(ctx, options);
+  if (onboarding.cancelled) return daemon.result;
+  ctx.prompts.outro(
+    onboarding.connected.length > 0
+      ? "setup complete · daemon ready · agent onboarding complete"
+      : "setup complete · daemon ready",
+  );
+  return daemon.result;
+}
+
+async function ensureDaemon(
+  ctx: HandlerCtx,
+  options: SetupOptions,
+  actions: {
+    inspect: () => Promise<SetupDaemonStatus>;
+    install: () => Promise<void>;
+    start: () => Promise<void>;
+    upgrade: (port: number) => Promise<void>;
+  },
+): Promise<{ result: SetupResult; ready: boolean }> {
+  const status = await actions.inspect();
   if (
     status.state !== "not-installed" &&
     options.expectedVersion &&
@@ -82,15 +137,15 @@ export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Pro
         });
     if (ctx.prompts.isCancel(confirmed) || confirmed === false) {
       ctx.prompts.cancel("setup cancelled");
-      return { ...status, changed: false };
+      return { result: { ...status, changed: false }, ready: false };
     }
-    await upgrade(status.port);
-    const running = await inspect();
+    await actions.upgrade(status.port);
+    const running = await actions.inspect();
     if (running.state !== "running" || running.version !== options.expectedVersion) {
       throw new Error(`daemon did not report version ${options.expectedVersion} after replacement`);
     }
-    ctx.prompts.outro(`setup complete · daemon updated to ${options.expectedVersion}`);
-    return { ...running, changed: true };
+    ctx.prompts.note(`Updated the daemon to ${options.expectedVersion}.`, "Daemon");
+    return { result: { ...running, changed: true }, ready: true };
   }
 
   if (status.state === "running") {
@@ -98,8 +153,7 @@ export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Pro
       `The Ratel daemon is already running at http://127.0.0.1:${status.port}.`,
       "Daemon",
     );
-    ctx.prompts.outro("setup complete");
-    return { ...status, changed: false };
+    return { result: { ...status, changed: false }, ready: true };
   }
 
   if (status.state === "stopped") {
@@ -111,18 +165,18 @@ export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Pro
         });
     if (ctx.prompts.isCancel(confirmed) || confirmed === false) {
       ctx.prompts.cancel("setup cancelled");
-      return { ...status, changed: false };
+      return { result: { ...status, changed: false }, ready: false };
     }
-    await start();
-    const running = await inspect();
+    await actions.start();
+    const running = await actions.inspect();
     if (
       running.state !== "running" ||
       (options.expectedVersion && running.version !== options.expectedVersion)
     ) {
       throw new Error("daemon did not report running after start");
     }
-    ctx.prompts.outro("setup complete · daemon running");
-    return { ...running, changed: true };
+    ctx.prompts.note("Started the installed Ratel daemon.", "Daemon");
+    return { result: { ...running, changed: true }, ready: true };
   }
 
   const confirmed = options.yes
@@ -133,18 +187,145 @@ export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Pro
       });
   if (ctx.prompts.isCancel(confirmed) || confirmed === false) {
     ctx.prompts.cancel("setup cancelled");
-    return { ...status, changed: false };
+    return { result: { ...status, changed: false }, ready: false };
   }
-  await install();
-  const running = await inspect();
+  await actions.install();
+  const running = await actions.inspect();
   if (
     running.state !== "running" ||
     (options.expectedVersion && running.version !== options.expectedVersion)
   ) {
     throw new Error("daemon did not report running after installation");
   }
-  ctx.prompts.outro("setup complete · daemon installed and running");
-  return { ...running, changed: true };
+  ctx.prompts.note("Installed and started the Ratel daemon.", "Daemon");
+  return { result: { ...running, changed: true }, ready: true };
+}
+
+async function onboardAgents(
+  ctx: HandlerCtx,
+  options: SetupOptions,
+): Promise<{ connected: SupportedAgentHostKind[]; cancelled: boolean }> {
+  const detections = await (options.detectAgents ?? detectSupportedAgents)(ctx);
+  ctx.prompts.note(renderAgentDetections(detections), "Supported agents");
+
+  let selected: SupportedAgentHostKind[];
+  if (options.agentsProvided) {
+    selected =
+      options.agentKinds === undefined
+        ? detections.filter(({ present }) => present).map(({ kind }) => kind)
+        : dedupeAgentKinds(options.agentKinds);
+  } else if (options.yes) {
+    ctx.prompts.note(
+      "No agents were changed. Pass repeatable `--agent claude-code|codex` to connect agents during automated setup.",
+      "Safe automation",
+    );
+    return { connected: [], cancelled: false };
+  } else {
+    const detected = detections.filter(({ present }) => present);
+    if (detected.length === 0) {
+      ctx.prompts.note(
+        "No Claude Code or Codex configuration was detected. The daemon is ready; rerun setup after installing an agent.",
+        "Agent connection",
+      );
+      return { connected: [], cancelled: false };
+    }
+    const picked = await ctx.prompts.multiselect<SupportedAgentHostKind>({
+      message: "Which agents should connect through Ratel Local?",
+      options: detected.map(({ kind, displayName, reasons }) => ({
+        value: kind,
+        label: displayName,
+        hint: reasons[0],
+      })),
+      initialValues: detected.map(({ kind }) => kind),
+      required: false,
+    });
+    if (ctx.prompts.isCancel(picked)) {
+      ctx.prompts.cancel("agent onboarding cancelled · daemon remains ready");
+      return { connected: [], cancelled: true };
+    }
+    selected = dedupeAgentKinds(picked as SupportedAgentHostKind[]);
+  }
+
+  const linkAgent =
+    options.linkAgent ??
+    ((targetCtx: HandlerCtx, agentKind: SupportedAgentHostKind) =>
+      runLink(targetCtx, { agentKind, yes: true }).then(() => {}));
+  for (const agentKind of selected) {
+    await linkAgent(ctx, agentKind);
+  }
+  if (selected.length === 0) return { connected: [], cancelled: false };
+
+  if (options.yes) {
+    ctx.prompts.note(
+      "Existing MCP servers and skills were not imported automatically. Use `ratel-local import --yes --agent <agent>` for an explicit automated migration.",
+      "Safe automation",
+    );
+    return { connected: selected, cancelled: false };
+  }
+
+  const importSelection = await ctx.prompts.multiselect<SupportedAgentHostKind>({
+    message: "Preview existing MCP servers and skills to import from which agents?",
+    options: selected.map((kind) => ({
+      value: kind,
+      label: agentDisplayName(kind),
+      hint: "Runs a separate preview and confirmation workflow.",
+    })),
+    initialValues: [],
+    required: false,
+  });
+  if (ctx.prompts.isCancel(importSelection)) {
+    ctx.prompts.note("Skipped MCP and skill import.", "Import");
+    return { connected: selected, cancelled: false };
+  }
+
+  const importAgent =
+    options.importAgent ??
+    ((targetCtx: HandlerCtx, agentKind: SupportedAgentHostKind) =>
+      runImport(targetCtx, { agentKind }).then(() => {}));
+  for (const agentKind of dedupeAgentKinds(importSelection as SupportedAgentHostKind[])) {
+    await importAgent(ctx, agentKind);
+  }
+  return { connected: selected, cancelled: false };
+}
+
+async function detectSupportedAgents(ctx: HandlerCtx): Promise<SetupAgentDetection[]> {
+  return Promise.all(
+    SUPPORTED_AGENT_HOSTS.map(async ({ kind, displayName }) => {
+      const detection = await new NamedAgentHostAdapter(kind).detect({
+        env: ctx.env,
+        fs: ctx.fs,
+      });
+      const pluginConnection = await findAgentHostRatelPluginConnection(ctx, kind);
+      const pluginDetected = pluginConnection !== null;
+      return {
+        kind,
+        displayName,
+        present: detection.present || pluginDetected,
+        reasons: [
+          ...detection.reasons,
+          ...(pluginDetected ? ["Found the Ratel Local agent plugin."] : []),
+        ],
+        warnings: detection.warnings,
+      };
+    }),
+  );
+}
+
+function renderAgentDetections(detections: SetupAgentDetection[]): string {
+  return detections
+    .map(({ displayName, present, reasons, warnings }) => {
+      const details = [...reasons, ...warnings].join(" ");
+      return `- ${displayName}: ${present ? "detected" : "not detected"}${details ? ` · ${details}` : ""}`;
+    })
+    .join("\n");
+}
+
+function dedupeAgentKinds(agentKinds: readonly SupportedAgentHostKind[]): SupportedAgentHostKind[] {
+  return [...new Set(agentKinds)];
+}
+
+function agentDisplayName(agentKind: SupportedAgentHostKind): string {
+  return agentKind === "codex" ? "Codex" : "Claude Code";
 }
 
 async function runDaemonCommand(

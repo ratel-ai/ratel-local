@@ -323,12 +323,24 @@ describe("runCli — help and routing", () => {
     expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
   });
 
-  it("`ratel-local setup --help` describes interactive and automated setup", async () => {
+  it("`ratel-local setup --help` describes complete and automated onboarding", async () => {
     const logs: string[] = [];
     await runCli(["setup", "--help"], { logger: (message) => logs.push(message) });
     const out = logs.join("\n");
+    expect(out).toContain("--agent auto|claude-code|codex");
+    expect(out).toContain("--daemon-only");
     expect(out).toContain("--yes");
     expect(out).toContain("--port N");
+    expect(out).toContain("never imports MCPs automatically");
+  });
+
+  it("rejects combining setup --daemon-only with agent selection", async () => {
+    await expect(
+      runCli(["setup", "--daemon-only", "--agent", "codex"], {
+        fs: new MemFs(),
+        logger: () => {},
+      }),
+    ).rejects.toThrow(/--daemon-only cannot be combined with --agent/);
   });
 
   it("rejects an unknown command with ArgError", async () => {

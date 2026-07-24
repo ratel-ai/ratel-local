@@ -1,6 +1,6 @@
 import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
-import { silentPromptAdapter } from "../prompts.js";
+import { type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import { resolveSetupServiceExecutable, runSetup } from "./setup.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -226,5 +226,146 @@ describe("runSetup", () => {
       version: "0.6.0-rc.0",
       changed: true,
     });
+  });
+
+  it("detects agents, connects the selected hosts, and offers import separately", async () => {
+    let selection = 0;
+    const prompts: PromptAdapter = {
+      ...silentPromptAdapter(),
+      async multiselect<T>() {
+        selection++;
+        return (selection === 1 ? ["claude-code", "codex"] : ["codex"]) as T[];
+      },
+    };
+    const linkAgent = vi.fn(async () => {});
+    const importAgent = vi.fn(async () => {});
+
+    await runSetup(setupCtx({ prompts }), {
+      inspect: async () => ({ state: "running", port: 5731 }),
+      detectAgents: async () => [
+        {
+          kind: "claude-code",
+          displayName: "Claude Code",
+          present: true,
+          reasons: ["Found ~/.claude.json."],
+          warnings: [],
+        },
+        {
+          kind: "codex",
+          displayName: "Codex",
+          present: true,
+          reasons: ["Found ~/.codex/config.toml."],
+          warnings: [],
+        },
+      ],
+      linkAgent,
+      importAgent,
+    });
+
+    expect(linkAgent.mock.calls.map(([, kind]) => kind)).toEqual(["claude-code", "codex"]);
+    expect(importAgent.mock.calls.map(([, kind]) => kind)).toEqual(["codex"]);
+  });
+
+  it("keeps plain --yes automation daemon-only unless agents are explicit", async () => {
+    const multiselect = vi.fn();
+    const linkAgent = vi.fn(async () => {});
+    const importAgent = vi.fn(async () => {});
+
+    await runSetup(
+      setupCtx({
+        prompts: { ...silentPromptAdapter(), multiselect },
+      }),
+      {
+        yes: true,
+        inspect: async () => ({ state: "running", port: 5731 }),
+        detectAgents: async () => [
+          {
+            kind: "claude-code",
+            displayName: "Claude Code",
+            present: true,
+            reasons: ["Found ~/.claude.json."],
+            warnings: [],
+          },
+        ],
+        linkAgent,
+        importAgent,
+      },
+    );
+
+    expect(multiselect).not.toHaveBeenCalled();
+    expect(linkAgent).not.toHaveBeenCalled();
+    expect(importAgent).not.toHaveBeenCalled();
+  });
+
+  it("links repeatable explicit agents in --yes mode without importing", async () => {
+    const multiselect = vi.fn();
+    const linkAgent = vi.fn(async () => {});
+    const importAgent = vi.fn(async () => {});
+
+    await runSetup(
+      setupCtx({
+        prompts: { ...silentPromptAdapter(), multiselect },
+      }),
+      {
+        yes: true,
+        agentsProvided: true,
+        agentKinds: ["claude-code", "codex", "claude-code"],
+        inspect: async () => ({ state: "running", port: 5731 }),
+        detectAgents: async () => [],
+        linkAgent,
+        importAgent,
+      },
+    );
+
+    expect(linkAgent.mock.calls.map(([, kind]) => kind)).toEqual(["claude-code", "codex"]);
+    expect(multiselect).not.toHaveBeenCalled();
+    expect(importAgent).not.toHaveBeenCalled();
+  });
+
+  it("uses --agent auto to link every detected agent safely", async () => {
+    const linkAgent = vi.fn(async () => {});
+
+    await runSetup(setupCtx(), {
+      yes: true,
+      agentsProvided: true,
+      inspect: async () => ({ state: "running", port: 5731 }),
+      detectAgents: async () => [
+        {
+          kind: "claude-code",
+          displayName: "Claude Code",
+          present: true,
+          reasons: [],
+          warnings: [],
+        },
+        {
+          kind: "codex",
+          displayName: "Codex",
+          present: false,
+          reasons: [],
+          warnings: [],
+        },
+      ],
+      linkAgent,
+    });
+
+    expect(linkAgent.mock.calls.map(([, kind]) => kind)).toEqual(["claude-code"]);
+  });
+
+  it("skips agent detection entirely in --daemon-only mode", async () => {
+    const detectAgents = vi.fn(async () => []);
+    const linkAgent = vi.fn(async () => {});
+    const importAgent = vi.fn(async () => {});
+
+    await runSetup(setupCtx(), {
+      daemonOnly: true,
+      inspect: async () => ({ state: "running", port: 5731 }),
+      detectAgents,
+      linkAgent,
+      importAgent,
+    });
+
+    expect(detectAgents).not.toHaveBeenCalled();
+    expect(linkAgent).not.toHaveBeenCalled();
+    expect(importAgent).not.toHaveBeenCalled();
   });
 });

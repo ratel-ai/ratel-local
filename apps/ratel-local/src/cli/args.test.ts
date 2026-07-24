@@ -93,6 +93,15 @@ describe("parseArgs — group/verb routing", () => {
     expect(result.flags).toEqual({ yes: true, port: "7331" });
   });
 
+  it("collects repeatable setup agent flags", () => {
+    const result = parseArgs(["setup", "--agent", "claude-code", "--agent=codex", "--daemon-only"]);
+
+    expect(result.flags).toEqual({
+      agent: ["claude-code", "codex"],
+      "daemon-only": true,
+    });
+  });
+
   it("recognizes the top-level connect command and project root flag", () => {
     const result = parseArgs(["connect", "--project-root", "/repo"]);
     expect(result.group).toBe("connect");
