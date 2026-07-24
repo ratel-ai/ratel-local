@@ -17,13 +17,19 @@ import {
   type DocumentRevision,
   documentRevision,
   InvalidContextSnapshotError,
+  loadMergedConfig,
   markDenseAuthReconnectRequired,
   type PreparedChangeCoordinator,
   type ProjectAdmissionLock,
   type ProjectId,
   type ProjectRegistry,
+  parseConfig,
   parseSkillMd,
+  preflightRetrieval,
   type RatelScopeRef,
+  type RetrievalConfig,
+  type RetrievalPreflightOptions,
+  type RetrievalPreflightResult,
   type RuntimeContextRef,
   readJson,
   type ServerEntry,
@@ -82,6 +88,10 @@ export interface StartUiServerOptions {
   /** Long-lived local daemon credential used by CLI API clients. */
   daemonToken?: string;
   canForgetProject?: CanForgetProject;
+  retrievalPreflight?: (
+    retrieval: RetrievalConfig,
+    options: RetrievalPreflightOptions,
+  ) => Promise<RetrievalPreflightResult>;
   publicRoute?: (req: IncomingMessage, res: ServerResponse, path: string) => Promise<boolean>;
 }
 
@@ -200,6 +210,7 @@ async function handleRequest(
       opts.skillImportControlPlane,
       opts.skillRegistrationControlPlane,
       opts.preparedChanges,
+      opts.retrievalPreflight ?? preflightRetrieval,
     );
     if (!response) {
       writeJson(res, 404, { error: "not found" });
@@ -231,6 +242,10 @@ async function route(
   skillImportControlPlane?: SkillImportControlPlane,
   skillRegistrationControlPlane?: SkillRegistrationControlPlane,
   preparedChanges?: PreparedChangeCoordinator,
+  retrievalPreflight: (
+    retrieval: RetrievalConfig,
+    options: RetrievalPreflightOptions,
+  ) => Promise<RetrievalPreflightResult> = preflightRetrieval,
 ): Promise<ApiResponse | null> {
   const method = req.method ?? "GET";
 
@@ -249,6 +264,45 @@ async function route(
 
   if (method === "GET" && path === "/api/config") {
     return getConfigWithSnapshot(ctx, runtimeContext, snapshotResolver);
+  }
+  if ((method === "PATCH" || method === "DELETE") && path === "/api/retrieval") {
+    if (!configControlPlane) return null;
+    const body = await readJsonBody(req);
+    const target = parseRatelScopeRef(body.target);
+    const expectedRevision = optionalDocumentRevision(body.expectedRevision);
+    const action = method === "DELETE" ? "reset" : "configure";
+    const retrieval = action === "configure" ? parseRetrievalBody(body.retrieval) : undefined;
+    const commit = await configControlPlane.mutateRetrieval({
+      target,
+      action,
+      ...(retrieval ? { retrieval } : {}),
+      ...(expectedRevision ? { expectedRevision } : {}),
+    });
+    return {
+      status: 200,
+      body: {
+        action,
+        target,
+        ...(retrieval ? { retrieval } : {}),
+        transactionId: commit.transactionId,
+        changedPaths: commit.changedPaths,
+        revisions: commit.revisions,
+        reconnectRequired: true,
+        reconnectMessage:
+          "Reconnect the affected agent/context to acquire the new retrieval generation; restart the daemon only as a fallback.",
+      },
+    };
+  }
+  if (method === "POST" && path === "/api/retrieval/prepare") {
+    const body = await readJsonBody(req);
+    const retrieval =
+      body.retrieval === undefined
+        ? ((await loadMergedConfig(ctx))?.retrieval ?? { method: "bm25" as const })
+        : parseRetrievalBody(body.retrieval);
+    return {
+      status: 200,
+      body: await retrievalPreflight(retrieval, { homeDir: ctx.env.homeDir }),
+    };
   }
   if (method === "GET" && path === "/api/projects" && projects) {
     return getProjectsRoute(projects);
@@ -633,8 +687,13 @@ async function getConfigWithSnapshot(
       documents: snapshot.documents,
       resolvedMcpEntries: snapshot.mcpEntries,
       diagnostics: snapshot.diagnostics,
+      effectiveRetrieval: snapshot.retrieval ?? { method: "bm25" },
     },
   };
+}
+
+function parseRetrievalBody(value: unknown): RetrievalConfig {
+  return parseConfig({ mcpServers: {}, retrieval: value }).retrieval as RetrievalConfig;
 }
 
 async function scopedAuthStatus(

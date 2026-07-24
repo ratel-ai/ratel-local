@@ -19,6 +19,7 @@ import {
   nodeFs,
   type PreparedChangeCoordinator,
   type ProjectRegistry,
+  preflightRetrieval,
   type RatelScopeRef,
   ratelConfigPath,
   type SupportedAgentHostKind,
@@ -26,6 +27,7 @@ import {
 } from "@ratel-ai/ratel-local-core";
 import { type AgentPluginInstaller, installRatelAgentPlugin } from "../agent-plugin.js";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
+import { requestRunningDaemon, requireDaemonJson } from "./daemon-api.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
 import { runConnect } from "./handlers/connect.js";
 import { daemonPaths, runDaemon } from "./handlers/daemon.js";
@@ -34,6 +36,7 @@ import { IMPORT_USAGE, runImport } from "./handlers/import.js";
 import { LINK_USAGE, runLink } from "./handlers/link.js";
 import { MCP_USAGE, runMcp } from "./handlers/mcp.js";
 import { PROJECT_USAGE, runProject } from "./handlers/project.js";
+import { type CliRetrievalMutator, RETRIEVAL_USAGE, runRetrieval } from "./handlers/retrieval.js";
 import { runServe } from "./handlers/serve.js";
 import { runSetup, SETUP_USAGE } from "./handlers/setup.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
@@ -59,6 +62,7 @@ export interface RunCliOptions {
   stdout?: (message: string) => void;
   projectRegistryFactory?: (homeDir: string) => ProjectRegistry;
   preparedChanges?: PreparedChangeCoordinator;
+  retrievalPreflight?: typeof preflightRetrieval;
 }
 
 export interface RunCliResult {
@@ -77,6 +81,7 @@ Commands:
   link     install the agent plugin, falling back to MCP config when needed
   mcp      manage MCP servers (add, remove, list, get, edit, auth)
   backup   manage backup snapshots (list)
+  retrieval manage scoped BM25, semantic, and hybrid retrieval
   project  manage registered project roots (list, add, remove)
   skill    manage scoped skills (skill import/list, add-scope, remove-scope, remove)
   doctor   recover interrupted mutations and diagnose scoped configuration/OAuth state
@@ -114,6 +119,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "backup" && parsed.verb === undefined) {
     log(BACKUP_USAGE);
+    return {};
+  }
+
+  if (parsed.group === "retrieval" && parsed.verb === undefined) {
+    log(RETRIEVAL_USAGE);
     return {};
   }
 
@@ -227,6 +237,17 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     return {};
   }
 
+  if (parsed.group === "retrieval") {
+    const registry = options.projectRegistryFactory
+      ? options.projectRegistryFactory(ctx.env.homeDir)
+      : createProjectRegistry({ homeDir: ctx.env.homeDir });
+    await runRetrieval(ctx, {
+      mutateRetrieval: createCliRetrievalMutator(ctx, registry),
+      preflight: options.retrievalPreflight ?? preflightRetrieval,
+    });
+    return {};
+  }
+
   if (parsed.group === "project") {
     const registry = options.projectRegistryFactory
       ? options.projectRegistryFactory(ctx.env.homeDir)
@@ -268,6 +289,9 @@ function commandUsesPreparedChanges(parsed: ParsedArgs): boolean {
   if (parsed.group === "mcp") {
     return parsed.verb === "add" || parsed.verb === "edit" || parsed.verb === "remove";
   }
+  if (parsed.group === "retrieval") {
+    return parsed.verb === "configure" || parsed.verb === "reset";
+  }
   if (parsed.group === "skill") {
     return [
       "import",
@@ -279,6 +303,62 @@ function commandUsesPreparedChanges(parsed: ParsedArgs): boolean {
     ].includes(parsed.verb ?? "");
   }
   return false;
+}
+
+function createCliRetrievalMutator(
+  ctx: HandlerCtx,
+  registry: ProjectRegistry,
+): CliRetrievalMutator {
+  return async (request) => {
+    const { target, projectRoot } = await cliMutationTarget(ctx, registry, request.scope);
+    const path = ratelConfigPath(request.scope, {
+      homeDir: ctx.env.homeDir,
+      ...(projectRoot ? { projectRoot } : {}),
+    });
+    if (await mutateRetrievalThroughRunningDaemon(ctx, request, target)) {
+      return { path };
+    }
+    const preparedChanges =
+      ctx.preparedChanges ??
+      createPreparedChangeCoordinator({
+        mutationEngine: await createMutationEngine({
+          controlDir: join(ctx.env.homeDir, ".ratel"),
+        }),
+      });
+    const control = await createConfigControlPlane({
+      homeDir: ctx.env.homeDir,
+      projectRegistry: registry,
+      preparedChanges,
+      localGitExcludeManager: createLocalGitExcludeManager(),
+    });
+    await control.mutateRetrieval({
+      target,
+      action: request.action,
+      ...(request.retrieval ? { retrieval: request.retrieval } : {}),
+      ...(request.expectedRevision ? { expectedRevision: request.expectedRevision } : {}),
+    });
+    return { path };
+  };
+}
+
+async function mutateRetrievalThroughRunningDaemon(
+  ctx: HandlerCtx,
+  request: Parameters<CliRetrievalMutator>[0],
+  target: RatelScopeRef,
+): Promise<boolean> {
+  const projectQuery =
+    target.scope === "user" ? "" : `?projectId=${encodeURIComponent(target.projectId)}`;
+  const response = await requestRunningDaemon(ctx, `/api/retrieval${projectQuery}`, {
+    method: request.action === "reset" ? "DELETE" : "PATCH",
+    body: {
+      target,
+      ...(request.retrieval ? { retrieval: request.retrieval } : {}),
+      ...(request.expectedRevision ? { expectedRevision: request.expectedRevision } : {}),
+    },
+  });
+  if (!response) return false;
+  await requireDaemonJson(response, `retrieval ${request.action}`);
+  return true;
 }
 
 function createCliServerMutator(ctx: HandlerCtx, registry: ProjectRegistry): CliServerMutator {

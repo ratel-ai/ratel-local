@@ -1,6 +1,7 @@
 export type Group =
   | "mcp"
   | "backup"
+  | "retrieval"
   | "project"
   | "skill"
   | "doctor"
@@ -18,6 +19,8 @@ export type Group =
 export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "auth";
 
 export type BackupVerb = "list";
+
+export type RetrievalVerb = "status" | "configure" | "reset" | "prepare";
 
 export type ProjectVerb = "list" | "add" | "remove";
 
@@ -47,6 +50,8 @@ export type SkillVerb =
 const MCP_VERBS: ReadonlySet<string> = new Set(["add", "remove", "list", "get", "edit", "auth"]);
 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
+
+const RETRIEVAL_VERBS: ReadonlySet<string> = new Set(["status", "configure", "reset", "prepare"]);
 
 const PROJECT_VERBS: ReadonlySet<string> = new Set(["list", "add", "remove"]);
 
@@ -154,6 +159,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const candidate = argv[1];
       if (!BACKUP_VERBS.has(candidate)) {
         throw new ArgError(`unknown backup verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "retrieval") {
+    group = "retrieval";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!RETRIEVAL_VERBS.has(candidate)) {
+        throw new ArgError(`unknown retrieval verb: ${candidate}`);
       }
       verb = candidate;
       i = 2;

@@ -49,6 +49,129 @@ describe("ConfigControlPlane", () => {
     });
   });
 
+  it("configures retrieval without disturbing unrelated scoped settings", async () => {
+    const configPath = join(homeDir, ".ratel", "config.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          custom: { keep: true },
+          mcpServers: { filesystem: { type: "stdio", command: "node" } },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const control = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+    });
+
+    const preview = await control.prepareRetrievalMutation({
+      target: { scope: "user" },
+      action: "configure",
+      retrieval: {
+        method: "hybrid",
+        embedding: { huggingface: "intfloat/e5-small-v2", download: false },
+      },
+    });
+    expect(preview.preview).toMatchObject({
+      action: "configure",
+      target: { scope: "user" },
+      retrieval: {
+        method: "hybrid",
+        embedding: { huggingface: "intfloat/e5-small-v2", download: false },
+      },
+    });
+    await control.commit(preview.changeId);
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      custom: { keep: true },
+      mcpServers: { filesystem: { type: "stdio", command: "node" } },
+      retrieval: {
+        method: "hybrid",
+        embedding: { huggingface: "intfloat/e5-small-v2", download: false },
+      },
+    });
+  });
+
+  it("resets only the retrieval override and keeps the selected scope document", async () => {
+    const configPath = join(homeDir, ".ratel", "config.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          mcpServers: { filesystem: { type: "stdio", command: "node" } },
+          retrieval: { method: "semantic" },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const control = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+    });
+
+    await control.mutateRetrieval({
+      target: { scope: "user" },
+      action: "reset",
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      mcpServers: { filesystem: { type: "stdio", command: "node" } },
+    });
+  });
+
+  it("applies retrieval revision safeguards and local Git-exclude preparation", async () => {
+    const registry = createProjectRegistry({ homeDir });
+    const project = await registry.registerRoot(projectRoot);
+    const excludePath = join(projectRoot, ".git", "info", "exclude");
+    await mkdir(join(projectRoot, ".git", "info"), { recursive: true });
+    const ensuredRoots: string[] = [];
+    const control = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: registry,
+      localGitExcludeManager: {
+        async preview(root) {
+          ensuredRoots.push(root);
+          return {
+            projectRoot: root,
+            excludePath,
+            changed: true,
+            currentContents: null,
+            contents: "# ratel local\n",
+            documentRevision: MISSING_DOCUMENT_REVISION,
+          };
+        },
+        async ensure(root) {
+          return { projectRoot: root, excludePath, changed: true };
+        },
+      },
+    });
+    const current = await control.read({ scope: "local", projectId: project.id });
+
+    const commit = await control.mutateRetrieval({
+      target: { scope: "local", projectId: project.id },
+      expectedRevision: current.documentRevision,
+      action: "configure",
+      retrieval: { method: "semantic" },
+    });
+
+    expect(commit.changedPaths).toEqual([
+      join(project.canonicalRoot, ".ratel", "config.local.json"),
+      excludePath,
+    ]);
+    expect(ensuredRoots).toEqual([project.canonicalRoot]);
+    await expect(
+      control.prepareRetrievalMutation({
+        target: { scope: "local", projectId: project.id },
+        expectedRevision: current.documentRevision,
+        action: "reset",
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, reason: "revision_conflict" });
+  });
+
   it("targets project/local files only through a registered ProjectId", async () => {
     const registry = createProjectRegistry({ homeDir });
     const project = await registry.registerRoot(projectRoot);
