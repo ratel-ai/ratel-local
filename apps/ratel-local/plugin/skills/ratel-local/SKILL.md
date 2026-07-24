@@ -236,8 +236,8 @@ ratel-local statusline uninstall
 
 Claude Code plugins cannot currently set top-level `statusLine` defaults
 directly; use the standalone statusline CLI, the optional import step, or the
-Claude Code agent page in `ratel-local daemon open`. The statusline reports Ratel as on
-when Claude Code starts Ratel via a linked MCP entry or an enabled
+Claude Code agent page in `ratel-local daemon open`. The statusline reports
+Ratel as on when Claude Code starts Ratel via a linked MCP entry or an enabled
 `ratel-local@...` plugin.
 
 Authorize HTTP/SSE upstreams:
