@@ -87,8 +87,11 @@ Top-level commands:
 - `ratel-local link` points an agent at the Ratel gateway without removing native MCP entries.
 - `ratel-local mcp` manages upstream MCP server entries.
 - `ratel-local backup` manages backup snapshots.
+- `ratel-local project` manages registered project roots.
 - `ratel-local skill` manages Claude Code and Codex skills through Ratel.
-- `ratel-local ui` launches the local browser UI.
+- `ratel-local doctor` recovers interrupted mutations and diagnoses scoped config/OAuth state.
+- `ratel-local daemon open` opens the persistent daemon UI with live client and gateway state.
+- `ratel-local ui --port <port>` launches a standalone config editor without live daemon state.
 - `ratel-local statusline` renders or manages the Claude Code Ratel statusline.
 - `ratel-local --version` or `ratel-local version` prints the CLI version.
 - `ratel-local help` prints top-level usage.
@@ -104,9 +107,13 @@ Top-level commands:
 
 `ratel-local skill` verbs:
 
-- `activate` links native Claude Code and Codex skills into Ratel as invoke-only without moving their folders.
-- `deactivate` removes Ratel-managed links and restores Ratel-owned metadata edits.
-- `list` shows the skills Ratel currently manages.
+- `activate` is a deprecated user-scope wrapper that links native skills into Ratel as invoke-only.
+- `deactivate` is a deprecated user-scope wrapper that removes those links and restores metadata.
+- `import` imports discovered skills into a user, project, or local registration.
+- `add-scope` adds another scoped reference or owned copy for a skill.
+- `remove-scope` removes only the selected registration.
+- `remove` removes a registration and its owned copy when applicable.
+- `list` shows effective, configured, or discovered scoped skills.
 - `suggest` ranks skills for a prompt.
 - `preload-hook` is the `UserPromptSubmit` hook entrypoint.
 - `install-hook` registers the preload hook in `settings.json`.
@@ -149,9 +156,11 @@ ratel-local serve --auto-config
 Open the local UI:
 
 ```bash
-ratel-local ui
-ratel-local ui --port 7331 --no-open
+ratel-local daemon open
 ```
+
+Use `ratel-local ui --port 7331 --no-open` only when a standalone config editor
+is explicitly needed; its daemon client and gateway counts are unavailable.
 
 Required workflow for adding a stdio upstream:
 
@@ -227,7 +236,7 @@ ratel-local statusline uninstall
 
 Claude Code plugins cannot currently set top-level `statusLine` defaults
 directly; use the standalone statusline CLI, the optional import step, or the
-Claude Code agent page in `ratel-local ui`. The statusline reports Ratel as on
+Claude Code agent page in `ratel-local daemon open`. The statusline reports Ratel as on
 when Claude Code starts Ratel via a linked MCP entry or an enabled
 `ratel-local@...` plugin.
 

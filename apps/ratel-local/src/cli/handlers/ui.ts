@@ -15,6 +15,7 @@ import { openBrowser } from "../../ui/open-browser.js";
 import { newSessionToken } from "../../ui/security.js";
 import { startUiServer } from "../../ui/server.js";
 import type { ParsedArgs } from "../args.js";
+import { type DaemonApiRequest, requestRunningDaemon, requireDaemonJson } from "../daemon-api.js";
 import type { HandlerCtx } from "./types.js";
 
 export interface RunUiResult {
@@ -25,11 +26,29 @@ export async function runUi(
   parsed: ParsedArgs,
   ctx: HandlerCtx,
   log: (m: string) => void,
-  opts: { open?: typeof openBrowser } = {},
+  opts: { open?: typeof openBrowser; daemonRequest?: DaemonApiRequest } = {},
 ): Promise<RunUiResult> {
   const portFlag = parsed.flags.port;
   const port = parsePort(portFlag);
   const noOpen = parsed.flags.open === false;
+  if (portFlag === undefined) {
+    const daemonRequest =
+      opts.daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
+    const response = await daemonRequest("/api/ui/sessions", { method: "POST" });
+    if (response) {
+      const { url } = await requireDaemonJson<{ url: string }>(response, "open daemon UI");
+      if (typeof url !== "string" || url.length === 0) {
+        throw new Error("open daemon UI returned an invalid session URL");
+      }
+      if (noOpen) {
+        log(`[ratel] daemon UI session: ${url}`);
+      } else {
+        (opts.open ?? openBrowser)(url);
+        log("[ratel] opened the persistent daemon UI");
+      }
+      return { shutdown: async () => {} };
+    }
+  }
 
   const projectRegistry = createProjectRegistry({ homeDir: ctx.env.homeDir });
   const projectAdmissionLock = createProjectAdmissionLock({
@@ -90,6 +109,7 @@ export async function runUi(
     skillRegistrationControlPlane,
     preparedChanges,
   });
+  log("[ratel] standalone UI: live daemon client and gateway state is unavailable");
   log(`[ratel] UI running at ${handle.url}`);
   log("[ratel] Press Ctrl-C to stop.");
 

@@ -2,13 +2,50 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeFs } from "@ratel-ai/ratel-local-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import type { HandlerCtx } from "./types.js";
 import { runUi } from "./ui.js";
 
 describe("runUi", () => {
+  it("opens the persistent daemon UI when no standalone port is requested", async () => {
+    const logs: string[] = [];
+    const open = vi.fn();
+    const parsed: ParsedArgs = {
+      group: "ui",
+      configPaths: [],
+      rest: [],
+      extras: [],
+      flags: {},
+    };
+    const ctx: HandlerCtx = {
+      argv: parsed,
+      env: { homeDir: "/home/u" },
+      fs: nodeFs,
+      log: (message) => logs.push(message),
+      prompts: silentPromptAdapter(),
+    };
+
+    const handle = await runUi(parsed, ctx, ctx.log, {
+      open,
+      daemonRequest: async (path, init) => {
+        expect({ path, method: init?.method }).toEqual({
+          path: "/api/ui/sessions",
+          method: "POST",
+        });
+        return new Response(JSON.stringify({ url: "http://127.0.0.1:5731/global/?t=session" }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    expect(open).toHaveBeenCalledWith("http://127.0.0.1:5731/global/?t=session");
+    expect(logs).toEqual(["[ratel] opened the persistent daemon UI"]);
+    await handle.shutdown();
+  });
+
   it("wires agent and skill import control planes into the standalone UI", async () => {
     const root = await mkdtemp(join(tmpdir(), "ratel-ui-handler-"));
     const homeDir = join(root, "home");
@@ -47,6 +84,9 @@ describe("runUi", () => {
         .find((message) => message.startsWith("[ratel] UI running at "))
         ?.slice("[ratel] UI running at ".length);
       expect(loggedUrl).toBeTruthy();
+      expect(logs).toContain(
+        "[ratel] standalone UI: live daemon client and gateway state is unavailable",
+      );
       const url = new URL(loggedUrl as string);
       const token = url.searchParams.get("t");
       expect(token).toBeTruthy();
