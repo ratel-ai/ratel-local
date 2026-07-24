@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   availableRetrievalScopes,
   retrievalConfigFromDraft,
-  retrievalDraftKey,
   retrievalDraftFromConfig,
+  retrievalDraftKey,
   retrievalTarget,
+  showsEmbeddingFields,
 } from "./RetrievalSettingsPage";
 
 describe("retrieval settings model", () => {
@@ -24,6 +25,14 @@ describe("retrieval settings model", () => {
     expect(retrievalConfigFromDraft(retrievalDraftFromConfig(undefined))).toEqual({
       method: "bm25",
     });
+  });
+
+  it("shows configurable embedding fields only for explicit dense sources", () => {
+    const builtIn = retrievalDraftFromConfig({ method: "semantic" });
+
+    expect(showsEmbeddingFields(builtIn)).toBe(false);
+    expect(showsEmbeddingFields({ ...builtIn, source: "huggingface" })).toBe(true);
+    expect(showsEmbeddingFields({ ...builtIn, method: "bm25", source: "huggingface" })).toBe(false);
   });
 
   it.each([

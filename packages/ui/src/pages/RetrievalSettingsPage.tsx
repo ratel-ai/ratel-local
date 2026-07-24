@@ -235,7 +235,7 @@ function RetrievalEditor({
           ) : null}
         </div>
 
-        {draft.method !== "bm25" ? <EmbeddingFields draft={draft} setDraft={setDraft} /> : null}
+        {showsEmbeddingFields(draft) ? <EmbeddingFields draft={draft} setDraft={setDraft} /> : null}
 
         <RetrievalDisclosures draft={draft} />
 
@@ -532,6 +532,10 @@ export function retrievalDraftFromConfig(config: RetrievalConfig | undefined): R
 
 export function retrievalDraftKey(draft: RetrievalDraft): string {
   return JSON.stringify(draft);
+}
+
+export function showsEmbeddingFields(draft: RetrievalDraft): boolean {
+  return draft.method !== "bm25" && draft.source !== "built-in";
 }
 
 export function retrievalConfigFromDraft(draft: RetrievalDraft): RetrievalConfig {
