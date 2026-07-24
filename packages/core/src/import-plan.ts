@@ -349,6 +349,7 @@ function hasRuntimeContent(config: RatelConfig | null): boolean {
   if (!config) return false;
   if (Object.keys(config.mcpServers).length > 0) return true;
   if (Object.keys(config.skills?.entries ?? {}).length > 0) return true;
+  if (config.retrieval) return true;
   return (config.skills?.dirs?.length ?? 0) > 0;
 }
 

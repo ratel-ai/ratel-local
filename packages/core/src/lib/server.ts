@@ -2,10 +2,14 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
+  EmbedderError,
   type ExecutableTool,
   formatUpstreamLine,
   getSkillContentTool,
   invokeToolTool,
+  type JSONSchema7,
+  SEARCH_CAPABILITIES_ID,
+  SEARCH_TOOLS_ID,
   type SkillCatalog,
   searchCapabilitiesTool,
   searchToolsTool,
@@ -59,17 +63,17 @@ export async function createMcpServer(
 
   const gateway: Record<string, ExecutableTool> = {};
   const skills = hasSkills ? skillCatalog : undefined;
-  for (const tool of [
+  const searchCapabilities = withRetrievalErrorSchema(
     searchCapabilitiesTool(catalog, skills, { upstreamServers }),
-    invokeToolTool(catalog, { onUnauthorized }),
-  ]) {
+  );
+  for (const tool of [searchCapabilities, invokeToolTool(catalog, { onUnauthorized })]) {
     gateway[tool.name] = tool;
   }
   // Backward-compat: keep advertising the pre-0.2.0 `search_tools` (deprecated
   // alias, tools-only `{ groups }` result) so MCP clients that pinned its name
   // don't break on upgrade. New clients should use `search_capabilities` — which
   // also returns skills — so the description steers them there.
-  const legacySearch = searchToolsTool(catalog, { upstreamServers });
+  const legacySearch = withRetrievalErrorSchema(searchToolsTool(catalog, { upstreamServers }));
   gateway[legacySearch.name] = {
     ...legacySearch,
     description: `[Deprecated: prefer search_capabilities, which also returns skills.] ${legacySearch.description}`,
@@ -100,7 +104,23 @@ export async function createMcpServer(
       throw new Error(`unknown gateway tool: ${req.params.name}`);
     }
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
-    const out = await tool.execute(args);
+    let out: unknown;
+    try {
+      out = await tool.execute(args);
+    } catch (error) {
+      if (
+        !(error instanceof EmbedderError) ||
+        (req.params.name !== SEARCH_CAPABILITIES_ID && req.params.name !== SEARCH_TOOLS_ID)
+      ) {
+        throw error;
+      }
+      out = {
+        error: "retrieval_failed",
+        code: error.code,
+        message: error.message,
+        isError: true,
+      };
+    }
     return wrapResult(out);
   });
 
@@ -112,6 +132,29 @@ export async function createMcpServer(
     },
     notifyToolListChanged: async () => {
       await server.sendToolListChanged();
+    },
+  };
+}
+
+const RETRIEVAL_ERROR_SCHEMA: JSONSchema7 = {
+  type: "object",
+  properties: {
+    error: { const: "retrieval_failed" },
+    code: { type: "string" },
+    message: { type: "string" },
+    isError: { const: true },
+  },
+  required: ["error", "code", "message", "isError"],
+  additionalProperties: false,
+};
+
+function withRetrievalErrorSchema(tool: ExecutableTool): ExecutableTool {
+  if (!isObjectSchema(tool.outputSchema)) return tool;
+  return {
+    ...tool,
+    outputSchema: {
+      type: "object",
+      oneOf: [tool.outputSchema, RETRIEVAL_ERROR_SCHEMA],
     },
   };
 }

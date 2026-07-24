@@ -238,6 +238,9 @@ export async function runDaemonServer(
           logger: log,
           resolvedMcpEntries: scope.resolvedContext.mcpEntries,
           resolvedSkills: scope.resolvedContext.skills.effectiveSkills,
+          ...(scope.resolvedContext.retrieval
+            ? { retrieval: scope.resolvedContext.retrieval }
+            : {}),
         },
       );
     }
