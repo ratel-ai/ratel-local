@@ -37,6 +37,7 @@ import { ReconciledGatewayPool } from "../../daemon/reconciled-gateway-pool.js";
 import {
   InMemoryScopedGatewayPool,
   type ResolvedGatewaySnapshot,
+  type RetrievalHealthStats,
 } from "../../daemon/scoped-gateway-pool.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
@@ -86,6 +87,7 @@ export interface DaemonStatusBody extends DaemonState {
   activeGatewayCount: number;
   activeUserGatewayCount: number;
   activeProjectGatewayCount: number;
+  retrievalHealth?: RetrievalHealthStats;
 }
 
 interface CommandResult {
@@ -228,6 +230,8 @@ export async function runDaemonServer(
     opts.snapshotResolver ??
     createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry });
   const serverVersion = options.serverVersion ?? "0.0.0";
+  const retrievalHealthEnabled =
+    (options.processEnv ?? process.env).RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -399,7 +403,17 @@ export async function runDaemonServer(
     sessionTokens: uiSessions,
     publicRoute: async (req, res, path) => {
       if (req.method === "GET" && path === "/healthz") {
-        writePlain(res, 200, "ok\n");
+        if (!retrievalHealthEnabled) {
+          writePlain(res, 200, "ok\n");
+          return true;
+        }
+        const retrievalHealth = gatewayPool.stats().retrievalHealth;
+        const ready = retrievalHealth.status === "ready";
+        writePlain(
+          res,
+          ready ? 200 : 503,
+          `${ready ? "ok" : "not ready"} retrieval=${retrievalHealth.status}\n`,
+        );
         return true;
       }
       if (req.method === "GET" && path === "/api/daemon/status") {
@@ -413,6 +427,7 @@ export async function runDaemonServer(
           activeGatewayCount: poolStats.activeGatewayCount,
           activeUserGatewayCount: poolStats.activeUserGatewayCount,
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
+          ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
         });
         return true;
       }

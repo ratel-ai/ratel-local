@@ -5,7 +5,7 @@ How a new version is published to npm. Read end-to-end before cutting a release.
 ## How the pipeline is wired
 
 - **`release.yml`** fires on every `v*` tag push (and supports `workflow_dispatch` with `dry_run: true` for rehearsal). Job graph: `tag-version-check` (asserts `package.json.version` matches the tag and that `CHANGELOG.md` has a `## [<version>]` heading) → `publish-npm` (pnpm install → build → `pnpm pack` → `npm publish --provenance --access public --tag <rc|latest>`) → `github-release`. Authentication is via Trusted Publishers (OIDC) — no `NPM_TOKEN` secret stored in the repo. `*-rc.*` tags publish under the `rc` dist-tag; un-suffixed tags become `latest`.
-- **`ts.yml`** runs build / typecheck / lint / test on every PR and on push to `main`.
+- **`ts.yml`** runs build / typecheck / lint / test plus packed-package smoke checks on Linux x64/arm64, macOS x64/arm64, and Windows x64 on every PR and on push to `main`.
 - **`verify-install.yml`** runs daily and on-demand: `npx -y @ratel-ai/ratel-local@latest --help` on Ubuntu.
 
 ## Cutting a release
