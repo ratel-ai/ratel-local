@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
 import type { SupportedAgentHostKind } from "@ratel-ai/ratel-local-core";
+import {
+  daemonSubprocessEnvironment,
+  daemonSubprocessPathDescription,
+} from "./daemon/subprocess-environment.js";
 
 export interface AgentPluginCommandResult {
   exitCode: number;
@@ -187,9 +191,15 @@ export function ratelMarketplaceRefForVersion(packageVersion?: string): string |
 export function runAgentPluginCommand(
   command: string,
   args: readonly string[],
+  processEnv: NodeJS.ProcessEnv = process.env,
 ): Promise<AgentPluginCommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const env = daemonSubprocessEnvironment(processEnv);
+    const pathDescription = daemonSubprocessPathDescription(processEnv);
+    const child = spawn(command, [...args], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout?.setEncoding("utf8");
@@ -201,10 +211,23 @@ export function runAgentPluginCommand(
       stderr += chunk;
     });
     child.once("error", (error) => {
-      resolve({ exitCode: -1, stdout, stderr: error.message });
+      resolve({
+        exitCode: -1,
+        stdout,
+        stderr: `Could not start "${command}" using ${pathDescription}: ${error.message}`,
+      });
     });
     child.once("close", (code) => {
-      resolve({ exitCode: code ?? -1, stdout, stderr });
+      const exitCode = code ?? -1;
+      const pathFailure =
+        exitCode === 127 || /(?:ENOENT|command not found|no such file)/i.test(stderr);
+      resolve({
+        exitCode,
+        stdout,
+        stderr: pathFailure
+          ? `${stderr.trimEnd()}\nCommand "${command}" used ${pathDescription}.`
+          : stderr,
+      });
     });
   });
 }

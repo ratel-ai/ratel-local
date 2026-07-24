@@ -17,6 +17,7 @@ import { silentPromptAdapter } from "../prompts.js";
 import {
   createLaunchAgentPlist,
   createSystemdUserService,
+  DAEMON_INSTALL_PATH_ENV,
   DAEMON_PROTOCOL_VERSION,
   DAEMON_SERVICE_ID,
   DEFAULT_DAEMON_PORT,
@@ -508,7 +509,7 @@ describe("runDaemon", () => {
     );
   });
 
-  it("preserves the install-time PATH for macOS upstream commands", () => {
+  it("preserves the install-time PATH separately from npm's macOS daemon PATH", () => {
     const plist = createLaunchAgentPlist({
       executablePath: "/opt/node/bin/node",
       homeDir: HOME,
@@ -519,6 +520,7 @@ describe("runDaemon", () => {
     expect(plist).toContain("<key>EnvironmentVariables</key>");
     expect(plist).toContain("<key>PATH</key>");
     expect(plist).toContain("<string>/opt/node/bin:/usr/bin:/bin</string>");
+    expect(plist).toContain(`<key>${DAEMON_INSTALL_PATH_ENV}</key>`);
   });
 
   it("installs the macOS daemon LaunchAgent and probes the stable port", async () => {
@@ -628,7 +630,7 @@ describe("runDaemon", () => {
     );
   });
 
-  it("preserves the install-time PATH for Linux upstream commands", () => {
+  it("preserves the install-time PATH separately from npm's Linux daemon PATH", () => {
     const service = createSystemdUserService({
       executablePath: "/opt/node/bin/node",
       homeDir: HOME,
@@ -637,6 +639,7 @@ describe("runDaemon", () => {
     });
 
     expect(service).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");
+    expect(service).toContain(`Environment=${DAEMON_INSTALL_PATH_ENV}=/opt/node/bin:/usr/bin:/bin`);
   });
 
   it("installs the Linux user systemd service and probes the stable port", async () => {

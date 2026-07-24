@@ -1,10 +1,15 @@
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type AgentPluginCommandResult,
   type AgentPluginCommandRunner,
   installRatelAgentPlugin,
   ratelMarketplaceRefForVersion,
+  runAgentPluginCommand,
 } from "./agent-plugin.js";
+import { DAEMON_INSTALL_PATH_ENV } from "./daemon/subprocess-environment.js";
 
 const SUCCESS: AgentPluginCommandResult = { exitCode: 0, stdout: "ok", stderr: "" };
 
@@ -298,5 +303,45 @@ describe("installRatelAgentPlugin", () => {
       installed: false,
       message: "codex plugin installation failed: command not found: codex",
     });
+  });
+});
+
+describe("runAgentPluginCommand", () => {
+  it("honors the install-time PATH when npm prepends its Node bin for the daemon", async () => {
+    const temp = await mkdtemp(join(tmpdir(), "ratel-agent-path-"));
+    const npmBin = join(temp, "npm-bin");
+    const installBin = join(temp, "install-bin");
+    await Promise.all([mkdir(npmBin), mkdir(installBin)]);
+    await Promise.all([
+      writeFile(join(npmBin, "codex"), "#!/bin/sh\necho stale npm codex >&2\nexit 127\n"),
+      writeFile(join(installBin, "codex"), "#!/bin/sh\nprintf 'valid codex'\n"),
+    ]);
+    await Promise.all([
+      chmod(join(npmBin, "codex"), 0o755),
+      chmod(join(installBin, "codex"), 0o755),
+    ]);
+
+    try {
+      const result = await runAgentPluginCommand("codex", [], {
+        PATH: `${npmBin}:${installBin}`,
+        [DAEMON_INSTALL_PATH_ENV]: `${installBin}:${npmBin}`,
+      });
+
+      expect(result).toEqual({ exitCode: 0, stdout: "valid codex", stderr: "" });
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it("reports which PATH was used when an agent command cannot start", async () => {
+    const result = await runAgentPluginCommand("codex", ["plugin", "add"], {
+      PATH: "/npm/bin:/usr/bin",
+      [DAEMON_INSTALL_PATH_ENV]: "/install/bin:/usr/bin",
+    });
+
+    expect(result.exitCode).toBe(-1);
+    expect(result.stderr).toContain('Could not start "codex"');
+    expect(result.stderr).toContain(DAEMON_INSTALL_PATH_ENV);
+    expect(result.stderr).toContain("/install/bin:/usr/bin");
   });
 });

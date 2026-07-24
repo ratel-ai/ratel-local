@@ -38,6 +38,7 @@ import {
   InMemoryScopedGatewayPool,
   type ResolvedGatewaySnapshot,
 } from "../../daemon/scoped-gateway-pool.js";
+import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
 import { startUiServer } from "../../ui/server.js";
@@ -50,6 +51,7 @@ export const DAEMON_LABEL = "ai.ratel.local.daemon";
 export const SYSTEMD_SERVICE = "ratel-local-daemon.service";
 export const DAEMON_SERVICE_ID = "ratel-local-daemon";
 export const DAEMON_PROTOCOL_VERSION = 1;
+export { DAEMON_INSTALL_PATH_ENV };
 
 export const DAEMON_USAGE = `usage: ratel-local daemon [verb] [args...]
 
@@ -613,6 +615,8 @@ ${
   <dict>
     <key>PATH</key>
     <string>${escapePlist(input.pathEnv)}</string>
+    <key>${DAEMON_INSTALL_PATH_ENV}</key>
+    <string>${escapePlist(input.pathEnv)}</string>
   </dict>
 `
     : ""
@@ -644,7 +648,13 @@ After=network.target
 Type=simple
 ExecStart=${command} daemon run --port ${input.port} --no-open --auto-config
 WorkingDirectory=${systemdQuote(input.homeDir)}
-${input.pathEnv ? `Environment=${systemdQuote(`PATH=${input.pathEnv}`)}\n` : ""}Restart=always
+${
+  input.pathEnv
+    ? `Environment=${systemdQuote(`PATH=${input.pathEnv}`)}
+Environment=${systemdQuote(`${DAEMON_INSTALL_PATH_ENV}=${input.pathEnv}`)}
+`
+    : ""
+}Restart=always
 RestartSec=2
 StandardOutput=append:${systemdPath(paths.stdoutLog)}
 StandardError=append:${systemdPath(paths.stderrLog)}
@@ -679,7 +689,7 @@ async function installDaemon(
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
-      pathEnv: process.env.PATH,
+      pathEnv: (options.processEnv ?? process.env).PATH,
     }),
   );
   await bootstrapDaemon(ctx, opts);
@@ -765,7 +775,7 @@ async function installLinuxDaemon(
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
-      pathEnv: process.env.PATH,
+      pathEnv: (options.processEnv ?? process.env).PATH,
     }),
   );
   await systemctl(opts, ["daemon-reload"]);

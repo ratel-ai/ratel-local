@@ -4,6 +4,11 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.6.0-rc.1] - 2026-07-24
+
+### Fixed
+- Preserved the setup-time PATH separately in macOS launchd and Linux systemd daemon services so npm/npx cannot reorder agent plugin executables ahead of the user's working installation. Agent command startup failures now report the command and PATH source used.
+
 ## [0.6.0-rc.0] - 2026-07-24
 
 ### Added
