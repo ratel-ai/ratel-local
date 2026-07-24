@@ -24,18 +24,7 @@ export async function requestRunningDaemon(
   const daemonToken = await ctx.fs.read(join(ctx.env.homeDir, ".ratel", "daemon-token"));
   if (!stateText || !daemonToken?.trim()) return null;
 
-  let state: { uiUrl?: unknown; port?: unknown };
-  try {
-    state = JSON.parse(stateText) as { uiUrl?: unknown; port?: unknown };
-  } catch {
-    return null;
-  }
-  const baseUrl =
-    typeof state.uiUrl === "string"
-      ? state.uiUrl
-      : typeof state.port === "number"
-        ? `http://127.0.0.1:${state.port}`
-        : undefined;
+  const baseUrl = daemonLoopbackUrl(stateText);
   if (!baseUrl) return null;
 
   try {
@@ -50,6 +39,24 @@ export async function requestRunningDaemon(
   } catch {
     return null;
   }
+}
+
+export function daemonLoopbackUrl(stateText: string): string | null {
+  let state: { port?: unknown };
+  try {
+    state = JSON.parse(stateText) as { port?: unknown };
+  } catch {
+    return null;
+  }
+  if (
+    typeof state.port !== "number" ||
+    !Number.isInteger(state.port) ||
+    state.port < 1 ||
+    state.port > 65535
+  ) {
+    return null;
+  }
+  return `http://127.0.0.1:${state.port}`;
 }
 
 export async function requireDaemonJson<T>(response: Response, operation: string): Promise<T> {

@@ -26,6 +26,7 @@ import {
 } from "@ratel-ai/ratel-local-core";
 import { type AgentPluginInstaller, installRatelAgentPlugin } from "../agent-plugin.js";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
+import { daemonLoopbackUrl } from "./daemon-api.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
 import { runConnect } from "./handlers/connect.js";
 import { daemonPaths, runDaemon } from "./handlers/daemon.js";
@@ -356,18 +357,7 @@ async function mutateServerThroughRunningDaemon(
   const stateText = await ctx.fs.read(daemonPaths(ctx.env.homeDir).state);
   const daemonToken = await ctx.fs.read(join(ctx.env.homeDir, ".ratel", "daemon-token"));
   if (!stateText || !daemonToken?.trim()) return false;
-  let state: { uiUrl?: unknown; port?: unknown };
-  try {
-    state = JSON.parse(stateText) as { uiUrl?: unknown; port?: unknown };
-  } catch {
-    return false;
-  }
-  const baseUrl =
-    typeof state.uiUrl === "string"
-      ? state.uiUrl
-      : typeof state.port === "number"
-        ? `http://127.0.0.1:${state.port}`
-        : undefined;
+  const baseUrl = daemonLoopbackUrl(stateText);
   if (!baseUrl) return false;
   const endpoint =
     request.action === "add" ? "/api/servers" : `/api/servers/${encodeURIComponent(request.name)}`;
@@ -421,18 +411,7 @@ async function removeProjectThroughRunningDaemon(
   const daemonToken = await ctx.fs.read(join(ctx.env.homeDir, ".ratel", "daemon-token"));
   if (!stateText || !daemonToken?.trim()) return false;
 
-  let state: { uiUrl?: unknown; port?: unknown };
-  try {
-    state = JSON.parse(stateText) as { uiUrl?: unknown; port?: unknown };
-  } catch {
-    return false;
-  }
-  const baseUrl =
-    typeof state.uiUrl === "string"
-      ? state.uiUrl
-      : typeof state.port === "number"
-        ? `http://127.0.0.1:${state.port}`
-        : undefined;
+  const baseUrl = daemonLoopbackUrl(stateText);
   if (!baseUrl) return false;
 
   let response: Response;
