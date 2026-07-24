@@ -33,7 +33,11 @@ It ships as the npm package `@ratel-ai/ratel-local` and the `ratel-local` CLI. T
 Choose the setup that matches where you are starting:
 
 - **Migrate existing MCP servers:** install the CLI and import the servers already configured in Claude Code or Codex.
-- **Start fresh with the plugin:** let the plugin start Ratel Local, then add upstreams directly to Ratel Local configuration.
+- **Start fresh with the plugin:** install the agent connector, set up the persistent daemon once, then add upstreams directly to Ratel Local configuration.
+
+This README tracks the `0.6.0-rc.0` release candidate, matching the package
+version pinned by the bundled plugin. Use that exact version while validating
+this release; stable releases use the `latest` npm tag.
 
 The CLI and UI prefer the `ratel-local` plugin when linking because it bundles the gateway and agent skills. If plugin installation fails, Ratel Local reports the failure and applies the reviewed explicit MCP gateway fallback instead. An enabled plugin is recognized as an existing Ratel connection, so importing does not add a second gateway and `link` becomes a no-op. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server. Agent Setup offers **Fix duplicate installation** when both the plugin and an explicit Ratel MCP entry are present, and **Switch to plugin** for MCP-only installations. Both actions preserve the existing MCP connection unless plugin installation succeeds, and only recognized Ratel entries are removed.
 
@@ -44,7 +48,7 @@ The CLI and UI prefer the `ratel-local` plugin when linking because it bundles t
 Node.js 20 or newer is required.
 
 ```bash
-npm install --global @ratel-ai/ratel-local
+npm install --global @ratel-ai/ratel-local@0.6.0-rc.0
 ratel-local --version
 ```
 
@@ -73,7 +77,19 @@ ratel-local link --agent codex
 
 Native entries remain directly exposed, so their schemas still enter the agent's context without capability search.
 
-#### 3. Confirm Ratel Local and restart
+#### 3. Set up the persistent daemon
+
+The plugin connection is a lightweight connector. On macOS or Linux, install
+and start the per-user login service once:
+
+```bash
+ratel-local setup
+```
+
+Re-running setup is safe. It starts a stopped service and offers to replace a
+service installed from an incompatible Ratel Local version.
+
+#### 4. Confirm Ratel Local and restart
 
 ```bash
 # Claude Code
@@ -99,20 +115,30 @@ codex plugin marketplace add ratel-ai/ratel-local
 codex plugin add ratel-local@ratel
 ```
 
-Reload or restart Claude Code, then start a new Codex session.
+The plugin installs the agent-side connector; it does not install the daemon.
 
-#### 2. Add an upstream
+#### 2. Set up the persistent daemon
 
-The plugin does not install the global CLI, so use `npx`:
+On macOS or Linux, run the setup wizard once. The plugin does not install a
+global CLI, so use the exact package version bundled by this release:
 
 ```bash
-npx -y @ratel-ai/ratel-local@latest mcp add \
-  --scope user context7 -- npx -y @upstash/context7-mcp
-
-npx -y @ratel-ai/ratel-local@latest mcp list
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 setup
 ```
 
-Restart the agent after changing the configuration.
+#### 3. Add an upstream
+
+```bash
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 mcp add \
+  --scope user context7 -- npx -y @upstash/context7-mcp
+
+npx -y @ratel-ai/ratel-local@0.6.0-rc.0 mcp list
+```
+
+#### 4. Restart the agent
+
+Reload or restart Claude Code, then start a new Codex session. The connector
+will attach to the daemon and expose the capability tools.
 
 ### Verify capability search
 
