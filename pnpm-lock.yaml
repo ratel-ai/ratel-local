@@ -11,6 +11,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.4.13
         version: 2.4.15
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.4
@@ -81,15 +84,15 @@ importers:
       '@fontsource-variable/inter-tight':
         specifier: ^5.2.7
         version: 5.2.7
-      '@ratel-ai/ratel-local-core':
-        specifier: workspace:*
-        version: link:../core
       '@fontsource/jetbrains-mono':
         specifier: ^5.2.8
         version: 5.2.8
       '@radix-ui/react-slot':
         specifier: ^1.2.4
         version: 1.2.4(@types/react@19.2.15)(react@19.2.6)
+      '@ratel-ai/ratel-local-core':
+        specifier: workspace:*
+        version: link:../core
       '@tanstack/react-form':
         specifier: ^1.33.0
         version: 1.33.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)

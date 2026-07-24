@@ -9,18 +9,13 @@
 #   C. PUSH path — the preload hook + REAL project-signal detection (same prompt,
 #      different repo → different skill), and the clear-winner gate staying silent.
 #
-# This is a LOCAL/manual check, not a CI job: it needs the unified SDK linked and
-# built (the SDK isn't published yet). Prereqs:
-#   cd ../ratel/src/sdk/ts && pnpm build
-#   cd ../../../../ratel-local
-#   mv node_modules/@ratel-ai/sdk node_modules/@ratel-ai/sdk.orig
-#   ln -s ../ratel/src/sdk/ts node_modules/@ratel-ai/sdk
+# This is a LOCAL/manual check, not a CI job. Prereqs:
+#   pnpm install --frozen-lockfile
 #   pnpm build
 #   bash e2e/run.sh          # → "19 passed, 0 failed"
-#   rm node_modules/@ratel-ai/sdk && mv node_modules/@ratel-ai/sdk.orig node_modules/@ratel-ai/sdk
 set -u
 RMCP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$RMCP/dist/bin.js"
+BIN="$RMCP/apps/ratel-local/dist/bin.js"
 PASS=0; FAIL=0
 ok()   { echo "  ✓ $1"; PASS=$((PASS+1)); }
 no()   { echo "  ✗ $1${2:+ — $2}"; FAIL=$((FAIL+1)); }

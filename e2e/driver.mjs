@@ -28,12 +28,14 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "e2e", version: "0.0.0" });
 await client.connect(transport);
 
-// A1 — the gateway surface is exactly the designed set (3 gateway tools + auth).
+// A1 — the gateway surface includes the designed set plus the deprecated
+// search_tools compatibility shim.
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
 check(
-  "A1  surface is exactly [auth, get_skill_content, invoke_tool, search_capabilities]",
-  JSON.stringify(names) === JSON.stringify(["auth", "get_skill_content", "invoke_tool", "search_capabilities"]),
+  "A1  surface includes capability tools, auth, and the deprecated search_tools shim",
+  JSON.stringify(names) ===
+    JSON.stringify(["auth", "get_skill_content", "invoke_tool", "search_capabilities", "search_tools"]),
   JSON.stringify(names),
 );
 

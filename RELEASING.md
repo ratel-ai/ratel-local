@@ -12,12 +12,18 @@ How a new version is published to npm. Read end-to-end before cutting a release.
 
 ### Per-release flow
 
-1. **Bump `package.json.version`** to the new value (e.g. `0.2.1-rc.1`, then later `0.2.1`).
+1. **Bump every synchronized version and runtime pin** to the new value (e.g. `0.2.1-rc.1`, then later `0.2.1`): the root, app, core, and UI `package.json` files; both plugin manifests; and the plugin `.mcp.json` package pin. `pnpm check:pack` verifies that they match.
 2. **Update `CHANGELOG.md`** — add a `## [<version>] - YYYY-MM-DD` section above the previous one. For GA versions, collapse any matching `## [X.Y.Z-rc.*]` sections into the new `## [X.Y.Z]`.
 3. **Verify locally:**
    - `pnpm install --frozen-lockfile`
    - `pnpm build && pnpm typecheck && pnpm lint && pnpm test`
-   - `pnpm pack --dry-run` — inspect the would-be tarball; `package.json` inside must show real semver ranges (workspace-protocol deps would break installs).
+   - Pack to a temporary directory and inspect the tarball:
+     ```
+     RATEL_PACK_DIR="$(mktemp -d)"
+     pnpm --filter @ratel-ai/ratel-local pack --pack-destination "$RATEL_PACK_DIR"
+     tar -xOf "$RATEL_PACK_DIR"/ratel-ai-ratel-local-*.tgz package/package.json
+     ```
+     The packed `package.json` must show real semver ranges; workspace-protocol dependencies would break installs.
 4. **(Optional dry-run)** `workflow_dispatch` `release.yml` with `dry_run: true` to validate the auth + publish path end-to-end without consuming a version number.
 5. **Commit, tag, push:**
    ```

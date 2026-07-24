@@ -1,6 +1,6 @@
 {
   "name": "@ratel-ai/ratel-local",
-  "version": "0.5.0-rc.0",
+  "version": "0.5.0",
   "description": "Ratel Local package: an MCP server library plus the ratel-local CLI for managing upstream MCP servers, OAuth, and agent imports from one binary.",
   "private": false,
   "type": "module",

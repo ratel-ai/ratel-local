@@ -24,7 +24,7 @@ shared `assets/icon.svg` remains referenced by the Codex manifest.
 The plugin MCP config starts Ratel over stdio through `npx`:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.5.0-rc.0 serve --auto-config
+npx -y @ratel-ai/ratel-local@0.5.0 serve --auto-config
 ```
 
 `--auto-config` loads `~/.ratel/config.json` plus project and local Ratel configs when a project root is discoverable.
