@@ -2,7 +2,9 @@
 
 All notable changes to this package are documented here. The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/), and this package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0-rc.0] - 2026-07-17
+## [Unreleased]
+
+## [0.6.0-rc.0] - 2026-07-24
 
 ### Added
 - Added a versioned canonical-root project registry, project-aware HTTP/CLI/UI flows, URL-scoped daemon pages, connector v2 metadata, and an active-client read model.
@@ -18,6 +20,12 @@ All notable changes to this package are documented here. The format is based on 
 - Skills now support explicit user/project/local reference or copy registrations. `skill activate` and `skill deactivate` remain deprecated user-scope compatibility wrappers.
 - The daemon reconciles disk state on every gateway acquire and uses targeted parent/resource watchers for near-immediate invalidation.
 - CLI and UI agent imports apply Ratel and native-agent config rewrites as one recoverable transaction.
+- Rebuilt the browser UI around the persistent daemon with global and project-scoped routes, dedicated project and MCP-client views, and a cloud-aligned visual system across tools, skills, and agent setup.
+
+### Fixed
+- Hardened the daemon and UI control plane with loopback-only authenticated requests, validated installed-service identity, safe canonical project admission, and serialized project-root mutations.
+- Routed OAuth through live daemon gateways, preserving results across bulk authentication while keeping scoped stores isolated.
+- Restored the legacy skill lifecycle aliases and tightened automated setup argument validation so existing workflows fail clearly instead of being silently misinterpreted.
 
 ## [0.5.0] - 2026-07-24
 

@@ -75,7 +75,7 @@ describe("Ratel gateway entries", () => {
         command: "npx",
         args: [
           "-y",
-          "@ratel-ai/ratel-local@0.5.0",
+          "@ratel-ai/ratel-local@0.6.0-rc.0",
           "connect",
           "--agent-host",
           "claude-code",
