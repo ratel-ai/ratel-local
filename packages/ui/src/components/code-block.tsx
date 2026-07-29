@@ -36,7 +36,7 @@ function CodeBlock({
   return (
     <section
       className={cn(
-        "overflow-hidden rounded-xl border border-forest-300 bg-base-deep/80",
+        "overflow-hidden rounded-xl border border-forest-300 bg-ratel-base-deep/80",
         className,
       )}
     >

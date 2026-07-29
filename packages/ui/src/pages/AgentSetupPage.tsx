@@ -49,6 +49,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { importStatuslineAction, linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
+import { REFRESH_SHORTCUT } from "@/lib/keyboard-shortcuts";
 import {
   applySkillImportSelections,
   availableSkillsForKind,
@@ -337,7 +338,7 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
               <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
-                kbd="⌘R"
+                shortcut={REFRESH_SHORTCUT.hotkey}
                 label="Refresh"
                 onClick={() => void Promise.all([refresh(), scanHosts()])}
               />
@@ -463,7 +464,7 @@ export function AgentDetailPage(props: {
               <ResponsiveToolbarButton
                 disabled={scanning}
                 icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
-                kbd="⌘R"
+                shortcut={REFRESH_SHORTCUT.hotkey}
                 label="Refresh"
                 onClick={() => void Promise.all([refresh(), scanHosts()])}
               />

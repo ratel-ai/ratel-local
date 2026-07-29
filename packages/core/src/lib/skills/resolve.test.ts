@@ -35,6 +35,81 @@ describe("resolveConfiguredSkills", () => {
     expect(explicitlyEmpty.registrations).toEqual([]);
   });
 
+  it("does not duplicate an explicitly registered copy through default legacy discovery", async () => {
+    const homeDir = await tempDir();
+    const ownedDir = join(homeDir, ".ratel", "skills", "owned");
+    const markerPath = join(ownedDir, ".ratel-skill.json");
+    await writeSkill(ownedDir, "owned", "Owned copy", "Owned body.");
+    await writeFile(markerPath, `${JSON.stringify({ version: 1, id: "owned" })}\n`, "utf8");
+    const canonicalMarkerPath = join(await realpath(ownedDir), ".ratel-skill.json");
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      scopes: [
+        {
+          ref: { scope: "user" },
+          config: { entries: { owned: { mode: "copy", source: "ratel" } } },
+        },
+      ],
+    });
+
+    expect(catalog.effectiveSkills.map(({ id }) => id)).toEqual(["owned"]);
+    expect(catalog.registrations).toEqual([
+      expect.objectContaining({
+        id: "owned",
+        state: "effective",
+        editable: true,
+        ref: expect.objectContaining({ kind: "entry" }),
+      }),
+    ]);
+    expect(catalog.watchInputs).toContain(canonicalMarkerPath);
+  });
+
+  it("keeps retained owned copies out of legacy discovery after registration removal", async () => {
+    const homeDir = await tempDir();
+    const managedRoot = join(homeDir, ".ratel", "skills");
+    const ownedDir = join(managedRoot, "owned");
+    const markerPath = join(ownedDir, ".ratel-skill.json");
+    await writeSkill(ownedDir, "owned", "Owned copy", "Owned body.");
+    await writeFile(markerPath, `${JSON.stringify({ version: 1, id: "owned" })}\n`, "utf8");
+    const canonicalMarkerPath = join(await realpath(ownedDir), ".ratel-skill.json");
+    await writeSkill(join(managedRoot, "legacy"), "legacy", "Genuine legacy skill", "Legacy body.");
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      scopes: [{ ref: { scope: "user" } }],
+    });
+
+    expect(catalog.effectiveSkills.map(({ id }) => id)).toEqual(["legacy"]);
+    expect(catalog.registrations).toEqual([
+      expect.objectContaining({
+        id: "legacy",
+        state: "effective",
+        ref: expect.objectContaining({ kind: "legacy" }),
+      }),
+    ]);
+    expect(catalog.watchInputs).toContain(canonicalMarkerPath);
+  });
+
+  it("continues to discover copies whose ownership marker does not match the skill", async () => {
+    const homeDir = await tempDir();
+    const skillDir = join(homeDir, ".ratel", "skills", "legacy");
+    await writeSkill(skillDir, "legacy", "Legacy skill", "Legacy body.");
+    await writeFile(
+      join(skillDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "someone-else" })}\n`,
+      "utf8",
+    );
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      scopes: [{ ref: { scope: "user" } }],
+    });
+
+    expect(catalog.effectiveSkills.map(({ id }) => id)).toEqual(["legacy"]);
+    expect(catalog.registrations[0]?.ref.kind).toBe("legacy");
+  });
+
   it("keeps an empty legacy directory in watch inputs so additions are observable", async () => {
     const homeDir = await tempDir();
     const legacyDir = join(homeDir, "empty-legacy");

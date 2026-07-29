@@ -187,6 +187,14 @@ export async function resolveConfiguredSkills(
           }
           const bundle = await loadSkillBundle(canonicalPath, entry.name);
           id = bundle.skill.id;
+          const markerPath = join(canonicalPath, ".ratel-skill.json");
+          configuredWatchInputs.add(markerPath);
+          if (await hasMatchingCopyMarker(canonicalPath, id)) {
+            // Owned copies are governed exclusively by skills.entries. Treating
+            // them as legacy registrations makes removal retain an implicit,
+            // still-served registration for the same directory.
+            continue;
+          }
           const ref: SkillRegistrationRef = {
             scopeRef,
             id,

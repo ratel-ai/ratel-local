@@ -49,8 +49,12 @@
   --font-pixel: "Geist Pixel Square", var(--font-geist-mono), ui-monospace, monospace;
 
   /* Brand surfaces + palette (mirrors packages/brand/tokens.css, plus app shades) */
-  --color-base: #001c16;
-  --color-base-deep: #00130f;
+  /*
+   * Keep surface token names out of Tailwind's typography namespace.
+   * `--color-base` makes `text-base` resolve as a color instead of a font size.
+   */
+  --color-ratel-base: #001c16;
+  --color-ratel-base-deep: #00130f;
   --color-forest: #023a2e;
   --color-forest-600: #04332a;
   --color-forest-300: #0c4d3e;

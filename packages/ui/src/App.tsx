@@ -26,6 +26,7 @@ import {
 import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand-logo";
 import { ContextSwitcher } from "@/components/context-switcher";
+import { ShortcutHint } from "@/components/shortcut-hint";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -51,6 +52,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
+import {
+  COMMAND_MENU_SHORTCUT,
+  type PrimaryDestination,
+  REFRESH_SHORTCUT,
+} from "@/lib/keyboard-shortcuts";
 import { type ProjectView, projectsFromResponse } from "@/lib/projects";
 import {
   contextPagePath,
@@ -403,7 +409,7 @@ export function AppShell() {
   );
 
   const goTo = useCallback(
-    (to: "/" | "/agent-setup" | "/skills" | "/clients") => {
+    (to: PrimaryDestination) => {
       void navigate({ to: pagePath(to) } as never);
     },
     [navigate, pagePath],
@@ -438,15 +444,15 @@ export function AppShell() {
     [refresh, refreshProjects, runtimeContext.kind],
   );
 
-  useHotkey("Mod+K", () => setCommandOpen((open) => !open), {
+  useHotkey(COMMAND_MENU_SHORTCUT.hotkey, () => setCommandOpen((open) => !open), {
     meta: {
-      name: "Open command menu",
+      name: COMMAND_MENU_SHORTCUT.label,
       description: "Toggle the Ratel command menu.",
     },
   });
-  useHotkey("Mod+R", () => void refreshCurrentContext(), {
+  useHotkey(REFRESH_SHORTCUT.hotkey, () => void refreshCurrentContext(), {
     meta: {
-      name: "Refresh current view",
+      name: REFRESH_SHORTCUT.label,
       description: "Reload the selected Ratel Local context.",
     },
     preventDefault: true,
@@ -566,6 +572,12 @@ function ProductSidebar({
               to={pagePath("/")}
             />
             <ProductSidebarItem
+              active={pageSuffix.startsWith("/skills")}
+              icon={<Sparkles />}
+              label="Skills"
+              to={pagePath("/skills")}
+            />
+            <ProductSidebarItem
               active={pageSuffix.startsWith("/agent-setup")}
               icon={<Settings2 />}
               label="Agent Setup"
@@ -576,12 +588,6 @@ function ProductSidebar({
               icon={<RadioTower />}
               label="Clients"
               to={pagePath("/clients")}
-            />
-            <ProductSidebarItem
-              active={pageSuffix.startsWith("/skills")}
-              icon={<Sparkles />}
-              label="Skills"
-              to={pagePath("/skills")}
             />
           </>
         )}
@@ -627,9 +633,11 @@ function AppHeader({
           >
             <Search className="size-4" />
             <span className="text-sm">Search</span>
-            <span className="ml-1 rounded border border-forest-300 px-1.5 font-mono text-[10px] leading-5 text-warm-muted">
-              ⌘K
-            </span>
+            <ShortcutHint
+              className="ml-1"
+              keyClassName="bg-forest/60 px-1.5 text-cream-dim ring-1 ring-forest-300 ring-inset"
+              shortcut={COMMAND_MENU_SHORTCUT.hotkey}
+            />
           </Button>
           <Button
             aria-label="Search"
@@ -737,7 +745,7 @@ function CommandMenu(props: {
   onAddToolSource: () => void;
   onImport: () => void;
   onLink: () => void;
-  onNavigate: (to: "/" | "/agent-setup" | "/skills" | "/clients") => void;
+  onNavigate: (to: PrimaryDestination) => void;
   onSelectAgent: (kind: AgentHostKind) => void;
   onSelectToolSource: (scope: RatelScope, name: string) => void;
   open: boolean;
@@ -762,20 +770,18 @@ function CommandMenu(props: {
               <CommandItem onSelect={() => props.onNavigate("/")}>
                 <Server />
                 Tools
-                <CommandShortcut>G T</CommandShortcut>
-              </CommandItem>
-              <CommandItem onSelect={() => props.onNavigate("/agent-setup")}>
-                <Settings2 />
-                Agent Setup
-                <CommandShortcut>G A</CommandShortcut>
-              </CommandItem>
-              <CommandItem onSelect={() => props.onNavigate("/clients")}>
-                <RadioTower />
-                Clients
               </CommandItem>
               <CommandItem onSelect={() => props.onNavigate("/skills")}>
                 <Sparkles />
                 Skills
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/agent-setup")}>
+                <Settings2 />
+                Agent Setup
+              </CommandItem>
+              <CommandItem onSelect={() => props.onNavigate("/clients")}>
+                <RadioTower />
+                Clients
               </CommandItem>
             </CommandGroup>
             {agentItems.length > 0 && (

@@ -1,14 +1,14 @@
 import type { ComponentProps, ReactNode } from "react";
+import { ShortcutHint } from "@/components/shortcut-hint";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
-import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 type ResponsiveToolbarButtonProps = Omit<ComponentProps<typeof Button>, "children" | "size"> & {
   icon: ReactNode;
-  kbd?: string;
   label: string;
+  shortcut?: string;
 };
 
 function ResponsiveToolbar(props: ComponentProps<"div">) {
@@ -27,8 +27,8 @@ function ResponsiveToolbarGroup(props: ComponentProps<typeof ButtonGroup>) {
 function ResponsiveToolbarButton({
   className,
   icon,
-  kbd,
   label,
+  shortcut,
   variant = "outline",
   ...props
 }: ResponsiveToolbarButtonProps) {
@@ -50,7 +50,13 @@ function ResponsiveToolbarButton({
       >
         {icon}
         <span className="hidden md:inline">{label}</span>
-        {kbd ? <Kbd className="hidden bg-background/70 lg:inline-flex">{kbd}</Kbd> : null}
+        {shortcut ? (
+          <ShortcutHint
+            className="hidden lg:inline-flex"
+            keyClassName="bg-background/70"
+            shortcut={shortcut}
+          />
+        ) : null}
       </TooltipTrigger>
       <TooltipContent className="md:hidden">{label}</TooltipContent>
     </Tooltip>
@@ -60,8 +66,8 @@ function ResponsiveToolbarButton({
 function ResponsiveToolbarLabeledButton({
   className,
   icon,
-  kbd,
   label,
+  shortcut,
   variant = "outline",
   ...props
 }: ResponsiveToolbarButtonProps) {
@@ -75,7 +81,13 @@ function ResponsiveToolbarLabeledButton({
     >
       {icon}
       <span>{label}</span>
-      {kbd ? <Kbd className="hidden bg-background/70 lg:inline-flex">{kbd}</Kbd> : null}
+      {shortcut ? (
+        <ShortcutHint
+          className="hidden lg:inline-flex"
+          keyClassName="bg-background/70"
+          shortcut={shortcut}
+        />
+      ) : null}
     </Button>
   );
 }

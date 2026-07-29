@@ -45,6 +45,7 @@ import {
   ResponsiveToolbarGroup,
   ResponsiveToolbarLabeledButton,
 } from "@/components/responsive-toolbar";
+import { ScopeToolbar, type ScopeToolbarOption } from "@/components/scope-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -71,7 +72,6 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupTextarea } from "@/components/ui/input-group";
-import { type Segment, SegmentedControl } from "@/components/ui/segmented-control";
 import {
   Select,
   SelectContent,
@@ -82,6 +82,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { REFRESH_SHORTCUT } from "@/lib/keyboard-shortcuts";
 import { scopeTarget } from "@/lib/runtime-context";
 import {
   AUTH_STATUS_LABELS,
@@ -240,7 +241,7 @@ export function ToolsPage() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const scope = context.kind === "project" ? selectedScope : "user";
   const visibleScopes = context.kind === "project" ? SCOPES : SCOPES.slice(0, 1);
-  const scopeOptions: Segment<RatelScope>[] = visibleScopes.map((value) => ({
+  const scopeOptions: ScopeToolbarOption<RatelScope>[] = visibleScopes.map((value) => ({
     label: scopeLabel(value),
     value,
   }));
@@ -321,7 +322,7 @@ export function ToolsPage() {
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
                 icon={<RefreshCw />}
-                kbd="⌘R"
+                shortcut={REFRESH_SHORTCUT.hotkey}
                 label="Refresh"
                 onClick={() => void refresh()}
               />
@@ -337,18 +338,45 @@ export function ToolsPage() {
         </PageHeaderActions>
       </PageHeader>
 
-      <section className="flex flex-col gap-3 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <SegmentedControl<RatelScope>
-            ariaLabel="Tool source scope"
-            onChange={setSelectedScope}
-            options={scopeOptions}
-            value={scope}
-          />
-          <p className="mt-2 truncate font-mono text-xs text-muted-foreground">
+      <ScopeToolbar<RatelScope>
+        ariaLabel="Tool source scope"
+        controls={
+          <div className="grid grid-cols-2 gap-2">
+            <ToolSourceFilterSelect
+              label="Type"
+              valueLabel={typeFilter === "all" ? "All types" : toolSourceTypeLabel(typeFilter)}
+              value={typeFilter}
+              onValueChange={(value) => setTypeFilter(value as TypeFilter)}
+            >
+              <SelectItem value="all">All types</SelectItem>
+              {Object.entries(TOOL_SOURCE_TYPE_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </ToolSourceFilterSelect>
+            <ToolSourceFilterSelect
+              label="Auth"
+              valueLabel={authFilter === "all" ? "All auth" : getAuthStatusLabel(authFilter)}
+              value={authFilter}
+              onValueChange={(value) => setAuthFilter(value as AuthFilter)}
+            >
+              <SelectItem value="all">All auth</SelectItem>
+              {Object.entries(AUTH_STATUS_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </ToolSourceFilterSelect>
+          </div>
+        }
+        metadataPrimary={
+          <p className="truncate font-mono text-xs text-muted-foreground">
             {scopeData?.available ? scopeData.path : "scope unavailable"}
           </p>
-          <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+        }
+        metadataSecondary={
+          <p className="truncate font-mono text-xs text-muted-foreground">
             {scopeData?.available
               ? formatScopeTokenSummary({
                   estimatedTokens: scopeEstimatedTokens,
@@ -358,36 +386,11 @@ export function ToolsPage() {
                 })
               : "Tool counts unavailable"}
           </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:w-fit">
-          <ToolSourceFilterSelect
-            label="Type"
-            valueLabel={typeFilter === "all" ? "All types" : toolSourceTypeLabel(typeFilter)}
-            value={typeFilter}
-            onValueChange={(value) => setTypeFilter(value as TypeFilter)}
-          >
-            <SelectItem value="all">All types</SelectItem>
-            {Object.entries(TOOL_SOURCE_TYPE_LABELS).map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </ToolSourceFilterSelect>
-          <ToolSourceFilterSelect
-            label="Auth"
-            valueLabel={authFilter === "all" ? "All auth" : getAuthStatusLabel(authFilter)}
-            value={authFilter}
-            onValueChange={(value) => setAuthFilter(value as AuthFilter)}
-          >
-            <SelectItem value="all">All auth</SelectItem>
-            {Object.entries(AUTH_STATUS_LABELS).map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </ToolSourceFilterSelect>
-        </div>
-      </section>
+        }
+        onValueChange={setSelectedScope}
+        options={scopeOptions}
+        value={scope}
+      />
 
       {!scopeData?.available ? (
         <EmptyTools
@@ -404,7 +407,7 @@ export function ToolsPage() {
         <EmptyTools
           action={
             hasActiveFilters ? (
-              <div className="flex flex-wrap justify-center gap-2">
+              <div className="flex flex-wrap items-stretch justify-center gap-2">
                 <Button
                   onClick={() => {
                     setTypeFilter("all");
@@ -416,7 +419,7 @@ export function ToolsPage() {
                 </Button>
               </div>
             ) : (
-              <div className="flex flex-wrap justify-center gap-2">
+              <div className="flex flex-wrap items-stretch justify-center gap-2">
                 <Button onClick={() => goToCreateSource()} size="sm">
                   <Plus />
                   Add tool source

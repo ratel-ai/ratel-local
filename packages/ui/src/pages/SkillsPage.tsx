@@ -12,6 +12,7 @@ import {
   PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/page-header";
+import { ScopeToolbar, type ScopeToolbarOption } from "@/components/scope-toolbar";
 import { type SkillSource, SourceIcon, sourceLabel } from "@/components/source-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type Segment, SegmentedControl } from "@/components/ui/segmented-control";
 import {
   Select,
   SelectContent,
@@ -105,10 +105,12 @@ export function SkillsPage() {
   const canImport = available.length > 0;
   const usesScopedResolver = ready?.effectiveSkills !== undefined;
   const registrationGroups = ready ? configuredSkillRegistrationGroups(ready, context) : [];
-  const scopeOptions: Segment<"user" | "project" | "local">[] = registrationGroups.map((group) => ({
-    label: `${scopeLabel(group.scope)} ${group.registrations.length}`,
-    value: group.scope,
-  }));
+  const scopeOptions: ScopeToolbarOption<"user" | "project" | "local">[] = registrationGroups.map(
+    (group) => ({
+      label: `${scopeLabel(group.scope)} ${group.registrations.length}`,
+      value: group.scope,
+    }),
+  );
   const selectedRegistrationGroup = registrationGroups.find(
     (group) => group.scope === configuredScope,
   );
@@ -195,25 +197,25 @@ export function SkillsPage() {
       )}
 
       {ready && usesScopedResolver && registrationGroups.length > 0 && (
-        <section className="flex flex-col gap-3 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <SegmentedControl<"user" | "project" | "local">
-              ariaLabel="Skill registration scope"
-              onChange={setConfiguredScope}
-              options={scopeOptions}
-              value={configuredScope}
+        <ScopeToolbar<"user" | "project" | "local">
+          ariaLabel="Skill registration scope"
+          controls={
+            <SkillSourceFilter
+              onValueChange={(value) => setSourceFilter(value as "all" | SkillSource)}
+              value={sourceFilter}
             />
-            <p className="mt-2 text-sm text-muted-foreground">
+          }
+          metadataPrimary={
+            <p className="truncate text-xs text-muted-foreground">
               {selectedRegistrationGroup?.registrations.length ?? 0} skill registration
               {(selectedRegistrationGroup?.registrations.length ?? 0) === 1 ? "" : "s"} configured
               in this scope.
             </p>
-          </div>
-          <SkillSourceFilter
-            onValueChange={(value) => setSourceFilter(value as "all" | SkillSource)}
-            value={sourceFilter}
-          />
-        </section>
+          }
+          onValueChange={setConfiguredScope}
+          options={scopeOptions}
+          value={configuredScope}
+        />
       )}
 
       {ready && managed.length === 0 && available.length > 0 && (
