@@ -259,6 +259,7 @@ describe("buildGatewayFromConfig", () => {
         },
         {
           oauthStorePath: (name) => join(tmpdir(), `ratel-dense-auth-${name}-${Date.now()}.json`),
+          resolvedSkills: [],
           transportFactory: () => ({
             async start() {
               throw new UnauthorizedError("missing tokens");
