@@ -10,6 +10,7 @@ All notable changes to this package are documented here. The format is based on 
 - Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
 
 ### Changed
+- Simplified Retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind the Save button, while missing models show an explicit download confirmation and progress before settings are committed.
 - Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
 
 ## [0.6.0-rc.1] - 2026-07-24

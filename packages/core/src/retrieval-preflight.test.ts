@@ -1,7 +1,64 @@
 import { describe, expect, it, vi } from "vitest";
-import { preflightRetrieval } from "./retrieval-preflight.js";
+import { inspectRetrievalPreparation, preflightRetrieval } from "./retrieval-preflight.js";
 
 describe("retrieval preflight", () => {
+  it("distinguishes a cached built-in model from a required download", async () => {
+    const cached = vi.fn().mockResolvedValue(true);
+    const missing = vi.fn().mockResolvedValue(false);
+
+    await expect(
+      inspectRetrievalPreparation(
+        { method: "hybrid" },
+        { homeDir: "/home/u", env: {}, isModelCached: cached },
+      ),
+    ).resolves.toMatchObject({
+      action: "verify",
+      source: "built-in",
+      model: "BAAI/bge-small-en-v1.5",
+    });
+    await expect(
+      inspectRetrievalPreparation(
+        { method: "hybrid" },
+        { homeDir: "/home/u", env: {}, isModelCached: missing },
+      ),
+    ).resolves.toMatchObject({
+      action: "download-and-verify",
+      source: "built-in",
+      model: "BAAI/bge-small-en-v1.5",
+    });
+    expect(cached).toHaveBeenCalledWith("BAAI/bge-small-en-v1.5");
+  });
+
+  it("only checks the Hugging Face cache for downloadable model sources", async () => {
+    const isModelCached = vi.fn().mockResolvedValue(false);
+
+    await expect(
+      inspectRetrievalPreparation(
+        { method: "semantic", embedding: { local: "/models/bge" } },
+        { homeDir: "/home/u", env: {}, isModelCached },
+      ),
+    ).resolves.toMatchObject({
+      action: "verify",
+      source: "local",
+    });
+    expect(isModelCached).not.toHaveBeenCalled();
+  });
+
+  it("reports that BM25 needs neither download nor verification", async () => {
+    const isModelCached = vi.fn();
+
+    await expect(
+      inspectRetrievalPreparation(
+        { method: "bm25" },
+        { homeDir: "/home/u", env: {}, isModelCached },
+      ),
+    ).resolves.toMatchObject({
+      action: "none",
+      source: "none",
+    });
+    expect(isModelCached).not.toHaveBeenCalled();
+  });
+
   it("keeps BM25 model-free and does not invoke the dense probe", async () => {
     const probe = vi.fn();
 

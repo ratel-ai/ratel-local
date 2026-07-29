@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { type EmbeddingSpec, ToolCatalog } from "@ratel-ai/sdk";
 import type { RetrievalConfig } from "./lib/config.js";
@@ -33,6 +34,21 @@ export interface RetrievalPreflightOptions {
   probe?: RetrievalProbe;
 }
 
+export interface RetrievalPreparationInspection {
+  action: "none" | "verify" | "download-and-verify";
+  method: RetrievalConfig["method"];
+  source: RetrievalPreflightSource;
+  model?: string;
+  runtimeMemoryMb: number | null;
+  remoteDataTransfer: boolean;
+}
+
+export interface RetrievalPreparationInspectionOptions {
+  homeDir: string;
+  env?: Readonly<Record<string, string | undefined>>;
+  isModelCached?: (model: string) => Promise<boolean>;
+}
+
 export class RetrievalPreflightError extends Error {
   readonly code = "RETRIEVAL_PREFLIGHT_FAILED";
 
@@ -44,6 +60,38 @@ export class RetrievalPreflightError extends Error {
     super(message, options);
     this.name = "RetrievalPreflightError";
   }
+}
+
+export async function inspectRetrievalPreparation(
+  retrieval: RetrievalConfig,
+  options: RetrievalPreparationInspectionOptions,
+): Promise<RetrievalPreparationInspection> {
+  if (retrieval.method === "bm25") {
+    return {
+      action: "none",
+      method: retrieval.method,
+      source: "none",
+      runtimeMemoryMb: null,
+      remoteDataTransfer: false,
+    };
+  }
+
+  const source = describeSource(retrieval.embedding);
+  const canDownload = source.source === "built-in" || source.source === "huggingface";
+  const isModelCached =
+    options.isModelCached ??
+    ((model: string) =>
+      isHuggingFaceModelCached(model, options.homeDir, options.env ?? process.env));
+  const downloadRequired = canDownload ? !(await isModelCached(source.model)) : false;
+
+  return {
+    action: downloadRequired ? "download-and-verify" : "verify",
+    method: retrieval.method,
+    source: source.source,
+    model: source.model,
+    runtimeMemoryMb: source.source === "built-in" ? BUILT_IN_RETRIEVAL_RUNTIME_MEMORY_MB : null,
+    remoteDataTransfer: source.source === "endpoint",
+  };
 }
 
 export async function preflightRetrieval(
@@ -172,6 +220,24 @@ function expandHomePath(path: string, homeDir: string): string {
 
 function nonEmptyEnvironmentValue(value: string | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+async function isHuggingFaceModelCached(
+  model: string,
+  homeDir: string,
+  env: Readonly<Record<string, string | undefined>>,
+): Promise<boolean> {
+  const cacheRoot =
+    env.HF_HUB_CACHE ??
+    env.HUGGINGFACE_HUB_CACHE ??
+    env.TRANSFORMERS_CACHE ??
+    (env.HF_HOME ? join(env.HF_HOME, "hub") : join(homeDir, ".cache", "huggingface", "hub"));
+  const snapshots = join(cacheRoot, `models--${model.split("/").join("--")}`, "snapshots");
+  try {
+    return (await readdir(snapshots)).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function preflightMessage(

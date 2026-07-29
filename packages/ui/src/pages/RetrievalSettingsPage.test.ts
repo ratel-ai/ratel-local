@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   availableRetrievalScopes,
   retrievalConfigFromDraft,
+  retrievalDownloadConfirmationCopy,
   retrievalDraftFromConfig,
   retrievalDraftKey,
+  retrievalMethodLabel,
+  retrievalNeedsPreparation,
+  retrievalScopeLabel,
   retrievalTarget,
   showsEmbeddingFields,
 } from "./RetrievalSettingsPage";
@@ -115,6 +119,36 @@ describe("retrieval settings model", () => {
     expect(retrievalTarget("local", { kind: "project", projectId: "project/a" })).toEqual({
       scope: "local",
       projectId: "project/a",
+    });
+  });
+
+  it("uses human-readable labels for retrieval values", () => {
+    expect(retrievalMethodLabel("bm25")).toBe("BM25");
+    expect(retrievalMethodLabel("semantic")).toBe("Semantic");
+    expect(retrievalScopeLabel("user")).toBe("User");
+    expect(retrievalScopeLabel("local")).toBe("Local");
+  });
+
+  it("only requires preparation for methods that use embeddings", () => {
+    expect(retrievalNeedsPreparation(retrievalDraftFromConfig({ method: "bm25" }))).toBe(false);
+    expect(retrievalNeedsPreparation(retrievalDraftFromConfig({ method: "semantic" }))).toBe(true);
+    expect(retrievalNeedsPreparation(retrievalDraftFromConfig({ method: "hybrid" }))).toBe(true);
+  });
+
+  it("uses download-specific confirmation copy only for a missing model", () => {
+    expect(
+      retrievalDownloadConfirmationCopy({
+        action: "download-and-verify",
+        method: "hybrid",
+        source: "built-in",
+        model: "BAAI/bge-small-en-v1.5",
+        runtimeMemoryMb: 130,
+        remoteDataTransfer: false,
+      }),
+    ).toEqual({
+      title: "Download the built-in model?",
+      description:
+        "The built-in embedding model is not cached on this machine. Ratel will download it once, verify it, then save these settings.",
     });
   });
 });

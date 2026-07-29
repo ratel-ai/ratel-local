@@ -1302,6 +1302,27 @@ describe("UI server — add / edit / remove", () => {
         embedding: { ollama: "nomic-embed-text" },
       });
 
+      const inspectedRetrieval = await fetch(
+        `${base}/api/retrieval/inspect?projectId=${project.id}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            retrieval: {
+              method: "hybrid",
+            },
+          }),
+        },
+      );
+      expect(inspectedRetrieval.status).toBe(200);
+      expect(await inspectedRetrieval.json()).toMatchObject({
+        action: "download-and-verify",
+        source: "built-in",
+        model: "BAAI/bge-small-en-v1.5",
+        runtimeMemoryMb: 130,
+        remoteDataTransfer: false,
+      });
+
       const preparedRetrieval = await fetch(
         `${base}/api/retrieval/prepare?projectId=${project.id}`,
         {

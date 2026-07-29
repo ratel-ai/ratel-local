@@ -19,6 +19,7 @@ import {
   type DocumentRevision,
   documentRevision,
   InvalidContextSnapshotError,
+  inspectRetrievalPreparation,
   loadMergedConfig,
   markDenseAuthReconnectRequired,
   type PreparedChangeCoordinator,
@@ -313,6 +314,17 @@ async function route(
     return {
       status: 200,
       body: await retrievalPreflight(retrieval, { homeDir: ctx.env.homeDir }),
+    };
+  }
+  if (method === "POST" && path === "/api/retrieval/inspect") {
+    const body = await readJsonBody(req);
+    const retrieval =
+      body.retrieval === undefined
+        ? ((await loadMergedConfig(ctx))?.retrieval ?? { method: "bm25" as const })
+        : parseRetrievalBody(body.retrieval);
+    return {
+      status: 200,
+      body: await inspectRetrievalPreparation(retrieval, { homeDir: ctx.env.homeDir }),
     };
   }
   if (method === "GET" && path === "/api/projects" && projects) {

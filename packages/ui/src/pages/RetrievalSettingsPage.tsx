@@ -1,11 +1,30 @@
-import { CheckCircle2, DatabaseZap, RefreshCw, Save } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
+import { Save } from "lucide-react";
 import { useState } from "react";
 import { type ConfigResponse, type RatelScope, type RetrievalConfig, useRatelApp } from "@/App";
+import {
+  PageHeader,
+  PageHeaderBackRow,
+  PageHeaderContent,
+  PageHeaderDescription,
+  PageHeaderTitle,
+} from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress, ProgressLabel } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -16,6 +35,7 @@ import {
 import { ratelQueryKeys } from "@/lib/ratel-query";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
+import { cn } from "@/lib/utils";
 
 type RetrievalMethod = RetrievalConfig["method"];
 type RetrievalSource = "built-in" | "huggingface" | "local" | "ollama" | "endpoint";
@@ -43,17 +63,21 @@ interface RetrievalPreflightView {
   reconnectRequired: boolean;
 }
 
+export interface RetrievalPreparationInspection {
+  action: "none" | "verify" | "download-and-verify";
+  method: RetrievalMethod;
+  source: RetrievalPreflightView["source"] | "none";
+  model?: string;
+  runtimeMemoryMb: number | null;
+  remoteDataTransfer: boolean;
+}
+
 interface RetrievalWriteVariables {
   action: "configure" | "reset";
   draft: RetrievalDraft;
   revision?: string;
   scope: RatelScope;
   target: ReturnType<typeof retrievalTarget>;
-}
-
-interface RetrievalPreflightState {
-  draftKey: string;
-  result: RetrievalPreflightView;
 }
 
 export function RetrievalSettingsPage() {
@@ -68,18 +92,18 @@ export function RetrievalSettingsPage() {
   const effective = effectiveRetrieval(config);
 
   return (
-    <main className="grid w-full gap-6">
-      <header className="grid gap-2">
-        <div className="flex items-center gap-2 text-ctx-skills">
-          <DatabaseZap className="size-5" />
-          <span className="font-mono text-xs uppercase tracking-[0.18em]">Retrieval</span>
-        </div>
-        <h1 className="font-semibold text-3xl tracking-tight">Retrieval settings</h1>
-        <p className="max-w-3xl text-muted-foreground">
-          Keep BM25 model-free, or opt this runtime context into semantic or hybrid retrieval. Each
-          scope replaces the complete earlier retrieval block.
-        </p>
-      </header>
+    <main className="flex w-full flex-1 flex-col gap-5 px-4 py-5 sm:px-6">
+      <PageHeader>
+        <PageHeaderContent>
+          <PageHeaderBackRow>
+            <PageHeaderTitle>Retrieval</PageHeaderTitle>
+          </PageHeaderBackRow>
+          <PageHeaderDescription>
+            Choose how Ratel finds relevant tools and skills. Changes apply to newly connected
+            clients.
+          </PageHeaderDescription>
+        </PageHeaderContent>
+      </PageHeader>
 
       {configError ? (
         <Alert variant="destructive">
@@ -88,18 +112,14 @@ export function RetrievalSettingsPage() {
         </Alert>
       ) : null}
 
-      <Card>
+      <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
         <CardHeader>
-          <CardTitle>Effective retrieval</CardTitle>
-          <CardDescription>
-            The rightmost configured scope wins for newly connected clients.
-          </CardDescription>
+          <CardTitle>Current method</CardTitle>
+          <CardDescription>Used by newly connected clients.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-1">
-          <p className="font-medium capitalize">{effective.method}</p>
-          <p className="font-mono text-muted-foreground text-sm">
-            {retrievalSourceLabel(effective)}
-          </p>
+          <p className="font-medium">{retrievalMethodLabel(effective.method)}</p>
+          <p className="text-muted-foreground text-sm">{retrievalSourceLabel(effective)}</p>
         </CardContent>
       </Card>
 
@@ -136,9 +156,9 @@ function RetrievalEditor({
 }) {
   const { context, request } = useRatelApp();
   const [draft, setDraft] = useState(() => retrievalDraftFromConfig(initial));
-  const [preflight, setPreflight] = useState<RetrievalPreflightState | null>(null);
-  const draftKey = retrievalDraftKey(draft);
-  const visiblePreflight = preflight?.draftKey === draftKey ? preflight.result : null;
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [savePhase, setSavePhase] = useState<"idle" | "preparing" | "saving">("idle");
+  const [inspection, setInspection] = useState<RetrievalPreparationInspection | null>(null);
   const target = retrievalTarget(scope, context);
   const hasOverride = config?.scopes[scope]?.available
     ? config.scopes[scope].config.retrieval !== undefined
@@ -157,133 +177,235 @@ function RetrievalEditor({
       }),
     successMessage: (_result, variables) =>
       variables.action === "configure"
-        ? `Saved ${variables.scope} retrieval override`
-        : `Reset ${variables.scope} retrieval override`,
+        ? `Saved ${retrievalScopeLabel(variables.scope)} retrieval settings`
+        : variables.scope === "user"
+          ? "Restored the default retrieval setting"
+          : `Using inherited retrieval for ${retrievalScopeLabel(variables.scope)}`,
   });
-  const preflightMutation = useRatelMutation<RetrievalPreflightView, RetrievalDraft>({
-    invalidate: false,
+  const preparationMutation = useMutation({
     mutationKey: [...ratelQueryKeys.context(context), "retrieval", "preflight"],
-    mutationFn: (nextDraft) =>
+    mutationFn: (nextDraft: RetrievalDraft) =>
       request("/api/retrieval/prepare", {
         method: "POST",
         body: { retrieval: retrievalConfigFromDraft(nextDraft) },
-      }),
-    onSuccess: (result, preparedDraft) => {
-      setPreflight({ draftKey: retrievalDraftKey(preparedDraft), result });
-    },
-    successMessage: (result) => result.message,
+      }) as Promise<RetrievalPreflightView>,
   });
-  const disabled = writeMutation.isPending || preflightMutation.isPending || loading;
+  const inspectionMutation = useMutation({
+    mutationKey: [...ratelQueryKeys.context(context), "retrieval", "inspect"],
+    mutationFn: (nextDraft: RetrievalDraft) =>
+      request("/api/retrieval/inspect", {
+        method: "POST",
+        body: { retrieval: retrievalConfigFromDraft(nextDraft) },
+      }) as Promise<RetrievalPreparationInspection>,
+  });
+  const disabled =
+    writeMutation.isPending ||
+    preparationMutation.isPending ||
+    inspectionMutation.isPending ||
+    loading;
   const writeVariables = { draft, revision, scope, target };
+  const resetLabel = scope === "user" ? "Restore default" : "Use inherited setting";
+
+  const save = async () => {
+    preparationMutation.reset();
+    inspectionMutation.reset();
+    setInspection(null);
+    if (!retrievalNeedsPreparation(draft)) {
+      writeMutation.mutate({ ...writeVariables, action: "configure" });
+      return;
+    }
+    try {
+      const result = await inspectionMutation.mutateAsync(draft);
+      setInspection(result);
+      if (result.action === "download-and-verify") {
+        setSavePhase("idle");
+        setConfirmationOpen(true);
+        return;
+      }
+      await prepareAndSave();
+    } catch {
+      // Inspection errors are shown next to the Save action.
+    }
+  };
+
+  const prepareAndSave = async () => {
+    setSavePhase("preparing");
+    try {
+      await preparationMutation.mutateAsync(draft);
+      setSavePhase("saving");
+      await writeMutation.mutateAsync({ ...writeVariables, action: "configure" });
+      setConfirmationOpen(false);
+    } catch {
+      // Preparation errors are shown in the dialog. Write errors use the shared mutation toast.
+    } finally {
+      setSavePhase("idle");
+    }
+  };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Scoped override</CardTitle>
-        <CardDescription>
-          Configure and prepare one scope. Saving creates a new runtime revision.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-6">
-        <div className="grid gap-2 sm:max-w-xs">
-          <Label htmlFor="retrieval-scope">Scope</Label>
-          <Select value={scope} onValueChange={(value) => onScopeChange(value as RatelScope)}>
-            <SelectTrigger id="retrieval-scope" className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {scopes.map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <SelectField
-            id="retrieval-method"
-            label="Method"
-            value={draft.method}
-            onChange={(method) =>
-              setDraft((current) => ({ ...current, method: method as RetrievalMethod }))
-            }
-            options={[
-              ["bm25", "BM25"],
-              ["semantic", "Semantic"],
-              ["hybrid", "Hybrid"],
-            ]}
-          />
-          {draft.method !== "bm25" ? (
+    <>
+      <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
+        <CardHeader>
+          <CardTitle>Settings</CardTitle>
+          <CardDescription>
+            Choose the retrieval method for {retrievalScopeLabel(scope).toLowerCase()} settings.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-2">
+              <Label htmlFor="retrieval-scope">Scope</Label>
+              <Select value={scope} onValueChange={(value) => onScopeChange(value as RatelScope)}>
+                <SelectTrigger id="retrieval-scope" className="w-full">
+                  <SelectValue>{retrievalScopeLabel(scope)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {scopes.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {retrievalScopeLabel(value)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <SelectField
-              id="retrieval-source"
-              label="Embedding source"
-              value={draft.source}
-              onChange={(source) =>
-                setDraft((current) => ({ ...current, source: source as RetrievalSource }))
+              className="sm:col-start-1"
+              id="retrieval-method"
+              label="Method"
+              value={draft.method}
+              onChange={(method) =>
+                setDraft((current) => ({ ...current, method: method as RetrievalMethod }))
               }
               options={[
-                ["built-in", "Built-in"],
-                ["huggingface", "Hugging Face"],
-                ["local", "Local path"],
-                ["ollama", "Ollama"],
-                ["endpoint", "OpenAI-compatible endpoint"],
+                ["bm25", "BM25"],
+                ["semantic", "Semantic"],
+                ["hybrid", "Hybrid"],
               ]}
             />
+            {draft.method !== "bm25" ? (
+              <SelectField
+                id="retrieval-source"
+                label="Embedding source"
+                value={draft.source}
+                onChange={(source) =>
+                  setDraft((current) => ({ ...current, source: source as RetrievalSource }))
+                }
+                options={[
+                  ["built-in", "Built-in"],
+                  ["huggingface", "Hugging Face"],
+                  ["local", "Local path"],
+                  ["ollama", "Ollama"],
+                  ["endpoint", "OpenAI-compatible endpoint"],
+                ]}
+              />
+            ) : null}
+          </div>
+
+          {showsEmbeddingFields(draft) ? (
+            <EmbeddingFields draft={draft} setDraft={setDraft} />
           ) : null}
-        </div>
 
-        {showsEmbeddingFields(draft) ? <EmbeddingFields draft={draft} setDraft={setDraft} /> : null}
+          <RetrievalDisclosures draft={draft} />
 
-        <RetrievalDisclosures draft={draft} />
+          {inspectionMutation.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Couldn&apos;t check retrieval requirements</AlertTitle>
+              <AlertDescription>{errorMessage(inspectionMutation.error)}</AlertDescription>
+            </Alert>
+          ) : null}
 
-        {visiblePreflight ? (
-          <Alert>
-            <CheckCircle2 />
-            <AlertTitle>Preflight {visiblePreflight.status}</AlertTitle>
-            <AlertDescription>{visiblePreflight.message}</AlertDescription>
-          </Alert>
-        ) : null}
+          {preparationMutation.isError && !confirmationOpen ? (
+            <Alert variant="destructive">
+              <AlertTitle>Couldn&apos;t verify retrieval</AlertTitle>
+              <AlertDescription>{errorMessage(preparationMutation.error)}</AlertDescription>
+            </Alert>
+          ) : null}
 
-        <div className="flex flex-wrap gap-2">
-          <Button
-            disabled={disabled}
-            onClick={() => preflightMutation.mutate(draft)}
-            type="button"
-            variant="outline"
-          >
-            <RefreshCw />
-            {preflightMutation.isPending ? (
-              <Button.LoadingIndicator label="Preparing retrieval configuration" />
-            ) : null}
-            Prepare
-          </Button>
-          <Button
-            disabled={disabled}
-            onClick={() => writeMutation.mutate({ ...writeVariables, action: "configure" })}
-            type="button"
-          >
-            <Save />
-            {writeMutation.isPending && writeMutation.variables?.action === "configure" ? (
-              <Button.LoadingIndicator label="Saving retrieval override" />
-            ) : null}
-            Save override
-          </Button>
-          <Button
-            disabled={disabled || !hasOverride}
-            onClick={() => writeMutation.mutate({ ...writeVariables, action: "reset" })}
-            type="button"
-            variant="ghost"
-          >
-            {writeMutation.isPending && writeMutation.variables?.action === "reset" ? (
-              <Button.LoadingIndicator label="Resetting retrieval override" />
-            ) : null}
-            Reset override
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={disabled} onClick={() => void save()} type="button">
+              <Save />
+              {inspectionMutation.isPending ? (
+                <Button.LoadingIndicator label="Checking retrieval requirements" />
+              ) : preparationMutation.isPending && !confirmationOpen ? (
+                <Button.LoadingIndicator label="Verifying retrieval" />
+              ) : writeMutation.isPending &&
+                writeMutation.variables?.action === "configure" &&
+                !confirmationOpen ? (
+                <Button.LoadingIndicator label="Saving retrieval settings" />
+              ) : null}
+              Save
+            </Button>
+            <Button
+              disabled={disabled || !hasOverride}
+              onClick={() => writeMutation.mutate({ ...writeVariables, action: "reset" })}
+              type="button"
+              variant="ghost"
+            >
+              {writeMutation.isPending && writeMutation.variables?.action === "reset" ? (
+                <Button.LoadingIndicator label={resetLabel} />
+              ) : null}
+              {resetLabel}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <AlertDialog
+        open={confirmationOpen}
+        onOpenChange={(open) => {
+          if (savePhase === "idle") setConfirmationOpen(open);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {savePhase === "preparing"
+                ? "Downloading and verifying the model…"
+                : savePhase === "saving"
+                  ? "Saving retrieval settings…"
+                  : inspection
+                    ? retrievalDownloadConfirmationCopy(inspection).title
+                    : "Download the model?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {savePhase === "idle"
+                ? inspection
+                  ? retrievalDownloadConfirmationCopy(inspection).description
+                  : "This model must be downloaded before retrieval can be saved."
+                : "Keep this window open while Ratel finishes."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {savePhase !== "idle" ? (
+            <Progress value={null}>
+              <ProgressLabel>
+                {savePhase === "preparing" ? "Preparing retrieval…" : "Saving settings…"}
+              </ProgressLabel>
+            </Progress>
+          ) : null}
+
+          {preparationMutation.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Couldn&apos;t prepare retrieval</AlertTitle>
+              <AlertDescription>{errorMessage(preparationMutation.error)}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={savePhase !== "idle"}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={savePhase !== "idle"}
+              onClick={() => void prepareAndSave()}
+            >
+              {savePhase !== "idle" ? (
+                <Button.LoadingIndicator label="Downloading and verifying the retrieval model" />
+              ) : null}
+              {preparationMutation.isError ? "Try again" : "Download and save"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -388,9 +510,10 @@ function RetrievalDisclosures({ draft }: { draft: RetrievalDraft }) {
   if (draft.method === "bm25") {
     return (
       <Alert>
-        <AlertTitle>Zero-download path</AlertTitle>
+        <AlertTitle>No embedding model required</AlertTitle>
         <AlertDescription>
-          BM25 loads no embedding model and sends no embedding requests.
+          BM25 uses local keyword search. It does not download a model or send data to an embedding
+          service.
         </AlertDescription>
       </Alert>
     );
@@ -398,44 +521,42 @@ function RetrievalDisclosures({ draft }: { draft: RetrievalDraft }) {
   const remote = draft.source === "endpoint";
   return (
     <Alert>
-      <AlertTitle>Dense retrieval lifecycle</AlertTitle>
+      <AlertTitle>About this embedding source</AlertTitle>
       <AlertDescription className="grid gap-1">
         {draft.source === "built-in" ? (
           <span>
-            The pinned built-in model adds roughly 130 MB while loaded and is English-focused.
-            Choose a multilingual Hugging Face model when needed.
+            The built-in model uses about 130 MB of memory and works best with English content.
           </span>
         ) : null}
         {draft.source === "huggingface" || draft.source === "local" ? (
           <span>
-            This in-process model&apos;s memory and multilingual coverage vary by model. Hugging
-            Face sources use the normal model cache.
+            Memory use and language support depend on the model. Hugging Face models use the local
+            model cache.
           </span>
         ) : null}
         {draft.source === "ollama" || draft.source === "endpoint" ? (
-          <span>Model memory is owned by the configured embedding service.</span>
+          <span>The configured embedding service manages the model and its memory.</span>
         ) : null}
         <span>
           {remote
-            ? "Tool/skill metadata and retrieval queries are sent to the configured endpoint."
-            : "Embedding metadata and queries stay on this machine."}
+            ? "Tool and skill metadata, along with search queries, will be sent to this endpoint."
+            : "Tool and skill metadata, along with search queries, stay on this machine."}
         </span>
-        <span>
-          Retrieval traces remain under ~/.ratel/telemetry. Reconnect the affected agent/context
-          after saving; restart the daemon only as a fallback.
-        </span>
+        <span>Reconnect affected clients after saving so they use the new retrieval method.</span>
       </AlertDescription>
     </Alert>
   );
 }
 
 function SelectField({
+  className,
   id,
   label,
   onChange,
   options,
   value,
 }: {
+  className?: string;
   id: string;
   label: string;
   onChange: (value: string) => void;
@@ -443,11 +564,11 @@ function SelectField({
   value: string;
 }) {
   return (
-    <div className="grid gap-2">
+    <div className={cn("grid gap-2", className)}>
       <Label htmlFor={id}>{label}</Label>
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger id={id} className="w-full">
-          <SelectValue />
+          <SelectValue>{selectOptionLabel(options, value)}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           {options.map(([optionValue, optionLabel]) => (
@@ -546,6 +667,37 @@ export function retrievalDraftKey(draft: RetrievalDraft): string {
   return JSON.stringify(draft);
 }
 
+export function retrievalMethodLabel(method: RetrievalMethod): string {
+  if (method === "bm25") return "BM25";
+  return method === "semantic" ? "Semantic" : "Hybrid";
+}
+
+export function retrievalScopeLabel(scope: RatelScope): string {
+  if (scope === "user") return "User";
+  return scope === "project" ? "Project" : "Local";
+}
+
+export function retrievalNeedsPreparation(draft: RetrievalDraft): boolean {
+  return draft.method !== "bm25";
+}
+
+export function retrievalDownloadConfirmationCopy(inspection: RetrievalPreparationInspection): {
+  description: string;
+  title: string;
+} {
+  if (inspection.source === "built-in") {
+    return {
+      title: "Download the built-in model?",
+      description:
+        "The built-in embedding model is not cached on this machine. Ratel will download it once, verify it, then save these settings.",
+    };
+  }
+  return {
+    title: "Download the embedding model?",
+    description: `${inspection.model ?? "The selected embedding model"} is not cached on this machine. Ratel will download it, verify it, then save these settings.`,
+  };
+}
+
 export function showsEmbeddingFields(draft: RetrievalDraft): boolean {
   return draft.method !== "bm25" && draft.source !== "built-in";
 }
@@ -618,14 +770,25 @@ function documentRevisionForScope(
 }
 
 function retrievalSourceLabel(retrieval: RetrievalConfig): string {
-  if (retrieval.method === "bm25") return "model-free";
+  if (retrieval.method === "bm25") return "No embedding model";
   const embedding = retrieval.embedding;
-  if (embedding === undefined) return "BAAI/bge-small-en-v1.5 (built-in)";
+  if (embedding === undefined) return "Built-in embedding model";
   if (typeof embedding === "string") return embedding;
   if ("huggingface" in embedding) return embedding.huggingface;
   if ("local" in embedding) return embedding.local;
   if ("ollama" in embedding) return `Ollama · ${embedding.ollama}`;
   return `${embedding.model} · ${embedding.url}`;
+}
+
+function selectOptionLabel(
+  options: ReadonlyArray<readonly [string, string]>,
+  value: string,
+): string {
+  return options.find(([optionValue]) => optionValue === value)?.[1] ?? value;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "The retrieval model could not be prepared.";
 }
 
 function requiredDraftValue(value: string, label: string): string {
