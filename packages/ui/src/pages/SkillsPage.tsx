@@ -1,6 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { LinkIcon, Sparkles, TriangleAlert } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { skillPath, useRatelApp } from "@/App";
 import { EmptyStateIcon } from "@/components/empty-state-icon";
 import { ImportSkillsDialog } from "@/components/import-skills-dialog";
@@ -37,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { projectLabel } from "@/lib/projects";
+import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
 import { scopeTarget } from "@/lib/runtime-context";
 import {
   availableSkillImportScopes,
@@ -49,54 +51,43 @@ import {
   type SkillSummary,
   type SkillsResponse,
 } from "@/lib/skills";
+import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
-type LoadState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: SkillsResponse };
+interface SkillAction {
+  body?: Record<string, unknown>;
+  id: string;
+  label: string;
+  method?: "DELETE" | "POST";
+  path: string;
+}
 
 export function SkillsPage() {
-  const { busy, context, request, runAction, token } = useRatelApp();
+  const { context, request, token } = useRatelApp();
   const navigate = useNavigate();
-  const [state, setState] = useState<LoadState>({ status: "loading" });
   const [importOpen, setImportOpen] = useState(false);
   const [configuredScope, setConfiguredScope] = useState<"user" | "project" | "local">("user");
   const [sourceFilter, setSourceFilter] = useState<"all" | SkillSource>("all");
+  const skillsQuery = useQuery(
+    ratelApiQueryOptions<SkillsResponse>({
+      context,
+      path: "/api/skills",
+      queryKey: ratelQueryKeys.skills(context),
+      token,
+    }),
+  );
+  const actionMutation = useRatelMutation<unknown, SkillAction>({
+    invalidate: [ratelQueryKeys.skills(context)],
+    mutationKey: [...ratelQueryKeys.skills(context), "manage"],
+    mutationFn: ({ body, method = "POST", path }) => request(path, { method, body: body ?? {} }),
+    successMessage: (_data, variables) => variables.label,
+  });
 
   const openSkill = (id: string) => {
     void navigate({ to: skillPath(id, token, context) } as never);
   };
 
-  const load = useCallback(async () => {
-    try {
-      const data = await request<SkillsResponse>("/api/skills");
-      setState({ status: "ready", data });
-    } catch (err) {
-      setState({
-        status: "error",
-        message: err instanceof Error ? err.message : "Failed to load skills",
-      });
-    }
-  }, [request]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const mutate = useCallback(
-    async (label: string, path: string, body?: Record<string, unknown>) => {
-      // Discard the response body so runAction's toast shows just `label`, not the
-      // operation's per-skill log lines (which are noise for a human).
-      const okResult = await runAction(label, () =>
-        request(path, { method: "POST", body: body ?? {} }).then(() => undefined),
-      );
-      if (okResult) await load();
-    },
-    [runAction, request, load],
-  );
-
-  const ready = state.status === "ready" ? state.data : null;
+  const ready = skillsQuery.data ?? null;
   // Default the buckets defensively: if the API ever returns an unexpected shape
   // (e.g. a stale server mid-deploy), render an empty page instead of crashing.
   const managed = ready ? effectiveSkillSummaries(ready) : [];
@@ -111,30 +102,25 @@ export function SkillsPage() {
       value: group.scope,
     }),
   );
+  const effectiveConfiguredScope = registrationGroups.some(({ scope }) => scope === configuredScope)
+    ? configuredScope
+    : (registrationGroups[0]?.scope ?? "user");
   const selectedRegistrationGroup = registrationGroups.find(
-    (group) => group.scope === configuredScope,
+    (group) => group.scope === effectiveConfiguredScope,
   );
   const filteredManaged = managed.filter(
     (skill) => sourceFilter === "all" || skill.source === sourceFilter,
   );
-  const loading = state.status === "loading";
+  const loading = skillsQuery.isPending;
 
-  useEffect(() => {
-    if (!registrationGroups.some(({ scope }) => scope === configuredScope)) {
-      setConfiguredScope(registrationGroups[0]?.scope ?? "user");
-    }
-  }, [configuredScope, registrationGroups]);
-
-  const removeRegistration = async (registration: SkillRegistrationView) => {
-    const removed = await runAction(
-      `Removed ${registration.id} from ${registration.scopeRef.scope}`,
-      () =>
-        request(`/api/skills/${encodeURIComponent(registration.id)}`, {
-          method: "DELETE",
-          body: { target: registration.scopeRef, deleteOwnedCopy: false },
-        }),
-    );
-    if (removed) await load();
+  const removeRegistration = (registration: SkillRegistrationView) => {
+    actionMutation.mutate({
+      body: { target: registration.scopeRef, deleteOwnedCopy: false },
+      id: registration.id,
+      label: `Removed ${registration.id} from ${registration.scopeRef.scope}`,
+      method: "DELETE",
+      path: `/api/skills/${encodeURIComponent(registration.id)}`,
+    });
   };
 
   return (
@@ -150,7 +136,7 @@ export function SkillsPage() {
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="items-center">
-          <NewSkillDialog onCreated={load} />
+          <NewSkillDialog />
           <Button
             className="h-10"
             disabled={loading || !canImport}
@@ -164,13 +150,13 @@ export function SkillsPage() {
         </PageHeaderActions>
       </PageHeader>
 
-      {state.status === "loading" && (
+      {skillsQuery.isPending && (
         <p className="px-1 text-muted-foreground text-sm">Loading skills…</p>
       )}
 
-      {state.status === "error" && (
-        <EmptyState title="Couldn't load skills" description={state.message}>
-          <Button onClick={() => void load()} size="sm" variant="outline">
+      {skillsQuery.isError && (
+        <EmptyState title="Couldn't load skills" description={skillsQuery.error.message}>
+          <Button onClick={() => void skillsQuery.refetch()} size="sm" variant="outline">
             Retry
           </Button>
         </EmptyState>
@@ -214,7 +200,7 @@ export function SkillsPage() {
           }
           onValueChange={setConfiguredScope}
           options={scopeOptions}
-          value={configuredScope}
+          value={effectiveConfiguredScope}
         />
       )}
 
@@ -260,18 +246,22 @@ export function SkillsPage() {
             if (registration?.ref.kind === "entry") {
               return (
                 <Button
-                  disabled={busy}
+                  disabled={actionMutation.isPending}
                   onClick={() =>
-                    void runAction(`Removed ${skill.name} from this scope`, () =>
-                      request(`/api/skills/${encodeURIComponent(skill.id)}`, {
-                        method: "DELETE",
-                        body: { target: registration.scopeRef, deleteOwnedCopy: false },
-                      }),
-                    ).then((ok) => (ok ? load() : undefined))
+                    actionMutation.mutate({
+                      body: { target: registration.scopeRef, deleteOwnedCopy: false },
+                      id: skill.id,
+                      label: `Removed ${skill.name} from this scope`,
+                      method: "DELETE",
+                      path: `/api/skills/${encodeURIComponent(skill.id)}`,
+                    })
                   }
                   size="sm"
                   variant="outline"
                 >
+                  {actionMutation.isPending && actionMutation.variables?.id === skill.id && (
+                    <Button.LoadingIndicator label={`Stopping management of ${skill.name}`} />
+                  )}
                   Stop managing
                 </Button>
               );
@@ -282,15 +272,21 @@ export function SkillsPage() {
               <span className="px-1 text-muted-foreground text-xs">Legacy registration</span>
             ) : (
               <Button
-                disabled={busy}
+                disabled={actionMutation.isPending}
                 onClick={() =>
-                  void mutate(`Stopped managing ${skill.name}`, "/api/skills/deactivate", {
-                    ids: [skill.id],
+                  actionMutation.mutate({
+                    body: { ids: [skill.id] },
+                    id: skill.id,
+                    label: `Stopped managing ${skill.name}`,
+                    path: "/api/skills/deactivate",
                   })
                 }
                 size="sm"
                 variant="outline"
               >
+                {actionMutation.isPending && actionMutation.variables?.id === skill.id && (
+                  <Button.LoadingIndicator label={`Stopping management of ${skill.name}`} />
+                )}
                 Stop managing
               </Button>
             );
@@ -309,7 +305,7 @@ export function SkillsPage() {
             </p>
           </div>
           <ConfiguredRegistrationList
-            busy={busy}
+            pendingId={actionMutation.isPending ? (actionMutation.variables?.id ?? null) : null}
             onRemove={removeRegistration}
             registrations={selectedRegistrationGroup.registrations}
             scope={selectedRegistrationGroup.scope}
@@ -317,12 +313,7 @@ export function SkillsPage() {
         </section>
       )}
 
-      <ImportSkillsDialog
-        available={available}
-        onImported={load}
-        onOpenChange={setImportOpen}
-        open={importOpen}
-      />
+      <ImportSkillsDialog available={available} onOpenChange={setImportOpen} open={importOpen} />
     </main>
   );
 }
@@ -352,8 +343,8 @@ function SkillSourceFilter(props: {
 }
 
 function ConfiguredRegistrationList(props: {
-  busy: boolean;
   onRemove: (registration: SkillRegistrationView) => void | Promise<void>;
+  pendingId: string | null;
   registrations: SkillRegistrationView[];
   scope: "user" | "project" | "local";
 }) {
@@ -393,11 +384,14 @@ function ConfiguredRegistrationList(props: {
           </div>
           {registration.ref.kind === "entry" ? (
             <Button
-              disabled={props.busy}
+              disabled={props.pendingId !== null}
               onClick={() => void props.onRemove(registration)}
               size="sm"
               variant="outline"
             >
+              {props.pendingId === registration.id && (
+                <Button.LoadingIndicator label={`Stopping management of ${registration.id}`} />
+              )}
               Stop managing
             </Button>
           ) : (
@@ -650,8 +644,8 @@ function EmptyState(props: { title: string; description: string; children?: Reac
   );
 }
 
-function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
-  const { busy, context, projects, request, runAction } = useRatelApp();
+function NewSkillDialog() {
+  const { context, projects, request } = useRatelApp();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -672,29 +666,48 @@ function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
     setTags("");
     setBody("");
   };
+  const createMutation = useRatelMutation<
+    unknown,
+    {
+      body: string;
+      description: string;
+      name: string;
+      scope: SkillImportScope;
+      tags: string[];
+    }
+  >({
+    invalidate: [ratelQueryKeys.skills(context)],
+    mutationKey: [...ratelQueryKeys.skills(context), "create"],
+    mutationFn: (values) =>
+      request("/api/skills", {
+        method: "POST",
+        body: {
+          target: scopeTarget(context, values.scope),
+          name: values.name,
+          description: values.description,
+          tags: values.tags,
+          body: values.body,
+        },
+      }),
+    onSuccess: () => {
+      setOpen(false);
+      reset();
+    },
+    successMessage: (_data, values) => `Created skill ${values.name}`,
+  });
 
-  const submit = async () => {
+  const submit = () => {
     const tagList = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    const created = await runAction(`Created skill ${name.trim()}`, () =>
-      request("/api/skills", {
-        method: "POST",
-        body: {
-          target: scopeTarget(context, scope),
-          name: name.trim(),
-          description: description.trim(),
-          tags: tagList,
-          body,
-        },
-      }),
-    );
-    if (created) {
-      setOpen(false);
-      reset();
-      await props.onCreated();
-    }
+    createMutation.mutate({
+      body,
+      description: description.trim(),
+      name: name.trim(),
+      scope,
+      tags: tagList,
+    });
   };
 
   return (
@@ -787,7 +800,7 @@ function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
           <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
           <Button
             disabled={
-              busy ||
+              createMutation.isPending ||
               availableScopes.length === 0 ||
               name.trim() === "" ||
               description.trim() === ""
@@ -795,6 +808,7 @@ function NewSkillDialog(props: { onCreated: () => void | Promise<void> }) {
             onClick={() => void submit()}
             size="sm"
           >
+            {createMutation.isPending && <Button.LoadingIndicator label="Creating skill" />}
             Create
           </Button>
         </DialogFooter>

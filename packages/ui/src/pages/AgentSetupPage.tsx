@@ -4,6 +4,7 @@ import {
   beginAgentImportWorkflow,
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core/agent-import-workflow";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type StructuredPatchHunk, structuredPatch } from "diff";
 import {
@@ -50,15 +51,17 @@ import {
 } from "@/components/ui/select";
 import { importStatuslineAction, linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
 import { REFRESH_SHORTCUT } from "@/lib/keyboard-shortcuts";
+import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
 import {
   applySkillImportSelections,
   availableSkillsForKind,
   buildSkillImportSelections,
   defaultSkillImportTarget,
   discoveredSkillSummaries,
-  fetchSkills,
   type SkillSummary,
+  type SkillsResponse,
 } from "@/lib/skills";
+import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
 type AgentHostKind = "claude-code" | "codex";
@@ -188,6 +191,26 @@ interface PreparedAgentChangeResponse {
   preview: Omit<AgentPlanPreview, "changeId">;
 }
 
+function useAgentAction() {
+  const { context } = useRatelApp();
+  const mutation = useRatelMutation<unknown, { action: () => Promise<unknown>; label: string }>({
+    invalidate: [ratelQueryKeys.config(context)],
+    mutationFn: ({ action }) => action(),
+    successMessage: (_data, { label }) => label,
+  });
+  return {
+    isPending: mutation.isPending,
+    runAction: async (label: string, action: () => Promise<unknown>) => {
+      try {
+        await mutation.mutateAsync({ action, label });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
 function agentPreviewFromPrepared(change: PreparedAgentChangeResponse): AgentPlanPreview {
   return { ...change.preview, changeId: change.changeId };
 }
@@ -233,25 +256,40 @@ const CLAUDE_CODE_ICON_SRC = new URL("../assets/claudecode-color.svg", import.me
  * never blocks the MCP setup flows.
  */
 function useAvailableSkills(initialAvailable?: SkillSummary[]) {
-  const { request } = useRatelApp();
-  const [available, setAvailable] = useState<SkillSummary[]>(initialAvailable ?? []);
-  const skipInitialReload = useRef(initialAvailable !== undefined);
-  const reload = useCallback(async () => {
-    try {
-      const data = await fetchSkills(request);
-      setAvailable(discoveredSkillSummaries(data));
-    } catch {
-      setAvailable([]);
-    }
-  }, [request]);
-  useEffect(() => {
-    if (skipInitialReload.current) {
-      skipInitialReload.current = false;
-      return;
-    }
-    void reload();
-  }, [reload]);
-  return { available, reload };
+  const { context, token } = useRatelApp();
+  const query = useQuery(
+    ratelApiQueryOptions<SkillsResponse>({
+      context,
+      path: "/api/skills",
+      queryKey: ratelQueryKeys.skills(context),
+      token,
+    }),
+  );
+  return {
+    available: query.data ? discoveredSkillSummaries(query.data) : (initialAvailable ?? []),
+    reload: async () => {
+      await query.refetch();
+    },
+  };
+}
+
+function useAgentHosts(initialHosts?: DetectedAgentHostSummary[]) {
+  const { context, token } = useRatelApp();
+  const query = useQuery(
+    ratelApiQueryOptions<unknown>({
+      context,
+      path: "/api/agent-hosts",
+      queryKey: ratelQueryKeys.agentHosts(context),
+      token,
+    }),
+  );
+  return {
+    hosts: query.data ? agentHostsFromResponse(query.data) : (initialHosts ?? []),
+    scanHosts: async () => {
+      await query.refetch();
+    },
+    scanning: query.isFetching,
+  };
 }
 
 export interface AgentSetupRouteData {
@@ -261,26 +299,12 @@ export interface AgentSetupRouteData {
 }
 
 export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteData }) {
-  const { clearSetupIntent, config, pagePath, refresh, request, setupIntent } = useRatelApp();
+  const { clearSetupIntent, config, pagePath, refresh, setupIntent } = useRatelApp();
   const navigate = useNavigate();
   const { available } = useAvailableSkills(initialData?.available);
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>(initialData?.hosts ?? []);
-  const skipInitialHostScan = useRef(initialData !== undefined);
-  const [scanning, setScanning] = useState(false);
+  const { hosts, scanHosts, scanning } = useAgentHosts(initialData?.hosts);
   const handledIntent = useRef<number | null>(null);
   const backups = config?.backups ?? initialData?.backups ?? [];
-
-  const scanHosts = useCallback(async () => {
-    setScanning(true);
-    try {
-      const body = await request<unknown>("/api/agent-hosts");
-      setHosts(agentHostsFromResponse(body));
-    } catch {
-      setHosts([]);
-    } finally {
-      setScanning(false);
-    }
-  }, [request]);
 
   const openAgent = useCallback(
     (kind: AgentHostKind, operation?: SetupFlow) => {
@@ -292,14 +316,6 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
     },
     [navigate, pagePath],
   );
-  useEffect(() => {
-    if (skipInitialHostScan.current) {
-      skipInitialHostScan.current = false;
-      return;
-    }
-    void scanHosts();
-  }, [scanHosts]);
-
   useEffect(() => {
     if (setupIntent && handledIntent.current !== setupIntent.id) {
       handledIntent.current = setupIntent.id;
@@ -323,7 +339,8 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
                 type="button"
                 variant="outline"
               >
-                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <RefreshCw />
+                {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
                 <span className="sr-only">Refresh</span>
               </Button>
             </div>
@@ -337,7 +354,12 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
                 disabled={scanning}
-                icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
+                icon={
+                  <>
+                    <RefreshCw />
+                    {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
+                  </>
+                }
                 shortcut={REFRESH_SHORTCUT.hotkey}
                 label="Refresh"
                 onClick={() => void Promise.all([refresh(), scanHosts()])}
@@ -374,29 +396,7 @@ export function AgentDetailPage(props: {
   const navigate = useNavigate();
   const { available, reload: reloadSkills } = useAvailableSkills(props.initialData?.available);
   const agentAvailable = availableSkillsForKind(available, props.kind);
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>(props.initialData?.hosts ?? []);
-  const skipInitialHostScan = useRef(props.initialData !== undefined);
-  const [scanning, setScanning] = useState(false);
-
-  const scanHosts = useCallback(async () => {
-    setScanning(true);
-    try {
-      const body = await request<unknown>("/api/agent-hosts");
-      setHosts(agentHostsFromResponse(body));
-    } catch {
-      setHosts([]);
-    } finally {
-      setScanning(false);
-    }
-  }, [request]);
-
-  useEffect(() => {
-    if (skipInitialHostScan.current) {
-      skipInitialHostScan.current = false;
-      return;
-    }
-    void scanHosts();
-  }, [scanHosts]);
+  const { hosts, scanHosts, scanning } = useAgentHosts(props.initialData?.hosts);
 
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
@@ -425,7 +425,8 @@ export function AgentDetailPage(props: {
                 type="button"
                 variant="outline"
               >
-                <RefreshCw className={cn(scanning && "animate-spin")} />
+                <RefreshCw />
+                {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
                 <span className="sr-only">Refresh</span>
               </Button>
             </div>
@@ -463,7 +464,12 @@ export function AgentDetailPage(props: {
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
                 disabled={scanning}
-                icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
+                icon={
+                  <>
+                    <RefreshCw />
+                    {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
+                  </>
+                }
                 shortcut={REFRESH_SHORTCUT.hotkey}
                 label="Refresh"
                 onClick={() => void Promise.all([refresh(), scanHosts()])}
@@ -698,7 +704,7 @@ function AgentConnectionRepairSection(props: {
   onScanHosts: () => Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
-  const { runAction } = useRatelApp();
+  const { isPending, runAction } = useAgentAction();
   const duplicate = props.host.connection.kind === "duplicate";
   const actionLabel = duplicate ? "Fix duplicate installation" : "Switch to plugin";
   const commit = async () => {
@@ -731,8 +737,13 @@ function AgentConnectionRepairSection(props: {
               : "Ratel installs the plugin first and removes the old MCP entry only after installation succeeds."}
           </p>
         </div>
-        <Button className="min-h-12 px-6 text-base md:min-w-44" onClick={() => void commit()}>
+        <Button
+          className="min-h-12 px-6 text-base md:min-w-44"
+          disabled={isPending}
+          onClick={() => void commit()}
+        >
           {duplicate ? <Wrench /> : <Sparkles />}
+          {isPending && <Button.LoadingIndicator label={actionLabel} />}
           {actionLabel}
         </Button>
       </div>
@@ -745,7 +756,7 @@ function ClaudeStatuslineSection(props: {
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   state: ClaudeStatuslineState;
 }) {
-  const { runAction } = useRatelApp();
+  const { isPending, runAction } = useAgentAction();
   const installed = props.state.status === "installed";
   const otherConfigured = props.state.status === "other";
   const actionLabel = installed
@@ -789,10 +800,12 @@ function ClaudeStatuslineSection(props: {
         </div>
         <Button
           className="min-h-12 px-6 text-base md:min-w-44"
+          disabled={isPending}
           onClick={() => void commit()}
           variant={installed ? "outline" : "default"}
         >
           {installed ? <X /> : <FileText />}
+          {isPending && <Button.LoadingIndicator label={actionLabel} />}
           {actionLabel}
         </Button>
       </div>
@@ -825,7 +838,8 @@ function PreviewFlow(props: {
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
-  const { context, runAction } = useRatelApp();
+  const { context } = useRatelApp();
+  const { runAction } = useAgentAction();
   const [preview, setPreview] = useState<AgentPlanPreview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1252,7 +1266,7 @@ function ImportSceneDialog(props: {
     props.workflow.step === "link" ? "link" : "skills",
   );
   const [workflow, setWorkflow] = useState(props.workflow);
-  const [committing, setCommitting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"commit" | "link" | "statusline" | null>(null);
   const [draftPreview, setDraftPreview] = useState<AgentPlanPreview>(props.preview);
   const [draftSelection, setDraftSelection] = useState<string[]>(props.preview.selected);
   const [draftSkillSelection, setDraftSkillSelection] = useState<Set<string>>(new Set());
@@ -1369,7 +1383,7 @@ function ImportSceneDialog(props: {
   }, [loadDraftPreview, props.open, props.request]);
 
   const commit = async () => {
-    setCommitting(true);
+    setPendingAction("commit");
     try {
       const committed = await props.onCommit(
         draftPreview,
@@ -1383,12 +1397,12 @@ function ImportSceneDialog(props: {
       if (next.step === "statusline") setScene("statusline");
       else props.onOpenChange(false);
     } finally {
-      setCommitting(false);
+      setPendingAction(null);
     }
   };
 
   const linkAndContinue = async () => {
-    setCommitting(true);
+    setPendingAction("link");
     try {
       const refreshedPreview = await linkThenRefreshImportPreview(props.onLink, async () => {
         const preview = await loadDraftPreview();
@@ -1400,7 +1414,7 @@ function ImportSceneDialog(props: {
       setWorkflow(advanceAgentImportWorkflow(workflow, { type: "link-completed" }));
       setScene("skills");
     } finally {
-      setCommitting(false);
+      setPendingAction(null);
     }
   };
 
@@ -1411,7 +1425,7 @@ function ImportSceneDialog(props: {
   };
 
   const installStatusline = async () => {
-    setCommitting(true);
+    setPendingAction("statusline");
     try {
       if (
         !(await props.onInstallStatusline(statuslineAction.force)) ||
@@ -1421,7 +1435,7 @@ function ImportSceneDialog(props: {
       setWorkflow(advanceAgentImportWorkflow(workflow, { type: "statusline-installed" }));
       props.onOpenChange(false);
     } finally {
-      setCommitting(false);
+      setPendingAction(null);
     }
   };
 
@@ -1470,11 +1484,21 @@ function ImportSceneDialog(props: {
               <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
                 Cancel import
               </Button>
-              <Button disabled={committing} onClick={skipLink} type="button" variant="outline">
+              <Button
+                disabled={pendingAction !== null}
+                onClick={skipLink}
+                type="button"
+                variant="outline"
+              >
                 Continue without linking
               </Button>
-              <Button disabled={committing} onClick={() => void linkAndContinue()} type="button">
+              <Button
+                disabled={pendingAction !== null}
+                onClick={() => void linkAndContinue()}
+                type="button"
+              >
                 <LinkIcon />
+                {pendingAction === "link" && <Button.LoadingIndicator label="Linking Ratel" />}
                 Link Ratel and continue
               </Button>
             </>
@@ -1666,11 +1690,14 @@ function ImportSceneDialog(props: {
                 Back
               </Button>
               <Button
-                disabled={committing || !hasSelectedImport}
+                disabled={pendingAction !== null || !hasSelectedImport}
                 onClick={() => void commit()}
                 type="button"
               >
                 <FileText />
+                {pendingAction === "commit" && (
+                  <Button.LoadingIndicator label="Committing import" />
+                )}
                 Commit import
               </Button>
             </>
@@ -1697,8 +1724,15 @@ function ImportSceneDialog(props: {
               <Button onClick={skipStatusline} type="button" variant="outline">
                 Skip
               </Button>
-              <Button disabled={committing} onClick={() => void installStatusline()} type="button">
+              <Button
+                disabled={pendingAction !== null}
+                onClick={() => void installStatusline()}
+                type="button"
+              >
                 <FileText />
+                {pendingAction === "statusline" && (
+                  <Button.LoadingIndicator label={statuslineAction.actionLabel} />
+                )}
                 {statuslineAction.actionLabel}
               </Button>
             </>
@@ -1740,6 +1774,7 @@ function LinkSceneDialog(props: {
             </Button>
             <Button disabled={committing} onClick={() => void commit()} type="button">
               <LinkIcon />
+              {committing && <Button.LoadingIndicator label="Committing link" />}
               Commit link
             </Button>
           </>

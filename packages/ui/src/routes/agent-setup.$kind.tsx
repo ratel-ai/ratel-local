@@ -10,9 +10,10 @@ type AppSearch = {
 export const Route = createFileRoute("/agent-setup/$kind")({
   validateSearch,
   loaderDeps: ({ search }) => ({ token: search.t }),
-  loader: ({ abortController, deps }) =>
+  loader: ({ abortController, context, deps }) =>
     loadContextRouteData({
       context: { kind: "global" },
+      queryClient: context.queryClient,
       signal: abortController.signal,
       subpath: "agent-setup",
       token: deps.token,

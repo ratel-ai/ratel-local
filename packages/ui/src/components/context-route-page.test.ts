@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadContextRouteData } from "./context-route-page";
 
@@ -38,6 +39,7 @@ describe("context route data preloading", () => {
 
     const result = await loadContextRouteData({
       context: { kind: "project", projectId: "project/a" },
+      queryClient: new QueryClient(),
       signal: new AbortController().signal,
       subpath: "agent-setup",
       token: "secret",
@@ -122,6 +124,7 @@ describe("context route data preloading", () => {
 
     const result = await loadContextRouteData({
       context: { kind: "project", projectId: "project/a" },
+      queryClient: new QueryClient(),
       signal: new AbortController().signal,
       subpath: "agent-setup",
       token: "secret",
@@ -138,6 +141,7 @@ describe("context route data preloading", () => {
     await expect(
       loadContextRouteData({
         context: { kind: "global" },
+        queryClient: new QueryClient(),
         signal: new AbortController().signal,
         subpath: "skills",
         token: "secret",

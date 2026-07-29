@@ -1,4 +1,5 @@
 import { useHotkey } from "@tanstack/react-hotkeys";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import {
   Download,
@@ -23,7 +24,6 @@ import {
   useMemo,
   useState,
 } from "react";
-import { toast } from "sonner";
 import { BrandLogo } from "@/components/brand-logo";
 import { ContextSwitcher } from "@/components/context-switcher";
 import { ShortcutHint } from "@/components/shortcut-hint";
@@ -58,9 +58,10 @@ import {
   REFRESH_SHORTCUT,
 } from "@/lib/keyboard-shortcuts";
 import { type ProjectView, projectsFromResponse } from "@/lib/projects";
+import { type JsonRequestInit, requestRatelApi } from "@/lib/ratel-api";
+import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
 import {
   contextPagePath,
-  contextualizeApiPath,
   legacyGlobalPath,
   pageSuffixFromPathname,
   type RuntimeUiContext,
@@ -190,11 +191,11 @@ interface AgentHostsResponse {
   hosts: DetectedAgentHostSummary[];
 }
 
-export type JsonRequestInit = Omit<RequestInit, "body"> & { body?: unknown };
+export type { JsonRequestInit } from "@/lib/ratel-api";
+
 type SetupIntent = { id: number; kind: "import" | "link" };
 
 interface RatelAppContextValue {
-  busy: boolean;
   config: ConfigResponse | null;
   configError: string | null;
   configLoading: boolean;
@@ -206,10 +207,6 @@ interface RatelAppContextValue {
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   refresh: () => Promise<void>;
   refreshProjects: () => Promise<void>;
-  runAction: (
-    label: string,
-    action: () => Promise<{ log?: string[] } | unknown>,
-  ) => Promise<boolean>;
   setupIntent: SetupIntent | null;
   token: string;
   clearSetupIntent: () => void;
@@ -222,6 +219,7 @@ export const SCOPES: RatelScope[] = ["user", "project", "local"];
 const LAST_ROUTE_STORAGE_KEY = "ratel:last-route:v1";
 
 export function AppShell() {
+  const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
   const token = tokenFromSearch(location.searchStr);
@@ -236,139 +234,61 @@ export function AppShell() {
         : { kind: runtimeContextKind },
     [runtimeContextKind, runtimeProjectId],
   );
-  const runtimeContextKey =
-    runtimeContext.kind === "project" ? `project:${runtimeContext.projectId}` : runtimeContext.kind;
-  const [configState, setConfigState] = useState<{
-    contextKey: string;
-    error: string | null;
-    loading: boolean;
-    value: ConfigResponse | null;
-  }>({ contextKey: "", error: null, loading: false, value: null });
-  const [agentHostsState, setAgentHostsState] = useState<{
-    contextKey: string;
-    value: DetectedAgentHostSummary[];
-  }>({ contextKey: "", value: [] });
-  const config = configState.contextKey === runtimeContextKey ? configState.value : null;
-  const configError = configState.contextKey === runtimeContextKey ? configState.error : null;
-  const configLoading =
-    Boolean(token) &&
-    runtimeContext.kind !== "all" &&
-    (configState.contextKey !== runtimeContextKey ||
-      (configState.loading && configState.value === null));
-  const agentHosts = agentHostsState.contextKey === runtimeContextKey ? agentHostsState.value : [];
-  const [projects, setProjects] = useState<ProjectView[]>([]);
-  const [projectsError, setProjectsError] = useState<string | null>(null);
-  const [projectsLoading, setProjectsLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [setupIntent, setSetupIntent] = useState<SetupIntent | null>(null);
 
-  const notify = useCallback((message: string, kind?: "error") => {
-    const [title, ...description] = message.split("\n");
-    const options = { description: description.join("\n") || undefined };
-    if (kind === "error") {
-      toast.error(title, options);
-      return;
-    }
-    toast.success(title, options);
-  }, []);
-
   const request = useCallback(
-    async <T,>(path: string, init: JsonRequestInit = {}): Promise<T> => {
-      const headers = new Headers(init.headers);
-      headers.set("Authorization", `Bearer ${token}`);
-      const body =
-        init.body === undefined
-          ? undefined
-          : typeof init.body === "string"
-            ? init.body
-            : JSON.stringify(init.body);
-      if (body !== undefined && !headers.has("Content-Type")) {
-        headers.set("Content-Type", "application/json");
-      }
-      const requestPath = contextualizeApiPath(path, runtimeContext, init.method ?? "GET");
-      const res = await fetch(requestPath, { ...init, headers, body });
-      const payload = await readJson(res);
-      if (!res.ok) {
-        const message =
-          payload && typeof payload.error === "string"
-            ? payload.error
-            : `${res.status} ${res.statusText}`;
-        throw new Error(message);
-      }
-      return payload as T;
-    },
+    <T,>(path: string, init: JsonRequestInit = {}) =>
+      requestRatelApi<T>({ context: runtimeContext, token }, path, init),
     [runtimeContext, token],
   );
 
+  const configQuery = useQuery({
+    ...ratelApiQueryOptions<ConfigResponse>({
+      context: runtimeContext,
+      path: "/api/config",
+      queryKey: ratelQueryKeys.config(runtimeContext),
+      token,
+    }),
+    enabled: Boolean(token) && runtimeContext.kind !== "all",
+  });
+  const config = configQuery.data ?? null;
+  const configError = configQuery.error?.message ?? null;
+  const configLoading = configQuery.isPending && configQuery.fetchStatus === "fetching";
+
   const refresh = useCallback(async () => {
-    if (runtimeContext.kind === "all") {
-      setConfigState({ contextKey: runtimeContextKey, error: null, loading: false, value: null });
-      return;
-    }
-    setConfigState((current) => ({
-      contextKey: runtimeContextKey,
-      error: null,
-      loading: true,
-      value: current.contextKey === runtimeContextKey ? current.value : null,
-    }));
-    try {
-      const value = await request<ConfigResponse>("/api/config");
-      setConfigState((current) =>
-        current.contextKey === runtimeContextKey
-          ? { contextKey: runtimeContextKey, error: null, loading: false, value }
-          : current,
-      );
-    } catch (err) {
-      const message = (err as Error).message;
-      setConfigState((current) =>
-        current.contextKey === runtimeContextKey
-          ? { ...current, error: message, loading: false }
-          : current,
-      );
-      notify(message, "error");
-    }
-  }, [notify, request, runtimeContext.kind, runtimeContextKey]);
+    if (runtimeContext.kind === "all") return;
+    await queryClient.invalidateQueries({ queryKey: ratelQueryKeys.config(runtimeContext) });
+  }, [queryClient, runtimeContext]);
 
-  useEffect(() => {
-    if (token && runtimeContext.kind !== "all") void refresh();
-  }, [refresh, runtimeContext.kind, token]);
+  const agentHostsQuery = useQuery({
+    ...ratelApiQueryOptions<AgentHostsResponse>({
+      context: runtimeContext,
+      path: "/api/agent-hosts",
+      queryKey: ratelQueryKeys.agentHosts(runtimeContext),
+      token,
+    }),
+    enabled: Boolean(token) && runtimeContext.kind !== "all",
+  });
+  const agentHosts = agentHostsQuery.data?.hosts ?? [];
 
-  const refreshAgentHosts = useCallback(async () => {
-    if (!token || runtimeContext.kind === "all") return;
-    try {
-      const body = await request<AgentHostsResponse>("/api/agent-hosts");
-      setAgentHostsState({ contextKey: runtimeContextKey, value: body.hosts });
-    } catch (err) {
-      notify((err as Error).message, "error");
-    }
-  }, [notify, request, runtimeContext.kind, runtimeContextKey, token]);
-
-  useEffect(() => {
-    if (token && runtimeContext.kind !== "all") void refreshAgentHosts();
-  }, [refreshAgentHosts, runtimeContext.kind, token]);
-
-  useEffect(() => {
-    if (commandOpen && token) void refreshAgentHosts();
-  }, [commandOpen, refreshAgentHosts, token]);
-
+  const projectsQuery = useQuery({
+    ...ratelApiQueryOptions<unknown>({
+      context: runtimeContext,
+      path: "/api/projects",
+      queryKey: ratelQueryKeys.projects(),
+      token,
+    }),
+    enabled: Boolean(token),
+    select: projectsFromResponse,
+  });
+  const projects = projectsQuery.data ?? [];
+  const projectsError = projectsQuery.error?.message ?? null;
+  const projectsLoading = projectsQuery.isPending && projectsQuery.fetchStatus === "fetching";
   const refreshProjects = useCallback(async () => {
     if (!token) return;
-    setProjectsLoading(true);
-    try {
-      const body = await request<unknown>("/api/projects");
-      setProjects(projectsFromResponse(body));
-      setProjectsError(null);
-    } catch (err) {
-      setProjectsError(err instanceof Error ? err.message : "Failed to load projects");
-    } finally {
-      setProjectsLoading(false);
-    }
-  }, [request, token]);
-
-  useEffect(() => {
-    if (token) void refreshProjects();
-  }, [refreshProjects, token]);
+    await queryClient.invalidateQueries({ queryKey: ratelQueryKeys.projects() });
+  }, [queryClient, token]);
 
   useEffect(() => {
     const rememberedPath =
@@ -382,26 +302,6 @@ export function AppShell() {
     }
     window.localStorage.setItem(LAST_ROUTE_STORAGE_KEY, location.pathname);
   }, [location.pathname, location.searchStr, navigate]);
-
-  const runAction = useCallback(
-    async (label: string, action: () => Promise<{ log?: string[] } | unknown>) => {
-      setBusy(true);
-      try {
-        const result = await action();
-        const log = isLogResult(result) ? result.log.slice(-3).join("\n") : "";
-        notify(log ? `${label}\n${log}` : label);
-        await refresh();
-        return true;
-      } catch (err) {
-        notify((err as Error).message, "error");
-        await refresh();
-        return false;
-      } finally {
-        setBusy(false);
-      }
-    },
-    [notify, refresh],
-  );
 
   const pagePath = useCallback(
     (page: string) => withToken(contextPagePath(runtimeContext, page), token),
@@ -459,7 +359,6 @@ export function AppShell() {
   });
 
   const context: RatelAppContextValue = {
-    busy,
     config,
     configError,
     configLoading,
@@ -471,7 +370,6 @@ export function AppShell() {
     request,
     refresh,
     refreshProjects,
-    runAction,
     setupIntent,
     token,
     clearSetupIntent: () => setSetupIntent(null),
@@ -485,7 +383,10 @@ export function AppShell() {
           config={config}
           context={runtimeContext}
           homePath={pagePath("/")}
-          onSearch={() => setCommandOpen(true)}
+          onSearch={() => {
+            setCommandOpen(true);
+            void agentHostsQuery.refetch();
+          }}
           onSelectContext={selectContext}
           projects={projects}
         />
@@ -1056,20 +957,6 @@ export function keyValsToText(
   return Object.entries(value ?? {})
     .map(([key, val]) => `${key}${separator}${val}`)
     .join("\n");
-}
-
-async function readJson(res: Response): Promise<Record<string, unknown> | null> {
-  try {
-    return (await res.json()) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-
-function isLogResult(value: unknown): value is { log: string[] } {
-  return (
-    typeof value === "object" && value !== null && Array.isArray((value as { log?: unknown }).log)
-  );
 }
 
 function tokenFromSearch(searchStr: string | undefined): string {

@@ -30,6 +30,10 @@ export function contextBasePath(context: RuntimeUiContext): string {
   return `/projects/${encodeURIComponent(context.projectId)}`;
 }
 
+export function runtimeContextKey(context: RuntimeUiContext): string {
+  return context.kind === "project" ? `project:${context.projectId}` : context.kind;
+}
+
 export function contextPagePath(context: RuntimeUiContext, page: string): string {
   const base = contextBasePath(context);
   if (context.kind === "all") return base;

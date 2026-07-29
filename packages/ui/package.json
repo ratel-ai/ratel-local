@@ -19,6 +19,7 @@
     "@ratel-ai/ratel-local-core": "workspace:*",
     "@tanstack/react-form": "^1.33.0",
     "@tanstack/react-hotkeys": "^0.10.0",
+    "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-router": "^1.170.9",
     "@tanstack/react-virtual": "^3.14.5",
     "class-variance-authority": "^0.7.1",

@@ -17,8 +17,8 @@ import {
 import { Stat } from "@/components/stat";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -66,7 +66,12 @@ export function AllProjectsPage() {
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
                 disabled={projectsLoading}
-                icon={projectsLoading ? <Spinner /> : <RefreshCw />}
+                icon={
+                  <>
+                    <RefreshCw />
+                    {projectsLoading && <Button.LoadingIndicator label="Refreshing projects" />}
+                  </>
+                }
                 label="Refresh projects"
                 onClick={() => void refreshProjects()}
               />

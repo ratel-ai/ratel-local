@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { projectLabel } from "@/lib/projects";
+import { ratelQueryKeys } from "@/lib/ratel-query";
 import {
   applySkillImportSelections,
   availableSkillImportScopes,
@@ -32,6 +33,7 @@ import {
   type SkillImportScope,
   type SkillSummary,
 } from "@/lib/skills";
+import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
 interface ImportSkillsDialogProps {
@@ -41,8 +43,6 @@ interface ImportSkillsDialogProps {
   available: SkillSummary[];
   /** Restrict the list to one agent's skills (Agent Setup). Omit to list all. */
   source?: SkillSource;
-  /** Called after successful activation so the caller can refresh its lists. */
-  onImported: () => void | Promise<void>;
 }
 
 /** A skill name can live in both Claude Code and Codex, so a row is keyed by source. */
@@ -55,7 +55,7 @@ const LOAD_MORE_SKILL_COUNT = 30;
 
 /** Import opaque discovery candidates into one explicit Ratel scope and mode. */
 export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
-  const { busy, context, projects, request, runAction } = useRatelApp();
+  const { context, projects, request } = useRatelApp();
   const skills = props.source
     ? props.available.filter((skill) => skill.source === props.source)
     : props.available;
@@ -68,6 +68,23 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
     context.kind === "project"
       ? projects.find((candidate) => candidate.id === context.projectId)
       : undefined;
+  const importMutation = useRatelMutation<
+    unknown,
+    { chosen: SkillSummary[]; mode: SkillImportMode; scope: SkillImportScope }
+  >({
+    invalidate: [ratelQueryKeys.skills(context)],
+    mutationKey: [...ratelQueryKeys.skills(context), "import"],
+    mutationFn: async (values) => {
+      const selections = buildSkillImportSelections(values.chosen, context, {
+        scope: values.scope,
+        mode: values.mode,
+      });
+      await applySkillImportSelections(request, selections);
+    },
+    onSuccess: () => props.onOpenChange(false),
+    successMessage: (_data, values) =>
+      `Imported ${values.chosen.length} skill${values.chosen.length === 1 ? "" : "s"} into ${values.scope}`,
+  });
 
   // Start each session with a clean slate; the user opts in per skill (or all).
   useEffect(() => {
@@ -105,17 +122,9 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
     });
   };
 
-  const submit = async () => {
+  const submit = () => {
     if (chosen.length === 0) return;
-    const label = `Imported ${chosen.length} skill${chosen.length === 1 ? "" : "s"} into ${scope}`;
-    const ok = await runAction(label, async () => {
-      const selections = buildSkillImportSelections(chosen, context, { scope, mode });
-      await applySkillImportSelections(request, selections);
-    });
-    if (ok) {
-      props.onOpenChange(false);
-      await props.onImported();
-    }
+    importMutation.mutate({ chosen, mode, scope });
   };
 
   return (
@@ -202,10 +211,13 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
         <DialogFooter>
           <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
           <Button
-            disabled={busy || chosen.length === 0 || availableScopes.length === 0}
+            disabled={
+              importMutation.isPending || chosen.length === 0 || availableScopes.length === 0
+            }
             onClick={() => void submit()}
             size="sm"
           >
+            {importMutation.isPending && <Button.LoadingIndicator label="Managing skills" />}
             {chosen.length > 0 ? `Manage ${chosen.length}` : "Manage"}
           </Button>
         </DialogFooter>

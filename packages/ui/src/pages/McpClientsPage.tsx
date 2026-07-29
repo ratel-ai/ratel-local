@@ -1,5 +1,5 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { RefreshCw, TriangleAlert, Unplug } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
 import { useRatelApp } from "@/App";
 import { EmptyStateIcon } from "@/components/empty-state-icon";
 import {
@@ -18,7 +18,6 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -27,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
 
 interface ActiveMcpClient {
   sessionId: string;
@@ -51,30 +51,26 @@ interface ClientsResponse {
 }
 
 export function McpClientsPage() {
-  const { request } = useRatelApp();
-  const [clients, setClients] = useState<ActiveMcpClient[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { context, token } = useRatelApp();
+  const clientsQuery = useQuery({
+    ...ratelApiQueryOptions<ClientsResponse>({
+      context,
+      path: "/api/mcp-clients",
+      queryKey: ratelQueryKeys.clients(context),
+      token,
+    }),
+    refetchInterval: 5_000,
+  });
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const result = await clientsQuery.refetch();
+      if (result.error) throw result.error;
+    },
+  });
+  const clients = clientsQuery.data?.clients ?? [];
+  const loading = refreshMutation.isPending;
+  const error = clientsQuery.error?.message ?? null;
   const staleClients = clients.filter((client) => client.stale);
-
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const body = await request<ClientsResponse>("/api/mcp-clients");
-      setClients(body.clients);
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [request]);
-
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 5_000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
 
   return (
     <main className="grid w-full gap-4 px-4 py-5 sm:px-6">
@@ -86,12 +82,13 @@ export function McpClientsPage() {
               <Button
                 aria-label="Refresh clients"
                 disabled={loading}
-                onClick={() => void refresh()}
+                onClick={() => refreshMutation.mutate()}
                 size="icon-lg"
                 type="button"
                 variant="outline"
               >
-                {loading ? <Spinner /> : <RefreshCw />}
+                <RefreshCw />
+                {loading && <Button.LoadingIndicator label="Refreshing clients" />}
                 <span className="sr-only">Refresh clients</span>
               </Button>
             </div>
@@ -105,9 +102,14 @@ export function McpClientsPage() {
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
                 disabled={loading}
-                icon={loading ? <Spinner /> : <RefreshCw />}
+                icon={
+                  <>
+                    <RefreshCw />
+                    {loading && <Button.LoadingIndicator label="Refreshing clients" />}
+                  </>
+                }
                 label="Refresh clients"
-                onClick={() => void refresh()}
+                onClick={() => refreshMutation.mutate()}
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
@@ -132,7 +134,14 @@ export function McpClientsPage() {
         </Alert>
       )}
 
-      {clients.length === 0 ? (
+      {clientsQuery.isPending ? (
+        <section
+          aria-busy="true"
+          className="grid min-h-72 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 text-center"
+        >
+          <p className="text-sm text-muted-foreground">Loading active MCP clients…</p>
+        </section>
+      ) : clients.length === 0 ? (
         <section className="grid min-h-72 place-items-center rounded-2xl border border-forest-300 border-dashed bg-forest-600/20 px-6 text-center">
           <div className="grid max-w-sm gap-2">
             <EmptyStateIcon>

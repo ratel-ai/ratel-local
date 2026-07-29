@@ -1,6 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Pencil, Save, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { useRatelApp } from "@/App";
 import { Markdown } from "@/components/markdown";
 import {
@@ -17,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
+import { useRatelMutation } from "@/lib/use-ratel-mutation";
 
 interface SkillDetail {
   id: string;
@@ -33,15 +36,9 @@ interface SkillDetail {
   };
 }
 
-type LoadState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: SkillDetail };
-
 export function SkillDetailPage(props: { id: string }) {
   const navigate = useNavigate();
-  const { request, runAction, busy, pagePath } = useRatelApp();
-  const [state, setState] = useState<LoadState>({ status: "loading" });
+  const { context, pagePath, request, token } = useRatelApp();
   const [isEditing, setIsEditing] = useState(false);
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
@@ -52,74 +49,69 @@ export function SkillDetailPage(props: { id: string }) {
     void navigate({ to: backPath } as never);
   };
 
-  const load = useCallback(
-    async (signal?: { cancelled: boolean }) => {
-      setState({ status: "loading" });
-      try {
-        const data = await request<SkillDetail>(`/api/skills/${encodeURIComponent(props.id)}`);
-        if (!signal?.cancelled) setState({ status: "ready", data });
-      } catch (err) {
-        if (!signal?.cancelled) {
-          setState({
-            status: "error",
-            message: err instanceof Error ? err.message : "Failed to load skill",
-          });
-        }
-      }
-    },
-    [request, props.id],
+  const skillQuery = useQuery(
+    ratelApiQueryOptions<SkillDetail>({
+      context,
+      path: `/api/skills/${encodeURIComponent(props.id)}`,
+      queryKey: ratelQueryKeys.skill(context, props.id),
+      token,
+    }),
   );
-
-  // Guard against a superseded load: if `id` changes (or the page unmounts)
-  // before the request resolves, cancel so a stale response can't clobber the
-  // newer skill's state.
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void load(signal);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [load]);
+  const saveMutation = useRatelMutation<
+    unknown,
+    {
+      body: string;
+      description: string;
+      detail: SkillDetail;
+      tags: string[];
+    }
+  >({
+    invalidate: [ratelQueryKeys.skills(context)],
+    mutationKey: [...ratelQueryKeys.skill(context, props.id), "update"],
+    mutationFn: (values) =>
+      request(`/api/skills/${encodeURIComponent(props.id)}`, {
+        method: "PATCH",
+        body: {
+          ...(values.detail.registration ? { target: values.detail.registration.scopeRef } : {}),
+          description: values.description,
+          tags: values.tags,
+          body: values.body,
+          ...(values.detail.skillDocumentRevision
+            ? { expectedRevision: values.detail.skillDocumentRevision }
+            : {}),
+        },
+      }),
+    onSuccess: () => setIsEditing(false),
+    successMessage: `Updated ${props.id}`,
+  });
 
   const startEdit = () => {
-    if (state.status !== "ready") return;
-    setDescription(state.data.description);
-    setTags(state.data.tags.join(", "));
-    setBody(state.data.body);
+    if (!skillQuery.data) return;
+    setDescription(skillQuery.data.description);
+    setTags(skillQuery.data.tags.join(", "));
+    setBody(skillQuery.data.body);
     setIsEditing(true);
   };
 
   const save = async () => {
-    if (state.status !== "ready") return;
+    if (!skillQuery.data) return;
     const tagList = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    const saved = await runAction(`Updated ${props.id}`, () =>
-      request(`/api/skills/${encodeURIComponent(props.id)}`, {
-        method: "PATCH",
-        body: {
-          ...(state.data.registration ? { target: state.data.registration.scopeRef } : {}),
-          description: description.trim(),
-          tags: tagList,
-          body,
-          ...(state.data.skillDocumentRevision
-            ? { expectedRevision: state.data.skillDocumentRevision }
-            : {}),
-        },
-      }),
-    );
-    if (saved) {
-      setIsEditing(false);
-      await load();
-    }
+    saveMutation.mutate({
+      body,
+      description: description.trim(),
+      detail: skillQuery.data,
+      tags: tagList,
+    });
   };
 
-  const detail = state.status === "ready" ? state.data : null;
+  const detail = skillQuery.data ?? null;
   // Unmanaged skills live in an agent's own folder (Claude / Codex); they're
   // read-only here until managed through Ratel (the backend rejects the PATCH too).
   const canEdit = detail?.editable === true;
-  const canSave = description.trim() !== "" && !busy;
+  const canSave = description.trim() !== "" && !saveMutation.isPending;
 
   return (
     <main className="grid w-full gap-5 px-4 py-5 sm:px-6">
@@ -174,6 +166,7 @@ export function SkillDetailPage(props: { id: string }) {
                 </Button>
                 <Button disabled={!canSave} onClick={() => void save()} size="sm" type="button">
                   <Save />
+                  {saveMutation.isPending && <Button.LoadingIndicator label="Saving skill" />}
                   Save
                 </Button>
               </>
@@ -186,15 +179,13 @@ export function SkillDetailPage(props: { id: string }) {
         </PageHeaderActions>
       </PageHeader>
 
-      {state.status === "loading" && (
-        <p className="px-1 text-muted-foreground text-sm">Loading skill…</p>
-      )}
+      {skillQuery.isPending && <p className="px-1 text-muted-foreground text-sm">Loading skill…</p>}
 
-      {state.status === "error" && (
+      {skillQuery.isError && (
         <div className="grid gap-3">
-          <p className="text-destructive text-sm">{state.message}</p>
+          <p className="text-destructive text-sm">{skillQuery.error.message}</p>
           <div>
-            <Button onClick={() => void load()} size="sm" variant="outline">
+            <Button onClick={() => void skillQuery.refetch()} size="sm" variant="outline">
               Retry
             </Button>
           </div>
@@ -278,6 +269,7 @@ export function SkillDetailPage(props: { id: string }) {
             </Button>
             <Button disabled={!canSave} onClick={() => void save()} size="sm" type="button">
               <Save />
+              {saveMutation.isPending && <Button.LoadingIndicator label="Saving skill" />}
               Save
             </Button>
           </div>

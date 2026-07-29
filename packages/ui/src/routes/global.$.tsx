@@ -6,9 +6,10 @@ type AppSearch = { t?: string };
 export const Route = createFileRoute("/global/$")({
   validateSearch,
   loaderDeps: ({ search }) => ({ token: search.t }),
-  loader: ({ abortController, deps, params }) =>
+  loader: ({ abortController, context, deps, params }) =>
     loadContextRouteData({
       context: { kind: "global" },
+      queryClient: context.queryClient,
       signal: abortController.signal,
       subpath: params._splat,
       token: deps.token,

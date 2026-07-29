@@ -1,4 +1,5 @@
 import { useForm } from "@tanstack/react-form";
+import { useIsFetching } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -80,9 +81,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { REFRESH_SHORTCUT } from "@/lib/keyboard-shortcuts";
+import { ratelQueryKeys } from "@/lib/ratel-query";
 import { scopeTarget } from "@/lib/runtime-context";
 import {
   AUTH_STATUS_LABELS,
@@ -91,6 +92,7 @@ import {
   type ToolSourceType,
   toolSourceTypeLabel,
 } from "@/lib/tool-source-labels";
+import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
 type AuthFilter = "all" | AuthStatus;
@@ -224,7 +226,6 @@ const entrySubmitSchema = entryFormSchema.transform((value, context) => {
 export function ToolsPage() {
   const navigate = useNavigate();
   const {
-    busy,
     config,
     configError,
     configLoading,
@@ -232,10 +233,20 @@ export function ToolsPage() {
     pagePath,
     refresh,
     request,
-    runAction,
     token,
     triggerSetupIntent,
   } = useRatelApp();
+  const refreshing = useIsFetching({ queryKey: ratelQueryKeys.config(context) }) > 0;
+  const authorizeMutation = useRatelMutation<unknown, string>({
+    invalidate: [ratelQueryKeys.config(context)],
+    mutationKey: [...ratelQueryKeys.config(context), "authorize"],
+    mutationFn: (name) =>
+      request(`/api/auth/${encodeURIComponent(name)}`, {
+        method: "POST",
+        body: {},
+      }),
+    successMessage: "Authorization updated",
+  });
   const [selectedScope, setSelectedScope] = useState<RatelScope>("user");
   const [authFilter, setAuthFilter] = useState<AuthFilter>("all");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -299,6 +310,7 @@ export function ToolsPage() {
                 variant="outline"
               >
                 <RefreshCw />
+                {refreshing && <Button.LoadingIndicator label="Refreshing tool sources" />}
                 <span className="sr-only">Refresh</span>
               </Button>
               <Button
@@ -321,7 +333,12 @@ export function ToolsPage() {
           <ResponsiveToolbar>
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<RefreshCw />}
+                icon={
+                  <>
+                    <RefreshCw />
+                    {refreshing && <Button.LoadingIndicator label="Refreshing tool sources" />}
+                  </>
+                }
                 shortcut={REFRESH_SHORTCUT.hotkey}
                 label="Refresh"
                 onClick={() => void refresh()}
@@ -462,19 +479,11 @@ export function ToolsPage() {
             {rows.map(({ authStatus, entry, name, usage }) => (
               <ToolSourceRow
                 authStatus={authStatus}
-                busy={busy}
                 entry={entry}
                 key={name}
                 name={name}
                 usage={usage}
-                onAuthorize={() => {
-                  return runAction("Authorization updated", () =>
-                    request(`/api/auth/${encodeURIComponent(name)}`, {
-                      method: "POST",
-                      body: {},
-                    }),
-                  );
-                }}
+                onAuthorize={() => authorizeMutation.mutateAsync(name)}
                 onOpen={() => {
                   void navigate({ to: toolSourcePath(scope, name, token, context) } as never);
                 }}
@@ -489,7 +498,6 @@ export function ToolsPage() {
 
 function ToolSourceRow(props: {
   authStatus?: AuthStatus;
-  busy: boolean;
   entry: ServerEntry;
   name: string;
   onAuthorize: () => Promise<unknown> | undefined;
@@ -551,7 +559,6 @@ function ToolSourceRow(props: {
           Auth
         </span>
         <AuthStatusControl
-          busy={props.busy}
           canAuthorize={canAuthorize}
           onAuthorize={props.onAuthorize}
           status={props.authStatus}
@@ -631,21 +638,17 @@ function ToolSourceFilterSelect(props: {
 
 export function ToolSourceCreatePage(props: { scope: string }) {
   const navigate = useNavigate();
-  const { config, configError, configLoading, context, pagePath, request, runAction, token } =
-    useRatelApp();
+  const { config, configError, configLoading, context, pagePath, request, token } = useRatelApp();
   const requestedScope = isRatelScope(props.scope) ? props.scope : "user";
   const scope = context.kind === "project" ? requestedScope : "user";
   const scopeData = config?.scopes[scope];
   const backPath = pagePath("/");
-
-  const goBack = () => {
-    void navigate({ to: backPath } as never);
-  };
-
-  const addEntry = async (name: string, entry: ServerEntry) => {
-    if (!config) throw new Error("Ratel configuration is not loaded");
-    const saved = await runAction(`Added ${name}`, () =>
-      request("/api/servers", {
+  const addMutation = useRatelMutation<unknown, { entry: ServerEntry; name: string }>({
+    invalidate: [ratelQueryKeys.config(context)],
+    mutationKey: [...ratelQueryKeys.config(context), "add-server"],
+    mutationFn: ({ entry, name }) => {
+      if (!config) throw new Error("Ratel configuration is not loaded");
+      return request("/api/servers", {
         method: "POST",
         body: {
           target: scopeTarget(context, scope),
@@ -654,11 +657,20 @@ export function ToolSourceCreatePage(props: { scope: string }) {
           entry,
           expectedRevision: expectedRevision(config, scope),
         },
-      }),
-    );
-    if (saved) {
+      });
+    },
+    onSuccess: (_data, { name }) => {
       void navigate({ to: toolSourcePath(scope, name, token, context) } as never);
-    }
+    },
+    successMessage: (_data, { name }) => `Added ${name}`,
+  });
+
+  const goBack = () => {
+    void navigate({ to: backPath } as never);
+  };
+
+  const addEntry = async (name: string, entry: ServerEntry) => {
+    await addMutation.mutateAsync({ entry, name });
   };
 
   if (configLoading) return <ToolDetailPageSkeleton onBack={goBack} />;
@@ -715,8 +727,7 @@ export function ToolSourceCreatePage(props: { scope: string }) {
 
 export function ToolSourceDetailPage(props: { name: string; scope: string }) {
   const navigate = useNavigate();
-  const { busy, config, configError, configLoading, context, pagePath, request, runAction } =
-    useRatelApp();
+  const { config, configError, configLoading, context, pagePath, request } = useRatelApp();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const parsedScope = isRatelScope(props.scope) ? props.scope : null;
@@ -729,6 +740,54 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
   const goBack = () => {
     void navigate({ to: backPath } as never);
   };
+  const authorizeMutation = useRatelMutation({
+    invalidate: [ratelQueryKeys.config(context)],
+    mutationKey: [...ratelQueryKeys.config(context), "authorize", props.name],
+    mutationFn: () =>
+      request(`/api/auth/${encodeURIComponent(props.name)}`, {
+        method: "POST",
+        body: {},
+      }),
+    successMessage: "Authorization updated",
+  });
+  const updateMutation = useRatelMutation<unknown, ServerEntry>({
+    invalidate: [ratelQueryKeys.config(context)],
+    mutationKey: [...ratelQueryKeys.config(context), "update-server", props.name],
+    mutationFn: (nextEntry) => {
+      if (!config || !scope) throw new Error("Ratel configuration is not loaded");
+      return request(`/api/servers/${encodeURIComponent(props.name)}`, {
+        method: "PATCH",
+        body: {
+          entry: nextEntry,
+          target: scopeTarget(context, scope),
+          scope,
+          expectedRevision: expectedRevision(config, scope),
+        },
+      });
+    },
+    onSuccess: () => setIsEditing(false),
+    successMessage: `Updated ${props.name}`,
+  });
+  const removeMutation = useRatelMutation({
+    invalidate: [ratelQueryKeys.config(context)],
+    mutationKey: [...ratelQueryKeys.config(context), "remove-server", props.name],
+    mutationFn: () => {
+      if (!config || !scope) throw new Error("Ratel configuration is not loaded");
+      return request(`/api/servers/${encodeURIComponent(props.name)}`, {
+        method: "DELETE",
+        body: {
+          target: scopeTarget(context, scope),
+          scope,
+          expectedRevision: expectedRevision(config, scope),
+        },
+      });
+    },
+    onSuccess: () => {
+      setDeleteOpen(false);
+      goBack();
+    },
+    successMessage: `Removed ${props.name}`,
+  });
 
   if (configLoading) return <ToolDetailPageSkeleton onBack={goBack} />;
 
@@ -760,42 +819,14 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
     (authStatus === "needs auth" || authStatus === "expired");
   const editFormId = `tool-source-edit-${scope}-${props.name}`;
 
-  const authorize = () =>
-    runAction("Authorization updated", () =>
-      request(`/api/auth/${encodeURIComponent(props.name)}`, {
-        method: "POST",
-        body: {},
-      }),
-    );
+  const authorize = () => authorizeMutation.mutateAsync();
 
   const updateEntry = async (_name: string, nextEntry: ServerEntry) => {
-    await runAction(`Updated ${props.name}`, () =>
-      request(`/api/servers/${encodeURIComponent(props.name)}`, {
-        method: "PATCH",
-        body: {
-          entry: nextEntry,
-          target: scopeTarget(context, scope),
-          scope,
-          expectedRevision: expectedRevision(config, scope),
-        },
-      }),
-    );
-    setIsEditing(false);
+    await updateMutation.mutateAsync(nextEntry);
   };
 
-  const removeEntry = async () => {
-    await runAction(`Removed ${props.name}`, () =>
-      request(`/api/servers/${encodeURIComponent(props.name)}`, {
-        method: "DELETE",
-        body: {
-          target: scopeTarget(context, scope),
-          scope,
-          expectedRevision: expectedRevision(config, scope),
-        },
-      }),
-    );
-    setDeleteOpen(false);
-    goBack();
+  const removeEntry = () => {
+    removeMutation.mutate();
   };
 
   return (
@@ -824,6 +855,9 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                       </Button>
                       <Button aria-label="Save" form={editFormId} size="icon-lg" type="submit">
                         <Save />
+                        {updateMutation.isPending && (
+                          <Button.LoadingIndicator label="Saving tool source" />
+                        )}
                         <span className="sr-only">Save</span>
                       </Button>
                     </>
@@ -841,7 +875,7 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                   )}
                   <Button
                     aria-label="Remove"
-                    disabled={busy}
+                    disabled={removeMutation.isPending}
                     onClick={() => setDeleteOpen(true)}
                     size="icon-lg"
                     type="button"
@@ -875,7 +909,14 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                     />
                     <ResponsiveToolbarLabeledButton
                       form={editFormId}
-                      icon={<Save />}
+                      icon={
+                        <>
+                          <Save />
+                          {updateMutation.isPending && (
+                            <Button.LoadingIndicator label="Saving tool source" />
+                          )}
+                        </>
+                      }
                       label="Save"
                       type="submit"
                       variant="default"
@@ -891,7 +932,7 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
                 )}
                 <ResponsiveToolbarLabeledButton
                   className="border-destructive/25"
-                  disabled={busy}
+                  disabled={removeMutation.isPending}
                   icon={<Trash2 />}
                   label="Remove"
                   onClick={() => setDeleteOpen(true)}
@@ -920,10 +961,11 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={busy}
+              disabled={removeMutation.isPending}
               onClick={() => void removeEntry()}
               variant="destructive"
             >
+              {removeMutation.isPending && <Button.LoadingIndicator label="Removing tool source" />}
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -959,7 +1001,6 @@ export function ToolSourceDetailPage(props: { name: string; scope: string }) {
             <DetailLabel>Auth</DetailLabel>
             <div className="flex flex-wrap items-center gap-2">
               <AuthStatusControl
-                busy={busy}
                 canAuthorize={canAuthorize}
                 onAuthorize={authorize}
                 status={authStatus}
@@ -1543,13 +1584,19 @@ function EntryForm(props: {
         >
           Cancel
         </Button>
-        <Button
-          className={props.layout === "page" ? "sm:min-w-40" : undefined}
-          size={props.layout === "page" ? "lg" : "default"}
-          type="submit"
-        >
-          {props.name ? "Save changes" : "Add source"}
-        </Button>
+        <form.Subscribe selector={(state) => state.isSubmitting}>
+          {(isSubmitting) => (
+            <Button
+              className={props.layout === "page" ? "sm:min-w-40" : undefined}
+              disabled={isSubmitting}
+              size={props.layout === "page" ? "lg" : "default"}
+              type="submit"
+            >
+              {isSubmitting && <Button.LoadingIndicator label="Saving tool source" />}
+              {props.name ? "Save changes" : "Add source"}
+            </Button>
+          )}
+        </form.Subscribe>
       </div>
     </form>
   );
@@ -1618,7 +1665,6 @@ function AuthBadge({ status }: { status?: AuthStatus }) {
 }
 
 function AuthStatusControl(props: {
-  busy: boolean;
   canAuthorize: boolean;
   onAuthorize: () => Promise<unknown> | undefined;
   status?: AuthStatus;
@@ -1628,6 +1674,8 @@ function AuthStatusControl(props: {
     setAuthorizing(true);
     try {
       await props.onAuthorize();
+    } catch {
+      // The mutation owns error feedback.
     } finally {
       setAuthorizing(false);
     }
@@ -1637,8 +1685,6 @@ function AuthStatusControl(props: {
     return <AuthBadge status={props.status} />;
   }
 
-  const disabled = props.busy || authorizing;
-
   return (
     <ButtonGroup className="w-fit">
       <ButtonGroupText className={authControlTextClassName(props.status)}>
@@ -1647,13 +1693,14 @@ function AuthStatusControl(props: {
       <Button
         aria-label={props.status === "expired" ? "Reauthorize" : "Authorize"}
         className={authControlButtonClassName(props.status)}
-        disabled={disabled}
+        disabled={authorizing}
         onClick={() => void handleAuthorize()}
         size="icon-xs"
         title={props.status === "expired" ? "Reauthorize" : "Authorize"}
         variant="outline"
       >
-        {authorizing ? <Spinner /> : <ExternalLink />}
+        <ExternalLink />
+        {authorizing && <Button.LoadingIndicator label="Authorizing tool source" />}
       </Button>
     </ButtonGroup>
   );

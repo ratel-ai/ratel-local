@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { describe, expect, it } from "vitest";
 import { routeTree } from "../routeTree.gen";
@@ -13,6 +14,7 @@ describe("URL-scoped route tree", () => {
     ],
   ])("matches %s", async (path, routeId, params) => {
     const router = createRouter({
+      context: { queryClient: new QueryClient() },
       history: createMemoryHistory({ initialEntries: [path] }),
       routeTree,
     });

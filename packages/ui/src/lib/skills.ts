@@ -1,5 +1,5 @@
-import type { JsonRequestInit } from "@/App";
 import type { SkillSource } from "@/components/source-icon";
+import type { JsonRequestInit } from "@/lib/ratel-api";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
 
 /** Agent harnesses Ratel can pull skills from (and link MCP gateways into). */
