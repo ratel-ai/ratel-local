@@ -10,6 +10,9 @@ import { type StructuredPatchHunk, structuredPatch } from "diff";
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
   Download,
   FileText,
   GitCompare,
@@ -32,6 +35,12 @@ import {
   PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/page-header";
+import {
+  PageSurface,
+  PageSurfaceContent,
+  PageSurfaceFooter,
+  PageSurfaceHeader,
+} from "@/components/page-surface";
 import {
   ResponsiveToolbar,
   ResponsiveToolbarButton,
@@ -325,7 +334,7 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
   }, [clearSetupIntent, hosts, openAgent, setupIntent]);
 
   return (
-    <main className="grid w-full gap-4 px-4 py-5 sm:px-6">
+    <main className="grid w-full gap-5 px-4 py-5 sm:px-6">
       <PageHeader className="sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
         <PageHeaderContent>
           <PageHeaderBackRow>
@@ -369,8 +378,16 @@ export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteD
         </PageHeaderActions>
       </PageHeader>
 
-      <section className="grid gap-3">
-        <div className="grid gap-3 xl:grid-cols-2">
+      <section aria-labelledby="supported-agents-title" className="grid gap-3">
+        <div className="px-1">
+          <h2 className="font-medium" id="supported-agents-title">
+            Supported agents
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Review Ratel coverage and setup for Claude Code and Codex.
+          </p>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
           {hosts.map((host) => (
             <AgentDirectoryCard
               host={host}
@@ -499,25 +516,11 @@ export function AgentDetailPage(props: {
                 </StatusBadge>
               </>
             ) : null}
-            {missingRatelEntryNames(host).length > 0 || agentAvailable.length > 0 ? (
-              <>
-                <DetailLabel>Coverage</DetailLabel>
-                <div className="grid gap-1">
-                  {missingRatelEntryNames(host).length > 0 ? (
-                    <p className="text-sm text-amber-700 dark:text-amber-400">
-                      {missingRatelEntryNames(host).length} native tool
-                      {missingRatelEntryNames(host).length === 1 ? "" : "s"} not in Ratel.
-                    </p>
-                  ) : null}
-                  {agentAvailable.length > 0 ? (
-                    <p className="text-sm text-amber-700 dark:text-amber-400">
-                      {agentAvailable.length} skill{agentAvailable.length === 1 ? "" : "s"} not
-                      managed by Ratel.
-                    </p>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
+            <DetailLabel>Coverage</DetailLabel>
+            <CoverageBadges
+              missingToolCount={missingRatelEntryNames(host).length}
+              unmanagedSkillCount={agentAvailable.length}
+            />
             <DetailLabel>Config</DetailLabel>
             <code className="min-w-0 truncate rounded-md bg-background px-2 py-1.5 font-mono text-xs text-muted-foreground">
               {primaryPath ?? "Known paths unavailable"}
@@ -564,11 +567,15 @@ function AgentPageSwitcher(props: {
           </span>
         </SelectValue>
       </SelectTrigger>
-      <SelectContent align="end" alignItemWithTrigger={false} className="min-w-56">
+      <SelectContent
+        align="end"
+        alignItemWithTrigger={false}
+        className="w-72 min-w-0 max-w-[calc(100vw-2rem)]"
+      >
         {props.hosts.map((host) => (
           <SelectItem key={host.kind} value={host.kind}>
             <AgentIconFrame kind={host.kind} />
-            <span>{host.displayName}</span>
+            <span className="min-w-0 flex-1 truncate">{host.displayName}</span>
             <LinkStatusBadge host={host} />
           </SelectItem>
         ))}
@@ -583,42 +590,45 @@ function AgentDirectoryCard(props: {
   unmanagedSkillCount: number;
 }) {
   const posture = POSTURE_COPY[props.host.posture];
+  const missingTools = missingRatelEntryNames(props.host).length;
   const primaryPath =
     props.host.scopes.find((scope) => scope.available)?.path ?? props.host.scopes[0]?.path;
+  const configPath = primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable";
   return (
-    <div className="group grid gap-3 border border-border bg-background p-4 transition-colors hover:border-brand-green/60 hover:bg-brand-green/5">
+    <PageSurface className="group h-full transition-colors hover:border-foreground/20 hover:bg-muted/20 focus-within:border-ring/50">
       <button
-        className="flex w-full min-w-0 items-start gap-3 text-left"
+        className="grid h-full w-full min-w-0 grid-rows-[1fr_auto] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35"
         onClick={props.onOpen}
         type="button"
       >
-        <AgentIcon kind={props.host.kind} />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <h4 className="min-w-0 truncate text-xl font-semibold tracking-tight">
-              {props.host.displayName}
-            </h4>
-            <LinkStatusBadge host={props.host} />
+        <PageSurfaceContent className="grid min-w-0 content-start gap-4">
+          <div className="flex min-w-0 items-start gap-3">
+            <AgentIcon kind={props.host.kind} />
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate text-lg font-semibold tracking-tight">
+                {props.host.displayName}
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">{posture.description}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <LinkStatusBadge host={props.host} />
+              <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+            </div>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{posture.description}</p>
-          {missingRatelEntryNames(props.host).length > 0 ? (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-              {missingRatelEntryNames(props.host).length} native tool
-              {missingRatelEntryNames(props.host).length === 1 ? "" : "s"} not in Ratel.
-            </p>
-          ) : null}
-          {props.unmanagedSkillCount > 0 ? (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-              {props.unmanagedSkillCount} skill{props.unmanagedSkillCount === 1 ? "" : "s"} not
-              managed by Ratel.
-            </p>
-          ) : null}
-          <p className="mt-3 truncate font-mono text-xs text-muted-foreground">
-            {primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable"}
-          </p>
-        </div>
+
+          <CoverageBadges
+            missingToolCount={missingTools}
+            unmanagedSkillCount={props.unmanagedSkillCount}
+          />
+        </PageSurfaceContent>
+        <PageSurfaceFooter className="grid min-w-0 gap-1">
+          <span className="font-mono text-[10px] text-muted-foreground uppercase">Config</span>
+          <code className="truncate font-mono text-xs text-muted-foreground" title={configPath}>
+            {configPath}
+          </code>
+        </PageSurfaceFooter>
       </button>
-    </div>
+    </PageSurface>
   );
 }
 
@@ -1104,33 +1114,44 @@ function PreviewFlow(props: {
 }
 
 function Backups(props: { backups: BackupManifest[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleBackups = expanded ? props.backups : props.backups.slice(0, BACKUP_PREVIEW_COUNT);
+  const hiddenCount = Math.max(0, props.backups.length - visibleBackups.length);
   return (
-    <section className="grid gap-3 border-border border-t pt-4">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+    <PageSurface aria-labelledby="backups-title">
+      <PageSurfaceHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h3 className="font-medium">Backups</h3>
+          <h2 className="font-medium" id="backups-title">
+            Backups
+          </h2>
           <p className="text-sm text-muted-foreground">
             Recent changes created by import, link, and other config writes.
           </p>
         </div>
-        <p className="text-sm text-muted-foreground">
+        <Badge className="w-fit shrink-0" variant="outline">
           {props.backups.length} backup{props.backups.length === 1 ? "" : "s"}
-        </p>
-      </div>
+        </Badge>
+      </PageSurfaceHeader>
       {props.backups.length === 0 ? (
-        <div className="py-6 text-sm text-muted-foreground">No backups yet.</div>
+        <PageSurfaceContent className="py-8 text-center text-sm text-muted-foreground">
+          No backups yet.
+        </PageSurfaceContent>
       ) : (
-        <div className="divide-y divide-border border border-border">
-          {props.backups.map((backup, index) => (
-            <BackupRow
-              backup={backup}
-              key={`${backup.createdAt}-${backup.action}`}
-              latest={index === 0}
-            />
+        <div className="divide-y divide-forest-300">
+          {visibleBackups.map((backup, index) => (
+            <BackupRow backup={backup} key={backupKey(backup)} latest={index === 0} />
           ))}
         </div>
       )}
-    </section>
+      {props.backups.length > BACKUP_PREVIEW_COUNT ? (
+        <PageSurfaceFooter className="flex justify-center">
+          <Button onClick={() => setExpanded((current) => !current)} size="sm" variant="ghost">
+            {expanded ? <ChevronUp /> : <ChevronDown />}
+            {expanded ? "Show fewer backups" : `Show ${hiddenCount} more`}
+          </Button>
+        </PageSurfaceFooter>
+      ) : null}
+    </PageSurface>
   );
 }
 
@@ -1139,28 +1160,34 @@ function BackupRow(props: { backup: BackupManifest; latest: boolean }) {
   return (
     <div
       className={cn(
-        "grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center",
-        props.latest && "bg-muted/25",
+        "grid gap-2 px-4 py-4 sm:px-5 [content-visibility:auto] [contain-intrinsic-size:auto_88px]",
+        props.latest && "bg-brand-green/5",
       )}
     >
-      <div className="grid min-w-0 gap-1.5">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <p className="font-medium">{restoreActionLabel(props.backup.action)}</p>
-          <span className="text-xs text-muted-foreground">
-            {restoreCreatedLabel(props.backup.createdAt)}
-          </span>
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-          <span className={cn(props.latest && "font-medium text-foreground")}>
-            {props.latest ? "Latest backup" : "Previous backup"}
-          </span>
-          <span aria-hidden="true">/</span>
-          <span>{backupFileSummary(props.backup.entries.length)}</span>
-        </div>
-        <p className="truncate font-mono text-xs text-muted-foreground">{paths}</p>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="font-medium">{restoreActionLabel(props.backup.action)}</p>
+        {props.latest ? <Badge variant="secondary">Latest</Badge> : null}
+        <span className="text-xs text-muted-foreground">
+          {restoreCreatedLabel(props.backup.createdAt)}
+        </span>
       </div>
+      <p className="text-sm text-muted-foreground">
+        {backupFileSummary(props.backup.entries.length)}
+      </p>
+      <code className="truncate font-mono text-xs text-muted-foreground" title={paths}>
+        {paths}
+      </code>
     </div>
   );
+}
+
+const BACKUP_PREVIEW_COUNT = 6;
+
+function backupKey(backup: BackupManifest): string {
+  const entries = backup.entries
+    .map((entry) => `${entry.originalPath}:${entry.backupPath}`)
+    .join("|");
+  return `${backup.createdAt}:${backup.action}:${entries}`;
 }
 
 const RESTORE_ACTION_LABELS: Record<BackupManifest["action"], string> = {
@@ -2352,6 +2379,26 @@ function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "succes
       <span className={cn("size-1.5 rounded-full", dotClass)} />
       {props.children}
     </Badge>
+  );
+}
+
+function CoverageBadges(props: { missingToolCount: number; unmanagedSkillCount: number }) {
+  if (props.missingToolCount === 0 && props.unmanagedSkillCount === 0) {
+    return <StatusBadge tone="success">Coverage up to date</StatusBadge>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {props.missingToolCount > 0 ? (
+        <StatusBadge tone="warning">
+          {props.missingToolCount} native tool{props.missingToolCount === 1 ? "" : "s"} not in Ratel
+        </StatusBadge>
+      ) : null}
+      {props.unmanagedSkillCount > 0 ? (
+        <StatusBadge tone="warning">
+          {props.unmanagedSkillCount} skill{props.unmanagedSkillCount === 1 ? "" : "s"} not managed
+        </StatusBadge>
+      ) : null}
+    </div>
   );
 }
 
