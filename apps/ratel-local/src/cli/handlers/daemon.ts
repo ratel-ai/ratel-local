@@ -26,6 +26,12 @@ import {
   writeJson,
 } from "@ratel-ai/ratel-local-core";
 import {
+  CLOUD_API_KEY_ENV,
+  cloudOtlpRelayOptionsFromEnv,
+  createCloudOtlpTraceRelay,
+  OTLP_TRACES_PATH,
+} from "../../cloud/otlp-trace-relay.js";
+import {
   authorizeDaemonRequest,
   DaemonAccessError,
   type DaemonRequestScope,
@@ -126,6 +132,7 @@ interface DaemonHandlerDeps {
   skillImportControlPlane?: SkillImportControlPlane;
   skillRegistrationControlPlane?: SkillRegistrationControlPlane;
   preparedChanges?: PreparedChangeCoordinator;
+  cloudOtlpFetch?: typeof fetch;
 }
 
 export interface DaemonServiceStatus {
@@ -237,8 +244,17 @@ export async function runDaemonServer(
     opts.snapshotResolver ??
     createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry });
   const serverVersion = options.serverVersion ?? "0.0.0";
-  const retrievalHealthEnabled =
-    (options.processEnv ?? process.env).RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
+  const daemonProcessEnv = options.processEnv ?? process.env;
+  const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
+  const cloudOtlpOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
+  if (cloudOtlpOptions) delete daemonProcessEnv[CLOUD_API_KEY_ENV];
+  const cloudOtlpRelay = cloudOtlpOptions
+    ? createCloudOtlpTraceRelay({
+        ...cloudOtlpOptions,
+        fetch: opts.cloudOtlpFetch,
+        log,
+      })
+    : undefined;
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -431,6 +447,9 @@ export async function runDaemonServer(
     daemonToken,
     sessionTokens: uiSessions,
     publicRoute: async (req, res, path) => {
+      if (cloudOtlpRelay && (await cloudOtlpRelay.handleRequest(req, res, path))) {
+        return true;
+      }
       if (req.method === "GET" && path === "/healthz") {
         if (!retrievalHealthEnabled) {
           writePlain(res, 200, "ok\n");
@@ -493,6 +512,9 @@ export async function runDaemonServer(
   log(`[ratel] daemon running at ${state.uiUrl}`);
   log(`[ratel] daemon UI: ${state.uiUrl}`);
   log(`[ratel] MCP HTTP endpoint: ${state.mcpUrl}`);
+  if (cloudOtlpRelay) {
+    log(`[ratel] Cloud OTLP trace relay enabled at ${state.uiUrl}${OTLP_TRACES_PATH}`);
+  }
   log("[ratel] ready for scoped MCP clients");
   log("[ratel] Press Ctrl-C to stop.");
 

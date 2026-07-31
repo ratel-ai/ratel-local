@@ -161,7 +161,7 @@ The result should contain a `tools` bucket with matching upstream tools and a `s
 
 For troubleshooting and the complete setup guide, see the [Ratel Local quickstart](https://docs.ratel.sh/docs/local/quickstart).
 
-For configuration scopes, OAuth, skills, the local UI, telemetry, and library usage, see the [Ratel Local Docs](https://docs.ratel.sh/docs/local). Repository contributors can also read the [retrieval configuration and preflight guide](docs/retrieval.md).
+For configuration scopes, OAuth, skills, the local UI, telemetry, and library usage, see the [Ratel Local Docs](https://docs.ratel.sh/docs/local). Repository contributors can also read the [retrieval configuration and preflight guide](docs/retrieval.md) and the [experimental Cloud OTLP relay contract](docs/cloud-otlp-relay.md).
 
 ## How it works
 

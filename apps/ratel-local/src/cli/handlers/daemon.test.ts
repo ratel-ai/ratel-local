@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { connectorHeaders } from "../../daemon/access.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
@@ -84,6 +84,79 @@ function makeCtx(fs: MemFs, env: HierarchyEnv = { homeDir: HOME, projectRoot: RO
 }
 
 describe("runDaemon", () => {
+  it("mounts the feature-flagged Cloud OTLP trace relay on the loopback daemon", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const cloudFetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer cloud-test-secret");
+      return new Response(Buffer.from([0x00]), {
+        status: 200,
+        headers: { "Content-Type": "application/x-protobuf" },
+      });
+    });
+    const daemonProcessEnv = {
+      RATEL_EXPERIMENTAL_CLOUD_OTLP_RELAY: "1",
+      RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/otlp/v1/traces",
+      RATEL_API_KEY: "cloud-test-secret",
+    };
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: daemonProcessEnv,
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudOtlpFetch: cloudFetch,
+      },
+    );
+    const daemonUrl = new URL(daemonUrlFromLogs(logs));
+
+    try {
+      expect(daemonUrl.hostname).toBe("127.0.0.1");
+      const response = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+      expect(response.status).toBe(200);
+      expect(cloudFetch).toHaveBeenCalledOnce();
+
+      const rejectedHostStatus = await new Promise<number>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: "127.0.0.1",
+            port: Number(daemonUrl.port),
+            path: "/otlp/v1/traces",
+            method: "POST",
+            headers: {
+              Host: "evil.example.test:5731",
+              "Content-Type": "application/x-protobuf",
+              "Content-Length": "2",
+            },
+          },
+          (rawResponse) => {
+            rawResponse.resume();
+            resolve(rawResponse.statusCode ?? 0);
+          },
+        );
+        request.once("error", reject);
+        request.end(Buffer.from([0x0a, 0x00]));
+      });
+      expect(rejectedHostStatus).toBe(400);
+      expect(cloudFetch).toHaveBeenCalledOnce();
+      expect(logs.join("\n")).toContain("Cloud OTLP trace relay enabled");
+      expect(logs.join("\n")).not.toContain("cloud-test-secret");
+      expect([...fs.files.values()].join("\n")).not.toContain("cloud-test-secret");
+      expect(daemonProcessEnv).not.toHaveProperty("RATEL_API_KEY");
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("exposes retrieval build health only when the experimental health flag is enabled", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
