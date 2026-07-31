@@ -7,6 +7,8 @@ import {
   mkdir,
   readdir,
   readFile,
+  readlink,
+  realpath,
   rename,
   rm,
   stat,
@@ -42,6 +44,8 @@ export interface CopyDirectoryInput {
 export interface DeleteArtifactInput {
   kind: "delete-artifact";
   path: string;
+  /** Allows deletion only when the symlink resolves to this canonical target. */
+  expectedSymlinkTarget?: string;
 }
 
 export type MutationInputOperation = ReplaceFileInput | CopyDirectoryInput | DeleteArtifactInput;
@@ -69,6 +73,7 @@ export interface CopyDirectoryOperation {
 export interface DeleteArtifactOperation {
   kind: "delete-artifact";
   path: string;
+  expectedSymlinkTarget?: string;
 }
 
 export type MutationOperation =
@@ -247,13 +252,22 @@ export class FilesystemMutationEngine implements MutationEngine {
       }
       paths.add(input.path);
 
-      const before = await readArtifact(input.path);
+      const before = await readArtifact(
+        input.path,
+        input.kind === "delete-artifact" ? input.expectedSymlinkTarget : undefined,
+      );
       if (input.kind === "delete-artifact") {
         if (!before.exists || !before.kind) {
           throw new MutationValidationError(`delete target does not exist: ${input.path}`);
         }
         baseRevisions[input.path] = before.revision;
-        operations.push({ kind: "delete-artifact", path: input.path });
+        operations.push({
+          kind: "delete-artifact",
+          path: input.path,
+          ...(input.expectedSymlinkTarget
+            ? { expectedSymlinkTarget: input.expectedSymlinkTarget }
+            : {}),
+        });
         files.push({
           kind: before.kind,
           path: input.path,
@@ -404,6 +418,15 @@ export class FilesystemMutationEngine implements MutationEngine {
           throw new MutationValidationError(`copy target must not exist: ${operation.path}`);
         }
       } else if (operation.kind === "delete-artifact") {
+        if (
+          operation.expectedSymlinkTarget !== undefined &&
+          (!isAbsolute(operation.expectedSymlinkTarget) ||
+            operation.expectedSymlinkTarget.includes("\0"))
+        ) {
+          throw new MutationValidationError(
+            `invalid expected symlink target: ${operation.expectedSymlinkTarget}`,
+          );
+        }
         expectedAfterRevision = MISSING_DOCUMENT_REVISION;
         expectedKind = preview.kind;
         if (
@@ -442,7 +465,12 @@ export class FilesystemMutationEngine implements MutationEngine {
     if (expected === undefined) {
       throw new MutationValidationError(`plan has no base revision for ${operation.path}`);
     }
-    const actual = (await readArtifact(operation.path)).revision;
+    const actual = (
+      await readArtifact(
+        operation.path,
+        operation.kind === "delete-artifact" ? operation.expectedSymlinkTarget : undefined,
+      )
+    ).revision;
     if (actual !== expected) {
       throw new MutationConflictError(
         "revision_conflict",
@@ -754,11 +782,23 @@ function toBuffer(contents: string | Uint8Array): Buffer {
 
 async function readArtifact(
   path: string,
+  expectedSymlinkTarget?: string,
 ): Promise<{ exists: boolean; kind?: "file" | "directory"; revision: DocumentRevision }> {
   try {
     const info = await lstat(path);
     if (info.isSymbolicLink()) {
-      throw new MutationValidationError(`mutation target must not be a symlink: ${path}`);
+      if (!expectedSymlinkTarget) {
+        throw new MutationValidationError(`mutation target must not be a symlink: ${path}`);
+      }
+      const actualTarget = await realpath(path);
+      if (actualTarget !== expectedSymlinkTarget) {
+        throw new MutationValidationError(`symlink target mismatch for ${path}`);
+      }
+      return {
+        exists: true,
+        kind: "file",
+        revision: documentRevision(`symlink\0${await readlink(path)}\0${actualTarget}`),
+      };
     }
     if (info.isDirectory()) {
       return { exists: true, kind: "directory", revision: await directoryRevision(path) };

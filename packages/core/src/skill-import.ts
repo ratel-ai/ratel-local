@@ -34,6 +34,7 @@ import {
   StaleSkillCandidateError,
   UnknownSkillCandidateError,
 } from "./skill-discovery.js";
+import { prepareSkillHostPolicy, type SkillHostPolicy } from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
 
 export type SkillImportMode = "reference" | "copy";
@@ -172,6 +173,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     const registrations = new Map<string, string>();
     const appliedTargets = new Map<string, SkillImportTarget[]>();
     const skippedDuplicates: SkippedDuplicateSkillImport[] = [];
+    const hostPolicyOperations: MutationInputOperation[] = [];
     const projectRootsByPath = new Map<string, string>();
     const adoptionRevisions = new Map<string, DocumentRevision>();
 
@@ -217,10 +219,22 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
         targets.push(target);
         appliedTargets.set(selection.candidateId, targets);
 
+        let hostPolicy: SkillHostPolicy | undefined;
+        if (target.scopeRef.scope === "user" && candidate.source !== "ratel") {
+          const prepared = await prepareSkillHostPolicy({
+            canonicalSkillPath: candidate.canonicalPath,
+            homeDir: this.options.homeDir,
+            id: candidate.id,
+            source: candidate.source,
+          });
+          hostPolicy = prepared.policy;
+          if (prepared.operation) hostPolicyOperations.push(prepared.operation);
+        }
         targetDocument.entries[candidate.id] = await this.registrationEntry(
           candidate,
           target,
           targetDocument.projectRoot,
+          hostPolicy,
         );
         if (target.mode === "copy") {
           const targetPath = copyTargetPath(
@@ -277,7 +291,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     );
     return this.options.preparedChanges.prepare({
       kind: "skill.import",
-      operations: [...configOperations, ...copyOperations],
+      operations: [...configOperations, ...hostPolicyOperations, ...copyOperations],
       affectedContexts: contextsForSelections(appliedSelections),
       buildPreview: (mutation) => {
         for (const target of documents.values()) {
@@ -345,7 +359,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
       },
       captureBackup: async () => {
         const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
-        for (const operation of [...configOperations, ...copyOperations]) {
+        for (const operation of [...configOperations, ...hostPolicyOperations, ...copyOperations]) {
           await backup.capture(operation.path);
         }
         return backup.finalize("import");
@@ -509,6 +523,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     candidate: SkillCandidate,
     target: SkillImportTarget,
     projectRoot: string | undefined,
+    hostPolicy: SkillHostPolicy | undefined,
   ): Promise<SkillEntry> {
     const source = configuredSource(candidate.source);
     if (target.mode === "copy") {
@@ -516,6 +531,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
         mode: "copy",
         source,
         copiedFrom: { source: candidate.source, id: candidate.id },
+        ...(hostPolicy ? { hostPolicy } : {}),
       };
     }
 
@@ -523,7 +539,12 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
       if (candidate.context.kind !== "global") {
         throw invalidReference(candidate, target.scopeRef);
       }
-      return { mode: "reference", path: candidate.canonicalPath, source };
+      return {
+        mode: "reference",
+        path: candidate.canonicalPath,
+        source,
+        ...(hostPolicy ? { hostPolicy } : {}),
+      };
     }
 
     if (

@@ -10,6 +10,7 @@ export * from "./hierarchy.js";
 export * from "./import-plan.js";
 export * from "./io.js";
 export * from "./json.js";
+export * from "./legacy-skill-migration.js";
 export * from "./lib/index.js";
 export * from "./local-git-exclude.js";
 export * from "./locate-bin.js";

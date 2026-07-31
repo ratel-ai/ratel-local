@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -314,6 +324,41 @@ describe("MutationEngine", () => {
     await engine.commit(plan, { digest: plan.digest });
 
     await expect(readFile(join(target, "SKILL.md"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("deletes only an explicitly validated symlink target", async () => {
+    const target = join(root, "native-skill");
+    const link = join(root, "managed-skill");
+    const other = join(root, "other-skill");
+    await mkdir(target);
+    await mkdir(other);
+    await symlink(target, link);
+    const engine = await createMutationEngine({ controlDir });
+
+    await expect(engine.prepare([{ kind: "delete-artifact", path: link }])).rejects.toThrow(
+      /must not be a symlink/,
+    );
+    await expect(
+      engine.prepare([
+        {
+          kind: "delete-artifact",
+          path: link,
+          expectedSymlinkTarget: await realpath(other),
+        },
+      ]),
+    ).rejects.toThrow(/symlink target mismatch/);
+
+    const plan = await engine.prepare([
+      {
+        kind: "delete-artifact",
+        path: link,
+        expectedSymlinkTarget: await realpath(target),
+      },
+    ]);
+    await engine.commit(plan, { digest: plan.digest });
+
+    await expect(lstat(link)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await stat(target)).isDirectory()).toBe(true);
   });
 
   it("restores a deleted directory when a later hook fails", async () => {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProjectRegistry, type MutationJournalV1, nodeFs } from "@ratel-ai/ratel-local-core";
@@ -215,6 +215,63 @@ describe("runDoctor", () => {
     expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
   });
 
+  it("previews and fixes a verified legacy skill symlink migration", async () => {
+    const homeDir = await temporaryHome();
+    const native = join(homeDir, ".claude", "skills", "review");
+    const managed = join(homeDir, ".ratel", "skills", "review");
+    const manifestPath = join(homeDir, ".ratel", "skill-manifest.json");
+    const configPath = join(homeDir, ".ratel", "config.json");
+    const before = "---\nname: review\ndescription: Review\n---\n";
+    const after = "---\nname: review\ndescription: Review\ndisable-model-invocation: true\n---\n";
+    await mkdir(native, { recursive: true });
+    await mkdir(join(homeDir, ".ratel", "skills"), { recursive: true });
+    await writeFile(join(native, "SKILL.md"), after);
+    await symlink(native, managed);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        version: 1,
+        managed: [
+          {
+            id: "review",
+            mode: "linked",
+            originalPath: native,
+            source: "claude",
+            metadataPatch: [{ path: join(native, "SKILL.md"), before, after }],
+          },
+        ],
+      })}\n`,
+    );
+    const previewLogs: string[] = [];
+
+    await runDoctor(context(homeDir, previewLogs));
+
+    expect(previewLogs).toContain(
+      "[info] legacy_skill_migration_ready [skill:review]: run ratel-local doctor --fix to migrate",
+    );
+    expect((await lstat(managed)).isSymbolicLink()).toBe(true);
+
+    const fixLogs: string[] = [];
+    await runDoctor(context(homeDir, fixLogs, true));
+
+    expect(fixLogs).toContain(
+      "[ok] legacy_skill_migrated [skill:review]: converted legacy symlink management to a user-scoped reference",
+    );
+    await expect(lstat(managed)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(manifestPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      skills: {
+        entries: {
+          review: {
+            mode: "reference",
+            source: "claude",
+            hostPolicy: { mode: "manual-only", source: "claude" },
+          },
+        },
+      },
+    });
+  });
+
   async function temporaryHome(): Promise<string> {
     const home = await mkdtemp(join(tmpdir(), "ratel-doctor-"));
     homes.push(home);
@@ -222,9 +279,15 @@ describe("runDoctor", () => {
   }
 });
 
-function context(homeDir: string, logs: string[]): HandlerCtx {
+function context(homeDir: string, logs: string[], fix = false): HandlerCtx {
   return {
-    argv: { group: "doctor", configPaths: [], rest: [], extras: [], flags: {} },
+    argv: {
+      group: "doctor",
+      configPaths: [],
+      rest: [],
+      extras: [],
+      flags: fix ? { fix: true } : {},
+    },
     env: { homeDir },
     fs: nodeFs,
     log: (message) => logs.push(message),

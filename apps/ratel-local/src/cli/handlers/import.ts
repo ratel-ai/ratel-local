@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import type { BackupManifest, RatelConfig, ServerEntry } from "@ratel-ai/ratel-local-core";
 import {
   type AgentHostState,
@@ -9,6 +10,11 @@ import {
   beginAgentImportWorkflow,
   buildAgentAgentImportDraft,
   conflictKey,
+  createMutationEngine,
+  createPreparedChangeCoordinator,
+  createProjectRegistry,
+  createSkillDiscovery,
+  createSkillImportControlPlane,
   documentRevision,
   getAgentHostRatelConnection,
   getClaudeCodeStatuslineState,
@@ -24,18 +30,14 @@ import {
   projectIdFromCanonicalRoot,
   type ResolvedBin,
   ratelConfigPath,
+  type SkillImportControlPlane,
   type SupportedAgentHostKind,
   startBackup,
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core";
 import { ArgError } from "../args.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
-import {
-  activateSkills,
-  defaultSkillManagePaths,
-  type SkillManagePaths,
-  type SkillSource,
-} from "../skills/manage.js";
+import { defaultSkillPaths, type SkillPaths } from "../skills/paths.js";
 import { runLink } from "./link.js";
 import { runStatuslineInstallStep } from "./statusline.js";
 import type { HandlerCtx } from "./types.js";
@@ -53,7 +55,7 @@ export interface ImportFlowOptions {
   agentKind?: SupportedAgentHostKind;
   exists?: (path: string) => Promise<boolean>;
   probe?: ProbeFn;
-  skillPaths?: SkillManagePaths;
+  skillPaths?: SkillPaths;
   now?: () => Date;
 }
 
@@ -69,8 +71,9 @@ interface ConflictResolution {
 }
 
 interface SkillCandidate {
+  candidateId: string;
   id: string;
-  source: SkillSource;
+  source: "claude" | "codex";
 }
 
 interface SkillPreview {
@@ -81,6 +84,11 @@ interface SkillPreview {
 interface SkillImportResult {
   managed: number;
   skipped: Array<{ id: string; reason: string }>;
+}
+
+interface ScopedSkillImportRuntime {
+  control: SkillImportControlPlane | null;
+  preview: SkillPreview;
 }
 
 type ConflictResolutionResult =
@@ -115,11 +123,11 @@ export async function runImport(
     candidates = collectCandidates(agentState);
   }
 
-  const skillPaths = opts.skillPaths ?? defaultSkillManagePaths(ctx.env.homeDir);
-  const skillPreview = await previewSkillCandidates(skillPaths, {
+  const skillPaths = opts.skillPaths ?? defaultSkillPaths(ctx.env.homeDir);
+  const skillRuntime = await createScopedSkillImportRuntime(skillPaths, {
     source: resolveSkillSource(opts.agentKind, agentState),
-    now: opts.now,
   });
+  const skillPreview = skillRuntime.preview;
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
   let connection =
     workflowHostKind && agentState
@@ -190,6 +198,9 @@ export async function runImport(
   }
   if (skillPreview.candidates.length > 0 || skillPreview.skipped.length > 0) {
     ctx.prompts.note(renderDetectedSkills(skillPreview, skillPaths), "Detected skills");
+    if (skillPreview.skipped.length > 0) {
+      ctx.log(`warning: ${skippedSkillsMessage(skillPreview.skipped)}`);
+    }
   }
 
   const selection = candidates.length > 0 ? await selectCandidates(ctx, candidates, opts) : [];
@@ -310,7 +321,8 @@ export async function runImport(
 
   let skillImportResult: SkillImportResult = { managed: 0, skipped: [] };
   if (selectedSkills.length > 0) {
-    skillImportResult = await activateSelectedSkills(ctx, skillPaths, selectedSkills, opts);
+    if (!skillRuntime.control) throw new Error("skill import control plane is unavailable");
+    skillImportResult = await importSelectedSkills(ctx, skillRuntime.control, selectedSkills);
   }
 
   if (workflow?.step === "import") {
@@ -554,32 +566,51 @@ function collectCandidates(state: AgentHostState): Candidate[] {
 function resolveSkillSource(
   agentKind: SupportedAgentHostKind | undefined,
   state: AgentHostState | null,
-): SkillSource | undefined {
+): "claude" | "codex" | undefined {
   if (agentKind) return skillSourceForAgentKind(agentKind);
   return skillSourceForAgentKind(state?.host.kind);
 }
 
-function skillSourceForAgentKind(kind: string | undefined): SkillSource | undefined {
+function skillSourceForAgentKind(kind: string | undefined): "claude" | "codex" | undefined {
   if (kind === "claude-code") return "claude";
   if (kind === "codex") return "codex";
   return undefined;
 }
 
-async function previewSkillCandidates(
-  paths: SkillManagePaths,
-  opts: { source?: SkillSource; now?: () => Date },
-): Promise<SkillPreview> {
-  const result = await activateSkills(paths, {
-    dryRun: true,
-    source: opts.source,
-    now: opts.now,
-  });
+async function createScopedSkillImportRuntime(
+  paths: SkillPaths,
+  opts: { source?: "claude" | "codex" },
+): Promise<ScopedSkillImportRuntime> {
+  const homeDir = dirname(dirname(paths.nativeDir));
+  const discovery = createSkillDiscovery({ homeDir });
+  const discovered = await discovery.discover({ kind: "global" });
+  const candidates = discovered.candidates
+    .filter(({ source }) => source !== "ratel")
+    .map((candidate) => ({
+      candidateId: candidate.candidateId,
+      id: candidate.id,
+      source: candidate.source === "claude" ? ("claude" as const) : ("codex" as const),
+    }))
+    .filter(({ source }) => opts.source === undefined || source === opts.source);
+  const preparedChanges =
+    candidates.length === 0
+      ? null
+      : createPreparedChangeCoordinator({
+          mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
+        });
   return {
-    candidates: result.managed.map((entry) => ({
-      id: entry.id,
-      source: entry.source ?? "claude",
-    })),
-    skipped: result.skipped,
+    control: preparedChanges
+      ? createSkillImportControlPlane({
+          homeDir,
+          projectRegistry: createProjectRegistry({ homeDir }),
+          discovery,
+          preparedChanges,
+        })
+      : null,
+    preview: {
+      candidates,
+      skipped: discovered.diagnostics.map(({ path, message }) => ({ id: path, reason: message })),
+    },
   };
 }
 
@@ -605,30 +636,29 @@ async function selectSkillCandidates(
   return candidates.filter((skill) => selected.has(skillTagOf(skill)));
 }
 
-async function activateSelectedSkills(
+async function importSelectedSkills(
   ctx: HandlerCtx,
-  paths: SkillManagePaths,
+  control: SkillImportControlPlane,
   skills: SkillCandidate[],
-  opts: ImportFlowOptions,
 ): Promise<SkillImportResult> {
-  const idsBySource = new Map<SkillSource, string[]>();
+  const selected: SkillCandidate[] = [];
+  const seen = new Set<string>();
   for (const skill of skills) {
-    const ids = idsBySource.get(skill.source) ?? [];
-    ids.push(skill.id);
-    idsBySource.set(skill.source, ids);
+    if (seen.has(skill.id)) continue;
+    seen.add(skill.id);
+    selected.push(skill);
   }
-  const skipped: Array<{ id: string; reason: string }> = [];
-  let managed = 0;
-  for (const [source, ids] of idsBySource) {
-    const result = await activateSkills(paths, {
-      ids,
-      source,
-      logger: ctx.log,
-      now: opts.now,
-    });
-    managed += result.managed.length;
-    skipped.push(...result.skipped);
-  }
+  const skipped = skills
+    .filter((skill) => !selected.includes(skill))
+    .map(({ id }) => ({ id, reason: "duplicate skill id; earlier harness copy kept" }));
+  const plan = await control.prepare(
+    selected.map(({ candidateId }) => ({
+      candidateId,
+      targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+    })),
+  );
+  const commit = await control.commit(plan.changeId);
+  const managed = commit.result.imported.length;
   ctx.log(`managing ${managed} skill${managed === 1 ? "" : "s"} as invoke-only`);
   if (skipped.length > 0) {
     ctx.log(`warning: ${skippedSkillsMessage(skipped)}`);
@@ -649,7 +679,7 @@ function skillTagOf(skill: SkillCandidate): string {
   return `${skill.source}:${skill.id}`;
 }
 
-function sourceLabel(source: SkillSource): string {
+function sourceLabel(source: "claude" | "codex"): string {
   return source === "codex" ? "Codex" : "Claude Code";
 }
 
@@ -669,9 +699,9 @@ function renderDetectedAgentSources(state: AgentHostState): string {
   return lines.join("\n");
 }
 
-function renderDetectedSkills(preview: SkillPreview, paths: SkillManagePaths): string {
+function renderDetectedSkills(preview: SkillPreview, paths: SkillPaths): string {
   const lines: string[] = [];
-  const bySource = new Map<SkillSource, SkillCandidate[]>();
+  const bySource = new Map<"claude" | "codex", SkillCandidate[]>();
   for (const skill of preview.candidates) {
     const skills = bySource.get(skill.source) ?? [];
     skills.push(skill);

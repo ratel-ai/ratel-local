@@ -80,7 +80,7 @@ Commands:
   backup   manage backup snapshots (list)
   project  manage registered project roots (list, add, remove)
   skill    manage scoped skills (skill import/list, add-scope, remove-scope, remove)
-  doctor   recover interrupted mutations and diagnose scoped configuration/OAuth state
+  doctor   recover mutations and diagnose scoped state (--fix migrates safe legacy skills)
   statusline render or install the Claude Code Ratel statusline
   ui       open the persistent daemon UI [--no-open]
 
