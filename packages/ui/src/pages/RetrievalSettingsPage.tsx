@@ -112,16 +112,19 @@ export function RetrievalSettingsPage() {
         </Alert>
       ) : null}
 
-      <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
-        <CardHeader>
-          <CardTitle>Current method</CardTitle>
-          <CardDescription>Used by newly connected clients.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-1">
-          <p className="font-medium">{retrievalMethodLabel(effective.method)}</p>
-          <p className="text-muted-foreground text-sm">{retrievalSourceLabel(effective)}</p>
-        </CardContent>
-      </Card>
+      <section
+        aria-label="Current retrieval method"
+        className="flex min-h-12 items-center gap-3 rounded-xl border border-forest-300 bg-forest-600/40 px-4 py-3 text-sm"
+      >
+        <span className="shrink-0 text-muted-foreground">Current</span>
+        <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
+        <p className="min-w-0 truncate">
+          <span className="font-medium">{retrievalMethodLabel(effective.method)}</span>
+          {effective.method !== "bm25" ? (
+            <span className="text-muted-foreground"> · {retrievalSourceLabel(effective)}</span>
+          ) : null}
+        </p>
+      </section>
 
       <RetrievalEditor
         key={editorKey}
@@ -772,7 +775,7 @@ function documentRevisionForScope(
 function retrievalSourceLabel(retrieval: RetrievalConfig): string {
   if (retrieval.method === "bm25") return "No embedding model";
   const embedding = retrieval.embedding;
-  if (embedding === undefined) return "Built-in embedding model";
+  if (embedding === undefined) return "Built-in";
   if (typeof embedding === "string") return embedding;
   if ("huggingface" in embedding) return embedding.huggingface;
   if ("local" in embedding) return embedding.local;
