@@ -1,6 +1,6 @@
 ---
 name: ratel-local
-description: Configure, use, and debug the Ratel Local plugin and ratel-local CLI. Use when working with Codex or Claude Code plugin setup, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
+description: Configure, use, and debug the Ratel Local plugin and ratel-local CLI. Use when working with Codex or Claude Code plugin setup, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, configuring capability retrieval, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
 ---
 
 # Ratel Local
@@ -19,7 +19,7 @@ the plugin `.mcp.json`.
 
 ## Plugin Runtime
 
-The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.6.0-rc.1 connect`.
+The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.7.0-rc.0 connect`.
 The connector sends its resolved project root to the authenticated loopback
 daemon, which loads the appropriate config chain and shares upstream
 connections only within that canonical project scope. Do not replace the
@@ -29,7 +29,7 @@ into the plugin `.mcp.json`.
 Run the setup wizard once from a terminal:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.6.0-rc.1 setup
+npx -y @ratel-ai/ratel-local@0.7.0-rc.0 setup
 ```
 
 This is the default onboarding path: it makes the daemon ready, detects Claude
@@ -44,11 +44,11 @@ MCP stdio.
 For human CLI work, install the package globally and use the `ratel-local` bin:
 
 ```bash
-pnpm add -g @ratel-ai/ratel-local@0.6.0-rc.1
+pnpm add -g @ratel-ai/ratel-local@0.7.0-rc.0
 ratel-local --version
 ```
 
-Node 20 or newer is required.
+Node 20.6 or newer is required.
 
 ## Config Scopes
 
@@ -90,6 +90,7 @@ Top-level commands:
 - `ratel-local import` migrates agent MCP entries and native skills into Ratel.
 - `ratel-local link` points an agent at the Ratel gateway without removing native MCP entries.
 - `ratel-local mcp` manages upstream MCP server entries.
+- `ratel-local retrieval` inspects and configures scoped BM25, semantic, or hybrid capability search.
 - `ratel-local backup` manages backup snapshots.
 - `ratel-local project` manages registered project roots.
 - `ratel-local skill` manages Claude Code and Codex skills through Ratel.
@@ -108,6 +109,13 @@ Top-level commands:
 - `get` shows one entry's resolved details.
 - `edit` edits fields on an existing entry; it is interactive when no edit flags are supplied.
 - `auth` runs OAuth for HTTP/SSE upstreams or checks stored auth state.
+
+`ratel-local retrieval` verbs:
+
+- `status` shows each scoped override and the effective retrieval mode.
+- `configure` writes one atomic scoped retrieval override.
+- `reset` removes one override so the earlier scope is inherited again.
+- `prepare` downloads or verifies a dense model, or checks an Ollama/endpoint source.
 
 `ratel-local skill` verbs:
 
@@ -166,6 +174,24 @@ Inspect configured upstreams:
 ```bash
 ratel-local mcp list
 ```
+
+Inspect or opt into dense retrieval:
+
+```bash
+# BM25 is the model-free default.
+ratel-local retrieval status
+
+# Opt one project into the pinned built-in model, then prepare it.
+ratel-local retrieval configure --scope project --method hybrid --source built-in
+ratel-local retrieval prepare --scope project
+```
+
+Treat retrieval as an atomic scoped setting: a narrower scope replaces the
+entire earlier retrieval block. Dense configuration is opt-in. After
+`configure`, `reset`, `prepare`, or dense OAuth changes, reconnect the affected
+agent/context so it acquires the new immutable gateway generation. Use the
+Retrieval page in the daemon UI for the same validated flow and consult
+`docs/retrieval.md` in the repository for model, memory, and privacy details.
 
 Run a one-off gateway from the current project without the daemon:
 
@@ -277,7 +303,7 @@ ratel-local backup list
 ## Debug Checklist
 
 1. Confirm Node and `npx` are available.
-2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.6.0-rc.1` with `connect`.
+2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.7.0-rc.0` with `connect`.
 3. Run `ratel-local daemon status`; if needed, run `ratel-local setup`.
 4. Run `ratel-local mcp list` to verify Ratel config has upstreams.
 5. Run `ratel-local connect` from the relevant project to reproduce the scoped bridge outside the host, or `ratel-local serve --auto-config` to isolate the gateway itself.
@@ -289,6 +315,7 @@ Common findings:
 
 - Bootstrap tools only: the daemon is missing or stopped; use `ratel_daemon_status`, then run the setup command returned by `ratel_daemon_setup` or call `ratel_daemon_start` for an installed service.
 - Empty catalog: no Ratel configs were found or all configs have empty `mcpServers`.
+- Dense retrieval startup failure: run `ratel-local retrieval status`, then `ratel-local retrieval prepare` in the affected project. Reset that scope to BM25 when the configured model or endpoint should not be used.
 - Missing project tools: the host did not expose a useful project root; set `RATEL_PROJECT_ROOT` or run from the project directory.
 - First startup failure: `npx` may need network access to resolve the pinned npm package version.
 - Auth needed: an upstream returned 401 or 403; complete the Ratel auth flow and retry.

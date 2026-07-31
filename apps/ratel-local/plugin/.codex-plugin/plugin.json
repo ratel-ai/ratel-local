@@ -1,7 +1,7 @@
 {
   "name": "ratel-local",
-  "version": "0.6.0-rc.1",
-  "description": "Persistent project-scoped Ratel gateway for exposing curated upstream MCP tools through search_capabilities and invoke_tool.",
+  "version": "0.7.0-rc.0",
+  "description": "Persistent project-scoped Ratel gateway with BM25, semantic, and hybrid capability search.",
   "author": {
     "name": "Agentified",
     "email": "support@agentified.com",
@@ -16,7 +16,9 @@
     "gateway",
     "tool-calling",
     "ratel",
-    "context-engineering"
+    "context-engineering",
+    "semantic-search",
+    "hybrid-search"
   ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
@@ -24,7 +26,7 @@
   "interface": {
     "displayName": "Ratel Local",
     "shortDescription": "Expose scoped MCP tools through one persistent local daemon",
-    "longDescription": "Ratel Local connects each Codex project to an isolated gateway hosted by one persistent local daemon. It searches and invokes configured upstream MCP tools while keeping agent tool surfaces small and upstream connections reusable.",
+    "longDescription": "Ratel Local connects each Codex project to an isolated gateway hosted by one persistent local daemon. It searches configured upstream MCP tools with model-free BM25 by default or opt-in semantic and hybrid retrieval while keeping agent tool surfaces small and upstream connections reusable.",
     "developerName": "Agentified",
     "category": "Developer Tools",
     "capabilities": [
@@ -38,6 +40,7 @@
       "Use Ratel Local to find the right tool for this task",
       "Set up or check my Ratel Local daemon",
       "Import my Codex MCP servers into Ratel",
+      "Configure hybrid capability search for this project",
       "Review my Ratel tool usage and suggest improvements",
       "Open the Ratel UI"
     ],

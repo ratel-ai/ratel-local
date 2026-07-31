@@ -1,5 +1,7 @@
 # Retrieval configuration
 
+Introduced in Ratel Local `0.7.0-rc.0`.
+
 Ratel Local uses model-free BM25 retrieval unless a user, project, or local scope explicitly
 selects `semantic` or `hybrid`. The retrieval block is atomic: the rightmost scope that defines
 `retrieval` replaces the complete earlier block rather than merging individual fields.

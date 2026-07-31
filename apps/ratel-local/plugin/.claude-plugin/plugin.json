@@ -1,8 +1,8 @@
 {
   "name": "ratel-local",
   "displayName": "Ratel Local",
-  "version": "0.6.0-rc.1",
-  "description": "Persistent project-scoped Ratel gateway for exposing curated upstream MCP tools through search_capabilities and invoke_tool.",
+  "version": "0.7.0-rc.0",
+  "description": "Persistent project-scoped Ratel gateway with BM25, semantic, and hybrid capability search.",
   "author": {
     "name": "Agentified",
     "email": "support@agentified.com"

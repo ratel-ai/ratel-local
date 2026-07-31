@@ -4,6 +4,8 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.7.0-rc.0] - 2026-07-31
+
 ### Added
 - Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
 - Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
@@ -12,6 +14,7 @@ All notable changes to this package are documented here. The format is based on 
 ### Changed
 - Simplified Retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind the Save button, while missing models show an explicit download confirmation and progress before settings are committed.
 - Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
+- Raised the published package's minimum Node.js version from 20.0 to 20.6 to match the SDK runtime dependency.
 
 ## [0.6.0-rc.1] - 2026-07-31
 

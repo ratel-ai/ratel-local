@@ -31,6 +31,37 @@ for (const manifestPath of [
   }
 }
 
+const expectedPluginSource = "./apps/ratel-local/plugin";
+const claudeMarketplace = await readJson<{
+  plugins?: Array<{ name?: unknown; source?: unknown }>;
+}>(resolve(appRoot, "../../.claude-plugin/marketplace.json"));
+const claudeMarketplaceEntry = claudeMarketplace.plugins?.find(
+  (plugin) => plugin.name === "ratel-local",
+);
+if (claudeMarketplaceEntry?.source !== expectedPluginSource) {
+  throw new Error(
+    `../../.claude-plugin/marketplace.json must point ratel-local at ${expectedPluginSource}`,
+  );
+}
+
+const codexMarketplace = await readJson<{
+  plugins?: Array<{
+    name?: unknown;
+    source?: { source?: unknown; path?: unknown };
+  }>;
+}>(resolve(appRoot, "../../.agents/plugins/marketplace.json"));
+const codexMarketplaceEntry = codexMarketplace.plugins?.find(
+  (plugin) => plugin.name === "ratel-local",
+);
+if (
+  codexMarketplaceEntry?.source?.source !== "local" ||
+  codexMarketplaceEntry.source.path !== expectedPluginSource
+) {
+  throw new Error(
+    `../../.agents/plugins/marketplace.json must point ratel-local at local source ${expectedPluginSource}`,
+  );
+}
+
 const pluginMcp = await readJson<{
   mcpServers?: Record<string, { args?: unknown }>;
 }>(resolve(appRoot, "plugin/.mcp.json"));
