@@ -25,16 +25,26 @@ const HTTP_ONLY_FIELDS = ["callbackPort", "clientId", "clientSecret", "scope"] a
 
 export type SkillSource = "claude" | "codex" | "ratel" | "unknown";
 
+export interface SkillHostPolicy {
+  mode: "manual-only";
+  source: "claude" | "codex-current" | "codex-legacy";
+  previousLine?: string;
+  createdFile?: boolean;
+  createdPolicy?: boolean;
+}
+
 export type SkillEntry =
   | {
       mode: "reference";
       path: string;
       source?: SkillSource;
+      hostPolicy?: SkillHostPolicy;
     }
   | {
       mode: "copy";
       source?: SkillSource;
       copiedFrom?: { source: string; id: string };
+      hostPolicy?: SkillHostPolicy;
     };
 
 /** Ratel-managed skills: explicit registrations plus legacy directories. */
@@ -111,11 +121,17 @@ function parseSkillEntry(path: string, raw: unknown): SkillEntry {
     throw new ConfigError(`\`${path}\` must be a JSON object`);
   }
   const source = parseSkillSource(`${path}.source`, raw.source);
+  const hostPolicy = parseSkillHostPolicy(`${path}.hostPolicy`, raw.hostPolicy);
   if (raw.mode === "reference") {
     if (typeof raw.path !== "string" || raw.path.length === 0) {
       throw new ConfigError(`\`${path}.path\` must be a non-empty string`);
     }
-    return { mode: "reference", path: raw.path, ...(source ? { source } : {}) };
+    return {
+      mode: "reference",
+      path: raw.path,
+      ...(source ? { source } : {}),
+      ...(hostPolicy ? { hostPolicy } : {}),
+    };
   }
   if (raw.mode === "copy") {
     let copiedFrom: { source: string; id: string } | undefined;
@@ -131,9 +147,35 @@ function parseSkillEntry(path: string, raw: unknown): SkillEntry {
       }
       copiedFrom = { source: raw.copiedFrom.source, id: raw.copiedFrom.id };
     }
-    return { mode: "copy", ...(source ? { source } : {}), ...(copiedFrom ? { copiedFrom } : {}) };
+    return {
+      mode: "copy",
+      ...(source ? { source } : {}),
+      ...(copiedFrom ? { copiedFrom } : {}),
+      ...(hostPolicy ? { hostPolicy } : {}),
+    };
   }
   throw new ConfigError(`\`${path}.mode\` must be one of reference|copy`);
+}
+
+function parseSkillHostPolicy(path: string, raw: unknown): SkillHostPolicy | undefined {
+  if (raw === undefined) return undefined;
+  if (
+    !isPlainObject(raw) ||
+    raw.mode !== "manual-only" ||
+    (raw.source !== "claude" && raw.source !== "codex-current" && raw.source !== "codex-legacy") ||
+    (raw.previousLine !== undefined && typeof raw.previousLine !== "string") ||
+    (raw.createdFile !== undefined && typeof raw.createdFile !== "boolean") ||
+    (raw.createdPolicy !== undefined && typeof raw.createdPolicy !== "boolean")
+  ) {
+    throw new ConfigError(`\`${path}\` is not a valid managed host policy`);
+  }
+  return {
+    mode: "manual-only",
+    source: raw.source,
+    ...(raw.previousLine === undefined ? {} : { previousLine: raw.previousLine }),
+    ...(raw.createdFile === undefined ? {} : { createdFile: raw.createdFile }),
+    ...(raw.createdPolicy === undefined ? {} : { createdPolicy: raw.createdPolicy }),
+  };
 }
 
 function parseSkillSource(path: string, raw: unknown): SkillSource | undefined {

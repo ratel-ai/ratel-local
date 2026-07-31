@@ -29,6 +29,7 @@ import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { planSkillCopyMaterialization } from "./skill-copy-adoption.js";
 import { rewriteSkillDocument, stripBundledResourceIndex } from "./skill-document.js";
+import { prepareSkillHostPolicyRestore } from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
 
 export interface RemoveSkillRegistrationRequest {
@@ -568,6 +569,21 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         contents: `${JSON.stringify(document, null, 2)}\n`,
       },
     ];
+    if (request.target.scope === "user" && registration.hostPolicy) {
+      try {
+        const restore = await prepareSkillHostPolicyRestore({
+          homeDir: this.options.homeDir,
+          id: request.id,
+          policy: registration.hostPolicy,
+        });
+        if (restore) operations.push(restore);
+      } catch (error) {
+        throw new SkillRegistrationValidationError(
+          "invalid_registration",
+          `cannot restore native invocation policy: ${(error as Error).message}`,
+        );
+      }
+    }
     const projectRootsByPath = new Map<string, string>();
     if (request.target.scope !== "user") {
       const project = await this.options.projectRegistry.resolve(request.target.projectId);
