@@ -1,4 +1,4 @@
-# 12. Daemon-owned Cloud OTLP trace relay
+# 13. Daemon-owned Cloud OTLP trace relay
 
 Date: 2026-07-31
 
