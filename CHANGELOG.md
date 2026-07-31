@@ -4,6 +4,14 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+- Replaced the legacy symlink-based skill manager with scoped reference/copy registrations. Global native imports automatically mark the host skill manual-only, while project/local registrations never edit repository-owned skill metadata.
+- The daemon safely migrates verified legacy skill links to user-scoped references on startup; `ratel-local doctor --fix` provides the same recoverable migration explicitly. Ambiguous or externally changed entries are left untouched with diagnostics.
+- Removed the deprecated `skill activate` and `skill deactivate` compatibility commands.
+
+### Fixed
+- Native skill import no longer aborts when Claude Code and Codex expose the same skill ID; the first deterministic candidate is kept and duplicate candidates are reported as skipped.
+
 ## [0.6.0-rc.1] - 2026-07-24
 
 ### Fixed

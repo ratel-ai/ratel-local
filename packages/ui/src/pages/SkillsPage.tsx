@@ -268,27 +268,8 @@ export function SkillsPage() {
             }
             return skill.source === "ratel" ? (
               <span className="px-1 text-muted-foreground text-xs">Ratel skill</span>
-            ) : usesScopedResolver ? (
-              <span className="px-1 text-muted-foreground text-xs">Legacy registration</span>
             ) : (
-              <Button
-                disabled={actionMutation.isPending}
-                onClick={() =>
-                  actionMutation.mutate({
-                    body: { ids: [skill.id] },
-                    id: skill.id,
-                    label: `Stopped managing ${skill.name}`,
-                    path: "/api/skills/deactivate",
-                  })
-                }
-                size="sm"
-                variant="outline"
-              >
-                {actionMutation.isPending && actionMutation.variables?.id === skill.id && (
-                  <Button.LoadingIndicator label={`Stopping management of ${skill.name}`} />
-                )}
-                Stop managing
-              </Button>
+              <span className="px-1 text-muted-foreground text-xs">Legacy registration</span>
             );
           }}
         />

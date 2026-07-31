@@ -15,6 +15,7 @@ import {
   createSkillImportControlPlane,
   createSkillRegistrationControlPlane,
   migrateLegacyOAuthStores,
+  migrateLegacySkillLinks,
   type PreparedChangeCoordinator,
   type ProjectRegistry,
   type RuntimeContextRef,
@@ -282,6 +283,25 @@ export async function runDaemonServer(
         localGitExcludeManager,
       })))
     : undefined;
+  if (configControlPlane && preparedChanges) {
+    try {
+      const migration = await migrateLegacySkillLinks({
+        homeDir: ctx.env.homeDir,
+        configControlPlane,
+        preparedChanges,
+      });
+      for (const id of migration?.result.migrated ?? []) {
+        log(`[ratel] migrated legacy skill ${id} from symlink management to a scoped reference`);
+      }
+      for (const diagnostic of migration?.result.diagnostics ?? []) {
+        log(`[ratel] legacy skill ${diagnostic.id} requires doctor --fix: ${diagnostic.message}`);
+      }
+    } catch (error) {
+      log(
+        `[ratel] automatic legacy skill migration skipped: ${(error as Error).message}; run ratel-local doctor --fix`,
+      );
+    }
+  }
   const skillDiscovery = useResolvedControlPlane
     ? (opts.skillDiscovery ??
       createSkillDiscovery({

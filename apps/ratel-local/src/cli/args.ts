@@ -34,8 +34,6 @@ export type DaemonVerb =
   | "open";
 
 export type SkillVerb =
-  | "activate"
-  | "deactivate"
   | "import"
   | "add-scope"
   | "remove-scope"
@@ -66,8 +64,6 @@ const DAEMON_VERBS: ReadonlySet<string> = new Set([
 ]);
 
 const SKILL_VERBS: ReadonlySet<string> = new Set([
-  "activate",
-  "deactivate",
   "import",
   "add-scope",
   "remove-scope",

@@ -18,6 +18,37 @@ export interface PreparedSkillHostPolicy {
   operation?: MutationInputOperation;
 }
 
+export function skillHostPolicyFromLegacyPatch(input: {
+  source: NativeSkillSource;
+  before?: string;
+  created?: boolean;
+}): SkillHostPolicy {
+  if (input.source === "claude") {
+    const previousLine =
+      input.before === undefined
+        ? undefined
+        : frontmatterScalarLine(input.before, "disable-model-invocation");
+    return {
+      mode: "manual-only",
+      source: input.source,
+      ...(previousLine === undefined ? {} : { previousLine }),
+    };
+  }
+  const previousLine =
+    input.before === undefined
+      ? undefined
+      : codexPolicyScalarLine(input.before, "allow_implicit_invocation");
+  return {
+    mode: "manual-only",
+    source: input.source,
+    ...(previousLine === undefined ? {} : { previousLine }),
+    ...(input.created ? { createdFile: true } : {}),
+    ...(input.before === undefined || codexPolicyBlockIndex(lines(input.before)) === undefined
+      ? { createdPolicy: true }
+      : {}),
+  };
+}
+
 export async function prepareSkillHostPolicy(input: {
   canonicalSkillPath: string;
   homeDir: string;

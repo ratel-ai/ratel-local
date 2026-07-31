@@ -1,10 +1,14 @@
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  createConfigControlPlane,
   createContextSnapshotResolver,
   createMutationEngine,
+  createPreparedChangeCoordinator,
   createProjectRegistry,
   InvalidContextSnapshotError,
   inventoryLegacyOAuthStores,
+  prepareLegacySkillMigration,
   type ResolvedContextSnapshot,
   type RuntimeContextRef,
 } from "@ratel-ai/ratel-local-core";
@@ -25,8 +29,9 @@ export class DoctorFailure extends Error {
 
 export async function runDoctor(ctx: HandlerCtx): Promise<void> {
   const controlDir = join(ctx.env.homeDir, ".ratel");
+  let mutationEngine: Awaited<ReturnType<typeof createMutationEngine>>;
   try {
-    await createMutationEngine({ controlDir });
+    mutationEngine = await createMutationEngine({ controlDir });
   } catch (error) {
     ctx.log(
       `[error] mutation_recovery_failed: ${(error as Error).message}. Action: inspect ${join(controlDir, "transactions")} and repair or restore the reported journal before retrying.`,
@@ -36,12 +41,59 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
   ctx.log("[ok] mutation_recovery: transaction recovery completed");
 
   const registry = createProjectRegistry({ homeDir: ctx.env.homeDir });
+  const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
+  const configControlPlane = await createConfigControlPlane({
+    homeDir: ctx.env.homeDir,
+    projectRegistry: registry,
+    preparedChanges,
+  });
+  let issueCount = 0;
+  const legacyManifestPath = join(controlDir, "skill-manifest.json");
+  try {
+    const migration = await prepareLegacySkillMigration({
+      homeDir: ctx.env.homeDir,
+      configControlPlane,
+      preparedChanges,
+    });
+    if (migration) {
+      if (ctx.argv.flags.fix === true) {
+        await preparedChanges.commit(migration.changeId);
+      } else {
+        preparedChanges.cancel(migration.changeId);
+      }
+      for (const id of migration.preview.migrated) {
+        ctx.log(
+          ctx.argv.flags.fix === true
+            ? `[ok] legacy_skill_migrated [skill:${id}]: converted legacy symlink management to a user-scoped reference`
+            : `[info] legacy_skill_migration_ready [skill:${id}]: run ratel-local doctor --fix to migrate`,
+        );
+      }
+      for (const diagnostic of migration.preview.diagnostics) {
+        issueCount += 1;
+        ctx.log(
+          `[error] ${diagnostic.code} [skill:${diagnostic.id}]: ${diagnostic.message}. Action: inspect the legacy manifest and native skill before retrying doctor --fix.`,
+        );
+      }
+    } else {
+      await access(legacyManifestPath);
+      issueCount += 1;
+      ctx.log(
+        `[error] legacy_skill_migration_blocked: ${legacyManifestPath} exists but has no automatically safe entries. Action: inspect the manifest and resolve its conflicts before retrying doctor --fix.`,
+      );
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      issueCount += 1;
+      ctx.log(
+        `[error] legacy_skill_migration_failed: ${(error as Error).message}. Action: inspect ${legacyManifestPath}; no ambiguous entry was changed.`,
+      );
+    }
+  }
   const resolver = createContextSnapshotResolver({
     homeDir: ctx.env.homeDir,
     projectRegistry: registry,
   });
   const snapshots: ResolvedContextSnapshot[] = [];
-  let issueCount = 0;
   const resolveContext = async (
     context: RuntimeContextRef,
     label: string,
