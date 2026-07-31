@@ -69,6 +69,57 @@ async function readJson(path: string): Promise<Record<string, unknown>> {
 }
 
 describe("SkillImportControlPlane", () => {
+  it("keeps the first harness copy and skips duplicate skill ids in one import", async () => {
+    const f = await fixture();
+    await putSkill(join(f.homeDir, ".claude", "skills", "shared"), "shared", "Claude body");
+    await putSkill(join(f.homeDir, ".agents", "skills", "shared"), "shared", "Codex body");
+    const candidates = (await f.discovery.discover({ kind: "global" })).candidates.filter(
+      ({ id }) => id === "shared",
+    );
+    expect(candidates.map(({ source }) => source)).toEqual(["claude", "codex-current"]);
+
+    const selections = candidates.map((candidate) => ({
+      candidateId: candidate.candidateId,
+      targets: [{ scopeRef: { scope: "user" as const }, mode: "reference" as const }],
+    }));
+    await expect(f.controlPlane.prepare(selections)).rejects.toBeInstanceOf(
+      SkillImportValidationError,
+    );
+
+    const plan = await f.controlPlane.prepare(selections, { duplicateStrategy: "keep-first" });
+
+    expect(plan.preview.skippedDuplicates).toEqual([
+      {
+        candidateId: candidates[1]?.candidateId,
+        id: "shared",
+        keptCandidateId: candidates[0]?.candidateId,
+        target: { scopeRef: { scope: "user" }, mode: "reference" },
+      },
+    ]);
+
+    const commit = await f.controlPlane.commit(plan.changeId);
+
+    expect(commit.result.imported).toEqual([
+      {
+        candidateId: candidates[0]?.candidateId,
+        id: "shared",
+        targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+      },
+    ]);
+    expect(commit.result.skippedDuplicates).toEqual(plan.preview.skippedDuplicates);
+    expect(await readJson(join(f.homeDir, ".ratel", "config.json"))).toMatchObject({
+      skills: {
+        entries: {
+          shared: {
+            mode: "reference",
+            path: candidates[0]?.canonicalPath,
+            source: "claude",
+          },
+        },
+      },
+    });
+  });
+
   it("imports one project candidate by reference in A and copy in B in one transaction", async () => {
     const f = await fixture();
     const source = join(f.projectA, ".agents", "skills", "demo");

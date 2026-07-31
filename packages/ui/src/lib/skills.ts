@@ -173,13 +173,26 @@ export function buildSkillImportSelections(
   });
 }
 
+/**
+ * A Ratel scope has one registration slot per skill id. Discovery is
+ * deterministic (Claude before Codex), so the first selected copy wins.
+ */
+export function uniqueSkillImports(skills: readonly SkillSummary[]): SkillSummary[] {
+  const seenIds = new Set<string>();
+  return skills.filter((skill) => {
+    if (seenIds.has(skill.id)) return false;
+    seenIds.add(skill.id);
+    return true;
+  });
+}
+
 export async function applySkillImportSelections(
   request: SkillImportRequest,
   selections: readonly SkillImportSelection[],
 ): Promise<unknown> {
   const change = await request<{ changeId: string }>("/api/skills/import/prepare", {
     method: "POST",
-    body: { selections },
+    body: { selections, duplicateStrategy: "keep-first" },
   });
   return request(`/api/changes/${encodeURIComponent(change.changeId)}/commit`, {
     method: "POST",

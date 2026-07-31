@@ -4,6 +4,9 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+- Skill imports can now keep the first deterministic harness copy when Claude Code and Codex expose the same skill ID, report later copies as skipped duplicates, and complete without overwriting an existing Ratel registration.
+
 ## [0.6.0-rc.1] - 2026-07-24
 
 ### Fixed
