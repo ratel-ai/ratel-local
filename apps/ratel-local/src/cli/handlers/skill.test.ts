@@ -192,6 +192,7 @@ describe("runSkill — preload-hook output stream", () => {
 describe("runSkill — snapshot-backed reads", () => {
   it("imports a discovered candidate into an explicit target", async () => {
     const preparations: unknown[] = [];
+    const preparationOptions: unknown[] = [];
     const commits: unknown[] = [];
     const change = {
       changeId: "change-import",
@@ -200,8 +201,9 @@ describe("runSkill — snapshot-backed reads", () => {
       preview: { selections: [], candidates: [], files: [] },
     };
     const importControlPlane: SkillImportControlPlane = {
-      async prepare(selections) {
+      async prepare(selections, options) {
         preparations.push(selections);
+        preparationOptions.push(options);
         return change;
       },
       async commit(changeId) {
@@ -211,7 +213,7 @@ describe("runSkill — snapshot-backed reads", () => {
           changedPaths: [],
           revisions: {},
           backupManifest: null,
-          result: { imported: [] },
+          result: { imported: [], skippedDuplicates: [] },
         };
       },
       cancel() {},
@@ -270,6 +272,7 @@ describe("runSkill — snapshot-backed reads", () => {
         },
       ],
     ]);
+    expect(preparationOptions).toEqual([{ duplicateStrategy: "keep-first" }]);
     expect(commits).toEqual(["change-import"]);
   });
 
@@ -342,6 +345,7 @@ describe("runSkill — snapshot-backed reads", () => {
         init: {
           method: "POST",
           body: {
+            duplicateStrategy: "keep-first",
             selections: [
               {
                 candidateId: "cand_remote",

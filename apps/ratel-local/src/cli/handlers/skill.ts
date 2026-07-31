@@ -191,7 +191,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         contextApiPath("/api/skills/import/prepare", context),
         {
           method: "POST",
-          body: { selections },
+          body: { selections, duplicateStrategy: "keep-first" },
         },
       );
       let control: SkillImportControlPlane | undefined;
@@ -208,7 +208,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           );
         }
         control = options.importControlPlane ?? (await createImportControlPlane(ctx, runtime));
-        change = await control.prepare(selections);
+        change = await control.prepare(selections, { duplicateStrategy: "keep-first" });
       }
       if (dryRun) {
         for (const candidate of selectedCandidates) {
@@ -247,6 +247,11 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         : await control?.commit(change.changeId);
       if (!commit) throw new Error("skill import control plane is unavailable");
       ctx.log(`imported ${commit.result.imported.length} skill(s)`);
+      for (const duplicate of commit.result.skippedDuplicates ?? []) {
+        ctx.log(
+          `skipped duplicate ${duplicate.id} (${duplicate.candidateId}); kept ${duplicate.keptCandidateId}`,
+        );
+      }
       return;
     }
 

@@ -303,8 +303,12 @@ async function route(
     if (!Array.isArray(body.selections)) {
       throw new UiRouteError(422, "selections must be an array");
     }
+    if (body.duplicateStrategy !== undefined && body.duplicateStrategy !== "keep-first") {
+      throw new UiRouteError(422, "duplicateStrategy must be keep-first");
+    }
     const change = await skillImportControlPlane.prepare(
       body.selections as unknown as SkillImportSelection[],
+      body.duplicateStrategy === "keep-first" ? { duplicateStrategy: "keep-first" } : undefined,
     );
     return { status: 200, body: change };
   }

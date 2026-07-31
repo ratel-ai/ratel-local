@@ -60,6 +60,7 @@ export interface SkillImportCandidateSnapshot {
 export interface SkillImportReview {
   selections: SkillImportSelection[];
   candidates: SkillImportCandidateSnapshot[];
+  skippedDuplicates: SkippedDuplicateSkillImport[];
   files: MutationPreview["files"];
 }
 
@@ -69,8 +70,20 @@ export interface AppliedSkillImport {
   targets: SkillImportTarget[];
 }
 
+export interface SkippedDuplicateSkillImport {
+  candidateId: string;
+  id: string;
+  keptCandidateId: string;
+  target: SkillImportTarget;
+}
+
 export interface SkillImportResult {
   imported: AppliedSkillImport[];
+  skippedDuplicates: SkippedDuplicateSkillImport[];
+}
+
+export interface SkillImportPrepareOptions {
+  duplicateStrategy?: "keep-first";
 }
 
 export type SkillImportCommit = PreparedChangeCommit<SkillImportResult>;
@@ -84,7 +97,10 @@ export interface SkillImportControlPlaneOptions {
 }
 
 export interface SkillImportControlPlane {
-  prepare(selections: readonly SkillImportSelection[]): Promise<PreparedChange<SkillImportReview>>;
+  prepare(
+    selections: readonly SkillImportSelection[],
+    options?: SkillImportPrepareOptions,
+  ): Promise<PreparedChange<SkillImportReview>>;
   commit(changeId: string): Promise<SkillImportCommit>;
   cancel(changeId: string): void;
 }
@@ -147,12 +163,15 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
 
   async prepare(
     selectionsInput: readonly SkillImportSelection[],
+    options: SkillImportPrepareOptions = {},
   ): Promise<PreparedChange<SkillImportReview>> {
     const selections = cloneAndValidateSelections(selectionsInput);
     const candidates = await this.resolveCandidatesForPreview(selections);
     const documents = new Map<string, MutableTargetDocument>();
     const copyOperations: MutationInputOperation[] = [];
-    const registrations = new Set<string>();
+    const registrations = new Map<string, string>();
+    const appliedTargets = new Map<string, SkillImportTarget[]>();
+    const skippedDuplicates: SkippedDuplicateSkillImport[] = [];
     const projectRootsByPath = new Map<string, string>();
     const adoptionRevisions = new Map<string, DocumentRevision>();
 
@@ -169,14 +188,34 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
           projectRootsByPath.set(targetDocument.path, targetDocument.projectRoot);
         }
         const registrationKey = `${scopeKey(target.scopeRef)}\0${candidate.id}`;
-        if (registrations.has(registrationKey) || hasOwn(targetDocument.entries, candidate.id)) {
+        const keptCandidateId = registrations.get(registrationKey);
+        if (keptCandidateId) {
+          if (options.duplicateStrategy !== "keep-first") {
+            throw new SkillImportValidationError(
+              `skill registration ${JSON.stringify(candidate.id)} already exists at ${formatScope(
+                target.scopeRef,
+              )}`,
+            );
+          }
+          skippedDuplicates.push({
+            candidateId: selection.candidateId,
+            id: candidate.id,
+            keptCandidateId,
+            target,
+          });
+          continue;
+        }
+        if (hasOwn(targetDocument.entries, candidate.id)) {
           throw new SkillImportValidationError(
             `skill registration ${JSON.stringify(candidate.id)} already exists at ${formatScope(
               target.scopeRef,
             )}`,
           );
         }
-        registrations.add(registrationKey);
+        registrations.set(registrationKey, selection.candidateId);
+        const targets = appliedTargets.get(selection.candidateId) ?? [];
+        targets.push(target);
+        appliedTargets.set(selection.candidateId, targets);
 
         targetDocument.entries[candidate.id] = await this.registrationEntry(
           candidate,
@@ -211,6 +250,10 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
       }
     }
 
+    const appliedSelections = selections.flatMap((selection) => {
+      const targets = appliedTargets.get(selection.candidateId);
+      return targets ? [{ candidateId: selection.candidateId, targets }] : [];
+    });
     const configOperations: MutationInputOperation[] = [];
     for (const target of documents.values()) {
       try {
@@ -235,7 +278,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     return this.options.preparedChanges.prepare({
       kind: "skill.import",
       operations: [...configOperations, ...copyOperations],
-      affectedContexts: contextsForSelections(selections),
+      affectedContexts: contextsForSelections(appliedSelections),
       buildPreview: (mutation) => {
         for (const target of documents.values()) {
           const previewRevision = mutation.baseRevisions[target.path];
@@ -262,12 +305,17 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
             );
           }
         }
-        return { selections, candidates: candidateSnapshots, files: mutation.preview.files };
+        return {
+          selections: appliedSelections,
+          candidates: candidateSnapshots,
+          skippedDuplicates,
+          files: mutation.preview.files,
+        };
       },
       invariants: {
         precondition: async () => {
-          await this.assertProjectsAvailable(selections);
-          for (const selection of selections) {
+          await this.assertProjectsAvailable(appliedSelections);
+          for (const selection of appliedSelections) {
             const expected = candidateById.get(selection.candidateId);
             if (!expected) {
               throw new SkillImportConflictError(
@@ -303,7 +351,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
         return backup.finalize("import");
       },
       result: {
-        imported: selections.map((selection) => {
+        imported: appliedSelections.map((selection) => {
           const candidate = candidateById.get(selection.candidateId);
           if (!candidate) {
             throw new SkillImportConflictError(
@@ -317,6 +365,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
             targets: selection.targets,
           };
         }),
+        skippedDuplicates,
       },
     });
   }
