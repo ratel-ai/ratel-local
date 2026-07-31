@@ -123,6 +123,36 @@ describe("SkillRegistrationControlPlane", () => {
     expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
   });
 
+  it("restores the native host policy when removing a global registration", async () => {
+    const source = join(homeDir, ".claude", "skills", "native");
+    await mkdir(source, { recursive: true });
+    await writeFile(
+      join(source, "SKILL.md"),
+      "---\nname: native\ndescription: Native\n" + "disable-model-invocation: true\n---\n\nBody\n",
+    );
+    const { control, configPath } = await fixture({
+      native: {
+        mode: "reference",
+        path: source,
+        source: "claude",
+        hostPolicy: { mode: "manual-only", source: "claude" },
+      },
+    });
+
+    await control.remove({
+      target: { scope: "user" },
+      id: "native",
+      deleteOwnedCopy: false,
+    });
+
+    expect(await readFile(join(source, "SKILL.md"), "utf8")).not.toContain(
+      "disable-model-invocation",
+    );
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: { entries: {}, dirs: [] },
+    });
+  });
+
   it("edits an owned copy transactionally while preserving unknown frontmatter", async () => {
     const copyPath = await putOwnedCopy("demo");
     const skillPath = join(copyPath, "SKILL.md");

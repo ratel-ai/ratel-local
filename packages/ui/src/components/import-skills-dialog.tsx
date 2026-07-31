@@ -32,6 +32,7 @@ import {
   type SkillImportMode,
   type SkillImportScope,
   type SkillSummary,
+  uniqueSkillImports,
 } from "@/lib/skills";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
@@ -99,6 +100,8 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
   }, [context, props.open]);
 
   const chosen = skills.filter((skill) => selected.has(skillKey(skill)));
+  const importable = uniqueSkillImports(chosen);
+  const skippedDuplicateCount = chosen.length - importable.length;
 
   const toggle = (skill: SkillSummary) => {
     setSelected((current) => {
@@ -123,8 +126,8 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
   };
 
   const submit = () => {
-    if (chosen.length === 0) return;
-    importMutation.mutate({ chosen, mode, scope });
+    if (importable.length === 0) return;
+    importMutation.mutate({ chosen: importable, mode, scope });
   };
 
   return (
@@ -198,27 +201,38 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
             No external skills to manage.
           </p>
         ) : (
-          <SkillImportPicker
-            title="Skills"
-            onToggle={toggle}
-            onToggleAll={toggleAll}
-            resetKey={`${props.open}:${skills.length}`}
-            selected={selected}
-            skills={skills}
-          />
+          <>
+            <SkillImportPicker
+              title="Skills"
+              onToggle={toggle}
+              onToggleAll={toggleAll}
+              resetKey={`${props.open}:${skills.length}`}
+              selected={selected}
+              skills={skills}
+            />
+            {skippedDuplicateCount > 0 ? (
+              <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-800 text-xs dark:text-amber-300">
+                {skippedDuplicateCount === 1
+                  ? "1 selected harness copy shares"
+                  : `${skippedDuplicateCount} selected harness copies share`}{" "}
+                an ID with an earlier selection and will be skipped. Claude Code copies precede
+                Codex copies.
+              </p>
+            ) : null}
+          </>
         )}
 
         <DialogFooter>
           <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
           <Button
             disabled={
-              importMutation.isPending || chosen.length === 0 || availableScopes.length === 0
+              importMutation.isPending || importable.length === 0 || availableScopes.length === 0
             }
             onClick={() => void submit()}
             size="sm"
           >
             {importMutation.isPending && <Button.LoadingIndicator label="Managing skills" />}
-            {chosen.length > 0 ? `Manage ${chosen.length}` : "Manage"}
+            {importable.length > 0 ? `Manage ${importable.length}` : "Manage"}
           </Button>
         </DialogFooter>
       </DialogContent>

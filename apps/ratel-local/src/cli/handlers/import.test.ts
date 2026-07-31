@@ -11,7 +11,7 @@ import {
 } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it } from "vitest";
 import { CANCEL_SYMBOL, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
-import type { SkillManagePaths } from "../skills/manage.js";
+import type { SkillPaths } from "../skills/paths.js";
 import { runImport } from "./import.js";
 import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
@@ -82,7 +82,9 @@ function ctxOf(
   };
 }
 
-async function makeSkillPaths(): Promise<SkillManagePaths & { root: string }> {
+type TestSkillPaths = SkillPaths & { root: string; manifestPath: string };
+
+async function makeSkillPaths(): Promise<TestSkillPaths> {
   const root = await mkdtemp(join(tmpdir(), "ratel-import-skills-"));
   return {
     root,
@@ -93,7 +95,7 @@ async function makeSkillPaths(): Promise<SkillManagePaths & { root: string }> {
   };
 }
 
-async function writeCliClaudeSkill(paths: SkillManagePaths, name: string): Promise<string> {
+async function writeCliClaudeSkill(paths: SkillPaths, name: string): Promise<string> {
   const dir = join(paths.nativeDir, name);
   await mkdir(dir, { recursive: true });
   const text = `---\nname: ${name}\ndescription: d\n---\n# body`;
@@ -101,13 +103,13 @@ async function writeCliClaudeSkill(paths: SkillManagePaths, name: string): Promi
   return text;
 }
 
-async function writeMalformedClaudeSkill(paths: SkillManagePaths, name: string): Promise<void> {
+async function writeMalformedClaudeSkill(paths: SkillPaths, name: string): Promise<void> {
   const dir = join(paths.nativeDir, name);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "SKILL.md"), "# missing frontmatter", "utf8");
 }
 
-async function writeCliCodexSkill(paths: SkillManagePaths, name: string): Promise<string> {
+async function writeCliCodexSkill(paths: SkillPaths, name: string): Promise<string> {
   const dir = join(paths.codexDir, name);
   await mkdir(dir, { recursive: true });
   const text = `---\nname: ${name}\ndescription: d\n---\n# body`;
@@ -656,15 +658,17 @@ command = "codex"
         command: "ratel-local",
         args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
       });
-      expect((await lstat(join(skillPaths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
+      expect(await pathExists(join(skillPaths.managedDir, "api-design"))).toBe(false);
       expect(
         await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8"),
       ).toContain("disable-model-invocation: true");
-      const manifest = JSON.parse(await readFile(skillPaths.manifestPath, "utf8"));
-      expect(manifest.managed[0]).toMatchObject({
-        id: "api-design",
-        mode: "linked",
+      const scoped = JSON.parse(
+        await readFile(join(skillPaths.root, ".ratel", "config.json"), "utf8"),
+      );
+      expect(scoped.skills.entries["api-design"]).toMatchObject({
+        mode: "reference",
         source: "claude",
+        hostPolicy: { mode: "manual-only", source: "claude" },
       });
     } finally {
       await rm(skillPaths.root, { recursive: true, force: true });
@@ -695,7 +699,7 @@ command = "codex"
         JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-local"],
       ).toBeUndefined();
       expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers.fs).toBeUndefined();
-      expect((await lstat(join(skillPaths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
+      expect(await pathExists(join(skillPaths.managedDir, "api-design"))).toBe(false);
       expect(
         await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8"),
       ).toContain("disable-model-invocation: true");
@@ -772,9 +776,11 @@ command = "codex"
         skillPaths,
       });
 
-      expect((await lstat(join(skillPaths.managedDir, "valid-policy"))).isSymbolicLink()).toBe(
-        true,
-      );
+      expect(await pathExists(join(skillPaths.managedDir, "valid-policy"))).toBe(false);
+      expect(
+        JSON.parse(await readFile(join(skillPaths.root, ".ratel", "config.json"), "utf8")).skills
+          .entries["valid-policy"],
+      ).toMatchObject({ mode: "reference", source: "claude" });
       expect(await pathExists(join(skillPaths.managedDir, "broken-policy"))).toBe(false);
       expect(logs.join("\n")).toMatch(/managing 1 skill as invoke-only/);
       expect(logs.join("\n")).toMatch(/could not manage selected skill.*broken-policy/i);
@@ -798,15 +804,17 @@ command = "codex"
       });
 
       expect(fs.files.size).toBe(0);
-      expect((await lstat(join(skillPaths.managedDir, "review-flow"))).isSymbolicLink()).toBe(true);
+      expect(await pathExists(join(skillPaths.managedDir, "review-flow"))).toBe(false);
       expect(
         await readFile(join(skillPaths.codexDir, "review-flow", "agents", "openai.yaml"), "utf8"),
       ).toContain("allow_implicit_invocation: false");
-      const manifest = JSON.parse(await readFile(skillPaths.manifestPath, "utf8"));
-      expect(manifest.managed[0]).toMatchObject({
-        id: "review-flow",
-        mode: "linked",
+      const scoped = JSON.parse(
+        await readFile(join(skillPaths.root, ".ratel", "config.json"), "utf8"),
+      );
+      expect(scoped.skills.entries["review-flow"]).toMatchObject({
+        mode: "reference",
         source: "codex",
+        hostPolicy: { mode: "manual-only", source: "codex-legacy" },
       });
       expect(logs.join("\n")).toMatch(/managing 1 skill as invoke-only/);
     } finally {

@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -107,39 +107,6 @@ function hookCtx(homeDir: string, log: (m: string) => void): HandlerCtx {
   };
 }
 
-describe("runSkill — deprecated user-scope wrappers", () => {
-  it("activates and deactivates native skills without moving their source", async () => {
-    const home = await mkdtemp(join(tmpdir(), "ratel-skill-compat-"));
-    try {
-      const source = join(home, ".claude", "skills", "alpha");
-      const sourceFile = join(source, "SKILL.md");
-      const managed = join(home, ".ratel", "skills", "alpha");
-      await mkdir(source, { recursive: true });
-      await writeFile(
-        sourceFile,
-        "---\nname: alpha\ndescription: Alpha workflow\n---\nALPHA-BODY\n",
-      );
-      const ctx = hookCtx(home, () => {});
-      ctx.argv.verb = "activate";
-      ctx.argv.flags = { yes: true };
-
-      await runSkill(ctx);
-
-      expect((await lstat(managed)).isSymbolicLink()).toBe(true);
-      expect(await readFile(sourceFile, "utf8")).toContain("disable-model-invocation: true");
-
-      ctx.argv.verb = "deactivate";
-      await runSkill(ctx);
-
-      await expect(lstat(managed)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await readFile(sourceFile, "utf8")).not.toContain("disable-model-invocation");
-      expect(await readFile(sourceFile, "utf8")).toContain("ALPHA-BODY");
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-});
-
 describe("runSkill — preload-hook output stream", () => {
   const origStdin = Object.getOwnPropertyDescriptor(process, "stdin");
 
@@ -192,6 +159,7 @@ describe("runSkill — preload-hook output stream", () => {
 describe("runSkill — snapshot-backed reads", () => {
   it("imports a discovered candidate into an explicit target", async () => {
     const preparations: unknown[] = [];
+    const preparationOptions: unknown[] = [];
     const commits: unknown[] = [];
     const change = {
       changeId: "change-import",
@@ -200,8 +168,9 @@ describe("runSkill — snapshot-backed reads", () => {
       preview: { selections: [], candidates: [], files: [] },
     };
     const importControlPlane: SkillImportControlPlane = {
-      async prepare(selections) {
+      async prepare(selections, options) {
         preparations.push(selections);
+        preparationOptions.push(options);
         return change;
       },
       async commit(changeId) {
@@ -211,7 +180,7 @@ describe("runSkill — snapshot-backed reads", () => {
           changedPaths: [],
           revisions: {},
           backupManifest: null,
-          result: { imported: [] },
+          result: { imported: [], skippedDuplicates: [] },
         };
       },
       cancel() {},
@@ -270,6 +239,7 @@ describe("runSkill — snapshot-backed reads", () => {
         },
       ],
     ]);
+    expect(preparationOptions).toEqual([{ duplicateStrategy: "keep-first" }]);
     expect(commits).toEqual(["change-import"]);
   });
 
@@ -342,6 +312,7 @@ describe("runSkill — snapshot-backed reads", () => {
         init: {
           method: "POST",
           body: {
+            duplicateStrategy: "keep-first",
             selections: [
               {
                 candidateId: "cand_remote",

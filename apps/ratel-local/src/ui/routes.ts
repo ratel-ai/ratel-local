@@ -34,7 +34,7 @@ import {
   unavailableAgentPluginInstaller,
 } from "../agent-plugin.js";
 import type { HandlerCtx } from "../cli/handlers/types.js";
-import { defaultSkillManagePaths, listManaged, type SkillSource } from "../cli/skills/manage.js";
+import { defaultSkillPaths, type SkillSource } from "../cli/skills/paths.js";
 
 export interface ApiResponse {
   status: number;
@@ -111,18 +111,16 @@ function sameRuntimeContext(a: RuntimeContextRef, b: RuntimeContextRef): boolean
   );
 }
 
-/** Where a skill sits: an unmanaged skill's agent, or "ratel" for managed ones. */
+/** Where a skill sits: an unmanaged skill's agent, or "ratel" for owned ones. */
 type SkillOrigin = SkillSource | "ratel";
 
 /**
- * The skills Ratel serves (under the managed folder `~/.ratel/skills`) plus the
- * unmanaged skills available to manage, from Claude Code (`~/.claude/skills`)
- * and Codex (`~/.codex/skills`). Each carries a `source`: managed skills report
- * the agent they came from (or "ratel" when created here); available skills
- * report the agent whose folder they live in. Loaded as the gateway loads them.
+ * Legacy read model for callers without the scoped resolver. Real Ratel-owned
+ * skills live under `~/.ratel/skills`; native Claude Code and Codex skills are
+ * listed as import candidates. Symlinks are not interpreted as registrations.
  */
 export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
-  const paths = defaultSkillManagePaths(ctx.env.homeDir);
+  const paths = defaultSkillPaths(ctx.env.homeDir);
   const { managedDir, nativeDir, codexDir } = paths;
   const problems: Array<{ id: string; where: "managed" | "available"; reason: string }> = [];
 
@@ -141,17 +139,8 @@ export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
     onProblem: (p) => problems.push({ ...p, where: "available" }),
   });
 
-  // Managed skills carry their origin agent; one created directly in Ratel has
-  // no manifest entry → "ratel".
-  const manifestEntries = await listManaged(paths);
-  const originById = new Map(
-    manifestEntries.map((m) => [m.id, (m.source ?? "claude") as SkillOrigin]),
-  );
-  const modeById = new Map(manifestEntries.map((m) => [m.id, m.mode ?? "moved"]));
-
-  // Available = every unmanaged skill from each agent. A name that lives in both
-  // Claude and Codex appears once per agent (each independently manageable, told
-  // apart by `source`); a name already managed is excluded (it lives in Ratel).
+  // Available = every native skill not shadowed by an owned Ratel copy. A name
+  // present in both hosts remains distinct through its source.
   const available: Array<ReturnType<typeof skillSummary> & { source: SkillSource }> = [];
   for (const [skills, source] of [
     [claude, "claude"],
@@ -169,8 +158,8 @@ export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
     codexDir,
     managed: managed.map((s) => ({
       ...skillSummary(s),
-      source: originById.get(s.id) ?? "ratel",
-      mode: modeById.get(s.id) ?? "ratel",
+      source: "ratel",
+      mode: "ratel",
     })),
     available,
     problems,
@@ -208,7 +197,7 @@ function expandHome(p: string, home: string): string {
  * when nothing matches.
  */
 async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | null> {
-  const { managedDir, nativeDir, codexDir } = defaultSkillManagePaths(homeDir);
+  const { managedDir, nativeDir, codexDir } = defaultSkillPaths(homeDir);
   const sources: Array<{ dir: string; kind: FoundSkill["kind"] }> = [
     { dir: expandHome(managedDir, homeDir), kind: "managed" },
     { dir: expandHome(nativeDir, homeDir), kind: "claude" },
@@ -252,17 +241,7 @@ export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse
   const found = await findSkillFile(ctx.env.homeDir, id);
   if (!found) return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
   const { parsed, kind } = found;
-  // Managed skills report their origin agent (from the manifest), or "ratel"
-  // when created here; unmanaged ones report the agent folder they live in.
-  let source: SkillOrigin;
-  if (kind === "managed") {
-    const entry = (await listManaged(defaultSkillManagePaths(ctx.env.homeDir))).find(
-      (m) => m.id === id,
-    );
-    source = entry?.source ?? "ratel";
-  } else {
-    source = kind;
-  }
+  const source: SkillOrigin = kind === "managed" ? "ratel" : kind;
   return ok({
     id: parsed.name,
     name: parsed.name,
@@ -295,7 +274,7 @@ export async function createSkillRoute(
   const tags = optionalStringArray(body.tags, "tags") ?? [];
   const skillBody = typeof body.body === "string" ? body.body : "";
 
-  const { managedDir } = defaultSkillManagePaths(ctx.env.homeDir);
+  const { managedDir } = defaultSkillPaths(ctx.env.homeDir);
   const skillDir = join(managedDir, name);
   if (existsSync(join(skillDir, "SKILL.md"))) {
     throw new Error(`a skill named "${name}" already exists`);

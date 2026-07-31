@@ -69,6 +69,57 @@ async function readJson(path: string): Promise<Record<string, unknown>> {
 }
 
 describe("SkillImportControlPlane", () => {
+  it("keeps the first harness copy and skips duplicate skill ids in one import", async () => {
+    const f = await fixture();
+    await putSkill(join(f.homeDir, ".claude", "skills", "shared"), "shared", "Claude body");
+    await putSkill(join(f.homeDir, ".agents", "skills", "shared"), "shared", "Codex body");
+    const candidates = (await f.discovery.discover({ kind: "global" })).candidates.filter(
+      ({ id }) => id === "shared",
+    );
+    expect(candidates.map(({ source }) => source)).toEqual(["claude", "codex-current"]);
+
+    const selections = candidates.map((candidate) => ({
+      candidateId: candidate.candidateId,
+      targets: [{ scopeRef: { scope: "user" as const }, mode: "reference" as const }],
+    }));
+    await expect(f.controlPlane.prepare(selections)).rejects.toBeInstanceOf(
+      SkillImportValidationError,
+    );
+
+    const plan = await f.controlPlane.prepare(selections, { duplicateStrategy: "keep-first" });
+
+    expect(plan.preview.skippedDuplicates).toEqual([
+      {
+        candidateId: candidates[1]?.candidateId,
+        id: "shared",
+        keptCandidateId: candidates[0]?.candidateId,
+        target: { scopeRef: { scope: "user" }, mode: "reference" },
+      },
+    ]);
+
+    const commit = await f.controlPlane.commit(plan.changeId);
+
+    expect(commit.result.imported).toEqual([
+      {
+        candidateId: candidates[0]?.candidateId,
+        id: "shared",
+        targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+      },
+    ]);
+    expect(commit.result.skippedDuplicates).toEqual(plan.preview.skippedDuplicates);
+    expect(await readJson(join(f.homeDir, ".ratel", "config.json"))).toMatchObject({
+      skills: {
+        entries: {
+          shared: {
+            mode: "reference",
+            path: candidates[0]?.canonicalPath,
+            source: "claude",
+          },
+        },
+      },
+    });
+  });
+
   it("imports one project candidate by reference in A and copy in B in one transaction", async () => {
     const f = await fixture();
     const source = join(f.projectA, ".agents", "skills", "demo");
@@ -135,6 +186,12 @@ describe("SkillImportControlPlane", () => {
     expect(
       await readFile(join(f.projectB, ".ratel", "skills", "demo", "SKILL.md"), "utf8"),
     ).toContain("demo skill");
+    expect(await readFile(join(source, "SKILL.md"), "utf8")).not.toContain(
+      "disable-model-invocation",
+    );
+    await expect(readFile(join(source, "agents", "openai.yaml"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("adopts a real legacy Ratel directory as an owned copy during preview/apply", async () => {
@@ -274,6 +331,54 @@ describe("SkillImportControlPlane", () => {
             mode: "reference",
             path: candidate.canonicalPath,
             source: "claude",
+            hostPolicy: {
+              mode: "manual-only",
+              source: "claude",
+            },
+          },
+        },
+      },
+    });
+    expect(
+      await readFile(join(f.homeDir, ".claude", "skills", "new-skill", "SKILL.md"), "utf8"),
+    ).toContain("disable-model-invocation: true");
+  });
+
+  it("makes a global Codex skill manual-only without creating a Ratel symlink", async () => {
+    const f = await fixture();
+    const source = join(f.homeDir, ".agents", "skills", "codex-skill");
+    await putSkill(source, "codex-skill");
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "codex-skill",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: candidate.candidateId,
+        targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+      },
+    ]);
+    await f.controlPlane.commit(plan.changeId);
+
+    expect(await readFile(join(source, "agents", "openai.yaml"), "utf8")).toContain(
+      "allow_implicit_invocation: false",
+    );
+    await expect(
+      readFile(join(f.homeDir, ".ratel", "skills", "codex-skill", "SKILL.md"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readJson(join(f.homeDir, ".ratel", "config.json"))).toMatchObject({
+      skills: {
+        entries: {
+          "codex-skill": {
+            mode: "reference",
+            source: "codex",
+            hostPolicy: {
+              mode: "manual-only",
+              source: "codex-current",
+              createdFile: true,
+              createdPolicy: true,
+            },
           },
         },
       },

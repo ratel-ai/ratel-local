@@ -69,6 +69,7 @@ import {
   discoveredSkillSummaries,
   type SkillSummary,
   type SkillsResponse,
+  uniqueSkillImports,
 } from "@/lib/skills";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
@@ -1304,7 +1305,9 @@ function ImportSceneDialog(props: {
   const previewRequestIdRef = useRef(0);
   const activeChangeIdRef = useRef(draftPreview.changeId);
   const selected = new Set(draftSelection);
-  const selectedSkills = props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill)));
+  const selectedSkills = uniqueSkillImports(
+    props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill))),
+  );
   const conflicts = draftPreview.plan.summary.conflicts;
   const requiresConflictSelection =
     draftSelection.length > 0 && conflicts.length > 0 && conflictStrategy === "replace-selected";

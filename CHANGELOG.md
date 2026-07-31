@@ -12,6 +12,12 @@ All notable changes to this package are documented here. The format is based on 
 ### Changed
 - Simplified Retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind the Save button, while missing models show an explicit download confirmation and progress before settings are committed.
 - Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
+- Replaced the legacy symlink-based skill manager with scoped reference/copy registrations. Global native imports automatically mark the host skill manual-only, while project/local registrations never edit repository-owned skill metadata.
+- The daemon safely migrates verified legacy skill links to user-scoped references on startup; `ratel-local doctor --fix` provides the same recoverable migration explicitly. Ambiguous or externally changed entries are left untouched with diagnostics.
+- Removed the deprecated `skill activate` and `skill deactivate` compatibility commands.
+
+### Fixed
+- Skill imports can now keep the first deterministic harness copy when Claude Code and Codex expose the same skill ID, report later copies as skipped duplicates, and complete without overwriting an existing Ratel registration.
 
 ## [0.6.0-rc.1] - 2026-07-24
 

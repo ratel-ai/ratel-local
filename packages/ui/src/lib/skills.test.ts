@@ -9,6 +9,7 @@ import {
   discoveredSkillSummaries,
   effectiveSkillSummaries,
   type SkillSummary,
+  uniqueSkillImports,
 } from "./skills";
 
 describe("agentKindToSkillSource", () => {
@@ -205,6 +206,40 @@ describe("availableSkillsForKind", () => {
 });
 
 describe("scoped skill import", () => {
+  it("deduplicates overlapping harness skills by id while preserving discovery order", () => {
+    const selected: SkillSummary[] = [
+      {
+        id: "shared",
+        name: "Claude shared",
+        description: "",
+        tags: [],
+        source: "claude",
+        candidateId: "candidate_claude",
+      },
+      {
+        id: "shared",
+        name: "Codex shared",
+        description: "",
+        tags: [],
+        source: "codex",
+        candidateId: "candidate_codex",
+      },
+      {
+        id: "unique",
+        name: "Codex unique",
+        description: "",
+        tags: [],
+        source: "codex",
+        candidateId: "candidate_unique",
+      },
+    ];
+
+    expect(uniqueSkillImports(selected).map(({ candidateId }) => candidateId)).toEqual([
+      "candidate_claude",
+      "candidate_unique",
+    ]);
+  });
+
   it("builds discriminated targets from the selected URL context", () => {
     const selected: SkillSummary[] = [
       {
@@ -262,7 +297,7 @@ describe("scoped skill import", () => {
     expect(calls).toEqual([
       {
         path: "/api/skills/import/prepare",
-        body: { selections },
+        body: { selections, duplicateStrategy: "keep-first" },
       },
       {
         path: "/api/changes/change_1/commit",
