@@ -111,8 +111,6 @@ Top-level commands:
 
 `ratel-local skill` verbs:
 
-- `activate` is a deprecated user-scope wrapper that links native skills into Ratel as invoke-only.
-- `deactivate` is a deprecated user-scope wrapper that removes those links and restores metadata.
 - `import` imports discovered skills into a user, project, or local registration.
 - `add-scope` adds another scoped reference or owned copy for a skill.
 - `remove-scope` removes only the selected registration.
