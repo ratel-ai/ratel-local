@@ -730,6 +730,37 @@ command = "codex"
     }
   });
 
+  it("re-running a successful skill-only import is idempotent", async () => {
+    const fs = new MemFs();
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliClaudeSkill(skillPaths, "api-design");
+      const { ctx } = ctxOf(fs, autoConfirm(), false);
+      const options = {
+        agentKind: "claude-code" as const,
+        bin: BIN,
+        skillPaths,
+        yes: true,
+      };
+
+      await runImport(ctx, options);
+      const configPath = join(skillPaths.root, ".ratel", "config.json");
+      const configAfterFirstImport = await readFile(configPath, "utf8");
+      const skillAfterFirstImport = await readFile(
+        join(skillPaths.nativeDir, "api-design", "SKILL.md"),
+        "utf8",
+      );
+
+      await expect(runImport(ctx, options)).resolves.toBeNull();
+      expect(await readFile(configPath, "utf8")).toBe(configAfterFirstImport);
+      expect(await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
+        skillAfterFirstImport,
+      );
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
   it("offers the standalone statusline step after import and lets the user skip it", async () => {
     const fs = new MemFs();
     const skillPaths = await makeSkillPaths();

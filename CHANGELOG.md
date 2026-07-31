@@ -4,18 +4,16 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.6.0-rc.1] - 2026-07-31
+
 ### Changed
 - Replaced the legacy symlink-based skill manager with scoped reference/copy registrations. Global native imports automatically mark the host skill manual-only, while project/local registrations never edit repository-owned skill metadata.
 - The daemon safely migrates verified legacy skill links to user-scoped references on startup; `ratel-local doctor --fix` provides the same recoverable migration explicitly. Ambiguous or externally changed entries are left untouched with diagnostics.
 - Removed the deprecated `skill activate` and `skill deactivate` compatibility commands.
 
 ### Fixed
-- Skill imports can now keep the first deterministic harness copy when Claude Code and Codex expose the same skill ID, report later copies as skipped duplicates, and complete without overwriting an existing Ratel registration.
-
-## [0.6.0-rc.1] - 2026-07-24
-
-### Fixed
 - Preserved the setup-time PATH separately in macOS launchd and Linux systemd daemon services so npm/npx cannot reorder agent plugin executables ahead of the user's working installation. Agent command startup failures now report the command and PATH source used.
+- Skill imports can now keep the first deterministic harness copy when Claude Code and Codex expose the same skill ID, report later copies as skipped duplicates, and skip existing user registrations so repeated imports are no-ops.
 
 ## [0.6.0-rc.0] - 2026-07-24
 

@@ -10,6 +10,7 @@ import {
   beginAgentImportWorkflow,
   buildAgentAgentImportDraft,
   conflictKey,
+  createConfigControlPlane,
   createMutationEngine,
   createPreparedChangeCoordinator,
   createProjectRegistry,
@@ -584,7 +585,7 @@ async function createScopedSkillImportRuntime(
   const homeDir = dirname(dirname(paths.nativeDir));
   const discovery = createSkillDiscovery({ homeDir });
   const discovered = await discovery.discover({ kind: "global" });
-  const candidates = discovered.candidates
+  const discoveredCandidates = discovered.candidates
     .filter(({ source }) => source !== "ratel")
     .map((candidate) => ({
       candidateId: candidate.candidateId,
@@ -593,23 +594,43 @@ async function createScopedSkillImportRuntime(
     }))
     .filter(({ source }) => opts.source === undefined || source === opts.source);
   const preparedChanges =
-    candidates.length === 0
+    discoveredCandidates.length === 0
       ? null
       : createPreparedChangeCoordinator({
           mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
         });
+  const projectRegistry = createProjectRegistry({ homeDir });
+  const registeredIds = new Set<string>();
+  if (preparedChanges) {
+    const configControlPlane = await createConfigControlPlane({
+      homeDir,
+      projectRegistry,
+      preparedChanges,
+    });
+    const userConfig = await configControlPlane.read({ scope: "user" });
+    for (const id of Object.keys(userConfig.document.skills?.entries ?? {})) {
+      registeredIds.add(id);
+    }
+  }
+  const candidates = discoveredCandidates.filter(({ id }) => !registeredIds.has(id));
+  const skippedRegistrations = [...registeredIds]
+    .filter((id) => discoveredCandidates.some((candidate) => candidate.id === id))
+    .map((id) => ({ id, reason: "already registered in Ratel user scope" }));
   return {
     control: preparedChanges
       ? createSkillImportControlPlane({
           homeDir,
-          projectRegistry: createProjectRegistry({ homeDir }),
+          projectRegistry,
           discovery,
           preparedChanges,
         })
       : null,
     preview: {
       candidates,
-      skipped: discovered.diagnostics.map(({ path, message }) => ({ id: path, reason: message })),
+      skipped: [
+        ...skippedRegistrations,
+        ...discovered.diagnostics.map(({ path, message }) => ({ id: path, reason: message })),
+      ],
     },
   };
 }
