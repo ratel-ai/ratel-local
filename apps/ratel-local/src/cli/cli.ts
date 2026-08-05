@@ -41,6 +41,7 @@ import { runServe } from "./handlers/serve.js";
 import { runSetup, SETUP_USAGE } from "./handlers/setup.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
 import { runStatusline } from "./handlers/statusline.js";
+import { runTraces, TRACES_USAGE } from "./handlers/traces.js";
 import type { CliServerMutationRequest, CliServerMutator, HandlerCtx } from "./handlers/types.js";
 import { runUi } from "./handlers/ui.js";
 import { type PromptAdapter, silentPromptAdapter } from "./prompts.js";
@@ -76,6 +77,7 @@ Commands:
            or --auto-config to load user/project/local Ratel configs)
   connect  bridge this agent session to the scoped local daemon [--project-root <path>]
   setup    onboard the daemon and supported agents [--agent NAME] [--daemon-only] [--yes]
+  traces   manage native Claude Code and Codex trace exporters
   daemon   manage the loopback HTTP daemon and UI (run, install, status, daemon open)
   import   migrate agent MCP configs and native skills into Ratel
   link     install the agent plugin, falling back to MCP config when needed
@@ -152,6 +154,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     return {};
   }
 
+  if (parsed.group === "traces" && (parsed.verb === undefined || parsed.flags.help === true)) {
+    log(TRACES_USAGE);
+    return {};
+  }
+
   if (parsed.group === "serve") {
     return runServe(parsed, options, log);
   }
@@ -192,8 +199,22 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     const setupAgents = resolveSetupAgents(parsed.flags.agent);
     const daemonOnly = resolveBooleanFlag(parsed.flags["daemon-only"], "--daemon-only");
     const yes = resolveBooleanFlag(parsed.flags.yes, "--yes");
+    const traces = resolveBooleanFlag(parsed.flags.traces, "--traces");
+    const overwriteTraces = resolveBooleanFlag(
+      parsed.flags["overwrite-traces"],
+      "--overwrite-traces",
+    );
     if (daemonOnly && setupAgents.provided) {
       throw new ArgError("--daemon-only cannot be combined with --agent");
+    }
+    if (daemonOnly && traces) {
+      throw new ArgError("--traces cannot be combined with --daemon-only");
+    }
+    if (overwriteTraces && !traces) {
+      throw new ArgError("--overwrite-traces requires --traces");
+    }
+    if (yes && traces && (!setupAgents.provided || setupAgents.kinds === undefined)) {
+      throw new ArgError("setup --yes --traces requires an explicit --agent claude-code|codex");
     }
     await runSetup(ctx, {
       ...options,
@@ -203,6 +224,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
       agentKinds: setupAgents.kinds,
       agentsProvided: setupAgents.provided,
       daemonOnly,
+      traces,
+      overwriteTraces,
     });
     return {};
   }
@@ -214,6 +237,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
       { ...options, serverVersion: options.serverVersion ?? options.cliVersion },
       log,
     );
+  }
+
+  if (parsed.group === "traces") {
+    await runTraces(ctx);
+    return {};
   }
 
   if (parsed.group === "import") {

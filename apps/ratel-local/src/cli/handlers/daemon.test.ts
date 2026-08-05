@@ -26,6 +26,7 @@ import {
   runDaemon,
   SYSTEMD_SERVICE,
 } from "./daemon.js";
+import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
 
 const HOME = "/home/u";
@@ -84,6 +85,59 @@ function makeCtx(fs: MemFs, env: HierarchyEnv = { homeDir: HOME, projectRoot: RO
 }
 
 describe("runDaemon", () => {
+  it("derives both native exporter plans from the live daemon port", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-agent-traces-"));
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const result = await runDaemon(
+      daemonArgs({ configPaths: [], flags: { open: false, telemetry: "off", port: "0" } }),
+      makeCtx(fs, { homeDir }),
+      { processEnv: {} },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        preparedChanges: createTestPreparedChanges(makeCtx(fs, { homeDir }).fs),
+      },
+    );
+    try {
+      const daemonUrl = daemonUrlFromLogs(logs);
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+      const expectedEndpoint = new URL("/otlp/v1/traces", daemonUrl).toString();
+
+      const statusResponse = await fetch(new URL("/api/agent-traces", daemonUrl), { headers });
+      expect(statusResponse.status).toBe(200);
+      expect(await statusResponse.json()).toMatchObject({
+        endpoint: expectedEndpoint,
+        cloudConfigured: false,
+      });
+
+      const prepareResponse = await fetch(new URL("/api/agent-traces/prepare", daemonUrl), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "enable",
+          hostKinds: ["claude-code", "codex"],
+          overwrite: false,
+        }),
+      });
+      expect(prepareResponse.status).toBe(200);
+      const prepared = (await prepareResponse.json()) as { changeId: string };
+      const commitResponse = await fetch(
+        new URL(`/api/changes/${encodeURIComponent(prepared.changeId)}/commit`, daemonUrl),
+        { method: "POST", headers },
+      );
+      expect(commitResponse.status).toBe(200);
+      expect(fs.files.get(join(homeDir, ".claude", "settings.json"))).toContain(expectedEndpoint);
+      expect(fs.files.get(join(homeDir, ".codex", "config.toml"))).toContain(expectedEndpoint);
+    } finally {
+      await result.shutdown?.();
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("mounts the configured Cloud OTLP trace relay on the loopback daemon", async () => {
     const fs = new MemFs();
     const logs: string[] = [];

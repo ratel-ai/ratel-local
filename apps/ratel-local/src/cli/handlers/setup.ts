@@ -11,6 +11,7 @@ import { inspectDaemonService, runDaemon } from "./daemon.js";
 import { runImport } from "./import.js";
 import { runLink } from "./link.js";
 import type { ServeOptions } from "./serve.js";
+import { runTraces } from "./traces.js";
 import type { HandlerCtx } from "./types.js";
 
 export const SETUP_USAGE = `usage: ratel-local setup [options]
@@ -23,8 +24,12 @@ Options:
               connect an agent; repeat for multiple agents
   --daemon-only
               install/update/start only; skip agent onboarding
+  --traces    enable native trace export for selected agents after onboarding;
+              with --yes, explicit --agent values are required
+  --overwrite-traces
+              irreversibly replace conflicting exporters (requires --traces)
   --yes       accept daemon actions and explicitly selected agent links;
-              never imports MCPs automatically
+              never imports MCPs automatically; never enables traces unless requested
   --port N    choose the daemon port for first installation (default: 5731)
   --help      show this help`;
 
@@ -45,6 +50,8 @@ export interface SetupOptions extends ServeOptions {
   agentKinds?: readonly SupportedAgentHostKind[];
   agentsProvided?: boolean;
   daemonOnly?: boolean;
+  traces?: boolean;
+  overwriteTraces?: boolean;
   expectedVersion?: string;
   inspect?: (parsed: ParsedArgs) => Promise<SetupDaemonStatus>;
   install?: () => Promise<void>;
@@ -54,6 +61,11 @@ export interface SetupOptions extends ServeOptions {
   detectAgents?: (ctx: HandlerCtx) => Promise<SetupAgentDetection[]>;
   linkAgent?: (ctx: HandlerCtx, agentKind: SupportedAgentHostKind) => Promise<void>;
   importAgent?: (ctx: HandlerCtx, agentKind: SupportedAgentHostKind) => Promise<void>;
+  configureAgentTraces?: (
+    ctx: HandlerCtx,
+    agentKinds: readonly SupportedAgentHostKind[],
+    options: { overwrite: boolean; yes: boolean },
+  ) => Promise<void>;
 }
 
 export interface SetupAgentDetection {
@@ -104,12 +116,77 @@ export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Pro
 
   const onboarding = await onboardAgents(ctx, options);
   if (onboarding.cancelled) return daemon.result;
+  await onboardAgentTraces(ctx, options, onboarding.connected);
   ctx.prompts.outro(
     onboarding.connected.length > 0
       ? "setup complete · daemon ready · agent onboarding complete"
       : "setup complete · daemon ready",
   );
   return daemon.result;
+}
+
+async function onboardAgentTraces(
+  ctx: HandlerCtx,
+  options: SetupOptions,
+  connected: SupportedAgentHostKind[],
+): Promise<void> {
+  if (connected.length === 0) return;
+  let selected: SupportedAgentHostKind[];
+  if (options.yes) {
+    if (!options.traces) {
+      ctx.prompts.note(
+        "Native trace exporters were left unchanged. Automation must pass `--yes --traces --agent <agent>` explicitly.",
+        "Safe automation",
+      );
+      return;
+    }
+    selected = connected;
+  } else if (options.traces) {
+    selected = connected;
+  } else {
+    const picked = await ctx.prompts.multiselect<SupportedAgentHostKind>({
+      message: "Enable native trace export through Ratel for which agents?",
+      options: connected.map((kind) => ({
+        value: kind,
+        label: agentDisplayName(kind),
+        hint: "Requires a new agent session; Cloud setup can be added later.",
+      })),
+      initialValues: [],
+      required: false,
+    });
+    if (ctx.prompts.isCancel(picked)) {
+      ctx.prompts.note("Skipped native trace exporter setup.", "Traces");
+      return;
+    }
+    selected = dedupeAgentKinds(picked as SupportedAgentHostKind[]);
+  }
+  if (selected.length === 0) return;
+
+  const configure =
+    options.configureAgentTraces ??
+    ((targetCtx, agentKinds, traceOptions) =>
+      runTraces(
+        {
+          ...targetCtx,
+          argv: {
+            group: "traces",
+            verb: "enable",
+            configPaths: [],
+            rest: [],
+            extras: [],
+            flags: {
+              agent: [...agentKinds],
+              yes: traceOptions.yes,
+              overwrite: traceOptions.overwrite,
+            },
+          },
+        },
+        { overwriteFlagName: "--overwrite-traces" },
+      ));
+  await configure(ctx, selected, {
+    overwrite: options.overwriteTraces ?? false,
+    yes: options.yes ?? false,
+  });
 }
 
 async function ensureDaemon(

@@ -1,6 +1,7 @@
 export * from "./agent-host/index.js";
 export * from "./agent-host/ratel-connection.js";
 export * from "./agent-import-workflow.js";
+export * from "./agent-traces.js";
 export * from "./backup.js";
 export * from "./config-control-plane.js";
 export * from "./context.js";

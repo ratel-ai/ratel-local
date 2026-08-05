@@ -51,6 +51,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DetailGrid, DetailLabel } from "@/components/ui/detail-grid";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -137,6 +139,46 @@ export interface DetectedAgentHostSummary {
 
 interface AgentHostsResponse {
   hosts: DetectedAgentHostSummary[];
+}
+
+type AgentTraceState = "disabled" | "configured" | "stale" | "conflict" | "invalid";
+
+interface AgentTraceHostStatus {
+  hostKind: AgentHostKind;
+  displayName: string;
+  configPath: string;
+  state: AgentTraceState;
+  restartRequired: boolean;
+  conflictingFields: string[];
+  warnings: string[];
+}
+
+interface AgentTracesResponse {
+  endpoint: string;
+  cloudConfigured: boolean;
+  hosts: AgentTraceHostStatus[];
+}
+
+interface PreparedAgentTraceResponse {
+  changeId: string;
+}
+
+interface CloudTraceSettingsStatus {
+  configured: boolean;
+  endpoint: string;
+}
+
+const RATEL_CLOUD_SETTINGS_URL = "https://cloud.ratel.sh/settings";
+
+export function cloudTraceSetupPatch(
+  endpoint: string,
+  apiKey: string,
+): { endpoint: string; apiKey: string } {
+  const normalizedEndpoint = endpoint.trim();
+  const normalizedApiKey = apiKey.trim();
+  if (!normalizedEndpoint) throw new Error("Ratel Cloud trace endpoint is unavailable");
+  if (!normalizedApiKey) throw new Error("Ratel Cloud API key is required");
+  return { endpoint: normalizedEndpoint, apiKey: normalizedApiKey };
 }
 
 export function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
@@ -302,6 +344,24 @@ function useAgentHosts(initialHosts?: DetectedAgentHostSummary[]) {
   };
 }
 
+function useAgentTraces() {
+  const { context, token } = useRatelApp();
+  const query = useQuery(
+    ratelApiQueryOptions<AgentTracesResponse>({
+      context,
+      path: "/api/agent-traces",
+      queryKey: ratelQueryKeys.agentTraces(),
+      token,
+    }),
+  );
+  return {
+    status: query.data,
+    reload: async () => {
+      await query.refetch();
+    },
+  };
+}
+
 export interface AgentSetupRouteData {
   available: SkillSummary[];
   backups: BackupManifest[];
@@ -415,6 +475,7 @@ export function AgentDetailPage(props: {
   const { available, reload: reloadSkills } = useAvailableSkills(props.initialData?.available);
   const agentAvailable = availableSkillsForKind(available, props.kind);
   const { hosts, scanHosts, scanning } = useAgentHosts(props.initialData?.hosts);
+  const agentTraces = useAgentTraces();
 
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
@@ -535,6 +596,8 @@ export function AgentDetailPage(props: {
             onScanHosts={scanHosts}
             onSkillsImported={reloadSkills}
             request={request}
+            traceStatus={agentTraces.status}
+            onTraceStatusChanged={agentTraces.reload}
           />
         </section>
       ) : (
@@ -640,15 +703,22 @@ function AgentOperationPanel(props: {
   onScanHosts: () => Promise<void>;
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+  traceStatus?: AgentTracesResponse;
+  onTraceStatusChanged: () => Promise<void>;
 }) {
   const canImport =
     missingRatelEntryNames(props.host).length > 0 || props.availableSkills.length > 0;
   const canLink = props.host.posture !== "unavailable" && !props.host.connection.linked;
   const canRepairConnection =
     props.host.connection.kind === "duplicate" || props.host.connection.kind === "explicit";
-  const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
     <section className="grid gap-5 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
+      <AgentTraceExporterSection
+        hostKind={props.hostKind}
+        onStatusChanged={props.onTraceStatusChanged}
+        request={props.request}
+        status={props.traceStatus}
+      />
       {props.hostKind === "claude-code" && props.host.statusline ? (
         <ClaudeStatuslineSection
           onScanHosts={props.onScanHosts}
@@ -697,16 +767,247 @@ function AgentOperationPanel(props: {
           />
         </SetupActionSection>
       ) : null}
-      {!canImport && !canLink && !canRepairConnection && !canManageStatusline ? (
-        <div>
-          <h3 className="text-lg font-semibold tracking-tight">Nothing to do</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            This agent is linked, all native entries are already in Ratel, and every skill is
-            managed through Ratel.
-          </p>
-        </div>
-      ) : null}
     </section>
+  );
+}
+
+const TRACE_STATE_COPY: Record<
+  AgentTraceState,
+  { label: string; variant: "secondary" | "outline" | "warning" | "destructive" }
+> = {
+  disabled: { label: "Disabled", variant: "outline" },
+  configured: { label: "Configured", variant: "secondary" },
+  stale: { label: "Needs repair", variant: "warning" },
+  conflict: { label: "Conflict", variant: "warning" },
+  invalid: { label: "Invalid config", variant: "destructive" },
+};
+
+export function agentTraceCardModel(state: AgentTraceState): {
+  action: "enable" | "repair" | "disable" | "confirm-overwrite" | null;
+  irreversibleConfirmation: boolean;
+} {
+  if (state === "disabled") return { action: "enable", irreversibleConfirmation: false };
+  if (state === "stale") return { action: "repair", irreversibleConfirmation: false };
+  if (state === "configured") return { action: "disable", irreversibleConfirmation: false };
+  if (state === "conflict") {
+    return { action: "confirm-overwrite", irreversibleConfirmation: true };
+  }
+  return { action: null, irreversibleConfirmation: false };
+}
+
+function AgentTraceExporterSection(props: {
+  hostKind: AgentHostKind;
+  onStatusChanged: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+  status?: AgentTracesResponse;
+}) {
+  const host = props.status?.hosts.find(({ hostKind }) => hostKind === props.hostKind);
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
+  const [restartNotice, setRestartNotice] = useState(false);
+  const { isPending, runAction } = useAgentAction();
+
+  if (!host || !props.status) {
+    return (
+      <SetupActionSection
+        description="Reading the user-level native trace exporter configuration."
+        title="Native trace export"
+      >
+        <Badge variant="outline">Checking</Badge>
+      </SetupActionSection>
+    );
+  }
+
+  const stateCopy = TRACE_STATE_COPY[host.state];
+  const card = agentTraceCardModel(host.state);
+  const apply = async (action: "enable" | "disable", overwrite = false) => {
+    const label =
+      action === "enable" ? "Native trace export enabled" : "Native trace export disabled";
+    const ok = await runAction(label, async () => {
+      const prepared = await props.request<PreparedAgentTraceResponse>(
+        "/api/agent-traces/prepare",
+        {
+          method: "POST",
+          body: { action, hostKinds: [props.hostKind], overwrite },
+        },
+      );
+      return props.request(`/api/changes/${encodeURIComponent(prepared.changeId)}/commit`, {
+        method: "POST",
+      });
+    });
+    if (ok) {
+      setConfirmOverwrite(false);
+      setRestartNotice(true);
+      await props.onStatusChanged();
+    }
+  };
+
+  return (
+    <SetupActionSection
+      description="Route this agent's native traces to Ratel's loopback relay. Logs, metrics, and content privacy settings are untouched."
+      title="Native trace export"
+    >
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={stateCopy.variant}>{stateCopy.label}</Badge>
+          <code className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+            {host.configPath}
+          </code>
+        </div>
+
+        {!props.status.cloudConfigured ? (
+          <RatelCloudTraceSetup onConfigured={props.onStatusChanged} request={props.request} />
+        ) : null}
+
+        {host.restartRequired || restartNotice ? (
+          <p className="text-sm text-muted-foreground">
+            Start a new {host.displayName} session for persisted exporter changes to take effect.
+          </p>
+        ) : null}
+        {host.conflictingFields.length > 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Conflicting fields: {host.conflictingFields.join(", ")}
+          </p>
+        ) : null}
+        {host.warnings.map((warning) => (
+          <p className="text-sm text-muted-foreground" key={warning}>
+            Warning: {warning}
+          </p>
+        ))}
+
+        {confirmOverwrite ? (
+          <Alert variant="destructive">
+            <AlertTitle>Replace the existing exporter?</AlertTitle>
+            <AlertDescription>
+              This is irreversible: Ratel does not retain a backup and cannot restore the previous
+              exporter.
+            </AlertDescription>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                disabled={isPending}
+                onClick={() => setConfirmOverwrite(false)}
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={isPending}
+                onClick={() => void apply("enable", true)}
+                variant="destructive"
+              >
+                Replace exporter
+                {isPending ? <Button.LoadingIndicator label="Replacing trace exporter" /> : null}
+              </Button>
+            </div>
+          </Alert>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {card.action === "enable" || card.action === "repair" ? (
+              <Button disabled={isPending} onClick={() => void apply("enable")}>
+                {card.action === "repair" ? "Repair exporter" : "Enable traces"}
+                {isPending ? <Button.LoadingIndicator label="Updating trace exporter" /> : null}
+              </Button>
+            ) : null}
+            {card.action === "disable" ? (
+              <Button disabled={isPending} onClick={() => void apply("disable")} variant="outline">
+                Disable traces
+                {isPending ? <Button.LoadingIndicator label="Disabling trace exporter" /> : null}
+              </Button>
+            ) : null}
+            {card.action === "confirm-overwrite" ? (
+              <Button onClick={() => setConfirmOverwrite(true)} variant="outline">
+                Review replacement
+              </Button>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </SetupActionSection>
+  );
+}
+
+function RatelCloudTraceSetup(props: {
+  onConfigured: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const { isPending, runAction } = useAgentAction();
+
+  const save = async () => {
+    const ok = await runAction("Ratel Cloud tracing configured", async () => {
+      const cloud = await props.request<CloudTraceSettingsStatus>("/api/cloud-traces");
+      return props.request<CloudTraceSettingsStatus>("/api/cloud-traces", {
+        method: "PATCH",
+        body: cloudTraceSetupPatch(cloud.endpoint, apiKey),
+      });
+    });
+    if (ok) {
+      setApiKey("");
+      setEditing(false);
+      await props.onConfigured();
+    }
+  };
+
+  return (
+    <Alert>
+      <AlertTitle>Ratel Cloud tracing is not configured</AlertTitle>
+      <AlertDescription>
+        Would you like to add an API key? If you don&apos;t have one, create one at{" "}
+        <a href={RATEL_CLOUD_SETTINGS_URL} rel="noreferrer" target="_blank">
+          cloud.ratel.sh/settings
+        </a>
+        .
+      </AlertDescription>
+      {editing ? (
+        <form
+          className="mt-3 grid max-w-xl gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <div className="grid gap-1.5">
+            <Label htmlFor="ratel-cloud-trace-api-key">Ratel Cloud API key</Label>
+            <Input
+              autoComplete="new-password"
+              autoFocus
+              disabled={isPending}
+              id="ratel-cloud-trace-api-key"
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder="Paste API key"
+              type="password"
+              value={apiKey}
+            />
+          </div>
+          <p className="text-muted-foreground text-xs">
+            The key is stored by the local daemon and is never returned to the browser.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={isPending}
+              onClick={() => {
+                setApiKey("");
+                setEditing(false);
+              }}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button disabled={isPending || !apiKey.trim()} type="submit">
+              Save API key
+              {isPending ? <Button.LoadingIndicator label="Saving Ratel Cloud API key" /> : null}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <div className="mt-3">
+          <Button onClick={() => setEditing(true)} type="button" variant="outline">
+            Add API key
+          </Button>
+        </div>
+      )}
+    </Alert>
   );
 }
 

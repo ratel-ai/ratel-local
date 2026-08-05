@@ -9,6 +9,7 @@ All notable changes to this package are documented here. The format is based on 
 - Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
 - Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
 - Added daemon-owned Ratel Cloud trace export: native Claude Code, Codex, and daemon-hosted Ratel SDK OTLP/HTTP protobuf traces use the same bounded loopback relay without merging, correlating, decoding, or rewriting payloads. The Settings page persists the Cloud endpoint and API key for foreground and background daemons; the relay is always available and returns `503` until configured.
+- Added opt-in native trace exporter setup for Claude Code and Codex through Agent Setup, `ratel-local traces`, and the final optional setup step. The daemon derives the live loopback endpoint, applies atomic secret-free user-config mutations, repairs stale ports, and requires explicit irreversible conflict overwrite. Interactive CLI and Agent Setup flows can collect a missing Ratel Cloud API key through masked input and save it directly to the daemon; non-interactive runs remain secret-free.
 
 ### Changed
 - Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.

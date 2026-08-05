@@ -402,6 +402,30 @@ describe("runCli — help and routing", () => {
     ).rejects.toThrow(/--daemon-only cannot be combined with --agent/);
   });
 
+  it("rejects setup trace automation without an explicit agent", async () => {
+    await expect(
+      runCli(["setup", "--yes", "--traces"], { fs: new MemFs(), logger: () => {} }),
+    ).rejects.toThrow(/requires an explicit --agent/);
+    await expect(
+      runCli(["setup", "--yes", "--traces", "--agent", "auto"], {
+        fs: new MemFs(),
+        logger: () => {},
+      }),
+    ).rejects.toThrow(/requires an explicit --agent/);
+  });
+
+  it("rejects traces with daemon-only and orphaned overwrite-traces", async () => {
+    await expect(
+      runCli(["setup", "--daemon-only", "--traces"], {
+        fs: new MemFs(),
+        logger: () => {},
+      }),
+    ).rejects.toThrow(/cannot be combined/);
+    await expect(
+      runCli(["setup", "--overwrite-traces"], { fs: new MemFs(), logger: () => {} }),
+    ).rejects.toThrow(/requires --traces/);
+  });
+
   it("rejects a valued setup --yes flag instead of becoming interactive", async () => {
     await expect(
       runCli(["setup", "--yes=false"], {

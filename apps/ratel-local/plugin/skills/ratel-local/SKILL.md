@@ -1,6 +1,6 @@
 ---
 name: ratel-local
-description: Configure, use, and debug the Ratel Local plugin and ratel-local CLI. Use when working with Codex or Claude Code plugin setup, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
+description: Configure, use, and debug the Ratel Local plugin and ratel-local CLI. Use when working with Codex or Claude Code plugin setup, native trace exporters, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
 ---
 
 # Ratel Local
@@ -84,6 +84,7 @@ the existing config shape, and validate the JSON afterwards.
 Top-level commands:
 
 - `ratel-local setup` performs complete daemon and agent onboarding. Repeat `--agent` for explicit agent automation; use `--daemon-only` to skip agent onboarding.
+- `ratel-local traces` inspects or changes native Claude Code and Codex trace exporters through the daemon control plane.
 - `ratel-local connect` bridges one agent session to its scoped daemon gateway.
 - `ratel-local daemon` provides lower-level `install`, `start`, `stop`, `restart`, `status`, `uninstall`, and foreground `run` controls.
 - `ratel-local serve` starts the MCP gateway over stdio.
@@ -160,6 +161,40 @@ Never assume `setup --yes` imports native configuration. Use the expert
 `ratel-local import --yes --agent <agent>` command only when automated migration
 was explicitly requested. `ratel-local daemon`, `ratel-local link`, and
 `ratel-local import` remain available for targeted workflows.
+
+Manage native trace export through the CLI, never by directly editing Claude
+Code or Codex configuration:
+
+```bash
+# Always inspect semantic state first
+ratel-local traces status
+ratel-local traces status --agent codex --json
+
+# Mutations require explicit host selection
+ratel-local traces enable --agent claude-code --agent codex
+ratel-local traces disable --agent codex
+```
+
+If status reports `stale`, enable safely repairs the old Ratel daemon port. If
+it reports `conflict`, explain that replacement is irreversible because Ratel
+does not retain the displaced exporter, and request the user's approval before
+using `--overwrite`. Non-interactive replacement requires both `--overwrite`
+and `--yes`; never infer that approval. Do not request, read, or pass a Ratel
+Cloud API key for agent exporter setup. The agent config contains only the
+daemon-derived loopback route, and the daemon owns Cloud credentials.
+
+When interactive trace setup reports that Ratel Cloud is not configured, let
+the user enter the key directly into the CLI's masked prompt or Agent Setup's
+password field. Never ask the user to disclose the key in chat or place it in a
+command. If the user needs a key, direct them to
+<https://cloud.ratel.sh/settings>. Non-interactive `--yes` runs never prompt for
+or consume a Cloud API key.
+
+Plain `setup --yes` deliberately skips traces. Automated setup must be explicit:
+
+```bash
+ratel-local setup --yes --traces --agent claude-code --agent codex
+```
 
 Inspect configured upstreams:
 

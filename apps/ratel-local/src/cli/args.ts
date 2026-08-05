@@ -8,6 +8,7 @@ export type Group =
   | "import"
   | "link"
   | "setup"
+  | "traces"
   | "statusline"
   | "serve"
   | "connect"
@@ -25,6 +26,8 @@ export type RetrievalVerb = "status" | "configure" | "reset" | "prepare";
 export type ProjectVerb = "list" | "add" | "remove";
 
 export type StatuslineVerb = "install" | "uninstall";
+
+export type TracesVerb = "status" | "enable" | "disable";
 
 export type DaemonVerb =
   | "run"
@@ -56,6 +59,8 @@ const RETRIEVAL_VERBS: ReadonlySet<string> = new Set(["status", "configure", "re
 const PROJECT_VERBS: ReadonlySet<string> = new Set(["list", "add", "remove"]);
 
 const STATUSLINE_VERBS: ReadonlySet<string> = new Set(["install", "uninstall"]);
+
+const TRACES_VERBS: ReadonlySet<string> = new Set(["status", "enable", "disable"]);
 
 const DAEMON_VERBS: ReadonlySet<string> = new Set([
   "run",
@@ -206,6 +211,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const candidate = argv[1];
       if (!STATUSLINE_VERBS.has(candidate)) {
         throw new ArgError(`unknown statusline verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "traces") {
+    group = "traces";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!TRACES_VERBS.has(candidate)) {
+        throw new ArgError(`unknown traces verb: ${candidate}`);
       }
       verb = candidate;
       i = 2;

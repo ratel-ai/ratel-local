@@ -91,6 +91,19 @@ describe("parseArgs — group/verb routing", () => {
     expect(parseArgs(["statusline", "uninstall"]).verb).toBe("uninstall");
   });
 
+  it.each(["status", "enable", "disable"] as const)("recognizes traces %s", (verb) => {
+    const result = parseArgs(["traces", verb, "--agent", "claude-code", "--agent=codex"]);
+    expect(result).toMatchObject({
+      group: "traces",
+      verb,
+      flags: { agent: ["claude-code", "codex"] },
+    });
+  });
+
+  it("rejects an unknown traces verb", () => {
+    expect(() => parseArgs(["traces", "configure"])).toThrow(/unknown traces verb: configure/);
+  });
+
   it.each(["add", "remove", "list", "get", "edit"] as const)("recognizes mcp %s", (verb) => {
     const r = parseArgs(["mcp", verb]);
     expect(r.group).toBe("mcp");

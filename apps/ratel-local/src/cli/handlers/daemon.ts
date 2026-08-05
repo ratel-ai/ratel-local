@@ -14,10 +14,13 @@ import {
   createSkillDiscovery,
   createSkillImportControlPlane,
   createSkillRegistrationControlPlane,
+  getAgentTraceStatus,
+  loopbackTraceEndpoint,
   migrateLegacyOAuthStores,
   migrateLegacySkillLinks,
   type PreparedChangeCoordinator,
   type ProjectRegistry,
+  prepareAgentTraceChange,
   type RuntimeContextRef,
   readJson,
   type SkillDiscovery,
@@ -494,6 +497,24 @@ export async function runDaemonServer(
         return { configured: true, endpoint: next.endpoint.toString() };
       },
     },
+    agentTraceExporters: preparedChanges
+      ? {
+          status: async () => ({
+            ...(await getAgentTraceStatus(ctx, {
+              endpoint: loopbackTraceEndpoint(`http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`),
+            })),
+            cloudConfigured: activeCloudOptions !== undefined,
+          }),
+          prepare: ({ action, hostKinds, overwrite }) =>
+            prepareAgentTraceChange(ctx, {
+              action,
+              hostKinds,
+              endpoint: loopbackTraceEndpoint(`http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`),
+              ...(overwrite !== undefined ? { overwrite } : {}),
+              preparedChanges,
+            }),
+        }
+      : undefined,
     authenticateMcpServer: reconciledGatewayPool
       ? (context, authOptions) => reconciledGatewayPool.authenticate(context, authOptions)
       : undefined,

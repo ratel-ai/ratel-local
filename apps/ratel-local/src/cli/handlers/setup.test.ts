@@ -234,7 +234,9 @@ describe("runSetup", () => {
       ...silentPromptAdapter(),
       async multiselect<T>() {
         selection++;
-        return (selection === 1 ? ["claude-code", "codex"] : ["codex"]) as T[];
+        return (
+          selection === 1 ? ["claude-code", "codex"] : selection === 2 ? ["codex"] : []
+        ) as T[];
       },
     };
     const linkAgent = vi.fn(async () => {});
@@ -320,6 +322,71 @@ describe("runSetup", () => {
     expect(linkAgent.mock.calls.map(([, kind]) => kind)).toEqual(["claude-code", "codex"]);
     expect(multiselect).not.toHaveBeenCalled();
     expect(importAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps trace exporters unchanged during plain --yes setup", async () => {
+    const configureAgentTraces = vi.fn(async () => {});
+    await runSetup(setupCtx(), {
+      yes: true,
+      agentsProvided: true,
+      agentKinds: ["codex"],
+      inspect: async () => ({ state: "running", port: 5731 }),
+      detectAgents: async () => [],
+      linkAgent: vi.fn(async () => {}),
+      configureAgentTraces,
+    });
+    expect(configureAgentTraces).not.toHaveBeenCalled();
+  });
+
+  it("enables traces only for explicit automated setup targets", async () => {
+    const configureAgentTraces = vi.fn(async () => {});
+    await runSetup(setupCtx(), {
+      yes: true,
+      traces: true,
+      overwriteTraces: true,
+      agentsProvided: true,
+      agentKinds: ["claude-code", "codex"],
+      inspect: async () => ({ state: "running", port: 5731 }),
+      detectAgents: async () => [],
+      linkAgent: vi.fn(async () => {}),
+      configureAgentTraces,
+    });
+    expect(configureAgentTraces).toHaveBeenCalledWith(expect.anything(), ["claude-code", "codex"], {
+      overwrite: true,
+      yes: true,
+    });
+  });
+
+  it("offers traces as the final optional interactive onboarding step", async () => {
+    let selections = 0;
+    const prompts: PromptAdapter = {
+      ...silentPromptAdapter(),
+      async multiselect<T>() {
+        selections += 1;
+        if (selections === 1) return ["codex"] as T[];
+        if (selections === 2) return [] as T[];
+        return ["codex"] as T[];
+      },
+    };
+    const configureAgentTraces = vi.fn(async () => {});
+    await runSetup(setupCtx({ prompts }), {
+      inspect: async () => ({ state: "running", port: 5731 }),
+      detectAgents: async () => [
+        {
+          kind: "codex",
+          displayName: "Codex",
+          present: true,
+          reasons: [],
+          warnings: [],
+        },
+      ],
+      linkAgent: vi.fn(async () => {}),
+      configureAgentTraces,
+    });
+    expect(configureAgentTraces).toHaveBeenCalledWith(expect.anything(), ["codex"], {
+      overwrite: false,
+      yes: false,
+    });
   });
 
   it("uses --agent auto to link every detected agent safely", async () => {

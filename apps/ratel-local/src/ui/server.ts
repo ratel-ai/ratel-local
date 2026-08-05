@@ -10,6 +10,10 @@ import type { AddressInfo } from "node:net";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  type AgentTraceAction,
+  type AgentTraceChangeReview,
+  type AgentTraceHostStatus,
+  type AgentTraceStatus,
   type AuthFlowOptions,
   type AuthFlowResult,
   buildGatewayFromConfig,
@@ -22,6 +26,7 @@ import {
   inspectRetrievalPreparation,
   loadMergedConfig,
   markDenseAuthReconnectRequired,
+  type PreparedChange,
   type PreparedChangeCoordinator,
   type ProjectAdmissionLock,
   type ProjectId,
@@ -40,6 +45,7 @@ import {
   type SkillImportControlPlane,
   type SkillImportSelection,
   type SkillRegistrationControlPlane,
+  type SupportedAgentHostKind,
 } from "@ratel-ai/ratel-local-core";
 import type { HandlerCtx } from "../cli/handlers/types.js";
 import {
@@ -97,6 +103,7 @@ export interface StartUiServerOptions {
     options: RetrievalPreflightOptions,
   ) => Promise<RetrievalPreflightResult>;
   cloudTraceSettings?: CloudTraceSettingsControlPlane;
+  agentTraceExporters?: AgentTraceExportersControlPlane;
   publicRoute?: (req: IncomingMessage, res: ServerResponse, path: string) => Promise<boolean>;
 }
 
@@ -108,6 +115,19 @@ export interface CloudTraceSettingsStatus {
 export interface CloudTraceSettingsControlPlane {
   status(): Promise<CloudTraceSettingsStatus>;
   save(input: { endpoint: string; apiKey?: string }): Promise<CloudTraceSettingsStatus>;
+}
+
+export interface AgentTraceExportersStatus extends AgentTraceStatus {
+  cloudConfigured: boolean;
+}
+
+export interface AgentTraceExportersControlPlane {
+  status(): Promise<AgentTraceExportersStatus>;
+  prepare(input: {
+    action: AgentTraceAction;
+    hostKinds: SupportedAgentHostKind[];
+    overwrite?: boolean;
+  }): Promise<PreparedChange<AgentTraceChangeReview>>;
 }
 
 export type ContextAuthRunner = (
@@ -239,6 +259,38 @@ async function handleRequest(
       return;
     }
 
+    if (path === "/api/agent-traces" && opts.agentTraceExporters && req.method === "GET") {
+      writeJson(res, 200, await opts.agentTraceExporters.status());
+      return;
+    }
+
+    if (path === "/api/agent-traces/prepare" && opts.agentTraceExporters && req.method === "POST") {
+      const body = await readJsonBody(req);
+      if (body.action !== "enable" && body.action !== "disable") {
+        throw new UiRouteError(422, "action must be enable or disable");
+      }
+      if (
+        !Array.isArray(body.hostKinds) ||
+        body.hostKinds.length === 0 ||
+        !body.hostKinds.every((value) => value === "claude-code" || value === "codex")
+      ) {
+        throw new UiRouteError(422, "hostKinds must contain claude-code or codex");
+      }
+      if (body.overwrite !== undefined && typeof body.overwrite !== "boolean") {
+        throw new UiRouteError(422, "overwrite must be a boolean");
+      }
+      writeJson(
+        res,
+        200,
+        await opts.agentTraceExporters.prepare({
+          action: body.action,
+          hostKinds: [...new Set(body.hostKinds)] as SupportedAgentHostKind[],
+          ...(body.overwrite !== undefined ? { overwrite: body.overwrite } : {}),
+        }),
+      );
+      return;
+    }
+
     const requestContext = await contextForRequest(opts, projectId, projectRoot);
     const response = await route(
       req,
@@ -271,9 +323,18 @@ async function handleRequest(
       typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
         ? err.code
         : undefined;
+    const conflicts =
+      code === "AGENT_TRACE_CONFLICT" &&
+      typeof err === "object" &&
+      err !== null &&
+      "conflicts" in err &&
+      Array.isArray(err.conflicts)
+        ? (err.conflicts as AgentTraceHostStatus[])
+        : undefined;
     writeJson(res, routeErrorStatus(err, opts.snapshotResolver ? 500 : 400), {
       error: (err as Error).message,
       ...(code ? { code } : {}),
+      ...(conflicts ? { conflicts } : {}),
     });
   }
 }

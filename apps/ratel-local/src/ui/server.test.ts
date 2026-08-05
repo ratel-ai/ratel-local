@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  AgentTraceConflictError,
   type BackupFs,
   createConfigControlPlane,
   createContextSnapshotResolver,
@@ -14,6 +15,7 @@ import {
   defaultTelemetryDir,
   type HierarchyEnv,
   type JsonFs,
+  loopbackTraceEndpoint,
   nodeFs,
   type ProjectId,
   type ProjectRegistry,
@@ -104,6 +106,7 @@ async function spin(
     | "daemonToken"
     | "projectAdmissionLock"
     | "cloudTraceSettings"
+    | "agentTraceExporters"
   > = {},
 ): Promise<ServerSession> {
   const fs = new MemFs();
@@ -772,6 +775,125 @@ describe("UI server — auth", () => {
     // node fetch may rewrite Host on its own; if it does, this assertion is best-effort.
     // We accept either the security rejection or a successful response.
     expect([200, 400]).toContain(res.status);
+  });
+});
+
+describe("UI server — native agent traces", () => {
+  it("returns semantic status and prepares a secret-free change", async () => {
+    const endpoint = loopbackTraceEndpoint("http://127.0.0.1:5731/otlp/v1/traces");
+    const prepare = vi.fn(async () => ({
+      changeId: "trace-change",
+      kind: "agent-traces.enable",
+      expiresAt: "2026-08-05T12:00:00.000Z",
+      preview: {
+        action: "enable" as const,
+        endpoint,
+        hosts: [
+          {
+            hostKind: "codex" as const,
+            displayName: "Codex",
+            configPath: "/home/u/.codex/config.toml",
+            beforeState: "disabled" as const,
+            afterState: "configured" as const,
+            changed: true,
+            changedFields: ["otel.trace_exporter"],
+            overwroteConflict: false,
+            restartRequired: true,
+            warnings: [],
+          },
+        ],
+      },
+    }));
+    const traceSession = await spin(undefined, {
+      agentTraceExporters: {
+        status: async () => ({
+          endpoint,
+          cloudConfigured: false,
+          hosts: [
+            {
+              hostKind: "codex",
+              displayName: "Codex",
+              configPath: "/home/u/.codex/config.toml",
+              state: "disabled",
+              restartRequired: false,
+              conflictingFields: [],
+              warnings: [],
+            },
+          ],
+        }),
+        prepare,
+      },
+    });
+    try {
+      const base = `http://127.0.0.1:${traceSession.handle.port}`;
+      const headers = {
+        Authorization: `Bearer ${traceSession.token}`,
+        "Content-Type": "application/json",
+      };
+      const status = await fetch(`${base}/api/agent-traces`, { headers });
+      expect(await status.json()).toMatchObject({ cloudConfigured: false, endpoint });
+
+      const response = await fetch(`${base}/api/agent-traces/prepare`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ action: "enable", hostKinds: ["codex"] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ changeId: "trace-change" });
+      expect(prepare).toHaveBeenCalledWith({ action: "enable", hostKinds: ["codex"] });
+    } finally {
+      await traceSession.handle.shutdown();
+      await rm(traceSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns only secret-free conflict metadata", async () => {
+    const secret = "api-secret-canary";
+    const conflict = {
+      hostKind: "claude-code" as const,
+      displayName: "Claude Code",
+      configPath: "/home/u/.claude/settings.json",
+      state: "conflict" as const,
+      restartRequired: false,
+      conflictingFields: ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"],
+      warnings: [],
+    };
+    const traceSession = await spin(undefined, {
+      agentTraceExporters: {
+        status: async () => ({
+          endpoint: loopbackTraceEndpoint("http://127.0.0.1:5731/otlp/v1/traces"),
+          cloudConfigured: true,
+          hosts: [conflict],
+        }),
+        prepare: async () => {
+          void secret;
+          throw new AgentTraceConflictError([conflict]);
+        },
+      },
+    });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${traceSession.handle.port}/api/agent-traces/prepare`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${traceSession.token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ action: "enable", hostKinds: ["claude-code"] }),
+        },
+      );
+      expect(response.status).toBe(409);
+      const text = await response.text();
+      expect(text).not.toContain(secret);
+      expect(JSON.parse(text)).toMatchObject({
+        code: "AGENT_TRACE_CONFLICT",
+        conflicts: [{ conflictingFields: ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] }],
+      });
+    } finally {
+      await traceSession.handle.shutdown();
+      await rm(traceSession.assetDir, { recursive: true, force: true });
+    }
   });
 });
 

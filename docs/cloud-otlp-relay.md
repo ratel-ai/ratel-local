@@ -24,6 +24,11 @@ returns only the endpoint and whether a key is configured; it never returns
 the saved key. An installed background daemon loads the same file on its next
 start, so no service environment variables are required after saving.
 
+Agent Setup also offers an inline API-key prompt whenever native tracing is
+enabled but Ratel Cloud is not configured. It reuses the daemon's Cloud
+endpoint, so only the API key is requested. Create a key at
+<https://cloud.ratel.sh/settings> if needed.
+
 For a one-run override, start the daemon with both values:
 
 ```text
@@ -37,6 +42,51 @@ removes it from its process environment before it can launch subprocesses.
 
 Do not put `RATEL_API_KEY` in a project file, Codex config, Claude Code config,
 or exporter headers. Native exporters need only the loopback URL.
+
+## Configure native agent exporters
+
+Use the Agent Setup page or the CLI. Do not edit the native config files by
+hand:
+
+```bash
+ratel-local traces status
+ratel-local traces status --agent codex --json
+ratel-local traces enable --agent claude-code --agent codex
+ratel-local traces disable --agent codex
+```
+
+Status reports `disabled`, `configured`, `stale`, `conflict`, or `invalid` for
+each host. Ratel safely repairs a stale loopback endpoint from an older daemon
+port. It does not replace an unrelated exporter by default. Interactive
+overwrite explains that no backup is retained; automation must use both
+`--overwrite` and `--yes`.
+
+After an interactive enable, the CLI offers to configure Ratel Cloud when it is
+missing. The API key is entered through a masked prompt and saved immediately by
+the daemon. `--yes` remains non-interactive: it does not request a secret and
+prints <https://cloud.ratel.sh/settings> as the next step instead.
+
+`ratel-local setup` offers traces as its final optional interactive step. Plain
+`setup --yes` continues to skip traces. Explicit automation uses:
+
+```bash
+ratel-local setup --yes --traces --agent claude-code --agent codex
+# Add only when replacing a known conflicting exporter is intentional:
+ratel-local setup --yes --traces --overwrite-traces --agent codex
+```
+
+Claude Code is configured in `~/.claude/settings.json` with its native telemetry
+and enhanced-telemetry beta selectors, trace-only OTLP/HTTP protobuf routing,
+and an empty trace-specific header. Existing log, metric, and content/privacy
+flags are preserved. Codex is configured only in the user-level
+`~/.codex/config.toml` with its OTLP/HTTP binary trace exporter and no headers;
+unrelated tables, profiles, comments, and formatting are preserved.
+
+The UI and CLI cannot submit another agent-exporter endpoint. The daemon derives
+the loopback URL from its live port. The inline Cloud onboarding path also reads
+the Cloud endpoint from the daemon rather than accepting one from the prompt.
+Enabling an agent while Cloud is unconfigured remains allowed. Start a new
+Claude Code or Codex session after a change.
 
 ## Exporter contract
 
@@ -89,4 +139,5 @@ authentication activity. The thin stdio connector does not own the exporter.
 
 See [ADR 0013](adr/0013-daemon-owned-cloud-otlp-trace-relay.md),
 [ADR 0014](adr/0014-daemon-owned-ratel-runtime-cloud-traces.md), and
-[ADR 0015](adr/0015-persisted-cloud-trace-settings.md).
+[ADR 0015](adr/0015-persisted-cloud-trace-settings.md), and
+[ADR 0016](adr/0016-native-agent-trace-exporter-setup.md).
