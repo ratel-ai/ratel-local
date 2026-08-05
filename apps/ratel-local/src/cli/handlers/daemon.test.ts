@@ -87,6 +87,8 @@ describe("runDaemon", () => {
   it("mounts the feature-flagged Cloud OTLP trace relay on the loopback daemon", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
+    const shutdownRatelTelemetry = vi.fn(async () => {});
+    const configureRatelTelemetry = vi.fn(async () => ({ shutdown: shutdownRatelTelemetry }));
     const cloudFetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer cloud-test-secret");
       return new Response(Buffer.from([0x00]), {
@@ -111,6 +113,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         cloudOtlpFetch: cloudFetch,
+        configureRatelTelemetry,
       },
     );
     const daemonUrl = new URL(daemonUrlFromLogs(logs));
@@ -152,14 +155,51 @@ describe("runDaemon", () => {
       expect(logs.join("\n")).not.toContain("cloud-test-secret");
       expect([...fs.files.values()].join("\n")).not.toContain("cloud-test-secret");
       expect(daemonProcessEnv).not.toHaveProperty("RATEL_API_KEY");
+      expect(configureRatelTelemetry).toHaveBeenCalledWith({
+        endpoint: "https://cloud.example.test/otlp/v1/traces",
+        apiKey: "cloud-test-secret",
+        serviceName: "ratel-local",
+      });
     } finally {
       await result.shutdown?.();
     }
+    expect(shutdownRatelTelemetry).toHaveBeenCalledOnce();
+  });
+
+  it("removes the daemon credential even when Ratel telemetry initialization fails", async () => {
+    const fs = new MemFs();
+    const daemonProcessEnv = {
+      RATEL_EXPERIMENTAL_CLOUD_OTLP_RELAY: "1",
+      RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/otlp/v1/traces",
+      RATEL_API_KEY: "cloud-test-secret",
+    };
+
+    await expect(
+      runDaemon(
+        daemonArgs(),
+        makeCtx(fs),
+        {
+          readConfig: async () => ({ mcpServers: {} }),
+          processEnv: daemonProcessEnv,
+        },
+        () => {},
+        {
+          open: () => {},
+          ensureToken: async () => "daemon-test-token",
+          configureRatelTelemetry: async () => {
+            throw new Error("telemetry initialization failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("telemetry initialization failed");
+    expect(daemonProcessEnv).not.toHaveProperty("RATEL_API_KEY");
+    expect([...fs.files.values()].join("\n")).not.toContain("cloud-test-secret");
   });
 
   it("exposes retrieval build health only when the experimental health flag is enabled", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
+    const configureRatelTelemetry = vi.fn();
     const result = await runDaemon(
       daemonArgs(),
       makeCtx(fs),
@@ -168,7 +208,11 @@ describe("runDaemon", () => {
         processEnv: { RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH: "1" },
       },
       (message) => logs.push(message),
-      { open: () => {}, ensureToken: async () => "daemon-test-token" },
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry,
+      },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
 
@@ -181,6 +225,7 @@ describe("runDaemon", () => {
       expect(await status.json()).toMatchObject({
         retrievalHealth: { status: "ready", generations: [] },
       });
+      expect(configureRatelTelemetry).not.toHaveBeenCalled();
     } finally {
       await result.shutdown?.();
     }

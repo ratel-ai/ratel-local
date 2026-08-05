@@ -26,6 +26,11 @@ import {
   writeJson,
 } from "@ratel-ai/ratel-local-core";
 import {
+  type ConfigureTelemetryOptions,
+  configureTelemetry,
+  type TelemetryHandle,
+} from "@ratel-ai/sdk";
+import {
   CLOUD_API_KEY_ENV,
   cloudOtlpRelayOptionsFromEnv,
   createCloudOtlpTraceRelay,
@@ -112,6 +117,7 @@ type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>
 type ProbeDaemon = (
   port: number,
 ) => Promise<{ ok: boolean; reachable?: boolean; status?: DaemonStatusBody; error?: string }>;
+type ConfigureRatelTelemetry = (options?: ConfigureTelemetryOptions) => Promise<TelemetryHandle>;
 
 interface DaemonHandlerDeps {
   open?: typeof openBrowser;
@@ -133,6 +139,7 @@ interface DaemonHandlerDeps {
   skillRegistrationControlPlane?: SkillRegistrationControlPlane;
   preparedChanges?: PreparedChangeCoordinator;
   cloudOtlpFetch?: typeof fetch;
+  configureRatelTelemetry?: ConfigureRatelTelemetry;
 }
 
 export interface DaemonServiceStatus {
@@ -247,7 +254,6 @@ export async function runDaemonServer(
   const daemonProcessEnv = options.processEnv ?? process.env;
   const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
   const cloudOtlpOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
-  if (cloudOtlpOptions) delete daemonProcessEnv[CLOUD_API_KEY_ENV];
   const cloudOtlpRelay = cloudOtlpOptions
     ? createCloudOtlpTraceRelay({
         ...cloudOtlpOptions,
@@ -255,6 +261,18 @@ export async function runDaemonServer(
         log,
       })
     : undefined;
+  let ratelTelemetry: TelemetryHandle | undefined;
+  if (cloudOtlpOptions) {
+    try {
+      ratelTelemetry = await (opts.configureRatelTelemetry ?? configureTelemetry)({
+        endpoint: cloudOtlpOptions.endpoint.toString(),
+        apiKey: cloudOtlpOptions.apiKey,
+        serviceName: "ratel-local",
+      });
+    } finally {
+      delete daemonProcessEnv[CLOUD_API_KEY_ENV];
+    }
+  }
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -514,6 +532,7 @@ export async function runDaemonServer(
   log(`[ratel] MCP HTTP endpoint: ${state.mcpUrl}`);
   if (cloudOtlpRelay) {
     log(`[ratel] Cloud OTLP trace relay enabled at ${state.uiUrl}${OTLP_TRACES_PATH}`);
+    log("[ratel] Ratel runtime Cloud trace export enabled");
   }
   log("[ratel] ready for scoped MCP clients");
   log("[ratel] Press Ctrl-C to stop.");
@@ -524,9 +543,13 @@ export async function runDaemonServer(
 
   return {
     shutdown: async () => {
-      await mcp.shutdown();
-      await ui.shutdown();
-      await gatewayPool.shutdown();
+      try {
+        await mcp.shutdown();
+        await ui.shutdown();
+        await gatewayPool.shutdown();
+      } finally {
+        await ratelTelemetry?.shutdown();
+      }
     },
   };
 }

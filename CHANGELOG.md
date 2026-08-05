@@ -8,7 +8,7 @@ All notable changes to this package are documented here. The format is based on 
 - Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
 - Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
 - Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
-- Added an experimental, off-by-default daemon OTLP/HTTP protobuf trace relay that keeps the Ratel Cloud BYOK credential in the daemon environment, exposes a bounded loopback trace endpoint, injects Cloud authorization upstream, and sanitizes failure responses without decoding or rewriting trace payloads.
+- Added experimental, off-by-default Cloud trace export that keeps the Ratel Cloud BYOK credential daemon-owned: native Claude Code and Codex OTLP/HTTP protobuf traces use a bounded loopback relay, while the daemon's existing Ratel SDK spans export independently through the Ratel OTLP provider. Neither path merges, correlates, decodes, or rewrites trace payloads.
 
 ### Changed
 - Simplified Retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind the Save button, while missing models show an explicit download confirmation and progress before settings are committed.

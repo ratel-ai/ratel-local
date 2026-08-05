@@ -1,8 +1,13 @@
-# Experimental Cloud OTLP trace relay
+# Experimental Cloud OTLP traces
 
 Ratel Local can relay native Claude Code and Codex OpenTelemetry traces through
 its per-user daemon. The agent exporter sends OTLP/HTTP protobuf to loopback;
 the daemon adds its Ratel Cloud credential and forwards the bytes unchanged.
+
+The same opt-in also initializes the Ratel SDK's OTLP provider inside the
+daemon-hosted gateway. Ratel runtime spans are sent directly to the configured
+Cloud trace endpoint as `service.name=ratel-local`. These are two independent
+trace streams; this iteration does not merge or correlate their trace IDs.
 
 The relay is experimental and off by default. Configure these values only in
 the daemon process environment, preferably through a local secret manager or
@@ -23,6 +28,10 @@ before it starts.
 At startup, the daemon consumes `RATEL_API_KEY` into the relay and removes it
 from its process environment. This prevents MCP and agent subprocesses launched
 later by the daemon from inheriting the Cloud credential.
+
+The daemon also passes the endpoint and key in memory to the Ratel SDK telemetry
+provider and flushes that provider during graceful shutdown. The thin stdio
+connector does not hold the credential or run the exporter.
 
 ## Exporter contract
 
@@ -63,3 +72,23 @@ Malformed non-empty protobuf is intentionally not decoded or filtered locally;
 Ratel Cloud validates it. There is no retry queue, durable spool, trace merging,
 correlation, filtering, enrichment, metrics ingestion, or logs ingestion in
 this iteration.
+
+## Independent Ratel runtime export
+
+The daemon's Ratel SDK spans use the same Cloud endpoint and credential but do
+not travel through the loopback route:
+
+```text
+Claude Code / Codex traces -> daemon loopback relay -> Ratel Cloud
+Ratel SDK runtime spans    -> daemon OTLP exporter  -> Ratel Cloud
+```
+
+The runtime stream includes the spans already emitted by `@ratel-ai/sdk`, such
+as capability search, skill load, upstream registration, tool execution, and
+authentication activity. No additional correlation or payload processing is
+added by Ratel Local.
+
+See [ADR 0013](adr/0013-daemon-owned-cloud-otlp-trace-relay.md) for the native
+agent relay and
+[ADR 0014](adr/0014-daemon-owned-ratel-runtime-cloud-traces.md) for the
+independent daemon runtime exporter.
