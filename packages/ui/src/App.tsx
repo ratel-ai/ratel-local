@@ -526,10 +526,10 @@ function ProductSidebar({
               to={pagePath("/clients")}
             />
             <ProductSidebarItem
-              active={pageSuffix === "/retrieval"}
+              active={pageSuffix === "/settings" || pageSuffix === "/retrieval"}
               icon={<SlidersHorizontal />}
-              label="Retrieval"
-              to={pagePath("/retrieval")}
+              label="Settings"
+              to={pagePath("/settings")}
             />
           </>
         )}
@@ -725,9 +725,9 @@ function CommandMenu(props: {
                 <RadioTower />
                 Clients
               </CommandItem>
-              <CommandItem onSelect={() => props.onNavigate("/retrieval")}>
+              <CommandItem onSelect={() => props.onNavigate("/settings")}>
                 <SlidersHorizontal />
-                Retrieval
+                Settings
               </CommandItem>
             </CommandGroup>
             {agentItems.length > 0 && (

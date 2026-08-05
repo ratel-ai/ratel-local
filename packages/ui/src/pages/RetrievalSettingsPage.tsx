@@ -1,6 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Save } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type ConfigResponse, type RatelScope, type RetrievalConfig, useRatelApp } from "@/App";
 import {
   PageHeader,
@@ -72,6 +72,11 @@ export interface RetrievalPreparationInspection {
   remoteDataTransfer: boolean;
 }
 
+export interface CloudTraceSettingsStatus {
+  configured: boolean;
+  endpoint: string;
+}
+
 interface RetrievalWriteVariables {
   action: "configure" | "reset";
   draft: RetrievalDraft;
@@ -80,7 +85,7 @@ interface RetrievalWriteVariables {
   target: ReturnType<typeof retrievalTarget>;
 }
 
-export function RetrievalSettingsPage() {
+export function SettingsPage() {
   const { config, configError, configLoading, context } = useRatelApp();
   const scopes = availableRetrievalScopes(context);
   const [requestedScope, setRequestedScope] = useState<RatelScope>(scopes[0] ?? "user");
@@ -96,14 +101,15 @@ export function RetrievalSettingsPage() {
       <PageHeader>
         <PageHeaderContent>
           <PageHeaderBackRow>
-            <PageHeaderTitle>Retrieval</PageHeaderTitle>
+            <PageHeaderTitle>Settings</PageHeaderTitle>
           </PageHeaderBackRow>
           <PageHeaderDescription>
-            Choose how Ratel finds relevant tools and skills. Changes apply to newly connected
-            clients.
+            Configure Ratel Cloud traces and how Ratel finds relevant tools and skills.
           </PageHeaderDescription>
         </PageHeaderContent>
       </PageHeader>
+
+      <CloudTraceSettingsCard />
 
       {configError ? (
         <Alert variant="destructive">
@@ -111,6 +117,14 @@ export function RetrievalSettingsPage() {
           <AlertDescription>{configError}</AlertDescription>
         </Alert>
       ) : null}
+
+      <div className="grid gap-1 pt-2">
+        <h2 className="text-lg font-semibold">Retrieval</h2>
+        <p className="text-sm text-muted-foreground">
+          Choose how Ratel finds relevant tools and skills. Changes apply to newly connected
+          clients.
+        </p>
+      </div>
 
       <section
         aria-label="Current retrieval method"
@@ -137,6 +151,101 @@ export function RetrievalSettingsPage() {
         scopes={scopes}
       />
     </main>
+  );
+}
+
+export const RetrievalSettingsPage = SettingsPage;
+
+function CloudTraceSettingsCard() {
+  const { request } = useRatelApp();
+  const cloudQuery = useQuery({
+    queryKey: ratelQueryKeys.cloudTraces(),
+    queryFn: () => request<CloudTraceSettingsStatus>("/api/cloud-traces"),
+  });
+  const [endpoint, setEndpoint] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  useEffect(() => {
+    if (cloudQuery.data) setEndpoint(cloudQuery.data.endpoint);
+  }, [cloudQuery.data]);
+  const saveMutation = useRatelMutation<
+    CloudTraceSettingsStatus,
+    { endpoint: string; apiKey: string }
+  >({
+    invalidate: [ratelQueryKeys.cloudTraces()],
+    mutationKey: [...ratelQueryKeys.cloudTraces(), "save"],
+    mutationFn: ({ endpoint: nextEndpoint, apiKey: nextApiKey }) =>
+      request("/api/cloud-traces", {
+        method: "PATCH",
+        body: cloudTraceSettingsPatch(
+          {
+            configured: cloudQuery.data?.configured ?? false,
+            endpoint: nextEndpoint,
+          },
+          nextApiKey,
+        ),
+      }),
+    onSuccess: (status) => {
+      setApiKey("");
+      setEndpoint(status.endpoint);
+    },
+    successMessage: "Saved Ratel Cloud trace settings",
+  });
+
+  return (
+    <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
+      <CardHeader>
+        <CardTitle>Ratel Cloud</CardTitle>
+        <CardDescription>
+          Save the daemon-owned API key used for external agent and Ratel runtime traces.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-2">
+          <Label htmlFor="cloud-trace-endpoint">Trace endpoint</Label>
+          <Input
+            id="cloud-trace-endpoint"
+            onChange={(event) => setEndpoint(event.currentTarget.value)}
+            placeholder="https://cloud.ratel.sh/api/v1/traces"
+            value={endpoint}
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="cloud-api-key">API key</Label>
+          <Input
+            autoComplete="off"
+            id="cloud-api-key"
+            onChange={(event) => setApiKey(event.currentTarget.value)}
+            placeholder={
+              cloudQuery.data?.configured ? "Leave blank to keep the saved key" : "rtl_…"
+            }
+            type="password"
+            value={apiKey}
+          />
+          <p className="text-xs text-muted-foreground">
+            {cloudQuery.data?.configured
+              ? "Cloud trace export is configured for this daemon."
+              : "The key is stored by the local daemon and is never returned to this page."}
+          </p>
+        </div>
+        {cloudQuery.error ? (
+          <p className="text-sm text-destructive">{cloudQuery.error.message}</p>
+        ) : null}
+        <div>
+          <Button
+            disabled={cloudQuery.isPending || saveMutation.isPending || !endpoint.trim()}
+            onClick={() =>
+              saveMutation.mutate({
+                endpoint: endpoint.trim(),
+                apiKey,
+              })
+            }
+          >
+            <Save />
+            {saveMutation.isPending ? "Saving…" : "Save Cloud settings"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -249,7 +358,7 @@ function RetrievalEditor({
     <>
       <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
         <CardHeader>
-          <CardTitle>Settings</CardTitle>
+          <CardTitle>Retrieval</CardTitle>
           <CardDescription>
             Choose the retrieval method for {retrievalScopeLabel(scope).toLowerCase()} settings.
           </CardDescription>
@@ -663,6 +772,20 @@ export function retrievalDraftFromConfig(config: RetrievalConfig | undefined): R
     model: embedding.model ?? "",
     url: embedding.url ?? "",
     apiKeyEnv: embedding.apiKeyEnv ?? "",
+  };
+}
+
+export function cloudTraceSettingsPatch(
+  status: CloudTraceSettingsStatus,
+  apiKey: string,
+): { endpoint: string; apiKey?: string } {
+  const trimmedApiKey = apiKey.trim();
+  if (!status.configured && !trimmedApiKey) {
+    throw new Error("Ratel Cloud API key is required");
+  }
+  return {
+    endpoint: status.endpoint.trim(),
+    ...(trimmedApiKey ? { apiKey: trimmedApiKey } : {}),
   };
 }
 

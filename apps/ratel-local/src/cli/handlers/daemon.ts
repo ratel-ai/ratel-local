@@ -32,10 +32,18 @@ import {
 } from "@ratel-ai/sdk";
 import {
   CLOUD_API_KEY_ENV,
+  type CloudOtlpTraceRelayOptions,
   cloudOtlpRelayOptionsFromEnv,
-  createCloudOtlpTraceRelay,
+  cloudOtlpTraceRelayOptions,
+  createCloudOtlpTraceRelayController,
   OTLP_TRACES_PATH,
 } from "../../cloud/otlp-trace-relay.js";
+import {
+  CloudTraceSettingsStore,
+  type CloudTraceSettingsStoreLike,
+  cloudTraceSettingsPath,
+  DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
+} from "../../cloud/settings.js";
 import {
   authorizeDaemonRequest,
   DaemonAccessError,
@@ -140,6 +148,7 @@ interface DaemonHandlerDeps {
   preparedChanges?: PreparedChangeCoordinator;
   cloudOtlpFetch?: typeof fetch;
   configureRatelTelemetry?: ConfigureRatelTelemetry;
+  cloudTraceSettingsStore?: CloudTraceSettingsStoreLike;
 }
 
 export interface DaemonServiceStatus {
@@ -253,26 +262,32 @@ export async function runDaemonServer(
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
   const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
-  const cloudOtlpOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
-  const cloudOtlpRelay = cloudOtlpOptions
-    ? createCloudOtlpTraceRelay({
-        ...cloudOtlpOptions,
-        fetch: opts.cloudOtlpFetch,
-        log,
-      })
-    : undefined;
-  let ratelTelemetry: TelemetryHandle | undefined;
-  if (cloudOtlpOptions) {
-    try {
-      ratelTelemetry = await (opts.configureRatelTelemetry ?? configureTelemetry)({
-        endpoint: cloudOtlpOptions.endpoint.toString(),
-        apiKey: cloudOtlpOptions.apiKey,
-        serviceName: "ratel-local",
-      });
-    } finally {
-      delete daemonProcessEnv[CLOUD_API_KEY_ENV];
-    }
+  const cloudTraceSettingsStore =
+    opts.cloudTraceSettingsStore ??
+    new CloudTraceSettingsStore(cloudTraceSettingsPath(ctx.env.homeDir));
+  const persistedCloudSettings = await cloudTraceSettingsStore.load();
+  let environmentCloudOptions: CloudOtlpTraceRelayOptions | undefined;
+  try {
+    environmentCloudOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
+  } finally {
+    delete daemonProcessEnv[CLOUD_API_KEY_ENV];
   }
+  const persistedCloudOptions = persistedCloudSettings
+    ? cloudOtlpTraceRelayOptions(persistedCloudSettings)
+    : undefined;
+  let activeCloudOptions = environmentCloudOptions ?? persistedCloudOptions;
+  const cloudOtlpRelay = createCloudOtlpTraceRelayController(
+    activeCloudOptions ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log } : undefined,
+  );
+  let ratelTelemetry: TelemetryHandle | undefined;
+  let daemonPort = port;
+  const ensureRatelTelemetry = async () => {
+    if (ratelTelemetry || !activeCloudOptions) return;
+    ratelTelemetry = await (opts.configureRatelTelemetry ?? configureTelemetry)({
+      endpoint: `http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`,
+      serviceName: "ratel-local",
+    });
+  };
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -459,13 +474,33 @@ export async function runDaemonServer(
     skillImportControlPlane,
     skillRegistrationControlPlane,
     preparedChanges,
+    cloudTraceSettings: {
+      status: async () => ({
+        configured: activeCloudOptions !== undefined,
+        endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
+      }),
+      save: async ({ endpoint, apiKey }) => {
+        const retainedApiKey = apiKey?.trim() ? apiKey : activeCloudOptions?.apiKey;
+        if (!retainedApiKey) throw new Error("Ratel Cloud API key is required");
+        const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
+        await cloudTraceSettingsStore.save({
+          endpoint: next.endpoint.toString(),
+          apiKey: next.apiKey,
+        });
+        activeCloudOptions = next;
+        cloudOtlpRelay.configure({ ...next, fetch: opts.cloudOtlpFetch, log });
+        await ensureRatelTelemetry();
+        log("[ratel] Ratel Cloud trace export configured");
+        return { configured: true, endpoint: next.endpoint.toString() };
+      },
+    },
     authenticateMcpServer: reconciledGatewayPool
       ? (context, authOptions) => reconciledGatewayPool.authenticate(context, authOptions)
       : undefined,
     daemonToken,
     sessionTokens: uiSessions,
     publicRoute: async (req, res, path) => {
-      if (cloudOtlpRelay && (await cloudOtlpRelay.handleRequest(req, res, path))) {
+      if (await cloudOtlpRelay.handleRequest(req, res, path)) {
         return true;
       }
       if (req.method === "GET" && path === "/healthz") {
@@ -522,6 +557,14 @@ export async function runDaemonServer(
     },
   });
 
+  daemonPort = ui.port;
+  try {
+    await ensureRatelTelemetry();
+  } catch (error) {
+    await Promise.allSettled([mcp.shutdown(), ui.shutdown(), gatewayPool.shutdown()]);
+    throw error;
+  }
+
   const state = stateForPort(ui.port);
   await writeDaemonState(ctx, state);
 
@@ -530,8 +573,9 @@ export async function runDaemonServer(
   log(`[ratel] daemon running at ${state.uiUrl}`);
   log(`[ratel] daemon UI: ${state.uiUrl}`);
   log(`[ratel] MCP HTTP endpoint: ${state.mcpUrl}`);
-  if (cloudOtlpRelay) {
-    log(`[ratel] Cloud OTLP trace relay enabled at ${state.uiUrl}${OTLP_TRACES_PATH}`);
+  log(`[ratel] Cloud OTLP trace endpoint available at ${state.uiUrl}${OTLP_TRACES_PATH}`);
+  if (activeCloudOptions) {
+    log("[ratel] Ratel Cloud trace export configured");
     log("[ratel] Ratel runtime Cloud trace export enabled");
   }
   log("[ratel] ready for scoped MCP clients");

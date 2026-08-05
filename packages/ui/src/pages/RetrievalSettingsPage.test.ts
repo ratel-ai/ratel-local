@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   availableRetrievalScopes,
+  cloudTraceSettingsPatch,
   retrievalConfigFromDraft,
   retrievalDownloadConfirmationCopy,
   retrievalDraftFromConfig,
@@ -13,6 +14,30 @@ import {
 } from "./RetrievalSettingsPage";
 
 describe("retrieval settings model", () => {
+  it("requires an API key only for first-time Cloud setup", () => {
+    expect(() =>
+      cloudTraceSettingsPatch(
+        { configured: false, endpoint: "https://cloud.ratel.sh/api/v1/traces" },
+        "",
+      ),
+    ).toThrow(/API key is required/);
+    expect(
+      cloudTraceSettingsPatch(
+        { configured: false, endpoint: "https://cloud.ratel.sh/api/v1/traces" },
+        "rtl_test",
+      ),
+    ).toEqual({
+      endpoint: "https://cloud.ratel.sh/api/v1/traces",
+      apiKey: "rtl_test",
+    });
+    expect(
+      cloudTraceSettingsPatch(
+        { configured: true, endpoint: "https://cloud.ratel.sh/api/v1/traces" },
+        "",
+      ),
+    ).toEqual({ endpoint: "https://cloud.ratel.sh/api/v1/traces" });
+  });
+
   it("maps the inherited BM25 default to a model-free draft", () => {
     expect(retrievalDraftFromConfig(undefined)).toEqual({
       method: "bm25",

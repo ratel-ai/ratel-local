@@ -8,9 +8,10 @@ All notable changes to this package are documented here. The format is based on 
 - Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
 - Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
 - Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
-- Added experimental, off-by-default Cloud trace export that keeps the Ratel Cloud BYOK credential daemon-owned: native Claude Code and Codex OTLP/HTTP protobuf traces use a bounded loopback relay, while the daemon's existing Ratel SDK spans export independently through the Ratel OTLP provider. Neither path merges, correlates, decodes, or rewrites trace payloads.
+- Added daemon-owned Ratel Cloud trace export: native Claude Code, Codex, and daemon-hosted Ratel SDK OTLP/HTTP protobuf traces use the same bounded loopback relay without merging, correlating, decoding, or rewriting payloads. The Settings page persists the Cloud endpoint and API key for foreground and background daemons; the relay is always available and returns `503` until configured.
 
 ### Changed
+- Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.
 - Simplified Retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind the Save button, while missing models show an explicit download confirmation and progress before settings are committed.
 - Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
 

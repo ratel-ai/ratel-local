@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 export const OTLP_TRACES_PATH = "/otlp/v1/traces";
 export const OTLP_PROTOBUF_CONTENT_TYPE = "application/x-protobuf";
-export const CLOUD_OTLP_RELAY_FLAG = "RATEL_EXPERIMENTAL_CLOUD_OTLP_RELAY";
 export const CLOUD_OTLP_TRACES_ENDPOINT_ENV = "RATEL_CLOUD_OTLP_TRACES_ENDPOINT";
 export const CLOUD_API_KEY_ENV = "RATEL_API_KEY";
 
@@ -22,27 +21,58 @@ export interface CloudOtlpTraceRelay {
   handleRequest(req: IncomingMessage, res: ServerResponse, path: string): Promise<boolean>;
 }
 
+export interface CloudOtlpTraceRelayController extends CloudOtlpTraceRelay {
+  configure(options: CloudOtlpTraceRelayOptions): void;
+}
+
 export function cloudOtlpRelayOptionsFromEnv(
   env: NodeJS.ProcessEnv,
 ): CloudOtlpTraceRelayOptions | undefined {
-  if (env[CLOUD_OTLP_RELAY_FLAG] !== "1") return undefined;
-
   const endpointValue = env[CLOUD_OTLP_TRACES_ENDPOINT_ENV];
+  const apiKey = env[CLOUD_API_KEY_ENV];
+  if (!endpointValue && !apiKey) return undefined;
   if (!endpointValue) {
     throw new Error(
       `Cloud OTLP trace relay requires endpoint environment variable ${CLOUD_OTLP_TRACES_ENDPOINT_ENV}`,
     );
   }
-  const endpoint = parseCloudEndpoint(endpointValue);
-
-  const apiKey = env[CLOUD_API_KEY_ENV];
-  if (!apiKey?.trim() || /[\r\n]/.test(apiKey)) {
+  if (!apiKey) {
     throw new Error(
       `Cloud OTLP trace relay requires daemon credential environment variable ${CLOUD_API_KEY_ENV}`,
     );
   }
+  return cloudOtlpTraceRelayOptions({ endpoint: endpointValue, apiKey });
+}
 
-  return { endpoint, apiKey };
+export function cloudOtlpTraceRelayOptions(settings: {
+  endpoint: string;
+  apiKey: string;
+}): CloudOtlpTraceRelayOptions {
+  const endpoint = parseCloudEndpoint(settings.endpoint);
+  if (!settings.apiKey.trim() || /[\r\n]/.test(settings.apiKey)) {
+    throw new Error("Ratel Cloud API key is required and must fit in an HTTP header");
+  }
+  return { endpoint, apiKey: settings.apiKey };
+}
+
+export function createCloudOtlpTraceRelayController(
+  initial?: CloudOtlpTraceRelayOptions,
+): CloudOtlpTraceRelayController {
+  let relay = initial ? createCloudOtlpTraceRelay(initial) : undefined;
+  return {
+    configure(options) {
+      relay = createCloudOtlpTraceRelay(options);
+    },
+    async handleRequest(req, res, path) {
+      if (path !== OTLP_TRACES_PATH) return false;
+      if (!relay) {
+        req.resume();
+        writePlain(res, 503, "Ratel Cloud traces are not configured\n");
+        return true;
+      }
+      return relay.handleRequest(req, res, path);
+    },
+  };
 }
 
 export function createCloudOtlpTraceRelay(

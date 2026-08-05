@@ -14,6 +14,7 @@ export const ratelQueryKeys = {
     [...ratelQueryKeys.context(context), "agent-hosts"] as const,
   clients: (context: RuntimeUiContext) => [...ratelQueryKeys.context(context), "clients"] as const,
   projects: () => [...ratelQueryKeys.all, "projects"] as const,
+  cloudTraces: () => [...ratelQueryKeys.all, "cloud-traces"] as const,
 };
 
 export function ratelApiQueryOptions<T>(input: {

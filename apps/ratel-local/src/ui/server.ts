@@ -96,7 +96,18 @@ export interface StartUiServerOptions {
     retrieval: RetrievalConfig,
     options: RetrievalPreflightOptions,
   ) => Promise<RetrievalPreflightResult>;
+  cloudTraceSettings?: CloudTraceSettingsControlPlane;
   publicRoute?: (req: IncomingMessage, res: ServerResponse, path: string) => Promise<boolean>;
+}
+
+export interface CloudTraceSettingsStatus {
+  configured: boolean;
+  endpoint: string;
+}
+
+export interface CloudTraceSettingsControlPlane {
+  status(): Promise<CloudTraceSettingsStatus>;
+  save(input: { endpoint: string; apiKey?: string }): Promise<CloudTraceSettingsStatus>;
 }
 
 export type ContextAuthRunner = (
@@ -201,6 +212,33 @@ async function handleRequest(
   }
 
   try {
+    if (path === "/api/cloud-traces" && opts.cloudTraceSettings) {
+      if (req.method === "GET") {
+        writeJson(res, 200, await opts.cloudTraceSettings.status());
+        return;
+      }
+      if (req.method === "PATCH") {
+        const body = await readJsonBody(req);
+        if (typeof body.endpoint !== "string" || !body.endpoint.trim()) {
+          throw new UiRouteError(422, "Cloud trace endpoint is required");
+        }
+        if (body.apiKey !== undefined && typeof body.apiKey !== "string") {
+          throw new UiRouteError(422, "Cloud API key must be a string");
+        }
+        writeJson(
+          res,
+          200,
+          await opts.cloudTraceSettings.save({
+            endpoint: body.endpoint,
+            ...(body.apiKey !== undefined ? { apiKey: body.apiKey } : {}),
+          }),
+        );
+        return;
+      }
+      writeJson(res, 405, { error: "method not allowed" });
+      return;
+    }
+
     const requestContext = await contextForRequest(opts, projectId, projectRoot);
     const response = await route(
       req,

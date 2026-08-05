@@ -103,6 +103,7 @@ async function spin(
     | "retrievalPreflight"
     | "daemonToken"
     | "projectAdmissionLock"
+    | "cloudTraceSettings"
   > = {},
 ): Promise<ServerSession> {
   const fs = new MemFs();
@@ -163,6 +164,57 @@ async function makeAssetDir(): Promise<string> {
 }
 
 describe("UI server — auth", () => {
+  it("reads and saves Cloud trace settings without returning the credential", async () => {
+    const save = vi.fn(async () => ({
+      configured: true,
+      endpoint: "https://cloud.example.test/api/v1/traces",
+    }));
+    const cloudSession = await spin(undefined, {
+      cloudTraceSettings: {
+        status: async () => ({
+          configured: false,
+          endpoint: "https://cloud.ratel.sh/api/v1/traces",
+        }),
+        save,
+      },
+    });
+
+    try {
+      const base = `http://127.0.0.1:${cloudSession.handle.port}`;
+      const headers = {
+        Authorization: `Bearer ${cloudSession.token}`,
+        "Content-Type": "application/json",
+      };
+      const initial = await fetch(`${base}/api/cloud-traces`, { headers });
+      expect(await initial.json()).toEqual({
+        configured: false,
+        endpoint: "https://cloud.ratel.sh/api/v1/traces",
+      });
+
+      const saved = await fetch(`${base}/api/cloud-traces`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          endpoint: "https://cloud.example.test/api/v1/traces",
+          apiKey: "cloud-test-secret",
+        }),
+      });
+      const payload = await saved.json();
+      expect(payload).toEqual({
+        configured: true,
+        endpoint: "https://cloud.example.test/api/v1/traces",
+      });
+      expect(JSON.stringify(payload)).not.toContain("cloud-test-secret");
+      expect(save).toHaveBeenCalledWith({
+        endpoint: "https://cloud.example.test/api/v1/traces",
+        apiKey: "cloud-test-secret",
+      });
+    } finally {
+      await cloudSession.handle.shutdown();
+      await rm(cloudSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists registered projects using projectId in the response", async () => {
     const projectId = "prj_registered" as ProjectId;
     const projectSession = await spin(undefined, {

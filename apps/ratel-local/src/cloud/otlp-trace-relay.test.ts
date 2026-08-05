@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cloudOtlpRelayOptionsFromEnv,
   createCloudOtlpTraceRelay,
+  createCloudOtlpTraceRelayController,
   OTLP_PROTOBUF_CONTENT_TYPE,
   OTLP_TRACES_PATH,
 } from "./otlp-trace-relay.js";
@@ -28,21 +29,16 @@ afterEach(async () => {
 });
 
 describe("Cloud OTLP trace relay configuration", () => {
-  it("is off by default and requires daemon-owned endpoint and credential environment values", () => {
+  it("requires no feature flag and activates when daemon-owned environment values are present", () => {
     expect(cloudOtlpRelayOptionsFromEnv({})).toBeUndefined();
     expect(() =>
-      cloudOtlpRelayOptionsFromEnv({ RATEL_EXPERIMENTAL_CLOUD_OTLP_RELAY: "1" }),
-    ).toThrow(/endpoint/i);
-    expect(() =>
       cloudOtlpRelayOptionsFromEnv({
-        RATEL_EXPERIMENTAL_CLOUD_OTLP_RELAY: "1",
         RATEL_CLOUD_OTLP_TRACES_ENDPOINT: CLOUD_ENDPOINT,
       }),
     ).toThrow(/credential/i);
 
     expect(
       cloudOtlpRelayOptionsFromEnv({
-        RATEL_EXPERIMENTAL_CLOUD_OTLP_RELAY: "1",
         RATEL_CLOUD_OTLP_TRACES_ENDPOINT: CLOUD_ENDPOINT,
         RATEL_API_KEY: CLOUD_SECRET,
       }),
@@ -58,12 +54,39 @@ describe("Cloud OTLP trace relay configuration", () => {
     ]) {
       expect(() =>
         cloudOtlpRelayOptionsFromEnv({
-          RATEL_EXPERIMENTAL_CLOUD_OTLP_RELAY: "1",
           RATEL_CLOUD_OTLP_TRACES_ENDPOINT: endpoint,
           RATEL_API_KEY: CLOUD_SECRET,
         }),
       ).toThrow(/endpoint/i);
     }
+  });
+});
+
+describe("Cloud OTLP relay controller", () => {
+  it("keeps the route available before setup and activates it without a restart", async () => {
+    const controller = createCloudOtlpTraceRelayController();
+    const server = createHttpServer((request, response) => {
+      void controller.handleRequest(request, response, (request.url ?? "/").split("?")[0] ?? "/");
+    });
+    servers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    const baseUrl = new URL(`http://127.0.0.1:${address.port}`);
+
+    expect((await postTrace(baseUrl)).status).toBe(503);
+
+    const fetchUpstream = vi.fn(async () => new Response(Buffer.from([0x00]), { status: 200 }));
+    controller.configure({
+      endpoint: new URL(CLOUD_ENDPOINT),
+      apiKey: CLOUD_SECRET,
+      fetch: fetchUpstream,
+    });
+
+    expect((await postTrace(baseUrl)).status).toBe(200);
+    expect(fetchUpstream).toHaveBeenCalledOnce();
   });
 });
 
