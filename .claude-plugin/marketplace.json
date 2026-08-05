@@ -4,13 +4,13 @@
     "name": "Agentified",
     "email": "support@agentified.com"
   },
-  "description": "Ratel plugins for MCP gateway setup, usage, and debugging.",
+  "description": "Ratel plugins for scoped MCP gateway setup, hybrid capability search, usage, and debugging.",
   "plugins": [
     {
       "name": "ratel-local",
       "displayName": "Ratel Local",
       "source": "./apps/ratel-local/plugin",
-      "description": "Expose project-scoped upstream MCP tools through one persistent local Ratel daemon.",
+      "description": "Expose project-scoped upstream MCP tools through BM25, semantic, or hybrid search in one persistent local Ratel daemon.",
       "author": {
         "name": "Agentified",
         "email": "support@agentified.com"
@@ -23,7 +23,9 @@
         "mcp",
         "gateway",
         "tool-calling",
-        "context-engineering"
+        "context-engineering",
+        "semantic-search",
+        "hybrid-search"
       ]
     }
   ]

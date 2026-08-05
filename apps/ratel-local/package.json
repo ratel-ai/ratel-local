@@ -1,7 +1,7 @@
 {
   "name": "@ratel-ai/ratel-local",
-  "version": "0.6.0-rc.1",
-  "description": "Ratel Local package: a project-scoped persistent MCP gateway plus the ratel-local CLI for managing upstream servers, OAuth, and agent imports.",
+  "version": "0.8.0-rc.0",
+  "description": "Ratel Local package: a project-scoped persistent MCP gateway with BM25, semantic, and hybrid capability search plus the ratel-local CLI.",
   "private": false,
   "type": "module",
   "main": "./dist/index.js",
@@ -24,6 +24,8 @@
     "ratel",
     "context-engineering",
     "gateway",
+    "semantic-search",
+    "hybrid-search",
     "claude-code",
     "cli",
     "oauth"

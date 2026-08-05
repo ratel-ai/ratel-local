@@ -4,17 +4,26 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.8.0-rc.0] - 2026-08-05
+
 ### Added
-- Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
-- Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
-- Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
 - Added daemon-owned Ratel Cloud trace export: native Claude Code, Codex, and daemon-hosted Ratel SDK OTLP/HTTP protobuf traces use the same bounded loopback relay without merging, correlating, decoding, or rewriting payloads. The Settings page persists the Cloud endpoint and API key for foreground and background daemons; the relay is always available and returns `503` until configured.
 - Added opt-in native trace exporter setup for Claude Code and Codex through Agent Setup, `ratel-local traces`, and the final optional setup step. The daemon derives the live loopback endpoint, applies atomic secret-free user-config mutations, repairs stale ports, and requires explicit irreversible conflict overwrite. Interactive CLI and Agent Setup flows can collect a missing Ratel Cloud API key through masked input and save it directly to the daemon; non-interactive runs remain secret-free.
 
 ### Changed
 - Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.
+
+## [0.7.0-rc.0] - 2026-07-31
+
+### Added
+- Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
+- Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
+- Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
+
+### Changed
 - Simplified Retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind the Save button, while missing models show an explicit download confirmation and progress before settings are committed.
 - Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
+- Raised the published package's minimum Node.js version from 20.0 to 20.6 to match the SDK runtime dependency.
 
 ## [0.6.0-rc.1] - 2026-07-31
 
