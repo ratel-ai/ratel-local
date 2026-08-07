@@ -73,6 +73,7 @@ import {
   type SkillsResponse,
   uniqueSkillImports,
 } from "@/lib/skills";
+import { agentSettingsPageEnabled } from "@/lib/ui-features";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +83,8 @@ type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mix
 type RatelConnectionKind = "none" | "explicit" | "plugin" | "duplicate";
 type ConflictStrategy = "add-missing-only" | "replace-from-agent" | "replace-selected";
 type SetupFlow = "import" | "link";
+
+const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 interface AgentHostDetection {
   displayName: string;
@@ -167,8 +170,6 @@ interface CloudTraceSettingsStatus {
   configured: boolean;
   endpoint: string;
 }
-
-const RATEL_CLOUD_SETTINGS_URL = "https://cloud.ratel.sh/settings";
 
 export function cloudTraceSetupPatch(
   endpoint: string,
@@ -368,6 +369,84 @@ export interface AgentSetupRouteData {
   hosts: DetectedAgentHostSummary[];
 }
 
+export function AgentSettingsSection({ initialData }: { initialData?: AgentSetupRouteData }) {
+  const { clearSetupIntent, pagePath, refresh, setupIntent } = useRatelApp();
+  const navigate = useNavigate();
+  const { available } = useAvailableSkills(initialData?.available);
+  const { hosts, scanHosts, scanning } = useAgentHosts(initialData?.hosts);
+  const handledIntent = useRef<number | null>(null);
+  const openAgent = useCallback(
+    (kind: AgentHostKind, operation?: SetupFlow) => {
+      const path = pagePath(`/agent-setup/${kind}`);
+      const separator = path.includes("?") ? "&" : "?";
+      void navigate({
+        to: operation ? `${path}${separator}operation=${operation}` : path,
+      } as never);
+    },
+    [navigate, pagePath],
+  );
+
+  useEffect(() => {
+    if (setupIntent && handledIntent.current !== setupIntent.id) {
+      handledIntent.current = setupIntent.id;
+      openAgent(preferredHostKind(hosts), setupIntent.kind);
+      clearSetupIntent();
+    }
+  }, [clearSetupIntent, hosts, openAgent, setupIntent]);
+
+  return (
+    <section aria-labelledby="agents-settings-title" className="grid gap-3">
+      <div className="flex items-end justify-between gap-3 px-1">
+        <div>
+          <h2 className="text-lg font-semibold" id="agents-settings-title">
+            Agents
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Connections and native integrations for Claude Code and Codex.
+          </p>
+        </div>
+        <Button
+          aria-label="Refresh agents"
+          disabled={scanning}
+          onClick={() => void Promise.all([refresh(), scanHosts()])}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw />
+          Refresh
+          {scanning ? <Button.LoadingIndicator label="Refreshing agents" /> : null}
+        </Button>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {hosts.map((host) => (
+          <AgentDirectoryCard
+            host={host}
+            key={host.kind}
+            onOpen={() => openAgent(host.kind)}
+            unmanagedSkillCount={availableSkillsForKind(available, host.kind).length}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function LegacyAgentSetupRedirect() {
+  const { pagePath } = useRatelApp();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    void navigate({ replace: true, to: pagePath("/settings") } as never);
+  }, [navigate, pagePath]);
+
+  return (
+    <main className="grid min-h-48 place-items-center px-6 text-sm text-muted-foreground">
+      Opening agent settings…
+    </main>
+  );
+}
+
 export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteData }) {
   const { clearSetupIntent, config, pagePath, refresh, setupIntent } = useRatelApp();
   const navigate = useNavigate();
@@ -479,7 +558,9 @@ export function AgentDetailPage(props: {
 
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
-    void navigate({ to: pagePath("/agent-setup") } as never);
+    void navigate({
+      to: pagePath(AGENT_SETTINGS_ENABLED ? "/settings" : "/agent-setup"),
+    } as never);
   };
   const switchHost = (kind: AgentHostKind) => {
     void navigate({ to: pagePath(`/agent-setup/${kind}`) } as never);
@@ -493,7 +574,7 @@ export function AgentDetailPage(props: {
           <PageHeaderBackRow>
             <Button onClick={goBack} size="sm" type="button" variant="ghost">
               <ArrowLeft />
-              Agents
+              {AGENT_SETTINGS_ENABLED ? "Settings" : "Agents"}
             </Button>
             <div className="flex items-center gap-1 sm:hidden">
               <Button
@@ -560,31 +641,26 @@ export function AgentDetailPage(props: {
 
       {host ? (
         <section className="grid gap-5">
-          <DetailGrid>
+          <DetailGrid className="items-center">
             <DetailLabel>Host</DetailLabel>
-            <div className="flex min-w-0 items-center gap-2">
-              <AgentIcon kind={host.kind} />
+            <div className="flex min-h-5 min-w-0 items-center gap-2">
+              <AgentIconFrame kind={host.kind} />
               <span className="font-medium">{host.displayName}</span>
             </div>
             <DetailLabel>Status</DetailLabel>
-            <LinkStatusBadge host={host} />
+            <AgentStatusSummary host={host} unmanagedSkillCount={agentAvailable.length} />
             {host.kind === "claude-code" && host.statusline ? (
               <>
                 <DetailLabel>Statusline</DetailLabel>
-                <ClaudeStatuslineBadge state={host.statusline} />
+                <ClaudeStatuslineStatus state={host.statusline} />
                 <DetailLabel>Ratel Local</DetailLabel>
-                <StatusBadge tone={host.statusline.ratelEnabled ? "success" : "warning"}>
+                <AgentStatusText tone={host.statusline.ratelEnabled ? "success" : "warning"}>
                   {host.statusline.ratelEnabled ? "Enabled" : "Not enabled"}
-                </StatusBadge>
+                </AgentStatusText>
               </>
             ) : null}
-            <DetailLabel>Coverage</DetailLabel>
-            <CoverageBadges
-              missingToolCount={missingRatelEntryNames(host).length}
-              unmanagedSkillCount={agentAvailable.length}
-            />
             <DetailLabel>Config</DetailLabel>
-            <code className="min-w-0 truncate rounded-md bg-background px-2 py-1.5 font-mono text-xs text-muted-foreground">
+            <code className="flex min-h-5 min-w-0 items-center truncate font-mono text-xs text-muted-foreground">
               {primaryPath ?? "Known paths unavailable"}
             </code>
           </DetailGrid>
@@ -640,7 +716,6 @@ function AgentPageSwitcher(props: {
           <SelectItem key={host.kind} value={host.kind}>
             <AgentIconFrame kind={host.kind} />
             <span className="min-w-0 flex-1 truncate">{host.displayName}</span>
-            <LinkStatusBadge host={host} />
           </SelectItem>
         ))}
       </SelectContent>
@@ -654,7 +729,6 @@ function AgentDirectoryCard(props: {
   unmanagedSkillCount: number;
 }) {
   const posture = POSTURE_COPY[props.host.posture];
-  const missingTools = missingRatelEntryNames(props.host).length;
   const primaryPath =
     props.host.scopes.find((scope) => scope.available)?.path ?? props.host.scopes[0]?.path;
   const configPath = primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable";
@@ -665,7 +739,7 @@ function AgentDirectoryCard(props: {
         onClick={props.onOpen}
         type="button"
       >
-        <PageSurfaceContent className="grid min-w-0 content-start gap-4">
+        <PageSurfaceContent className="grid min-w-0 content-start gap-3">
           <div className="flex min-w-0 items-start gap-3">
             <AgentIcon kind={props.host.kind} />
             <div className="min-w-0 flex-1">
@@ -674,14 +748,11 @@ function AgentDirectoryCard(props: {
               </h3>
               <p className="mt-1 text-sm text-muted-foreground">{posture.description}</p>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <LinkStatusBadge host={props.host} />
-              <ChevronRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
-            </div>
+            <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
           </div>
-
-          <CoverageBadges
-            missingToolCount={missingTools}
+          <AgentStatusSummary
+            className="pl-[3.75rem]"
+            host={props.host}
             unmanagedSkillCount={props.unmanagedSkillCount}
           />
         </PageSurfaceContent>
@@ -694,6 +765,118 @@ function AgentDirectoryCard(props: {
       </button>
     </PageSurface>
   );
+}
+
+function AgentStatusSummary(props: {
+  className?: string;
+  host: DetectedAgentHostSummary;
+  unmanagedSkillCount: number;
+}) {
+  const status = agentCardStatusModel({
+    connectionKind: props.host.connection.kind,
+    linked: props.host.connection.linked,
+    missingToolCount: missingRatelEntryNames(props.host).length,
+    posture: props.host.posture,
+    unmanagedSkillCount: props.unmanagedSkillCount,
+  });
+  const connectionTone =
+    props.host.connection.kind === "duplicate"
+      ? "warning"
+      : props.host.connection.linked
+        ? "success"
+        : "muted";
+
+  return (
+    <div
+      className={cn(
+        "flex min-h-5 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs",
+        props.className,
+      )}
+      data-slot="agent-status-summary"
+    >
+      <AgentStatusText tone={connectionTone}>{status.connectionLabel}</AgentStatusText>
+      <span aria-hidden="true" className="text-border">
+        ·
+      </span>
+      <AgentStatusText dot={false} tone={status.tone}>
+        {status.healthLabel}
+      </AgentStatusText>
+    </div>
+  );
+}
+
+function AgentStatusText(props: {
+  children: React.ReactNode;
+  dot?: boolean;
+  tone: "muted" | "success" | "warning";
+}) {
+  const dotClass =
+    props.tone === "success"
+      ? "bg-emerald-500"
+      : props.tone === "warning"
+        ? "bg-amber-500"
+        : "bg-muted-foreground/50";
+  return (
+    <span
+      className={cn(
+        "inline-flex min-h-5 items-center gap-1.5 text-xs",
+        props.tone === "success" && "text-emerald-700 dark:text-emerald-300",
+        props.tone === "warning" && "text-amber-700 dark:text-amber-300",
+        props.tone === "muted" && "text-muted-foreground",
+      )}
+      data-slot="agent-status-text"
+    >
+      {props.dot === false ? null : (
+        <span aria-hidden="true" className={cn("size-1.5 rounded-full", dotClass)} />
+      )}
+      {props.children}
+    </span>
+  );
+}
+
+export function agentCardStatusModel(input: {
+  connectionKind: RatelConnectionKind;
+  linked: boolean;
+  missingToolCount: number;
+  posture: AgentPosture;
+  unmanagedSkillCount: number;
+}): {
+  connectionLabel: string;
+  healthLabel: string;
+  tone: "muted" | "success" | "warning";
+} {
+  const connectionLabel =
+    input.posture === "unavailable"
+      ? "Unavailable"
+      : input.connectionKind === "duplicate"
+        ? "Duplicate connection"
+        : input.connectionKind === "plugin"
+          ? "Plugin connected"
+          : input.linked
+            ? "Connected"
+            : "Not connected";
+  const attentionParts = [
+    input.missingToolCount > 0
+      ? `${input.missingToolCount} tool${input.missingToolCount === 1 ? "" : "s"}`
+      : null,
+    input.unmanagedSkillCount > 0
+      ? `${input.unmanagedSkillCount} skill${input.unmanagedSkillCount === 1 ? "" : "s"}`
+      : null,
+  ].filter((part): part is string => Boolean(part));
+
+  if (attentionParts.length > 0) {
+    const needs =
+      input.missingToolCount + input.unmanagedSkillCount === 1 ? "needs setup" : "need setup";
+    return {
+      connectionLabel,
+      healthLabel: `${attentionParts.join(" · ")} ${needs}`,
+      tone: "warning",
+    };
+  }
+  if (input.posture === "unavailable" || !input.linked) {
+    return { connectionLabel, healthLabel: "Setup needed", tone: "muted" };
+  }
+  return { connectionLabel, healthLabel: "Ready", tone: "success" };
 }
 
 function AgentOperationPanel(props: {
@@ -712,7 +895,7 @@ function AgentOperationPanel(props: {
   const canRepairConnection =
     props.host.connection.kind === "duplicate" || props.host.connection.kind === "explicit";
   return (
-    <section className="grid gap-5 rounded-2xl border border-forest-300 bg-forest-600/40 p-5 sm:p-6">
+    <section className="grid gap-7">
       <AgentTraceExporterSection
         hostKind={props.hostKind}
         onStatusChanged={props.onTraceStatusChanged}
@@ -795,6 +978,28 @@ export function agentTraceCardModel(state: AgentTraceState): {
   return { action: null, irreversibleConfirmation: false };
 }
 
+export function agentTraceInstallCopy(state: AgentTraceState): {
+  actionLabel: string | null;
+  description: string;
+  title: string;
+} {
+  const actionLabel =
+    state === "disabled"
+      ? "Enable"
+      : state === "configured"
+        ? "Disable"
+        : state === "stale"
+          ? "Repair"
+          : state === "conflict"
+            ? "Review"
+            : null;
+  return {
+    actionLabel,
+    description: "Send native traces to Ratel's local relay.",
+    title: "Native traces",
+  };
+}
+
 function AgentTraceExporterSection(props: {
   hostKind: AgentHostKind;
   onStatusChanged: () => Promise<void>;
@@ -819,6 +1024,7 @@ function AgentTraceExporterSection(props: {
 
   const stateCopy = TRACE_STATE_COPY[host.state];
   const card = agentTraceCardModel(host.state);
+  const copy = agentTraceInstallCopy(host.state);
   const apply = async (action: "enable" | "disable", overwrite = false) => {
     const label =
       action === "enable" ? "Native trace export enabled" : "Native trace export disabled";
@@ -842,17 +1048,42 @@ function AgentTraceExporterSection(props: {
   };
 
   return (
-    <SetupActionSection
-      description="Route this agent's native traces to Ratel's loopback relay. Logs, metrics, and content privacy settings are untouched."
-      title="Native trace export"
-    >
+    <SetupActionSection description="Native diagnostics for this agent." title="Trace export">
       <div className="grid gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={stateCopy.variant}>{stateCopy.label}</Badge>
-          <code className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-            {host.configPath}
-          </code>
-        </div>
+        <InstallActionRow
+          action={
+            confirmOverwrite ? null : (
+              <>
+                {card.action === "enable" || card.action === "repair" ? (
+                  <Button disabled={isPending} onClick={() => void apply("enable")}>
+                    {copy.actionLabel}
+                    {isPending ? <Button.LoadingIndicator label="Updating trace exporter" /> : null}
+                  </Button>
+                ) : null}
+                {card.action === "disable" ? (
+                  <Button
+                    disabled={isPending}
+                    onClick={() => void apply("disable")}
+                    variant="outline"
+                  >
+                    {copy.actionLabel}
+                    {isPending ? (
+                      <Button.LoadingIndicator label="Disabling trace exporter" />
+                    ) : null}
+                  </Button>
+                ) : null}
+                {card.action === "confirm-overwrite" ? (
+                  <Button onClick={() => setConfirmOverwrite(true)} variant="outline">
+                    {copy.actionLabel}
+                  </Button>
+                ) : null}
+              </>
+            )
+          }
+          description={copy.description}
+          meta={<Badge variant={stateCopy.variant}>{stateCopy.label}</Badge>}
+          title={copy.title}
+        />
 
         {!props.status.cloudConfigured ? (
           <RatelCloudTraceSetup onConfigured={props.onStatusChanged} request={props.request} />
@@ -899,27 +1130,7 @@ function AgentTraceExporterSection(props: {
               </Button>
             </div>
           </Alert>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {card.action === "enable" || card.action === "repair" ? (
-              <Button disabled={isPending} onClick={() => void apply("enable")}>
-                {card.action === "repair" ? "Repair exporter" : "Enable traces"}
-                {isPending ? <Button.LoadingIndicator label="Updating trace exporter" /> : null}
-              </Button>
-            ) : null}
-            {card.action === "disable" ? (
-              <Button disabled={isPending} onClick={() => void apply("disable")} variant="outline">
-                Disable traces
-                {isPending ? <Button.LoadingIndicator label="Disabling trace exporter" /> : null}
-              </Button>
-            ) : null}
-            {card.action === "confirm-overwrite" ? (
-              <Button onClick={() => setConfirmOverwrite(true)} variant="outline">
-                Review replacement
-              </Button>
-            ) : null}
-          </div>
-        )}
+        ) : null}
       </div>
     </SetupActionSection>
   );
@@ -949,18 +1160,10 @@ function RatelCloudTraceSetup(props: {
   };
 
   return (
-    <Alert>
-      <AlertTitle>Ratel Cloud tracing is not configured</AlertTitle>
-      <AlertDescription>
-        Would you like to add an API key? If you don&apos;t have one, create one at{" "}
-        <a href={RATEL_CLOUD_SETTINGS_URL} rel="noreferrer" target="_blank">
-          cloud.ratel.sh/settings
-        </a>
-        .
-      </AlertDescription>
+    <div className="rounded-xl border border-border bg-background px-4 py-3">
       {editing ? (
         <form
-          className="mt-3 grid max-w-xl gap-3"
+          className="grid max-w-xl gap-3"
           onSubmit={(event) => {
             event.preventDefault();
             void save();
@@ -1001,13 +1204,19 @@ function RatelCloudTraceSetup(props: {
           </div>
         </form>
       ) : (
-        <div className="mt-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-medium text-sm">Cloud key required</p>
+            <p className="text-xs text-muted-foreground">
+              Add a key before exporting to Ratel Cloud.
+            </p>
+          </div>
           <Button onClick={() => setEditing(true)} type="button" variant="outline">
             Add API key
           </Button>
         </div>
       )}
-    </Alert>
+    </div>
   );
 }
 
@@ -1076,12 +1285,6 @@ function ClaudeStatuslineSection(props: {
     : otherConfigured
       ? "Replace statusline"
       : "Install statusline";
-  const description = installed
-    ? "Remove the Ratel-owned statusLine command from Claude Code."
-    : otherConfigured
-      ? "Replace the existing Claude Code statusLine command with Ratel's statusline."
-      : "Show Claude context usage, Ratel enablement, and Ratel tool telemetry in the statusline.";
-
   const commit = async () => {
     const ok = await runAction(actionLabel, () =>
       installed
@@ -1095,33 +1298,54 @@ function ClaudeStatuslineSection(props: {
   };
 
   return (
-    <SetupActionSection description={description} title={actionLabel}>
-      <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-        <div>
-          <p className="font-medium text-sm">Context and Ratel telemetry at a glance</p>
-          <p className="mt-1 max-w-xl text-muted-foreground text-xs">
-            Shows model, context-window usage, session duration, git branch, whether Ratel is
-            enabled, and the estimated tool tokens/tool count Ratel keeps out of Claude's prompt.
-          </p>
-          {!props.state.ratelEnabled ? (
-            <p className="mt-2 max-w-xl text-amber-700 text-xs dark:text-amber-400">
-              Ratel is not enabled in Claude Code yet, so the statusline will report that until the
-              gateway is linked or the plugin is enabled.
-            </p>
-          ) : null}
-        </div>
-        <Button
-          className="min-h-12 px-6 text-base md:min-w-44"
-          disabled={isPending}
-          onClick={() => void commit()}
-          variant={installed ? "outline" : "default"}
-        >
-          {installed ? <X /> : <FileText />}
-          {isPending && <Button.LoadingIndicator label={actionLabel} />}
-          {actionLabel}
-        </Button>
-      </div>
+    <SetupActionSection description="Show Ratel status in Claude Code." title="Statusline">
+      <InstallActionRow
+        action={
+          <Button
+            disabled={isPending}
+            onClick={() => void commit()}
+            variant={installed ? "outline" : "default"}
+          >
+            {installed ? <X /> : <FileText />}
+            {isPending ? <Button.LoadingIndicator label={actionLabel} /> : null}
+            {actionLabel}
+          </Button>
+        }
+        description={
+          installed
+            ? "Installed and managed by Ratel."
+            : otherConfigured
+              ? "Replace the current custom statusline."
+              : "See context use and Ratel activity at a glance."
+        }
+        meta={
+          !props.state.ratelEnabled ? (
+            <span className="text-amber-700 text-xs dark:text-amber-300">Connect Ratel first</span>
+          ) : null
+        }
+        title="Claude Code statusline"
+      />
     </SetupActionSection>
+  );
+}
+
+function InstallActionRow(props: {
+  action: React.ReactNode;
+  description: string;
+  meta?: React.ReactNode;
+  title: string;
+}) {
+  return (
+    <div className="grid gap-4 rounded-xl border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <p className="font-medium text-sm">{props.title}</p>
+          {props.meta}
+        </div>
+        <p className="mt-1 text-muted-foreground text-xs">{props.description}</p>
+      </div>
+      {props.action ? <div className="flex md:justify-end">{props.action}</div> : null}
+    </div>
   );
 }
 
@@ -2655,14 +2879,14 @@ function LinkStatusBadge(props: { host: DetectedAgentHostSummary }) {
   return <StatusBadge tone="muted">Not linked</StatusBadge>;
 }
 
-function ClaudeStatuslineBadge(props: { state: ClaudeStatuslineState }) {
+function ClaudeStatuslineStatus(props: { state: ClaudeStatuslineState }) {
   if (props.state.status === "installed") {
-    return <StatusBadge tone="success">Installed</StatusBadge>;
+    return <AgentStatusText tone="success">Installed</AgentStatusText>;
   }
   if (props.state.status === "other") {
-    return <StatusBadge tone="warning">Other configured</StatusBadge>;
+    return <AgentStatusText tone="warning">Other configured</AgentStatusText>;
   }
-  return <StatusBadge tone="muted">Not installed</StatusBadge>;
+  return <AgentStatusText tone="muted">Not installed</AgentStatusText>;
 }
 
 function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "success" | "warning" }) {
@@ -2683,26 +2907,6 @@ function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "succes
       <span className={cn("size-1.5 rounded-full", dotClass)} />
       {props.children}
     </Badge>
-  );
-}
-
-function CoverageBadges(props: { missingToolCount: number; unmanagedSkillCount: number }) {
-  if (props.missingToolCount === 0 && props.unmanagedSkillCount === 0) {
-    return <StatusBadge tone="success">Coverage up to date</StatusBadge>;
-  }
-  return (
-    <div className="flex flex-wrap gap-2">
-      {props.missingToolCount > 0 ? (
-        <StatusBadge tone="warning">
-          {props.missingToolCount} native tool{props.missingToolCount === 1 ? "" : "s"} not in Ratel
-        </StatusBadge>
-      ) : null}
-      {props.unmanagedSkillCount > 0 ? (
-        <StatusBadge tone="warning">
-          {props.unmanagedSkillCount} skill{props.unmanagedSkillCount === 1 ? "" : "s"} not managed
-        </StatusBadge>
-      ) : null}
-    </div>
   );
 }
 

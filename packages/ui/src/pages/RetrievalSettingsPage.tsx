@@ -21,7 +21,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress, ProgressLabel } from "@/components/ui/progress";
@@ -34,11 +34,15 @@ import {
 } from "@/components/ui/select";
 import { ratelQueryKeys } from "@/lib/ratel-query";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
+import { agentSettingsPageEnabled } from "@/lib/ui-features";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
+import { AgentSettingsSection, type AgentSetupRouteData } from "@/pages/AgentSetupPage";
 
 type RetrievalMethod = RetrievalConfig["method"];
 type RetrievalSource = "built-in" | "huggingface" | "local" | "ollama" | "endpoint";
+
+const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 export interface RetrievalDraft {
   method: RetrievalMethod;
@@ -85,7 +89,11 @@ interface RetrievalWriteVariables {
   target: ReturnType<typeof retrievalTarget>;
 }
 
-export function SettingsPage() {
+export function SettingsPage({
+  initialAgentData,
+}: {
+  initialAgentData?: AgentSetupRouteData;
+} = {}) {
   const { config, configError, configLoading, context } = useRatelApp();
   const scopes = availableRetrievalScopes(context);
   const [requestedScope, setRequestedScope] = useState<RatelScope>(scopes[0] ?? "user");
@@ -104,12 +112,14 @@ export function SettingsPage() {
             <PageHeaderTitle>Settings</PageHeaderTitle>
           </PageHeaderBackRow>
           <PageHeaderDescription>
-            Configure Ratel Cloud traces and how Ratel finds relevant tools and skills.
+            Manage agents, cloud tracing, and retrieval.
           </PageHeaderDescription>
         </PageHeaderContent>
       </PageHeader>
 
-      <CloudTraceSettingsCard />
+      {AGENT_SETTINGS_ENABLED ? <AgentSettingsSection initialData={initialAgentData} /> : null}
+
+      <CloudTraceSettingsSection />
 
       {configError ? (
         <Alert variant="destructive">
@@ -118,45 +128,48 @@ export function SettingsPage() {
         </Alert>
       ) : null}
 
-      <div className="grid gap-1 pt-2">
-        <h2 className="text-lg font-semibold">Retrieval</h2>
-        <p className="text-sm text-muted-foreground">
-          Choose how Ratel finds relevant tools and skills. Changes apply to newly connected
-          clients.
-        </p>
-      </div>
+      <section aria-labelledby="retrieval-settings-title" className="grid gap-3">
+        <div className="grid gap-1 px-1">
+          <h2 className="text-lg font-semibold" id="retrieval-settings-title">
+            Retrieval
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Choose how Ratel finds relevant tools and skills.
+          </p>
+        </div>
 
-      <section
-        aria-label="Current retrieval method"
-        className="flex min-h-12 items-center gap-3 rounded-xl border border-forest-300 bg-forest-600/40 px-4 py-3 text-sm"
-      >
-        <span className="shrink-0 text-muted-foreground">Current</span>
-        <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
-        <p className="min-w-0 truncate">
-          <span className="font-medium">{retrievalMethodLabel(effective.method)}</span>
-          {effective.method !== "bm25" ? (
-            <span className="text-muted-foreground"> · {retrievalSourceLabel(effective)}</span>
-          ) : null}
-        </p>
+        <section
+          aria-label="Current retrieval method"
+          className="flex min-h-12 items-center gap-3 rounded-xl border border-forest-300 bg-forest-600/40 px-4 py-3 text-sm"
+        >
+          <span className="shrink-0 text-muted-foreground">Current</span>
+          <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
+          <p className="min-w-0 truncate">
+            <span className="font-medium">{retrievalMethodLabel(effective.method)}</span>
+            {effective.method !== "bm25" ? (
+              <span className="text-muted-foreground"> · {retrievalSourceLabel(effective)}</span>
+            ) : null}
+          </p>
+        </section>
+
+        <RetrievalEditor
+          key={editorKey}
+          config={config}
+          initial={override}
+          loading={configLoading}
+          onScopeChange={setRequestedScope}
+          revision={revision}
+          scope={scope}
+          scopes={scopes}
+        />
       </section>
-
-      <RetrievalEditor
-        key={editorKey}
-        config={config}
-        initial={override}
-        loading={configLoading}
-        onScopeChange={setRequestedScope}
-        revision={revision}
-        scope={scope}
-        scopes={scopes}
-      />
     </main>
   );
 }
 
 export const RetrievalSettingsPage = SettingsPage;
 
-function CloudTraceSettingsCard() {
+function CloudTraceSettingsSection() {
   const { request } = useRatelApp();
   const cloudQuery = useQuery({
     queryKey: ratelQueryKeys.cloudTraces(),
@@ -164,6 +177,7 @@ function CloudTraceSettingsCard() {
   });
   const [endpoint, setEndpoint] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [editingApiKey, setEditingApiKey] = useState(false);
   useEffect(() => {
     if (cloudQuery.data) setEndpoint(cloudQuery.data.endpoint);
   }, [cloudQuery.data]);
@@ -186,66 +200,108 @@ function CloudTraceSettingsCard() {
       }),
     onSuccess: (status) => {
       setApiKey("");
+      setEditingApiKey(false);
       setEndpoint(status.endpoint);
     },
     successMessage: "Saved Ratel Cloud trace settings",
   });
+  const apiKeyConfigured = cloudQuery.data?.configured ?? false;
+  const showApiKeyInput = !apiKeyConfigured || editingApiKey;
 
   return (
-    <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
-      <CardHeader>
-        <CardTitle>Ratel Cloud</CardTitle>
-        <CardDescription>
-          Save the daemon-owned API key used for external agent and Ratel runtime traces.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid gap-2">
-          <Label htmlFor="cloud-trace-endpoint">Trace endpoint</Label>
-          <Input
-            id="cloud-trace-endpoint"
-            onChange={(event) => setEndpoint(event.currentTarget.value)}
-            placeholder="https://cloud.ratel.sh/api/v1/traces"
-            value={endpoint}
-          />
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="cloud-api-key">API key</Label>
-          <Input
-            autoComplete="off"
-            id="cloud-api-key"
-            onChange={(event) => setApiKey(event.currentTarget.value)}
-            placeholder={
-              cloudQuery.data?.configured ? "Leave blank to keep the saved key" : "rtl_…"
-            }
-            type="password"
-            value={apiKey}
-          />
-          <p className="text-xs text-muted-foreground">
-            {cloudQuery.data?.configured
-              ? "Cloud trace export is configured for this daemon."
-              : "The key is stored by the local daemon and is never returned to this page."}
-          </p>
-        </div>
-        {cloudQuery.error ? (
-          <p className="text-sm text-destructive">{cloudQuery.error.message}</p>
-        ) : null}
-        <div>
-          <Button
-            disabled={cloudQuery.isPending || saveMutation.isPending || !endpoint.trim()}
-            onClick={() =>
-              saveMutation.mutate({
-                endpoint: endpoint.trim(),
-                apiKey,
-              })
-            }
-          >
-            <Save />
-            {saveMutation.isPending ? "Saving…" : "Save Cloud settings"}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+    <section aria-labelledby="cloud-settings-title" className="grid gap-3">
+      <div className="grid gap-1 px-1">
+        <h2 className="text-lg font-semibold" id="cloud-settings-title">
+          Ratel Cloud
+        </h2>
+        <p className="text-sm text-muted-foreground">Configure trace export to Ratel Cloud.</p>
+      </div>
+      <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
+        <CardContent className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="cloud-trace-endpoint">Trace endpoint</Label>
+            <Input
+              id="cloud-trace-endpoint"
+              onChange={(event) => setEndpoint(event.currentTarget.value)}
+              placeholder="https://cloud.ratel.sh/api/v1/traces"
+              value={endpoint}
+            />
+          </div>
+          {showApiKeyInput ? (
+            <div className="grid gap-2">
+              <Label htmlFor="cloud-api-key">API key</Label>
+              <Input
+                autoComplete="off"
+                autoFocus={editingApiKey}
+                id="cloud-api-key"
+                onChange={(event) => setApiKey(event.currentTarget.value)}
+                placeholder={apiKeyConfigured ? "Enter a replacement key" : "rtl_…"}
+                type="password"
+                value={apiKey}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  The key is stored by the local daemon and is never returned to this page.
+                </p>
+                {apiKeyConfigured ? (
+                  <Button
+                    onClick={() => {
+                      setApiKey("");
+                      setEditingApiKey(false);
+                    }}
+                    size="sm"
+                    type="button"
+                    variant="ghost"
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="flex min-h-12 items-center justify-between gap-3 rounded-xl border border-border px-3 py-2">
+              <div className="grid gap-1">
+                <p className="font-medium text-sm">API key</p>
+                <p className="inline-flex items-center gap-1.5 text-emerald-700 text-xs dark:text-emerald-300">
+                  <span aria-hidden="true" className="size-1.5 rounded-full bg-emerald-500" />
+                  Configured
+                </p>
+              </div>
+              <Button
+                onClick={() => setEditingApiKey(true)}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                Edit
+              </Button>
+            </div>
+          )}
+          {cloudQuery.error ? (
+            <p className="text-sm text-destructive">{cloudQuery.error.message}</p>
+          ) : null}
+          <div>
+            <Button
+              disabled={
+                cloudQuery.isPending ||
+                saveMutation.isPending ||
+                !endpoint.trim() ||
+                (showApiKeyInput && !apiKey.trim())
+              }
+              onClick={() =>
+                saveMutation.mutate({
+                  endpoint: endpoint.trim(),
+                  apiKey,
+                })
+              }
+            >
+              <Save />
+              {saveMutation.isPending ? "Saving…" : "Save Cloud settings"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </section>
   );
 }
 
@@ -357,12 +413,6 @@ function RetrievalEditor({
   return (
     <>
       <Card className="rounded-2xl border-forest-300 bg-forest-600/40 shadow-none">
-        <CardHeader>
-          <CardTitle>Retrieval</CardTitle>
-          <CardDescription>
-            Choose the retrieval method for {retrievalScopeLabel(scope).toLowerCase()} settings.
-          </CardDescription>
-        </CardHeader>
         <CardContent className="grid gap-6">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">

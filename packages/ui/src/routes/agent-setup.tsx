@@ -1,10 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { loadContextRouteData } from "@/components/context-route-page";
-import { AgentSetupPage } from "@/pages/AgentSetupPage";
+import { agentSettingsPageEnabled } from "@/lib/ui-features";
+import { AgentSetupPage, LegacyAgentSetupRedirect } from "@/pages/AgentSetupPage";
 
 type AppSearch = {
   t?: string;
 };
+
+const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 export const Route = createFileRoute("/agent-setup")({
   validateSearch,
@@ -22,7 +25,9 @@ export const Route = createFileRoute("/agent-setup")({
 });
 
 function AgentSetupRoute() {
-  return <AgentSetupPage initialData={Route.useLoaderData().agentSetup} />;
+  const routeData = Route.useLoaderData();
+  if (AGENT_SETTINGS_ENABLED) return <LegacyAgentSetupRedirect />;
+  return <AgentSetupPage initialData={routeData.agentSetup} />;
 }
 
 function validateSearch(search: Record<string, unknown>): AppSearch {

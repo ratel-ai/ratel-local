@@ -131,8 +131,7 @@ export function SkillsPage() {
             <PageHeaderTitle>Skills</PageHeaderTitle>
           </PageHeaderBackRow>
           <PageHeaderDescription>
-            Reusable playbooks Ratel manages and serves through the gateway. Link skills from Claude
-            Code or Codex as invoke-only without moving their native folders.
+            Manage Claude Code and Codex skills with Ratel.
           </PageHeaderDescription>
         </PageHeaderContent>
         <PageHeaderActions className="items-center">

@@ -4,17 +4,21 @@ import type { ConfigResponse } from "@/App";
 import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
 import { discoveredSkillSummaries, type SkillsResponse } from "@/lib/skills";
+import { agentSettingsPageEnabled } from "@/lib/ui-features";
 import {
   AgentDetailPage,
   AgentSetupPage,
   type AgentSetupRouteData,
   agentHostsFromResponse,
+  LegacyAgentSetupRedirect,
 } from "@/pages/AgentSetupPage";
 import { McpClientsPage } from "@/pages/McpClientsPage";
 import { SettingsPage } from "@/pages/RetrievalSettingsPage";
 import { SkillDetailPage } from "@/pages/SkillDetailPage";
 import { SkillsPage } from "@/pages/SkillsPage";
 import { ToolSourceCreatePage, ToolSourceDetailPage, ToolsPage } from "@/pages/ToolsPage";
+
+const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 interface ContextRoutePageProps {
   routeData?: ContextRouteData;
@@ -34,7 +38,7 @@ export function ContextRoutePage({ routeData, subpath = "" }: ContextRoutePagePr
   if (segments[0] === "clients" && segments.length === 1) return <McpClientsPage />;
   if (segments[0] === "skills" && segments.length === 1) return <SkillsPage />;
   if (["settings", "retrieval"].includes(segments[0] ?? "") && segments.length === 1) {
-    return <SettingsPage />;
+    return <SettingsPage initialAgentData={routeData?.agentSetup} />;
   }
   if (segments[0] === "skills" && segments.length === 2) {
     return <SkillDetailPage id={segments[1]} />;
@@ -46,7 +50,11 @@ export function ContextRoutePage({ routeData, subpath = "" }: ContextRoutePagePr
     return <ToolSourceDetailPage scope={segments[1]} name={segments[2]} />;
   }
   if (segments[0] === "agent-setup" && segments.length === 1) {
-    return <AgentSetupPage initialData={routeData?.agentSetup} />;
+    return AGENT_SETTINGS_ENABLED ? (
+      <LegacyAgentSetupRedirect />
+    ) : (
+      <AgentSetupPage initialData={routeData?.agentSetup} />
+    );
   }
   if (segments[0] === "agent-setup" && segments.length === 2) {
     return (
@@ -78,7 +86,7 @@ export async function loadContextRouteData(input: {
   token?: string;
 }): Promise<ContextRouteData> {
   const segments = (input.subpath ?? "").split("/").filter(Boolean);
-  if (segments[0] !== "agent-setup" || !input.token) return {};
+  if (!["agent-setup", "settings"].includes(segments[0] ?? "") || !input.token) return {};
 
   const token = input.token;
 

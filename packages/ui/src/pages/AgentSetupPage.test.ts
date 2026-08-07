@@ -1,5 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { agentTraceCardModel, cloudTraceSetupPatch } from "./AgentSetupPage";
+import {
+  agentCardStatusModel,
+  agentTraceCardModel,
+  agentTraceInstallCopy,
+  cloudTraceSetupPatch,
+} from "./AgentSetupPage";
+
+describe("Agent card status", () => {
+  it("collapses connected and covered state into one quiet summary", () => {
+    expect(
+      agentCardStatusModel({
+        connectionKind: "plugin",
+        linked: true,
+        missingToolCount: 0,
+        posture: "ratel-only",
+        unmanagedSkillCount: 0,
+      }),
+    ).toEqual({
+      connectionLabel: "Plugin connected",
+      healthLabel: "Ready",
+      tone: "success",
+    });
+  });
+
+  it("combines tool and skill attention into a single label", () => {
+    expect(
+      agentCardStatusModel({
+        connectionKind: "plugin",
+        linked: true,
+        missingToolCount: 4,
+        posture: "mixed",
+        unmanagedSkillCount: 1,
+      }),
+    ).toEqual({
+      connectionLabel: "Plugin connected",
+      healthLabel: "4 tools · 1 skill need setup",
+      tone: "warning",
+    });
+  });
+});
 
 describe("Agent Setup native trace card", () => {
   it.each([
@@ -10,6 +49,16 @@ describe("Agent Setup native trace card", () => {
     ["invalid", null, false],
   ] as const)("maps %s to its safe action", (state, action, irreversibleConfirmation) => {
     expect(agentTraceCardModel(state)).toEqual({ action, irreversibleConfirmation });
+  });
+
+  it("uses the same compact install language as other agent actions", () => {
+    expect(agentTraceInstallCopy("disabled")).toEqual({
+      actionLabel: "Enable",
+      description: "Send native traces to Ratel's local relay.",
+      title: "Native traces",
+    });
+    expect(agentTraceInstallCopy("configured").actionLabel).toBe("Disable");
+    expect(agentTraceInstallCopy("stale").actionLabel).toBe("Repair");
   });
 });
 

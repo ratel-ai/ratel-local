@@ -7,7 +7,10 @@ afterEach(() => {
 });
 
 describe("context route data preloading", () => {
-  it("preloads agent hosts and discovered skills for a project Agent Setup route", async () => {
+  it.each([
+    "agent-setup",
+    "settings",
+  ])("preloads agent hosts and discovered skills for the project %s route", async (subpath) => {
     const requests: Array<{ authorization: string | null; url: string }> = [];
     vi.stubGlobal(
       "fetch",
@@ -41,7 +44,7 @@ describe("context route data preloading", () => {
       context: { kind: "project", projectId: "project/a" },
       queryClient: new QueryClient(),
       signal: new AbortController().signal,
-      subpath: "agent-setup",
+      subpath,
       token: "secret",
     });
 
