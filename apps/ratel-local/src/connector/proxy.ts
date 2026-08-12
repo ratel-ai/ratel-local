@@ -99,13 +99,12 @@ export async function runConnectorProxy(
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
+    if (!backend && attaching) await attaching.catch(() => undefined);
     if (!backend) return { tools: BOOTSTRAP_TOOLS };
     return backend.listTools();
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    if (backend) return backend.callTool(request.params);
-
     if (request.params.name === "ratel_daemon_status") {
       return jsonResult(await options.daemonStatus());
     }
@@ -117,6 +116,9 @@ export async function runConnectorProxy(
       });
     }
     if (request.params.name === "ratel_daemon_start") {
+      if (backend) {
+        return jsonResult({ state: "running", message: "Ratel daemon is already connected." });
+      }
       try {
         await options.startDaemon();
         await attach();
@@ -133,6 +135,8 @@ export async function runConnectorProxy(
         );
       }
     }
+    if (!backend && attaching) await attaching.catch(() => undefined);
+    if (backend) return backend.callTool(request.params);
     throw new Error(`unknown connector tool: ${request.params.name}`);
   });
 

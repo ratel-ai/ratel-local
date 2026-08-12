@@ -130,6 +130,93 @@ describe("runConnectorProxy", () => {
     await connector.shutdown();
   });
 
+  it("waits for an in-flight initial attachment before returning the first tool list", async () => {
+    const remote = await backend();
+    const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    let finishAttach: ((client: Client) => void) | undefined;
+    const connector = await runConnectorProxy({
+      serverTransport: connectorTransport,
+      connectBackend: () =>
+        new Promise<Client>((resolve) => {
+          finishAttach = resolve;
+        }),
+      daemonStatus: async () => ({ state: "running" }),
+      startDaemon: async () => {},
+      serverVersion: "1.0.0",
+      initialConnectionGraceMs: 1,
+    });
+    const host = new Client({ name: "host", version: "1.0.0" });
+    await host.connect(hostTransport);
+
+    const tools = host.listTools();
+    finishAttach?.(remote.client);
+
+    expect((await tools).tools.map((tool) => tool.name)).toEqual(["search_capabilities"]);
+    await host.close();
+    await connector.shutdown();
+    await remote.server.close();
+  });
+
+  it("handles a bootstrap status call locally after the backend attaches", async () => {
+    const remote = await backend();
+    const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    let finishAttach: ((client: Client) => void) | undefined;
+    const daemonStatus = vi.fn(async () => ({ state: "running" as const }));
+    const connector = await runConnectorProxy({
+      serverTransport: connectorTransport,
+      connectBackend: () =>
+        new Promise<Client>((resolve) => {
+          finishAttach = resolve;
+        }),
+      daemonStatus,
+      startDaemon: async () => {},
+      serverVersion: "1.0.0",
+      initialConnectionGraceMs: 1,
+    });
+    const host = new Client({ name: "host", version: "1.0.0" });
+    await host.connect(hostTransport);
+
+    finishAttach?.(remote.client);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const result = await host.callTool({ name: "ratel_daemon_status", arguments: {} });
+
+    expect(daemonStatus).toHaveBeenCalledOnce();
+    expect((result.content as Array<{ text: string }>)[0].text).toContain('"state":"running"');
+    await host.close();
+    await connector.shutdown();
+    await remote.server.close();
+  });
+
+  it("waits for an in-flight attachment before forwarding a daemon tool call", async () => {
+    const remote = await backend();
+    const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    let finishAttach: ((client: Client) => void) | undefined;
+    const connector = await runConnectorProxy({
+      serverTransport: connectorTransport,
+      connectBackend: () =>
+        new Promise<Client>((resolve) => {
+          finishAttach = resolve;
+        }),
+      daemonStatus: async () => ({ state: "running" }),
+      startDaemon: async () => {},
+      serverVersion: "1.0.0",
+      initialConnectionGraceMs: 1,
+    });
+    const host = new Client({ name: "host", version: "1.0.0" });
+    await host.connect(hostTransport);
+
+    const result = host.callTool({
+      name: "search_capabilities",
+      arguments: { query: "incident" },
+    });
+    finishAttach?.(remote.client);
+
+    expect((await result).content).toEqual([{ type: "text", text: '{"query":"incident"}' }]);
+    await host.close();
+    await connector.shutdown();
+    await remote.server.close();
+  });
+
   it("returns to bootstrap tools when the daemon disconnects", async () => {
     const remote = await backend();
     const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
