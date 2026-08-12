@@ -23,11 +23,6 @@ describe("context route data preloading", () => {
         if (url.startsWith("/api/agent-hosts")) {
           return Response.json({ hosts: [{ kind: "codex", displayName: "Codex" }] });
         }
-        if (url.startsWith("/api/config")) {
-          return Response.json({
-            backups: [{ action: "add", createdAt: "2026-07-21", entries: [] }],
-          });
-        }
         return Response.json({
           available: [],
           codexDir: "",
@@ -57,10 +52,6 @@ describe("context route data preloading", () => {
         authorization: "Bearer secret",
         url: "/api/skills?projectId=project%2Fa",
       },
-      {
-        authorization: "Bearer secret",
-        url: "/api/config?projectId=project%2Fa",
-      },
     ]);
     expect(result.agentSetup?.hosts).toEqual([{ kind: "codex", displayName: "Codex" }]);
     expect(result.agentSetup?.available).toEqual([
@@ -73,9 +64,6 @@ describe("context route data preloading", () => {
         tags: [],
       },
     ]);
-    expect(result.agentSetup?.backups).toEqual([
-      { action: "add", createdAt: "2026-07-21", entries: [] },
-    ]);
   });
 
   it("does not count an unchanged project skill as unmanaged after Ratel registers it", async () => {
@@ -87,7 +75,6 @@ describe("context route data preloading", () => {
         if (url.startsWith("/api/agent-hosts")) {
           return Response.json({ hosts: [{ kind: "codex", displayName: "Codex" }] });
         }
-        if (url.startsWith("/api/config")) return Response.json({ backups: [] });
         return Response.json({
           available: [],
           codexDir: "",
@@ -133,7 +120,7 @@ describe("context route data preloading", () => {
       token: "secret",
     });
 
-    // AgentSetupPage derives its "skills not managed by Ratel" alert from this list.
+    // Agent settings derive their "skills not managed by Ratel" alert from this list.
     expect(result.agentSetup?.available).toEqual([]);
   });
 

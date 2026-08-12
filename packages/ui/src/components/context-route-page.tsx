@@ -1,13 +1,10 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { useLocation } from "@tanstack/react-router";
-import type { ConfigResponse } from "@/App";
 import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
 import { discoveredSkillSummaries, type SkillsResponse } from "@/lib/skills";
-import { agentSettingsPageEnabled } from "@/lib/ui-features";
 import {
   AgentDetailPage,
-  AgentSetupPage,
   type AgentSetupRouteData,
   agentHostsFromResponse,
   LegacyAgentSetupRedirect,
@@ -17,8 +14,6 @@ import { SettingsPage } from "@/pages/RetrievalSettingsPage";
 import { SkillDetailPage } from "@/pages/SkillDetailPage";
 import { SkillsPage } from "@/pages/SkillsPage";
 import { ToolSourceCreatePage, ToolSourceDetailPage, ToolsPage } from "@/pages/ToolsPage";
-
-const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 interface ContextRoutePageProps {
   routeData?: ContextRouteData;
@@ -50,11 +45,7 @@ export function ContextRoutePage({ routeData, subpath = "" }: ContextRoutePagePr
     return <ToolSourceDetailPage scope={segments[1]} name={segments[2]} />;
   }
   if (segments[0] === "agent-setup" && segments.length === 1) {
-    return AGENT_SETTINGS_ENABLED ? (
-      <LegacyAgentSetupRedirect />
-    ) : (
-      <AgentSetupPage initialData={routeData?.agentSetup} />
-    );
+    return <LegacyAgentSetupRedirect />;
   }
   if (segments[0] === "agent-setup" && segments.length === 2) {
     return (
@@ -90,7 +81,7 @@ export async function loadContextRouteData(input: {
 
   const token = input.token;
 
-  const [hosts, available, config] = await Promise.all([
+  const [hosts, available] = await Promise.all([
     input.queryClient
       .ensureQueryData(
         ratelApiQueryOptions<unknown>({
@@ -113,19 +104,8 @@ export async function loadContextRouteData(input: {
         }),
       )
       .then(discoveredSkillSummaries, () => []),
-    input.queryClient
-      .ensureQueryData(
-        ratelApiQueryOptions<ConfigResponse>({
-          context: input.context,
-          path: "/api/config",
-          queryKey: ratelQueryKeys.config(input.context),
-          signal: input.signal,
-          token,
-        }),
-      )
-      .catch(() => null),
   ]);
-  return { agentSetup: { available, backups: config?.backups ?? [], hosts } };
+  return { agentSetup: { available, hosts } };
 }
 
 function decodeSegment(segment: string): string {

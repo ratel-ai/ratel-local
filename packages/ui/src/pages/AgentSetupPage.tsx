@@ -10,9 +10,7 @@ import { type StructuredPatchHunk, structuredPatch } from "diff";
 import {
   ArrowLeft,
   Check,
-  ChevronDown,
   ChevronRight,
-  ChevronUp,
   Download,
   FileText,
   GitCompare,
@@ -25,7 +23,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useMeasure from "react-use-measure";
-import { type BackupManifest, type JsonRequestInit, type ServerEntry, useRatelApp } from "@/App";
+import { type JsonRequestInit, type ServerEntry, useRatelApp } from "@/App";
 import { SkillImportPicker, skillKey } from "@/components/import-skills-dialog";
 import {
   PageHeader,
@@ -35,12 +33,7 @@ import {
   PageHeaderDescription,
   PageHeaderTitle,
 } from "@/components/page-header";
-import {
-  PageSurface,
-  PageSurfaceContent,
-  PageSurfaceFooter,
-  PageSurfaceHeader,
-} from "@/components/page-surface";
+import { PageSurface, PageSurfaceContent, PageSurfaceFooter } from "@/components/page-surface";
 import {
   ResponsiveToolbar,
   ResponsiveToolbarButton,
@@ -73,7 +66,6 @@ import {
   type SkillsResponse,
   uniqueSkillImports,
 } from "@/lib/skills";
-import { agentSettingsPageEnabled } from "@/lib/ui-features";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
@@ -83,8 +75,6 @@ type AgentPosture = "unavailable" | "empty" | "not-linked" | "ratel-only" | "mix
 type RatelConnectionKind = "none" | "explicit" | "plugin" | "duplicate";
 type ConflictStrategy = "add-missing-only" | "replace-from-agent" | "replace-selected";
 type SetupFlow = "import" | "link";
-
-const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 interface AgentHostDetection {
   displayName: string;
@@ -365,7 +355,6 @@ function useAgentTraces() {
 
 export interface AgentSetupRouteData {
   available: SkillSummary[];
-  backups: BackupManifest[];
   hosts: DetectedAgentHostSummary[];
 }
 
@@ -447,103 +436,6 @@ export function LegacyAgentSetupRedirect() {
   );
 }
 
-export function AgentSetupPage({ initialData }: { initialData?: AgentSetupRouteData }) {
-  const { clearSetupIntent, config, pagePath, refresh, setupIntent } = useRatelApp();
-  const navigate = useNavigate();
-  const { available } = useAvailableSkills(initialData?.available);
-  const { hosts, scanHosts, scanning } = useAgentHosts(initialData?.hosts);
-  const handledIntent = useRef<number | null>(null);
-  const backups = config?.backups ?? initialData?.backups ?? [];
-
-  const openAgent = useCallback(
-    (kind: AgentHostKind, operation?: SetupFlow) => {
-      const path = pagePath(`/agent-setup/${kind}`);
-      const separator = path.includes("?") ? "&" : "?";
-      void navigate({
-        to: operation ? `${path}${separator}operation=${operation}` : path,
-      } as never);
-    },
-    [navigate, pagePath],
-  );
-  useEffect(() => {
-    if (setupIntent && handledIntent.current !== setupIntent.id) {
-      handledIntent.current = setupIntent.id;
-      openAgent(preferredHostKind(hosts), setupIntent.kind);
-      clearSetupIntent();
-    }
-  }, [clearSetupIntent, hosts, openAgent, setupIntent]);
-
-  return (
-    <main className="grid w-full gap-5 px-4 py-5 sm:px-6">
-      <PageHeader className="sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-        <PageHeaderContent>
-          <PageHeaderBackRow>
-            <PageHeaderTitle>Agent Setup</PageHeaderTitle>
-            <div className="flex items-center gap-1 sm:hidden">
-              <Button
-                aria-label="Refresh"
-                disabled={scanning}
-                onClick={() => void Promise.all([refresh(), scanHosts()])}
-                size="icon-lg"
-                type="button"
-                variant="outline"
-              >
-                <RefreshCw />
-                {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
-                <span className="sr-only">Refresh</span>
-              </Button>
-            </div>
-          </PageHeaderBackRow>
-          <PageHeaderDescription className="max-w-sm sm:max-w-2xl">
-            Inspect supported agent configs, then open an agent to import or link MCP entries.
-          </PageHeaderDescription>
-        </PageHeaderContent>
-        <PageHeaderActions className="hidden sm:flex">
-          <ResponsiveToolbar>
-            <ResponsiveToolbarGroup>
-              <ResponsiveToolbarButton
-                disabled={scanning}
-                icon={
-                  <>
-                    <RefreshCw />
-                    {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
-                  </>
-                }
-                shortcut={REFRESH_SHORTCUT.hotkey}
-                label="Refresh"
-                onClick={() => void Promise.all([refresh(), scanHosts()])}
-              />
-            </ResponsiveToolbarGroup>
-          </ResponsiveToolbar>
-        </PageHeaderActions>
-      </PageHeader>
-
-      <section aria-labelledby="supported-agents-title" className="grid gap-3">
-        <div className="px-1">
-          <h2 className="font-medium" id="supported-agents-title">
-            Supported agents
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Review Ratel coverage and setup for Claude Code and Codex.
-          </p>
-        </div>
-        <div className="grid gap-3 lg:grid-cols-2">
-          {hosts.map((host) => (
-            <AgentDirectoryCard
-              host={host}
-              key={host.kind}
-              onOpen={() => openAgent(host.kind)}
-              unmanagedSkillCount={availableSkillsForKind(available, host.kind).length}
-            />
-          ))}
-        </div>
-      </section>
-
-      <Backups backups={backups} />
-    </main>
-  );
-}
-
 export function AgentDetailPage(props: {
   initialData?: AgentSetupRouteData;
   kind: AgentHostKind;
@@ -558,9 +450,7 @@ export function AgentDetailPage(props: {
 
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
-    void navigate({
-      to: pagePath(AGENT_SETTINGS_ENABLED ? "/settings" : "/agent-setup"),
-    } as never);
+    void navigate({ to: pagePath("/settings") } as never);
   };
   const switchHost = (kind: AgentHostKind) => {
     void navigate({ to: pagePath(`/agent-setup/${kind}`) } as never);
@@ -574,7 +464,7 @@ export function AgentDetailPage(props: {
           <PageHeaderBackRow>
             <Button onClick={goBack} size="sm" type="button" variant="ghost">
               <ArrowLeft />
-              {AGENT_SETTINGS_ENABLED ? "Settings" : "Agents"}
+              Settings
             </Button>
             <div className="flex items-center gap-1 sm:hidden">
               <Button
@@ -1637,110 +1527,6 @@ function PreviewFlow(props: {
       ) : null}
     </div>
   );
-}
-
-function Backups(props: { backups: BackupManifest[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const visibleBackups = expanded ? props.backups : props.backups.slice(0, BACKUP_PREVIEW_COUNT);
-  const hiddenCount = Math.max(0, props.backups.length - visibleBackups.length);
-  return (
-    <PageSurface aria-labelledby="backups-title">
-      <PageSurfaceHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="font-medium" id="backups-title">
-            Backups
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Recent changes created by import, link, and other config writes.
-          </p>
-        </div>
-        <Badge className="w-fit shrink-0" variant="outline">
-          {props.backups.length} backup{props.backups.length === 1 ? "" : "s"}
-        </Badge>
-      </PageSurfaceHeader>
-      {props.backups.length === 0 ? (
-        <PageSurfaceContent className="py-8 text-center text-sm text-muted-foreground">
-          No backups yet.
-        </PageSurfaceContent>
-      ) : (
-        <div className="divide-y divide-forest-300">
-          {visibleBackups.map((backup, index) => (
-            <BackupRow backup={backup} key={backupKey(backup)} latest={index === 0} />
-          ))}
-        </div>
-      )}
-      {props.backups.length > BACKUP_PREVIEW_COUNT ? (
-        <PageSurfaceFooter className="flex justify-center">
-          <Button onClick={() => setExpanded((current) => !current)} size="sm" variant="ghost">
-            {expanded ? <ChevronUp /> : <ChevronDown />}
-            {expanded ? "Show fewer backups" : `Show ${hiddenCount} more`}
-          </Button>
-        </PageSurfaceFooter>
-      ) : null}
-    </PageSurface>
-  );
-}
-
-function BackupRow(props: { backup: BackupManifest; latest: boolean }) {
-  const paths = props.backup.entries.map((entry) => entry.originalPath).join(", ");
-  return (
-    <div
-      className={cn(
-        "grid gap-2 px-4 py-4 sm:px-5 [content-visibility:auto] [contain-intrinsic-size:auto_88px]",
-        props.latest && "bg-brand-green/5",
-      )}
-    >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-        <p className="font-medium">{restoreActionLabel(props.backup.action)}</p>
-        {props.latest ? <Badge variant="secondary">Latest</Badge> : null}
-        <span className="text-xs text-muted-foreground">
-          {restoreCreatedLabel(props.backup.createdAt)}
-        </span>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        {backupFileSummary(props.backup.entries.length)}
-      </p>
-      <code className="truncate font-mono text-xs text-muted-foreground" title={paths}>
-        {paths}
-      </code>
-    </div>
-  );
-}
-
-const BACKUP_PREVIEW_COUNT = 6;
-
-function backupKey(backup: BackupManifest): string {
-  const entries = backup.entries
-    .map((entry) => `${entry.originalPath}:${entry.backupPath}`)
-    .join("|");
-  return `${backup.createdAt}:${backup.action}:${entries}`;
-}
-
-const RESTORE_ACTION_LABELS: Record<BackupManifest["action"], string> = {
-  add: "Added tool source",
-  edit: "Edited tool source",
-  import: "Imported agent sources",
-  link: "Linked agent config",
-  remove: "Removed tool source",
-};
-
-function restoreActionLabel(action: BackupManifest["action"]) {
-  return RESTORE_ACTION_LABELS[action] ?? action;
-}
-
-function restoreCreatedLabel(createdAt: string) {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return createdAt;
-  return date.toLocaleString(undefined, {
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-  });
-}
-
-function backupFileSummary(count: number) {
-  return `${count} config file${count === 1 ? "" : "s"} backed up`;
 }
 
 function SetupRecap(props: {

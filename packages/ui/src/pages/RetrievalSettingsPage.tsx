@@ -34,15 +34,12 @@ import {
 } from "@/components/ui/select";
 import { ratelQueryKeys } from "@/lib/ratel-query";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
-import { agentSettingsPageEnabled } from "@/lib/ui-features";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 import { AgentSettingsSection, type AgentSetupRouteData } from "@/pages/AgentSetupPage";
 
 type RetrievalMethod = RetrievalConfig["method"];
 type RetrievalSource = "built-in" | "huggingface" | "local" | "ollama" | "endpoint";
-
-const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 export interface RetrievalDraft {
   method: RetrievalMethod;
@@ -117,7 +114,7 @@ export function SettingsPage({
         </PageHeaderContent>
       </PageHeader>
 
-      {AGENT_SETTINGS_ENABLED ? <AgentSettingsSection initialData={initialAgentData} /> : null}
+      <AgentSettingsSection initialData={initialAgentData} />
 
       <CloudTraceSettingsSection />
 

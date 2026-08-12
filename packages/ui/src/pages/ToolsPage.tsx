@@ -444,7 +444,7 @@ export function ToolsPage() {
                 <Button
                   onClick={() => {
                     triggerSetupIntent("import");
-                    void navigate({ to: pagePath("/agent-setup") } as never);
+                    void navigate({ to: pagePath("/settings") } as never);
                   }}
                   size="sm"
                   variant="outline"

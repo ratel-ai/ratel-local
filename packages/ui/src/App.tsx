@@ -69,7 +69,6 @@ import {
   runtimeContextFromPathname,
   safeRememberedRoute,
 } from "@/lib/runtime-context";
-import { agentSettingsPageEnabled } from "@/lib/ui-features";
 import { cn } from "@/lib/utils";
 import "./App.css";
 
@@ -253,7 +252,6 @@ const RatelAppContext = createContext<RatelAppContextValue | null>(null);
 
 export const SCOPES: RatelScope[] = ["user", "project", "local"];
 const LAST_ROUTE_STORAGE_KEY = "ratel:last-route:v1";
-const AGENT_SETTINGS_ENABLED = agentSettingsPageEnabled();
 
 export function AppShell() {
   const queryClient = useQueryClient();
@@ -458,12 +456,12 @@ export function AppShell() {
         onImport={() => {
           setCommandOpen(false);
           context.triggerSetupIntent("import");
-          goTo(AGENT_SETTINGS_ENABLED ? "/settings" : "/agent-setup");
+          goTo("/settings");
         }}
         onLink={() => {
           setCommandOpen(false);
           context.triggerSetupIntent("link");
-          goTo(AGENT_SETTINGS_ENABLED ? "/settings" : "/agent-setup");
+          goTo("/settings");
         }}
         onNavigate={(to) => {
           setCommandOpen(false);
@@ -515,14 +513,6 @@ function ProductSidebar({
               label="Skills"
               to={pagePath("/skills")}
             />
-            {!AGENT_SETTINGS_ENABLED ? (
-              <ProductSidebarItem
-                active={pageSuffix.startsWith("/agent-setup")}
-                icon={<Settings2 />}
-                label="Agent Setup"
-                to={pagePath("/agent-setup")}
-              />
-            ) : null}
             <ProductSidebarItem
               active={pageSuffix === "/clients"}
               icon={<RadioTower />}
@@ -533,7 +523,7 @@ function ProductSidebar({
               active={
                 pageSuffix === "/settings" ||
                 pageSuffix === "/retrieval" ||
-                (AGENT_SETTINGS_ENABLED && pageSuffix.startsWith("/agent-setup"))
+                pageSuffix.startsWith("/agent-setup")
               }
               icon={<SlidersHorizontal />}
               label="Settings"
@@ -725,12 +715,6 @@ function CommandMenu(props: {
                 <Sparkles />
                 Skills
               </CommandItem>
-              {!AGENT_SETTINGS_ENABLED ? (
-                <CommandItem onSelect={() => props.onNavigate("/agent-setup")}>
-                  <Settings2 />
-                  Agent Setup
-                </CommandItem>
-              ) : null}
               <CommandItem onSelect={() => props.onNavigate("/clients")}>
                 <RadioTower />
                 Clients
