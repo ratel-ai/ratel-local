@@ -44,6 +44,7 @@ function status(
 ) {
   return {
     endpoint,
+    logsEndpoint: "http://127.0.0.1:5731/otlp/v1/logs",
     cloudConfigured,
     hosts: [
       {
@@ -51,6 +52,9 @@ function status(
         displayName: "Claude Code",
         configPath: "/home/u/.claude/settings.json",
         state,
+        level: state === "disabled" ? "off" : state === "configured" ? "redacted" : "unknown",
+        supportedLevels: ["off", "redacted", "tool-details", "full-content"],
+        signals: { traces: state, logs: state },
         restartRequired: state === "configured",
         conflictingFields: state === "conflict" ? ["OTEL_TRACES_EXPORTER"] : [],
         warnings: [],
@@ -60,6 +64,9 @@ function status(
         displayName: "Codex",
         configPath: "/home/u/.codex/config.toml",
         state: "disabled",
+        level: "off",
+        supportedLevels: ["off", "redacted", "tool-activity", "prompt-content"],
+        signals: { traces: "disabled", logs: "disabled" },
         restartRequired: false,
         conflictingFields: [],
         warnings: [],
@@ -118,12 +125,132 @@ describe("runTraces", () => {
       { path: "/api/agent-traces", body: undefined },
       {
         path: "/api/agent-traces/prepare",
-        body: { action: "enable", hostKinds: ["claude-code", "codex"], overwrite: false },
+        body: {
+          action: "enable",
+          level: "redacted",
+          hostKinds: ["claude-code", "codex"],
+          overwrite: false,
+        },
       },
       { path: "/api/changes/trace-1/commit", body: undefined },
     ]);
     expect(output.join("\n")).toContain("Ratel Cloud tracing is not configured");
     expect(output.join("\n")).toContain("https://cloud.ratel.sh/settings");
+  });
+
+  it("requires an explicit content confirmation flag for non-interactive Claude levels", async () => {
+    const missingConfirmation = context("enable", {
+      agent: "claude-code",
+      level: "full-content",
+      yes: true,
+    });
+    await expect(
+      runTraces(missingConfirmation.ctx, { request: async () => response(status()) }),
+    ).rejects.toThrow(/--confirm-content/);
+
+    const calls: Array<{ path: string; body?: unknown }> = [];
+    const confirmed = context("enable", {
+      agent: "claude-code",
+      level: "tool-details",
+      yes: true,
+      "confirm-content": true,
+    });
+    await runTraces(confirmed.ctx, {
+      request: async (path, init) => {
+        calls.push({ path, body: init?.body });
+        if (path === "/api/agent-traces") return response(status("disabled", true));
+        if (path === "/api/agent-traces/prepare") return response({ changeId: "trace-level" });
+        return response({
+          result: {
+            action: "enable",
+            level: "tool-details",
+            hosts: [
+              {
+                ...status("configured", true).hosts[0],
+                level: "tool-details",
+              },
+            ],
+          },
+        });
+      },
+    });
+    expect(calls).toContainEqual({
+      path: "/api/agent-traces/prepare",
+      body: {
+        action: "enable",
+        level: "tool-details",
+        hostKinds: ["claude-code"],
+        overwrite: false,
+      },
+    });
+  });
+
+  it("warns and confirms before an interactive content-bearing level", async () => {
+    const notes: string[] = [];
+    const confirm = vi.fn(async () => true);
+    const { ctx } = context(
+      "enable",
+      { agent: "claude-code", level: "full-content" },
+      { ...silentPromptAdapter(), note: (message) => notes.push(message), confirm },
+    );
+    await runTraces(ctx, {
+      request: async (path) => {
+        if (path === "/api/agent-traces") return response(status("disabled", true));
+        if (path === "/api/agent-traces/prepare") return response({ changeId: "full" });
+        return response({
+          result: {
+            action: "enable",
+            level: "full-content",
+            hosts: [{ ...status("configured", true).hosts[0], level: "full-content" }],
+          },
+        });
+      },
+    });
+    expect(notes.join("\n")).toMatch(/prompts.*assistant responses.*tool content/i);
+    expect(confirm).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects Claude-only levels for Codex before preparing a change", async () => {
+    const { ctx } = context("enable", {
+      agent: "codex",
+      level: "tool-details",
+      yes: true,
+      "confirm-content": true,
+    });
+    await expect(runTraces(ctx, { request: async () => response(status()) })).rejects.toThrow(
+      /Codex.*does not support.*tool-details/,
+    );
+  });
+
+  it("requires explicit content confirmation for Codex logs", async () => {
+    const missing = context("enable", {
+      agent: "codex",
+      level: "tool-activity",
+      yes: true,
+    });
+    await expect(
+      runTraces(missing.ctx, { request: async () => response(status()) }),
+    ).rejects.toThrow(/--confirm-content/);
+  });
+
+  it("requires overwrite approval when a Codex log level would replace another exporter", async () => {
+    const body = status("disabled", true);
+    body.hosts[1] = {
+      ...body.hosts[1],
+      state: "configured",
+      level: "redacted",
+      signals: { traces: "configured", logs: "conflict" },
+      conflictingFields: ["otel.exporter"],
+    };
+    const { ctx } = context("enable", {
+      agent: "codex",
+      level: "tool-activity",
+      yes: true,
+      "confirm-content": true,
+    });
+    await expect(runTraces(ctx, { request: async () => response(body) })).rejects.toThrow(
+      /--overwrite.*--yes/,
+    );
   });
 
   it("offers masked Ratel Cloud API key setup after an interactive enable", async () => {
@@ -228,6 +355,7 @@ describe("runTraces", () => {
     expect(confirm).toHaveBeenCalledOnce();
     expect(requests).toContainEqual({
       action: "enable",
+      level: "redacted",
       hostKinds: ["claude-code"],
       overwrite: true,
     });

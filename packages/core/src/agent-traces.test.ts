@@ -50,20 +50,82 @@ describe("Claude Code native trace configuration", () => {
     expect(settings.theme).toBe("dark");
     expect(settings.env).toMatchObject({
       KEEP_ME: "yes",
-      OTEL_LOGS_EXPORTER: "otlp",
       OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer generic-secret-canary",
-      OTEL_LOG_USER_PROMPTS: "0",
       CLAUDE_CODE_ENABLE_TELEMETRY: "1",
       CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
       OTEL_TRACES_EXPORTER: "otlp",
       OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf",
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ENDPOINT,
       OTEL_EXPORTER_OTLP_TRACES_HEADERS: "",
+      OTEL_LOGS_EXPORTER: "otlp",
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/protobuf",
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:7331/otlp/v1/logs",
+      OTEL_EXPORTER_OTLP_LOGS_HEADERS: "",
+      OTEL_LOG_USER_PROMPTS: "0",
+      OTEL_LOG_ASSISTANT_RESPONSES: "0",
+      OTEL_LOG_TOOL_DETAILS: "0",
+      OTEL_LOG_TOOL_CONTENT: "0",
     });
-    expect(inspectAgentTraceHost("claude-code", after, ENDPOINT).state).toBe("configured");
+    expect(inspectAgentTraceHost("claude-code", after, ENDPOINT)).toMatchObject({
+      state: "configured",
+      level: "redacted",
+      supportedLevels: ["off", "redacted", "tool-details", "full-content"],
+    });
     expect(JSON.stringify(inspectAgentTraceHost("claude-code", after, ENDPOINT))).not.toContain(
       "generic-secret-canary",
     );
+  });
+
+  it("writes and inspects Claude-only content detail levels without raw API bodies", () => {
+    const toolDetails = rewriteClaudeTraceConfig(null, ENDPOINT, "enable", "tool-details");
+    const toolSettings = JSON.parse(toolDetails) as { env: Record<string, string> };
+    expect(toolSettings.env).toMatchObject({
+      OTEL_LOG_USER_PROMPTS: "0",
+      OTEL_LOG_ASSISTANT_RESPONSES: "0",
+      OTEL_LOG_TOOL_DETAILS: "1",
+      OTEL_LOG_TOOL_CONTENT: "0",
+    });
+    expect(toolSettings.env.OTEL_LOG_RAW_API_BODIES).toBeUndefined();
+    expect(inspectAgentTraceHost("claude-code", toolDetails, ENDPOINT)).toMatchObject({
+      state: "configured",
+      level: "tool-details",
+    });
+
+    const full = rewriteClaudeTraceConfig(toolDetails, ENDPOINT, "enable", "full-content");
+    const fullSettings = JSON.parse(full) as { env: Record<string, string> };
+    expect(fullSettings.env).toMatchObject({
+      OTEL_LOG_USER_PROMPTS: "1",
+      OTEL_LOG_ASSISTANT_RESPONSES: "1",
+      OTEL_LOG_TOOL_DETAILS: "1",
+      OTEL_LOG_TOOL_CONTENT: "1",
+    });
+    expect(fullSettings.env.OTEL_LOG_RAW_API_BODIES).toBeUndefined();
+    expect(inspectAgentTraceHost("claude-code", full, ENDPOINT)).toMatchObject({
+      state: "configured",
+      level: "full-content",
+    });
+  });
+
+  it("downgrades content gates without touching unrelated exporters or raw API settings", () => {
+    const before = JSON.stringify({
+      env: {
+        OTEL_METRICS_EXPORTER: "otlp",
+        OTEL_LOG_RAW_API_BODIES: "1",
+      },
+    });
+    const full = rewriteClaudeTraceConfig(before, ENDPOINT, "enable", "full-content");
+    const redacted = JSON.parse(rewriteClaudeTraceConfig(full, ENDPOINT, "enable", "redacted")) as {
+      env: Record<string, string>;
+    };
+    expect(redacted.env).toMatchObject({
+      OTEL_LOGS_EXPORTER: "otlp",
+      OTEL_METRICS_EXPORTER: "otlp",
+      OTEL_LOG_RAW_API_BODIES: "1",
+      OTEL_LOG_USER_PROMPTS: "0",
+      OTEL_LOG_ASSISTANT_RESPONSES: "0",
+      OTEL_LOG_TOOL_DETAILS: "0",
+      OTEL_LOG_TOOL_CONTENT: "0",
+    });
   });
 
   it("recognizes stale Ratel endpoints and disables without touching other signals", () => {
@@ -82,8 +144,26 @@ describe("Claude Code native trace configuration", () => {
       env: Record<string, string>;
     };
     expect(disabled.env.OTEL_TRACES_EXPORTER).toBe("none");
-    expect(disabled.env.OTEL_LOGS_EXPORTER).toBe("otlp");
+    expect(disabled.env.OTEL_LOGS_EXPORTER).toBe("none");
     expect(disabled.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBeUndefined();
+    expect(disabled.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBeUndefined();
+    expect(disabled.env.OTEL_LOG_TOOL_DETAILS).toBe("0");
+    expect(disabled.env.OTEL_LOG_TOOL_CONTENT).toBe("0");
+  });
+
+  it("preserves an unrelated Claude log exporter while disabling a Ratel trace route", () => {
+    const traceOnly = rewriteClaudeTraceConfig(null, ENDPOINT, "enable", "redacted");
+    const root = JSON.parse(traceOnly) as { env: Record<string, string> };
+    root.env.OTEL_LOGS_EXPORTER = "otlp";
+    root.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = "https://logs.example/v1/logs";
+    root.env.OTEL_EXPORTER_OTLP_LOGS_HEADERS = "Authorization=secret-canary";
+    const disabled = JSON.parse(
+      rewriteClaudeTraceConfig(JSON.stringify(root), ENDPOINT, "disable"),
+    ) as { env: Record<string, string> };
+    expect(disabled.env.OTEL_TRACES_EXPORTER).toBe("none");
+    expect(disabled.env.OTEL_LOGS_EXPORTER).toBe("otlp");
+    expect(disabled.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe("https://logs.example/v1/logs");
+    expect(disabled.env.OTEL_EXPORTER_OTLP_LOGS_HEADERS).toBe("Authorization=secret-canary");
   });
 
   it("reports only conflicting field names and privacy warnings", () => {
@@ -125,7 +205,44 @@ describe("Codex native trace configuration", () => {
     expect(after).toContain("# keep this comment");
     expect(after).toContain("log_user_prompt = false # privacy");
     expect(after).toContain("[mcp_servers.docs]");
-    expect(inspectAgentTraceHost("codex", after, ENDPOINT).state).toBe("configured");
+    expect(inspectAgentTraceHost("codex", after, ENDPOINT)).toMatchObject({
+      state: "configured",
+      level: "redacted",
+      supportedLevels: ["off", "redacted", "tool-activity", "prompt-content"],
+    });
+  });
+
+  it("adds independent content-bearing Codex log levels without promising unsupported content", () => {
+    const activity = rewriteCodexTraceConfig(null, ENDPOINT, "enable", "tool-activity");
+    expect(activity).toContain("exporter = { otlp-http = {");
+    expect(activity).toContain("/otlp/v1/logs");
+    expect(activity).toContain("log_user_prompt = false");
+    expect(inspectAgentTraceHost("codex", activity, ENDPOINT)).toMatchObject({
+      state: "configured",
+      level: "tool-activity",
+      supportedLevels: ["off", "redacted", "tool-activity", "prompt-content"],
+    });
+
+    const prompts = rewriteCodexTraceConfig(activity, ENDPOINT, "enable", "prompt-content");
+    expect(prompts).toContain("log_user_prompt = true");
+    expect(inspectAgentTraceHost("codex", prompts, ENDPOINT)).toMatchObject({
+      state: "configured",
+      level: "prompt-content",
+    });
+  });
+
+  it("preserves unrelated Codex log routing when selecting traces-only or disabling", () => {
+    const before = `[otel]\nexporter = { otlp-http = { endpoint = "https://logs.example/v1/logs", protocol = "binary", headers = { Authorization = "secret-canary" } } }\nlog_user_prompt = true\n`;
+    const redacted = rewriteCodexTraceConfig(before, ENDPOINT, "enable", "redacted");
+    expect(redacted).toContain("https://logs.example/v1/logs");
+    expect(redacted).toContain('Authorization = "secret-canary"');
+    expect(redacted).toContain("log_user_prompt = true");
+
+    const withRatelLogs = rewriteCodexTraceConfig(null, ENDPOINT, "enable", "tool-activity");
+    const disabled = rewriteCodexTraceConfig(withRatelLogs, ENDPOINT, "disable");
+    expect(disabled).toContain('trace_exporter = "none"');
+    expect(disabled).toContain('exporter = "none"');
+    expect(disabled).toContain("log_user_prompt = false");
   });
 
   it("replaces nested trace exporter tables without exposing existing headers", () => {
@@ -164,6 +281,42 @@ describe("Codex native trace configuration", () => {
 });
 
 describe("prepared native trace changes", () => {
+  it("defaults legacy enable requests to redacted and rejects unsupported Codex levels", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-agent-traces-levels-"));
+    try {
+      await mkdir(join(homeDir, ".ratel"), { recursive: true });
+      const preparedChanges = createPreparedChangeCoordinator({
+        mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
+      });
+      const context = { env: { homeDir }, fs: nodeFs };
+      const prepared = await prepareAgentTraceChange(context, {
+        action: "enable",
+        hostKinds: ["claude-code"],
+        endpoint: ENDPOINT,
+        preparedChanges,
+      });
+      expect(prepared.preview).toMatchObject({
+        action: "enable",
+        level: "redacted",
+        hosts: [{ beforeLevel: "off", afterLevel: "redacted" }],
+      });
+
+      const codexPrepared = await prepareAgentTraceChange(context, {
+        action: "enable",
+        level: "tool-activity",
+        hostKinds: ["codex"],
+        endpoint: ENDPOINT,
+        preparedChanges,
+      });
+      expect(codexPrepared.preview).toMatchObject({
+        level: "tool-activity",
+        hosts: [{ afterLevel: "tool-activity" }],
+      });
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats disabling an already-disabled host as an idempotent no-op", async () => {
     const homeDir = await mkdtemp(join(tmpdir(), "ratel-agent-traces-disabled-"));
     try {
@@ -237,6 +390,45 @@ describe("prepared native trace changes", () => {
       expect(committed.backupManifest).toBeNull();
       expect(JSON.stringify(committed)).not.toContain(secret);
       expect(await readFile(join(homeDir, ".codex", "config.toml"), "utf8")).not.toContain(secret);
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an unrelated Codex log exporter at redacted and conflicts only for log levels", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-agent-traces-log-conflict-"));
+    try {
+      await mkdir(join(homeDir, ".ratel"), { recursive: true });
+      await mkdir(join(homeDir, ".codex"), { recursive: true });
+      await writeFile(
+        join(homeDir, ".codex", "config.toml"),
+        '[otel]\nexporter = { otlp-http = { endpoint = "https://logs.example/v1/logs", protocol = "binary", headers = {} } }\n',
+      );
+      const preparedChanges = createPreparedChangeCoordinator({
+        mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
+      });
+      const context = { env: { homeDir }, fs: nodeFs };
+      const redacted = await prepareAgentTraceChange(context, {
+        action: "enable",
+        level: "redacted",
+        hostKinds: ["codex"],
+        endpoint: ENDPOINT,
+        preparedChanges,
+      });
+      await preparedChanges.commit(redacted.changeId);
+      expect(await readFile(join(homeDir, ".codex", "config.toml"), "utf8")).toContain(
+        "https://logs.example/v1/logs",
+      );
+
+      await expect(
+        prepareAgentTraceChange(context, {
+          action: "enable",
+          level: "tool-activity",
+          hostKinds: ["codex"],
+          endpoint: ENDPOINT,
+          preparedChanges,
+        }),
+      ).rejects.toBeInstanceOf(AgentTraceConflictError);
     } finally {
       await rm(homeDir, { recursive: true, force: true });
     }

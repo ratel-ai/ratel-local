@@ -170,8 +170,8 @@ Never assume `setup --yes` imports native configuration. Use the expert
 was explicitly requested. `ratel-local daemon`, `ratel-local link`, and
 `ratel-local import` remain available for targeted workflows.
 
-Manage native trace export through the CLI, never by directly editing Claude
-Code or Codex configuration:
+Manage native trace and structured-log export through the CLI, never by directly
+editing Claude Code or Codex configuration:
 
 ```bash
 # Always inspect semantic state first
@@ -180,8 +180,18 @@ ratel-local traces status --agent codex --json
 
 # Mutations require explicit host selection
 ratel-local traces enable --agent claude-code --agent codex
+ratel-local traces enable --agent claude-code --level tool-details
+ratel-local traces enable --agent codex --level tool-activity
 ratel-local traces disable --agent codex
 ```
+
+Plain `traces enable` selects Redacted. Claude Code also supports
+`--level tool-details` and `--level full-content`. Codex supports
+`--level tool-activity` and `--level prompt-content`; Tool activity includes
+structured `codex.tool_result` output snippets even with prompt logging off.
+Treat all enhanced levels as content-bearing. Interactive runs must confirm the
+privacy warning, and automation must pass the explicit level with both
+`--confirm-content` and `--yes`. Never enable `OTEL_LOG_RAW_API_BODIES`.
 
 If status reports `stale`, enable safely repairs the old Ratel daemon port. If
 it reports `conflict`, explain that replacement is irreversible because Ratel

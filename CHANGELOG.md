@@ -4,6 +4,13 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+- Added a daemon-owned OTLP log relay for native Claude Code and Codex events, deriving the Cloud `/logs` endpoint from the saved trace endpoint and preserving protobuf payloads unchanged. Host-aware levels now offer Claude Redacted, Tool details, and Full content, and Codex Redacted traces, Tool activity, and Prompt content. Existing `traces enable` and setup automation remain on the safest Redacted level; every content-bearing CLI and Agent Setup change requires explicit privacy confirmation.
+
+### Fixed
+- Kept connector discovery and invocation on the live daemon catalog while the initial daemon attachment is still in flight, and handled stale bootstrap calls locally instead of forwarding them as unknown gateway tools.
+- Resolved passive tool-usage hook paths from either the Codex or Claude Code plugin-root environment so both hosts can run the shared hooks.
+
 ## [0.8.0-rc.0] - 2026-08-05
 
 ### Added

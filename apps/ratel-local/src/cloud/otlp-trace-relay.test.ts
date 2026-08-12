@@ -3,8 +3,11 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cloudOtlpRelayOptionsFromEnv,
+  cloudOtlpTraceRelayOptions,
   createCloudOtlpTraceRelay,
   createCloudOtlpTraceRelayController,
+  deriveCloudOtlpLogsEndpoint,
+  OTLP_LOGS_PATH,
   OTLP_PROTOBUF_CONTENT_TYPE,
   OTLP_TRACES_PATH,
 } from "./otlp-trace-relay.js";
@@ -12,6 +15,7 @@ import {
 const CLOUD_ENDPOINT = "https://cloud.example.test/otlp/v1/traces";
 const CLOUD_SECRET = "cloud-secret-must-not-leak";
 const TRACE_PAYLOAD = Buffer.from([0x0a, 0x00]);
+const LOG_PAYLOAD = Buffer.from([0x12, 0x03, 0x6c, 0x6f, 0x67]);
 
 const servers: Server[] = [];
 
@@ -42,7 +46,32 @@ describe("Cloud OTLP trace relay configuration", () => {
         RATEL_CLOUD_OTLP_TRACES_ENDPOINT: CLOUD_ENDPOINT,
         RATEL_API_KEY: CLOUD_SECRET,
       }),
-    ).toMatchObject({ endpoint: new URL(CLOUD_ENDPOINT), apiKey: CLOUD_SECRET });
+    ).toMatchObject({
+      endpoint: new URL(CLOUD_ENDPOINT),
+      logsEndpoint: new URL("https://cloud.example.test/otlp/v1/logs"),
+      apiKey: CLOUD_SECRET,
+    });
+  });
+
+  it("derives the logs endpoint only from an exact terminal traces path segment", () => {
+    expect(
+      deriveCloudOtlpLogsEndpoint(new URL("https://cloud.example.test/api/v1/traces")),
+    ).toEqual(new URL("https://cloud.example.test/api/v1/logs"));
+    expect(
+      deriveCloudOtlpLogsEndpoint(new URL("https://cloud.example.test/tenant/traces/")),
+    ).toEqual(new URL("https://cloud.example.test/tenant/logs/"));
+    expect(() =>
+      cloudOtlpTraceRelayOptions({
+        endpoint: "https://cloud.example.test/api/v1/trace-ingest",
+        apiKey: CLOUD_SECRET,
+      }),
+    ).toThrow(/end.*traces/i);
+    expect(() =>
+      cloudOtlpTraceRelayOptions({
+        endpoint: "https://cloud.example.test/api/v1/traces-extra",
+        apiKey: CLOUD_SECRET,
+      }),
+    ).toThrow(/end.*traces/i);
   });
 
   it("requires a secret-free HTTPS Cloud endpoint", () => {
@@ -77,6 +106,7 @@ describe("Cloud OTLP relay controller", () => {
     const baseUrl = new URL(`http://127.0.0.1:${address.port}`);
 
     expect((await postTrace(baseUrl)).status).toBe(503);
+    expect((await postLogs(baseUrl)).status).toBe(503);
 
     const fetchUpstream = vi.fn(async () => new Response(Buffer.from([0x00]), { status: 200 }));
     controller.configure({
@@ -86,7 +116,8 @@ describe("Cloud OTLP relay controller", () => {
     });
 
     expect((await postTrace(baseUrl)).status).toBe(200);
-    expect(fetchUpstream).toHaveBeenCalledOnce();
+    expect((await postLogs(baseUrl)).status).toBe(200);
+    expect(fetchUpstream).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -120,6 +151,25 @@ describe("Cloud OTLP/HTTP trace relay", () => {
     expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([0x00]));
     expect(fetchUpstream).toHaveBeenCalledOnce();
     expect(String(fetchUpstream.mock.calls[0]?.[0])).toBe(CLOUD_ENDPOINT);
+  });
+
+  it("forwards Codex and Claude log protobuf bytes unchanged to the derived Cloud logs route", async () => {
+    const fetchUpstream = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(Buffer.from((init?.body as Uint8Array) ?? [])).toEqual(LOG_PAYLOAD);
+      return new Response(Buffer.from([0x00]), {
+        status: 200,
+        headers: { "Content-Type": OTLP_PROTOBUF_CONTENT_TYPE },
+      });
+    });
+    const baseUrl = await spinRelay({ fetch: fetchUpstream });
+
+    const response = await postLogs(baseUrl);
+
+    expect(response.status).toBe(200);
+    expect(fetchUpstream).toHaveBeenCalledOnce();
+    expect(String(fetchUpstream.mock.calls[0]?.[0])).toBe(
+      "https://cloud.example.test/otlp/v1/logs",
+    );
   });
 
   it("handles only the exact trace route and rejects unsupported methods", async () => {
@@ -267,6 +317,14 @@ function postTrace(baseUrl: URL): Promise<Response> {
     method: "POST",
     headers: { "Content-Type": OTLP_PROTOBUF_CONTENT_TYPE },
     body: TRACE_PAYLOAD,
+  });
+}
+
+function postLogs(baseUrl: URL): Promise<Response> {
+  return fetch(new URL(OTLP_LOGS_PATH, baseUrl), {
+    method: "POST",
+    headers: { "Content-Type": OTLP_PROTOBUF_CONTENT_TYPE },
+    body: LOG_PAYLOAD,
   });
 }
 

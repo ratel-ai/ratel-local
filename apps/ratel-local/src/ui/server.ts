@@ -13,6 +13,7 @@ import {
   type AgentTraceAction,
   type AgentTraceChangeReview,
   type AgentTraceHostStatus,
+  type AgentTraceLevel,
   type AgentTraceStatus,
   type AuthFlowOptions,
   type AuthFlowResult,
@@ -125,6 +126,7 @@ export interface AgentTraceExportersControlPlane {
   status(): Promise<AgentTraceExportersStatus>;
   prepare(input: {
     action: AgentTraceAction;
+    level?: AgentTraceLevel;
     hostKinds: SupportedAgentHostKind[];
     overwrite?: boolean;
   }): Promise<PreparedChange<AgentTraceChangeReview>>;
@@ -270,6 +272,20 @@ async function handleRequest(
         throw new UiRouteError(422, "action must be enable or disable");
       }
       if (
+        body.level !== undefined &&
+        body.level !== "off" &&
+        body.level !== "redacted" &&
+        body.level !== "tool-details" &&
+        body.level !== "full-content" &&
+        body.level !== "tool-activity" &&
+        body.level !== "prompt-content"
+      ) {
+        throw new UiRouteError(
+          422,
+          "level must be off, redacted, tool-details, full-content, tool-activity, or prompt-content",
+        );
+      }
+      if (
         !Array.isArray(body.hostKinds) ||
         body.hostKinds.length === 0 ||
         !body.hostKinds.every((value) => value === "claude-code" || value === "codex")
@@ -284,6 +300,7 @@ async function handleRequest(
         200,
         await opts.agentTraceExporters.prepare({
           action: body.action,
+          ...(body.level !== undefined ? { level: body.level as AgentTraceLevel } : {}),
           hostKinds: [...new Set(body.hostKinds)] as SupportedAgentHostKind[],
           ...(body.overwrite !== undefined ? { overwrite: body.overwrite } : {}),
         }),

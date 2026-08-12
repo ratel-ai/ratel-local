@@ -15,6 +15,7 @@ import {
   defaultTelemetryDir,
   type HierarchyEnv,
   type JsonFs,
+  loopbackLogEndpoint,
   loopbackTraceEndpoint,
   nodeFs,
   type ProjectId,
@@ -787,7 +788,9 @@ describe("UI server — native agent traces", () => {
       expiresAt: "2026-08-05T12:00:00.000Z",
       preview: {
         action: "enable" as const,
+        level: "tool-activity" as const,
         endpoint,
+        logsEndpoint: loopbackLogEndpoint(endpoint),
         hosts: [
           {
             hostKind: "codex" as const,
@@ -795,6 +798,8 @@ describe("UI server — native agent traces", () => {
             configPath: "/home/u/.codex/config.toml",
             beforeState: "disabled" as const,
             afterState: "configured" as const,
+            beforeLevel: "off" as const,
+            afterLevel: "tool-activity" as const,
             changed: true,
             changedFields: ["otel.trace_exporter"],
             overwroteConflict: false,
@@ -808,6 +813,7 @@ describe("UI server — native agent traces", () => {
       agentTraceExporters: {
         status: async () => ({
           endpoint,
+          logsEndpoint: loopbackLogEndpoint(endpoint),
           cloudConfigured: false,
           hosts: [
             {
@@ -815,6 +821,9 @@ describe("UI server — native agent traces", () => {
               displayName: "Codex",
               configPath: "/home/u/.codex/config.toml",
               state: "disabled",
+              level: "off",
+              supportedLevels: ["off", "redacted", "tool-activity", "prompt-content"],
+              signals: { traces: "disabled", logs: "disabled" },
               restartRequired: false,
               conflictingFields: [],
               warnings: [],
@@ -841,6 +850,49 @@ describe("UI server — native agent traces", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ changeId: "trace-change" });
       expect(prepare).toHaveBeenCalledWith({ action: "enable", hostKinds: ["codex"] });
+
+      const detailed = await fetch(`${base}/api/agent-traces/prepare`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "enable",
+          level: "tool-details",
+          hostKinds: ["claude-code"],
+        }),
+      });
+      expect(detailed.status).toBe(200);
+      expect(prepare).toHaveBeenCalledWith({
+        action: "enable",
+        level: "tool-details",
+        hostKinds: ["claude-code"],
+      });
+
+      const codexLogs = await fetch(`${base}/api/agent-traces/prepare`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "enable",
+          level: "tool-activity",
+          hostKinds: ["codex"],
+        }),
+      });
+      expect(codexLogs.status).toBe(200);
+      expect(prepare).toHaveBeenCalledWith({
+        action: "enable",
+        level: "tool-activity",
+        hostKinds: ["codex"],
+      });
+
+      const invalid = await fetch(`${base}/api/agent-traces/prepare`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          action: "enable",
+          level: "verbose",
+          hostKinds: ["claude-code"],
+        }),
+      });
+      expect(invalid.status).toBe(422);
     } finally {
       await traceSession.handle.shutdown();
       await rm(traceSession.assetDir, { recursive: true, force: true });
@@ -854,6 +906,8 @@ describe("UI server — native agent traces", () => {
       displayName: "Claude Code",
       configPath: "/home/u/.claude/settings.json",
       state: "conflict" as const,
+      level: "unknown" as const,
+      supportedLevels: ["off", "redacted", "tool-details", "full-content"] as const,
       restartRequired: false,
       conflictingFields: ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"],
       warnings: [],

@@ -3,6 +3,8 @@ import {
   agentCardStatusModel,
   agentTraceCardModel,
   agentTraceInstallCopy,
+  agentTraceLevelChoices,
+  agentTraceSelectionModel,
   cloudTraceSetupPatch,
 } from "./AgentSetupPage";
 
@@ -54,11 +56,74 @@ describe("Agent Setup native trace card", () => {
   it("uses the same compact install language as other agent actions", () => {
     expect(agentTraceInstallCopy("disabled")).toEqual({
       actionLabel: "Enable",
-      description: "Send native traces to Ratel's local relay.",
-      title: "Native traces",
+      description: "Send native telemetry to Ratel's local relay.",
+      title: "Native telemetry",
     });
     expect(agentTraceInstallCopy("configured").actionLabel).toBe("Disable");
     expect(agentTraceInstallCopy("stale").actionLabel).toBe("Repair");
+  });
+
+  it("offers honest host-aware detail choices", () => {
+    expect(agentTraceLevelChoices("codex").map(({ value }) => value)).toEqual([
+      "off",
+      "redacted",
+      "tool-activity",
+      "prompt-content",
+    ]);
+    expect(agentTraceLevelChoices("codex")[2].description).toMatch(/output snippet/i);
+    expect(agentTraceLevelChoices("claude-code").map(({ value }) => value)).toEqual([
+      "off",
+      "redacted",
+      "tool-details",
+      "full-content",
+    ]);
+  });
+
+  it("requires confirmation for content-bearing choices and exporter conflicts", () => {
+    expect(agentTraceSelectionModel("configured", "redacted", "full-content")).toEqual({
+      actionLabel: "Apply",
+      changed: true,
+      requiresOverwriteConfirmation: false,
+      requiresPrivacyConfirmation: true,
+    });
+    expect(agentTraceSelectionModel("conflict", "unknown", "tool-details")).toEqual({
+      actionLabel: "Review change",
+      changed: true,
+      requiresOverwriteConfirmation: true,
+      requiresPrivacyConfirmation: true,
+    });
+    expect(agentTraceSelectionModel("conflict", "unknown", "off")).toMatchObject({
+      actionLabel: "Keep existing",
+      changed: false,
+    });
+    expect(
+      agentTraceSelectionModel("conflict", "unknown", "off", {
+        traces: "configured",
+        logs: "conflict",
+      }),
+    ).toMatchObject({ actionLabel: "Turn off", changed: true });
+    expect(agentTraceSelectionModel("configured", "redacted", "tool-activity")).toMatchObject({
+      requiresPrivacyConfirmation: true,
+    });
+    expect(
+      agentTraceSelectionModel(
+        "configured",
+        "redacted",
+        "tool-activity",
+        { traces: "configured", logs: "conflict" },
+        "codex",
+      ),
+    ).toMatchObject({
+      actionLabel: "Review change",
+      requiresOverwriteConfirmation: true,
+      requiresPrivacyConfirmation: true,
+    });
+    expect(agentTraceSelectionModel("stale", "redacted", "redacted")).toEqual({
+      actionLabel: "Repair",
+      changed: true,
+      requiresOverwriteConfirmation: false,
+      requiresPrivacyConfirmation: false,
+    });
   });
 });
 

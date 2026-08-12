@@ -135,12 +135,26 @@ interface AgentHostsResponse {
 }
 
 type AgentTraceState = "disabled" | "configured" | "stale" | "conflict" | "invalid";
+type AgentTraceLevel =
+  | "off"
+  | "redacted"
+  | "tool-details"
+  | "full-content"
+  | "tool-activity"
+  | "prompt-content";
+type AgentTraceObservedLevel = AgentTraceLevel | "custom" | "unknown";
 
 interface AgentTraceHostStatus {
   hostKind: AgentHostKind;
   displayName: string;
   configPath: string;
   state: AgentTraceState;
+  level: AgentTraceObservedLevel;
+  supportedLevels: AgentTraceLevel[];
+  signals?: {
+    traces: "disabled" | "configured" | "stale" | "conflict";
+    logs: "disabled" | "configured" | "stale" | "conflict";
+  };
   restartRequired: boolean;
   conflictingFields: string[];
   warnings: string[];
@@ -148,6 +162,7 @@ interface AgentTraceHostStatus {
 
 interface AgentTracesResponse {
   endpoint: string;
+  logsEndpoint?: string;
   cloudConfigured: boolean;
   hosts: AgentTraceHostStatus[];
 }
@@ -885,9 +900,143 @@ export function agentTraceInstallCopy(state: AgentTraceState): {
             : null;
   return {
     actionLabel,
-    description: "Send native traces to Ratel's local relay.",
-    title: "Native traces",
+    description: "Send native telemetry to Ratel's local relay.",
+    title: "Native telemetry",
   };
+}
+
+export interface AgentTraceLevelChoice {
+  value: AgentTraceLevel;
+  label: string;
+  description: string;
+  contentBearing: boolean;
+}
+
+export function agentTraceLevelChoices(hostKind: AgentHostKind): AgentTraceLevelChoice[] {
+  const choices: AgentTraceLevelChoice[] = [
+    {
+      value: "off",
+      label: "Off",
+      description: "Do not route this agent's native traces or logs through Ratel.",
+      contentBearing: false,
+    },
+    {
+      value: "redacted",
+      label: "Redacted",
+      description:
+        hostKind === "claude-code"
+          ? "Route trace metadata and structured logs with prompts, responses, tool details, and tool content disabled."
+          : "Route Codex trace spans only; structured logs and prompt content stay off.",
+      contentBearing: false,
+    },
+  ];
+  if (hostKind === "claude-code") {
+    choices.push(
+      {
+        value: "tool-details",
+        label: "Tool details",
+        description:
+          "Include tool execution details while prompts, assistant responses, and tool content stay disabled.",
+        contentBearing: true,
+      },
+      {
+        value: "full-content",
+        label: "Full content",
+        description: "Include prompts, assistant responses, tool details, and tool content.",
+        contentBearing: true,
+      },
+    );
+  } else {
+    choices.push(
+      {
+        value: "tool-activity",
+        label: "Tool activity",
+        description:
+          "Add structured Codex tool logs while user prompt logging stays off. Tool results include an output snippet.",
+        contentBearing: true,
+      },
+      {
+        value: "prompt-content",
+        label: "Prompt content",
+        description:
+          "Also include Codex user prompts. Tool-result output snippets remain included; assistant response bodies are not promised.",
+        contentBearing: true,
+      },
+    );
+  }
+  return choices;
+}
+
+export function agentTraceSelectionModel(
+  state: AgentTraceState,
+  currentLevel: AgentTraceObservedLevel,
+  selectedLevel: AgentTraceLevel,
+  signals?: AgentTraceHostStatus["signals"],
+  hostKind?: AgentHostKind,
+): {
+  actionLabel: string;
+  changed: boolean;
+  requiresOverwriteConfirmation: boolean;
+  requiresPrivacyConfirmation: boolean;
+} {
+  const ownsRatelSignal =
+    signals?.traces === "configured" ||
+    signals?.traces === "stale" ||
+    signals?.logs === "configured" ||
+    signals?.logs === "stale";
+  const anySignalConflict = signals?.traces === "conflict" || signals?.logs === "conflict";
+  const targetConflict = signals
+    ? selectedLevel === "off"
+      ? Boolean(anySignalConflict && !ownsRatelSignal)
+      : hostKind === "codex" && selectedLevel === "redacted"
+        ? signals.traces === "conflict"
+        : Boolean(anySignalConflict)
+    : state === "conflict";
+  const conflictOff = targetConflict && selectedLevel === "off";
+  const changed =
+    !conflictOff && (state === "stale" || targetConflict || currentLevel !== selectedLevel);
+  return {
+    actionLabel: conflictOff
+      ? "Keep existing"
+      : selectedLevel === "off"
+        ? "Turn off"
+        : targetConflict
+          ? "Review change"
+          : state === "stale" && currentLevel === selectedLevel
+            ? "Repair"
+            : "Apply",
+    changed,
+    requiresOverwriteConfirmation: targetConflict && selectedLevel !== "off",
+    requiresPrivacyConfirmation:
+      selectedLevel === "tool-details" ||
+      selectedLevel === "full-content" ||
+      selectedLevel === "tool-activity" ||
+      selectedLevel === "prompt-content",
+  };
+}
+
+function defaultTraceLevel(host: AgentTraceHostStatus | undefined): AgentTraceLevel {
+  if (!host) return "off";
+  if (host.supportedLevels?.includes(host.level as AgentTraceLevel)) {
+    return host.level as AgentTraceLevel;
+  }
+  return host.state === "disabled" ? "off" : "redacted";
+}
+
+function traceLevelPrivacyWarning(level: AgentTraceLevel): string | null {
+  if (level === "tool-details") {
+    return "Tool details may expose sensitive command, file, and integration metadata.";
+  }
+  if (level === "full-content") {
+    return "Full content may expose source code, credentials, personal data, prompts, responses, and tool input or output.";
+  }
+  if (level === "tool-activity") {
+    return "Codex tool activity includes codex.tool_result output snippets, which may expose sensitive content. User prompt logging remains off.";
+  }
+  if (level === "prompt-content") {
+    return "Codex prompt content includes user prompts plus tool-result output snippets. Codex does not document assistant-response body capture.";
+  }
+  return null;
 }
 
 function AgentTraceExporterSection(props: {
@@ -897,9 +1046,17 @@ function AgentTraceExporterSection(props: {
   status?: AgentTracesResponse;
 }) {
   const host = props.status?.hosts.find(({ hostKind }) => hostKind === props.hostKind);
-  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
+  const observedDefaultLevel = defaultTraceLevel(host);
+  const observedHostKind = host?.hostKind;
+  const [selectedLevel, setSelectedLevel] = useState<AgentTraceLevel>(() => observedDefaultLevel);
+  const [pendingConfirmation, setPendingConfirmation] = useState<AgentTraceLevel | null>(null);
   const [restartNotice, setRestartNotice] = useState(false);
   const { isPending, runAction } = useAgentAction();
+  useEffect(() => {
+    if (!observedHostKind) return;
+    setSelectedLevel(observedDefaultLevel);
+    setPendingConfirmation(null);
+  }, [observedDefaultLevel, observedHostKind]);
 
   if (!host || !props.status) {
     return (
@@ -913,17 +1070,29 @@ function AgentTraceExporterSection(props: {
   }
 
   const stateCopy = TRACE_STATE_COPY[host.state];
-  const card = agentTraceCardModel(host.state);
-  const copy = agentTraceInstallCopy(host.state);
-  const apply = async (action: "enable" | "disable", overwrite = false) => {
-    const label =
-      action === "enable" ? "Native trace export enabled" : "Native trace export disabled";
+  const choices = agentTraceLevelChoices(props.hostKind).filter(({ value }) =>
+    (
+      host.supportedLevels ?? agentTraceLevelChoices(props.hostKind).map((item) => item.value)
+    ).includes(value),
+  );
+  const selectedChoice = choices.find(({ value }) => value === selectedLevel) ?? choices[0];
+  const selection = agentTraceSelectionModel(
+    host.state,
+    host.level,
+    selectedLevel,
+    host.signals,
+    host.hostKind,
+  );
+  const privacyWarning = traceLevelPrivacyWarning(selectedLevel);
+  const apply = async (level: AgentTraceLevel, overwrite = false) => {
+    const action = level === "off" ? "disable" : "enable";
+    const label = action === "enable" ? "Native trace detail updated" : "Native traces turned off";
     const ok = await runAction(label, async () => {
       const prepared = await props.request<PreparedAgentTraceResponse>(
         "/api/agent-traces/prepare",
         {
           method: "POST",
-          body: { action, hostKinds: [props.hostKind], overwrite },
+          body: { action, level, hostKinds: [props.hostKind], overwrite },
         },
       );
       return props.request(`/api/changes/${encodeURIComponent(prepared.changeId)}/commit`, {
@@ -931,49 +1100,69 @@ function AgentTraceExporterSection(props: {
       });
     });
     if (ok) {
-      setConfirmOverwrite(false);
+      setPendingConfirmation(null);
       setRestartNotice(true);
       await props.onStatusChanged();
     }
   };
+  const requestApply = () => {
+    if (selection.requiresOverwriteConfirmation || selection.requiresPrivacyConfirmation) {
+      setPendingConfirmation(selectedLevel);
+      return;
+    }
+    void apply(selectedLevel);
+  };
 
   return (
-    <SetupActionSection description="Native diagnostics for this agent." title="Trace export">
+    <SetupActionSection description="Native diagnostics for this agent." title="Telemetry export">
       <div className="grid gap-3">
         <InstallActionRow
           action={
-            confirmOverwrite ? null : (
-              <>
-                {card.action === "enable" || card.action === "repair" ? (
-                  <Button disabled={isPending} onClick={() => void apply("enable")}>
-                    {copy.actionLabel}
-                    {isPending ? <Button.LoadingIndicator label="Updating trace exporter" /> : null}
-                  </Button>
-                ) : null}
-                {card.action === "disable" ? (
-                  <Button
-                    disabled={isPending}
-                    onClick={() => void apply("disable")}
-                    variant="outline"
-                  >
-                    {copy.actionLabel}
-                    {isPending ? (
-                      <Button.LoadingIndicator label="Disabling trace exporter" />
-                    ) : null}
-                  </Button>
-                ) : null}
-                {card.action === "confirm-overwrite" ? (
-                  <Button onClick={() => setConfirmOverwrite(true)} variant="outline">
-                    {copy.actionLabel}
-                  </Button>
-                ) : null}
-              </>
+            host.state === "invalid" ? null : (
+              <Button
+                disabled={isPending || !selection.changed || pendingConfirmation !== null}
+                onClick={requestApply}
+                variant={selectedLevel === "off" ? "outline" : "default"}
+              >
+                {selection.actionLabel}
+                {isPending ? <Button.LoadingIndicator label="Updating trace detail" /> : null}
+              </Button>
             )
           }
-          description={copy.description}
+          description={selectedChoice.description}
           meta={<Badge variant={stateCopy.variant}>{stateCopy.label}</Badge>}
-          title={copy.title}
+          title="Native telemetry"
         />
+
+        {host.state !== "invalid" ? (
+          <div className="grid max-w-xl gap-1.5">
+            <Label htmlFor={`native-trace-level-${props.hostKind}`}>Telemetry detail</Label>
+            <Select
+              disabled={isPending || pendingConfirmation !== null}
+              onValueChange={(value) => setSelectedLevel(value as AgentTraceLevel)}
+              value={selectedLevel}
+            >
+              <SelectTrigger className="w-full" id={`native-trace-level-${props.hostKind}`}>
+                <SelectValue>{selectedChoice.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((choice) => (
+                  <SelectItem key={choice.value} value={choice.value}>
+                    {choice.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{selectedChoice.description}</p>
+          </div>
+        ) : null}
+
+        {privacyWarning ? (
+          <Alert variant="destructive">
+            <AlertTitle>Sensitive telemetry content</AlertTitle>
+            <AlertDescription>{privacyWarning}</AlertDescription>
+          </Alert>
+        ) : null}
 
         {!props.status.cloudConfigured ? (
           <RatelCloudTraceSetup onConfigured={props.onStatusChanged} request={props.request} />
@@ -995,28 +1184,38 @@ function AgentTraceExporterSection(props: {
           </p>
         ))}
 
-        {confirmOverwrite ? (
+        {pendingConfirmation ? (
           <Alert variant="destructive">
-            <AlertTitle>Replace the existing exporter?</AlertTitle>
+            <AlertTitle>
+              {selection.requiresOverwriteConfirmation
+                ? "Replace exporter and apply this detail level?"
+                : "Confirm sensitive telemetry content"}
+            </AlertTitle>
             <AlertDescription>
-              This is irreversible: Ratel does not retain a backup and cannot restore the previous
-              exporter.
+              {selection.requiresPrivacyConfirmation
+                ? traceLevelPrivacyWarning(pendingConfirmation)
+                : null}
+              {selection.requiresOverwriteConfirmation
+                ? " Ratel does not retain a backup and cannot restore the previous exporter."
+                : null}
             </AlertDescription>
             <div className="mt-2 flex flex-wrap gap-2">
               <Button
                 disabled={isPending}
-                onClick={() => setConfirmOverwrite(false)}
+                onClick={() => setPendingConfirmation(null)}
                 variant="outline"
               >
                 Cancel
               </Button>
               <Button
                 disabled={isPending}
-                onClick={() => void apply("enable", true)}
+                onClick={() =>
+                  void apply(pendingConfirmation, selection.requiresOverwriteConfirmation)
+                }
                 variant="destructive"
               >
-                Replace exporter
-                {isPending ? <Button.LoadingIndicator label="Replacing trace exporter" /> : null}
+                Confirm and apply
+                {isPending ? <Button.LoadingIndicator label="Applying trace detail" /> : null}
               </Button>
             </div>
           </Alert>

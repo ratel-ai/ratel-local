@@ -138,7 +138,7 @@ describe("runDaemon", () => {
     }
   });
 
-  it("mounts the configured Cloud OTLP trace relay on the loopback daemon", async () => {
+  it("mounts configured Cloud OTLP trace and log relays on the loopback daemon", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
     const shutdownRatelTelemetry = vi.fn(async () => {});
@@ -181,6 +181,19 @@ describe("runDaemon", () => {
       expect(response.status).toBe(200);
       expect(cloudFetch).toHaveBeenCalledOnce();
 
+      const logPayload = Buffer.from([0x12, 0x03, 0x6c, 0x6f, 0x67]);
+      const logsResponse = await fetch(new URL("/otlp/v1/logs", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: logPayload,
+      });
+      expect(logsResponse.status).toBe(200);
+      expect(cloudFetch).toHaveBeenCalledTimes(2);
+      expect(String(cloudFetch.mock.calls[1]?.[0])).toBe("https://cloud.example.test/otlp/v1/logs");
+      expect(Buffer.from((cloudFetch.mock.calls[1]?.[1]?.body as Uint8Array) ?? [])).toEqual(
+        logPayload,
+      );
+
       const rejectedHostStatus = await new Promise<number>((resolve, reject) => {
         const request = httpRequest(
           {
@@ -203,8 +216,9 @@ describe("runDaemon", () => {
         request.end(Buffer.from([0x0a, 0x00]));
       });
       expect(rejectedHostStatus).toBe(400);
-      expect(cloudFetch).toHaveBeenCalledOnce();
+      expect(cloudFetch).toHaveBeenCalledTimes(2);
       expect(logs.join("\n")).toContain("Cloud OTLP trace endpoint available");
+      expect(logs.join("\n")).toContain("Cloud OTLP log endpoint available");
       expect(logs.join("\n")).not.toContain("cloud-test-secret");
       expect([...fs.files.values()].join("\n")).not.toContain("cloud-test-secret");
       expect(daemonProcessEnv).not.toHaveProperty("RATEL_API_KEY");

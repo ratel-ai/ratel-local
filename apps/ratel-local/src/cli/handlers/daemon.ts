@@ -39,6 +39,7 @@ import {
   cloudOtlpRelayOptionsFromEnv,
   cloudOtlpTraceRelayOptions,
   createCloudOtlpTraceRelayController,
+  OTLP_LOGS_PATH,
   OTLP_TRACES_PATH,
 } from "../../cloud/otlp-trace-relay.js";
 import {
@@ -505,9 +506,10 @@ export async function runDaemonServer(
             })),
             cloudConfigured: activeCloudOptions !== undefined,
           }),
-          prepare: ({ action, hostKinds, overwrite }) =>
+          prepare: ({ action, level, hostKinds, overwrite }) =>
             prepareAgentTraceChange(ctx, {
               action,
+              ...(level !== undefined ? { level } : {}),
               hostKinds,
               endpoint: loopbackTraceEndpoint(`http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`),
               ...(overwrite !== undefined ? { overwrite } : {}),
@@ -595,6 +597,7 @@ export async function runDaemonServer(
   log(`[ratel] daemon UI: ${state.uiUrl}`);
   log(`[ratel] MCP HTTP endpoint: ${state.mcpUrl}`);
   log(`[ratel] Cloud OTLP trace endpoint available at ${state.uiUrl}${OTLP_TRACES_PATH}`);
+  log(`[ratel] Cloud OTLP log endpoint available at ${state.uiUrl}${OTLP_LOGS_PATH}`);
   if (activeCloudOptions) {
     log("[ratel] Ratel Cloud trace export configured");
     log("[ratel] Ratel runtime Cloud trace export enabled");

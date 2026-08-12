@@ -1,8 +1,9 @@
-# Ratel Cloud OTLP traces
+# Ratel Cloud OTLP telemetry relay
 
-Ratel Local relays native Claude Code and Codex OpenTelemetry traces through
-its per-user daemon. The agent exporter sends OTLP/HTTP protobuf to loopback;
-the daemon adds its Ratel Cloud credential and forwards the bytes unchanged.
+Ratel Local relays native Claude Code and Codex OpenTelemetry traces and logs
+through its per-user daemon. Agent exporters send OTLP/HTTP protobuf to
+loopback; the daemon adds its Ratel Cloud credential and forwards the bytes
+unchanged.
 
 The daemon-hosted gateway also initializes the Ratel SDK telemetry provider as
 `service.name=ratel-local`. Its exporter sends through the same loopback relay,
@@ -17,7 +18,9 @@ Open the daemon UI and select **Settings**. In the **Ratel Cloud** section, ente
 - Trace endpoint: `https://cloud.ratel.sh/api/v1/traces`
 - API key: your `rtl_...` credential
 
-Saving activates both the relay and Ratel runtime export immediately. The
+The daemon derives the matching Cloud log route by replacing the exact terminal
+`/traces` path segment with `/logs`. Saving activates both signal relays and
+Ratel runtime trace export immediately. The
 daemon persists the endpoint and key in `~/.ratel/cloud-traces.json`, with the
 directory and file restricted to the current user. The authenticated UI API
 returns only the endpoint and whether a key is configured; it never returns
@@ -52,7 +55,28 @@ hand:
 ratel-local traces status
 ratel-local traces status --agent codex --json
 ratel-local traces enable --agent claude-code --agent codex
+ratel-local traces enable --agent claude-code --level tool-details
+ratel-local traces enable --agent codex --level tool-activity
 ratel-local traces disable --agent codex
+```
+
+Both hosts support **Off** and **Redacted**. Redacted is the default for the
+backward-compatible `traces enable` command. For Claude, Redacted sends traces
+and structured logs with the managed content gates off; Claude additionally
+supports **Tool details** and **Full content**. For Codex, Redacted remains
+traces-only; **Tool activity** adds structured logs with user prompt logging
+off, and **Prompt content** additionally includes user prompts. Codex
+`tool_result` records can include output snippets. Ratel does not promise
+Codex assistant-response bodies or full tool arguments because Codex does not
+document those fields.
+
+Tool details, Full content, Tool activity, and Prompt content can carry
+sensitive material. Interactive CLI and Agent Setup flows display a privacy
+warning and require confirmation. Automation must be fully explicit:
+
+```bash
+ratel-local traces enable --agent claude-code --level full-content \
+  --confirm-content --yes
 ```
 
 Status reports `disabled`, `configured`, `stale`, `conflict`, or `invalid` for
@@ -75,12 +99,16 @@ ratel-local setup --yes --traces --agent claude-code --agent codex
 ratel-local setup --yes --traces --overwrite-traces --agent codex
 ```
 
-Claude Code is configured in `~/.claude/settings.json` with its native telemetry
-and enhanced-telemetry beta selectors, trace-only OTLP/HTTP protobuf routing,
-and an empty trace-specific header. Existing log, metric, and content/privacy
-flags are preserved. Codex is configured only in the user-level
-`~/.codex/config.toml` with its OTLP/HTTP binary trace exporter and no headers;
-unrelated tables, profiles, comments, and formatting are preserved.
+Claude Code is configured in `~/.claude/settings.json` with native telemetry,
+enhanced-telemetry beta, independent trace and log OTLP/HTTP protobuf routing,
+and empty signal-specific headers. Redacted explicitly disables prompt,
+response, tool-detail, and tool-content gates. Codex is configured in
+`~/.codex/config.toml`; its trace and optional log exporters use OTLP/HTTP
+binary with empty headers, and `log_user_prompt` is managed explicitly for
+Ratel-owned log routing. Lowering or disabling surgically removes only exact or
+stale Ratel routes and preserves unrelated exporters, tables, profiles,
+comments, and formatting. No normal level enables metrics or
+`OTEL_LOG_RAW_API_BODIES`.
 
 The UI and CLI cannot submit another agent-exporter endpoint. The daemon derives
 the loopback URL from its live port. The inline Cloud onboarding path also reads
@@ -90,10 +118,11 @@ Claude Code or Codex session after a change.
 
 ## Exporter contract
 
-Point the native trace exporter at:
+Point native exporters at the signal-specific loopback routes:
 
 ```text
 http://127.0.0.1:<daemon-port>/otlp/v1/traces
+http://127.0.0.1:<daemon-port>/otlp/v1/logs
 ```
 
 - Protocol: OTLP over HTTP/protobuf.
@@ -104,7 +133,7 @@ http://127.0.0.1:<daemon-port>/otlp/v1/traces
 - Cloud request timeout: 10 seconds.
 
 The daemon listens on `127.0.0.1` and applies its existing loopback `Host`
-validation before the trace route. The route is always available; it returns
+validation before either route. Both routes are always available; they return
 `503` until Cloud settings are configured.
 
 ## Relay behavior
@@ -124,13 +153,15 @@ timeout returns `504`. Empty bodies, wrong methods, wrong content types, and
 oversized bodies are rejected locally.
 
 Malformed non-empty protobuf is intentionally not decoded or filtered locally;
-Ratel Cloud validates it. There is no retry queue, durable spool, trace merging,
-correlation, filtering, enrichment, metrics ingestion, or logs ingestion in
-this iteration.
+Ratel Cloud validates it. There is no retry queue, durable spool, local
+trace/log joining, correlation, filtering, enrichment, or metrics ingestion.
+Cloud-side acceptance, normalization, persistence, and joining of native log
+events are separate from this relay.
 
 ```text
-Claude Code / Codex traces -> daemon loopback relay -> Ratel Cloud
-Ratel SDK runtime spans    -> daemon loopback relay -> Ratel Cloud
+Claude Code / Codex traces -> daemon loopback trace relay -> Ratel Cloud
+Claude Code / Codex logs   -> daemon loopback log relay   -> Ratel Cloud
+Ratel SDK runtime spans    -> daemon loopback trace relay -> Ratel Cloud
 ```
 
 The runtime stream includes spans already emitted by `@ratel-ai/sdk`, such as
@@ -138,6 +169,7 @@ capability search, skill load, upstream registration, tool execution, and
 authentication activity. The thin stdio connector does not own the exporter.
 
 See [ADR 0013](adr/0013-daemon-owned-cloud-otlp-trace-relay.md),
-[ADR 0014](adr/0014-daemon-owned-ratel-runtime-cloud-traces.md), and
-[ADR 0015](adr/0015-persisted-cloud-trace-settings.md), and
-[ADR 0016](adr/0016-native-agent-trace-exporter-setup.md).
+[ADR 0014](adr/0014-daemon-owned-ratel-runtime-cloud-traces.md),
+[ADR 0015](adr/0015-persisted-cloud-trace-settings.md),
+[ADR 0016](adr/0016-native-agent-trace-exporter-setup.md), and
+[ADR 0017](adr/0017-host-aware-native-trace-detail-levels.md).

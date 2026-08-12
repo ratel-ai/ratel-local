@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export const OTLP_TRACES_PATH = "/otlp/v1/traces";
+export const OTLP_LOGS_PATH = "/otlp/v1/logs";
 export const OTLP_PROTOBUF_CONTENT_TYPE = "application/x-protobuf";
 export const CLOUD_OTLP_TRACES_ENDPOINT_ENV = "RATEL_CLOUD_OTLP_TRACES_ENDPOINT";
 export const CLOUD_API_KEY_ENV = "RATEL_API_KEY";
@@ -10,6 +11,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 export interface CloudOtlpTraceRelayOptions {
   endpoint: URL;
+  logsEndpoint?: URL;
   apiKey: string;
   fetch?: typeof fetch;
   log?: (message: string) => void;
@@ -52,7 +54,21 @@ export function cloudOtlpTraceRelayOptions(settings: {
   if (!settings.apiKey.trim() || /[\r\n]/.test(settings.apiKey)) {
     throw new Error("Ratel Cloud API key is required and must fit in an HTTP header");
   }
-  return { endpoint, apiKey: settings.apiKey };
+  return {
+    endpoint,
+    logsEndpoint: deriveCloudOtlpLogsEndpoint(endpoint),
+    apiKey: settings.apiKey,
+  };
+}
+
+export function deriveCloudOtlpLogsEndpoint(traceEndpoint: URL): URL {
+  const match = /\/traces(\/?)$/.exec(traceEndpoint.pathname);
+  if (!match) {
+    throw new Error("Ratel Cloud OTLP trace endpoint path must end with /traces");
+  }
+  const logsEndpoint = new URL(traceEndpoint);
+  logsEndpoint.pathname = `${traceEndpoint.pathname.slice(0, match.index)}/logs${match[1]}`;
+  return logsEndpoint;
 }
 
 export function createCloudOtlpTraceRelayController(
@@ -64,10 +80,11 @@ export function createCloudOtlpTraceRelayController(
       relay = createCloudOtlpTraceRelay(options);
     },
     async handleRequest(req, res, path) {
-      if (path !== OTLP_TRACES_PATH) return false;
+      const signal = signalForPath(path);
+      if (!signal) return false;
       if (!relay) {
         req.resume();
-        writePlain(res, 503, "Ratel Cloud traces are not configured\n");
+        writePlain(res, 503, `Ratel Cloud ${signal} are not configured\n`);
         return true;
       }
       return relay.handleRequest(req, res, path);
@@ -85,10 +102,14 @@ export function createCloudOtlpTraceRelay(
     "body limit",
   );
   const timeoutMs = positiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "upstream timeout");
+  const logsEndpoint = options.logsEndpoint ?? deriveCloudOtlpLogsEndpoint(options.endpoint);
 
   return {
     async handleRequest(req, res, path) {
-      if (path !== OTLP_TRACES_PATH) return false;
+      const signal = signalForPath(path);
+      if (!signal) return false;
+      const endpoint = signal === "traces" ? options.endpoint : logsEndpoint;
+      const signalLabel = signal === "traces" ? "Trace" : "Log";
 
       if (req.method !== "POST") {
         req.resume();
@@ -112,24 +133,24 @@ export function createCloudOtlpTraceRelay(
         }
         if (parsedLength > maxBodyBytes) {
           req.resume();
-          writePlain(res, 413, "Trace payload too large\n");
+          writePlain(res, 413, `${signalLabel} payload too large\n`);
           return true;
         }
       }
 
       const body = await readBoundedBody(req, maxBodyBytes);
       if (body === undefined) {
-        writePlain(res, 413, "Trace payload too large\n");
+        writePlain(res, 413, `${signalLabel} payload too large\n`);
         return true;
       }
       if (body.length === 0) {
-        writePlain(res, 400, "Trace payload is empty\n");
+        writePlain(res, 400, `${signalLabel} payload is empty\n`);
         return true;
       }
 
-      const signal = AbortSignal.timeout(timeoutMs);
+      const abortSignal = AbortSignal.timeout(timeoutMs);
       try {
-        const upstream = await fetchUpstream(options.endpoint, {
+        const upstream = await fetchUpstream(endpoint, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${options.apiKey}`,
@@ -137,16 +158,16 @@ export function createCloudOtlpTraceRelay(
           },
           body: Uint8Array.from(body),
           redirect: "error",
-          signal,
+          signal: abortSignal,
         });
 
         if (upstream.status < 200 || upstream.status >= 300) {
-          log(`[ratel] Cloud OTLP trace relay upstream returned HTTP ${upstream.status}`);
+          log(`[ratel] Cloud OTLP ${signal} relay upstream returned HTTP ${upstream.status}`);
           const retryAfter = safeRetryAfter(upstream.headers.get("retry-after"));
           writePlain(
             res,
             validHttpStatus(upstream.status) ? upstream.status : 502,
-            `Ratel Cloud trace endpoint returned HTTP ${upstream.status}\n`,
+            `Ratel Cloud ${signal} endpoint returned HTTP ${upstream.status}\n`,
             retryAfter ? { "Retry-After": retryAfter } : undefined,
           );
           return true;
@@ -157,17 +178,23 @@ export function createCloudOtlpTraceRelay(
         res.end(responseBody);
         return true;
       } catch {
-        if (signal.aborted) {
-          log("[ratel] Cloud OTLP trace relay upstream timed out");
-          writePlain(res, 504, "Ratel Cloud trace endpoint timed out\n");
+        if (abortSignal.aborted) {
+          log(`[ratel] Cloud OTLP ${signal} relay upstream timed out`);
+          writePlain(res, 504, `Ratel Cloud ${signal} endpoint timed out\n`);
         } else {
-          log("[ratel] Cloud OTLP trace relay upstream unavailable");
-          writePlain(res, 502, "Ratel Cloud trace endpoint unavailable\n");
+          log(`[ratel] Cloud OTLP ${signal} relay upstream unavailable`);
+          writePlain(res, 502, `Ratel Cloud ${signal} endpoint unavailable\n`);
         }
         return true;
       }
     },
   };
+}
+
+function signalForPath(path: string): "traces" | "logs" | undefined {
+  if (path === OTLP_TRACES_PATH) return "traces";
+  if (path === OTLP_LOGS_PATH) return "logs";
+  return undefined;
 }
 
 function parseCloudEndpoint(value: string): URL {
@@ -232,7 +259,7 @@ function validHttpStatus(status: number): boolean {
 
 function positiveInteger(value: number, description: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`Cloud OTLP trace relay ${description} must be a positive integer`);
+    throw new Error(`Cloud OTLP relay ${description} must be a positive integer`);
   }
   return value;
 }
