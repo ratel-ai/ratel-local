@@ -19,17 +19,21 @@ the plugin `.mcp.json`.
 
 ## Plugin Runtime
 
-The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.8.0-rc.0 connect`.
+The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.8.0 connect`.
 The connector sends its resolved project root to the authenticated loopback
 daemon, which loads the appropriate config chain and shares upstream
 connections only within that canonical project scope. Do not replace the
 connector with a direct daemon HTTP URL or duplicate upstream MCP definitions
 into the plugin `.mcp.json`.
 
+Stable packages install the Ratel marketplace from the repository's default
+`main` branch. Only prerelease package versions reconcile the marketplace to an
+immutable matching Git tag. Never add an RC branch or ref for stable `0.8.0`.
+
 Run the setup wizard once from a terminal:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.0-rc.0 setup
+npx -y @ratel-ai/ratel-local@0.8.0 setup
 ```
 
 This is the default onboarding path: it makes the daemon ready, detects Claude
@@ -44,11 +48,11 @@ MCP stdio.
 For human CLI work, install the package globally and use the `ratel-local` bin:
 
 ```bash
-pnpm add -g @ratel-ai/ratel-local@0.8.0-rc.0
+pnpm add -g @ratel-ai/ratel-local@0.8.0
 ratel-local --version
 ```
 
-Node 20 or newer is required.
+Node 20.6 or newer is required.
 
 ## Config Scopes
 
@@ -175,9 +179,25 @@ editing Claude Code or Codex configuration:
 
 Cloud telemetry ships off by default. Before offering setup or changing an
 exporter, check `ratel-local traces status`. If the feature is off, explain that
-the user must start or install the daemon with
-`RATEL_FEATURE_CLOUD_TELEMETRY=1`; do not treat saved Cloud credentials as an
+the user must start a foreground daemon with
+`RATEL_FEATURE_CLOUD_TELEMETRY=1`, or reinstall a background service with that
+environment persisted. Merely exporting the flag before `daemon restart` does
+not rewrite an installed service. Do not treat saved Cloud credentials as an
 enablement signal.
+
+```bash
+# Enable an existing background service
+ratel-local daemon uninstall
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon install
+
+# Roll back by reinstalling without the environment assignment
+ratel-local daemon uninstall
+ratel-local daemon install
+```
+
+These lifecycle commands preserve Ratel configuration and saved Cloud settings.
+For a new interactive installation that should offer telemetry onboarding, run
+`RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local setup`.
 
 ```bash
 # Always inspect semantic state first
@@ -354,7 +374,7 @@ ratel-local backup list
 ## Debug Checklist
 
 1. Confirm Node and `npx` are available.
-2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.8.0-rc.0` with `connect`.
+2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.8.0` with `connect`.
 3. Run `ratel-local daemon status`; if needed, run `ratel-local setup`.
 4. Run `ratel-local mcp list` to verify Ratel config has upstreams.
 5. Run `ratel-local connect` from the relevant project to reproduce the scoped bridge outside the host, or `ratel-local serve --auto-config` to isolate the gateway itself.

@@ -35,11 +35,16 @@ persistent daemon, detects Claude Code and Codex, connects the agents you
 select, and offers existing MCP servers and skills as a separate reviewed
 import.
 
-This README tracks the `0.8.0-rc.0` release candidate, matching the package
-version pinned by the bundled plugin. Use that exact version while validating
-this release; stable releases use the `latest` npm tag.
+This README tracks the `0.8.0` stable release, matching the package version
+pinned by the bundled plugin. Unqualified npm installs resolve the `latest`
+dist-tag; the examples below remain exact-versioned for reproducibility.
 
-The CLI and UI prefer the `ratel-local` plugin when linking because it bundles the gateway and agent skills. Prerelease builds pin the existing **Ratel** marketplace to the immutable tag matching the package version (`v0.8.0-rc.0` here): Codex uses `--ref`, while Claude Code uses the equivalent `owner/repo@ref` source. This keeps one `ratel-local@ratel` plugin identity instead of creating a second RC marketplace. Stable builds continue to use the repository's default branch.
+The CLI and UI prefer the `ratel-local` plugin when linking because it bundles
+the gateway and agent skills. Stable builds use the **Ratel** marketplace from
+the repository's default `main` branch. Prerelease builds alone pin the same
+marketplace identity to their immutable matching release tag: Codex uses
+`--ref`, while Claude Code uses the equivalent `owner/repo@ref` source. Stable
+`0.8.0` therefore carries no RC branch or tag override.
 
 If an agent already has the plugin, `link` reconciles that marketplace channel and reinstalls the plugin. It verifies that an RC tag exists before changing a working installation and attempts to restore the stable plugin if an RC switch fails after removal. When stable is restored, the command preserves that connection but reports the RC setup as failed rather than claiming the requested channel is active. If no usable plugin remains, a new link uses the reviewed explicit MCP gateway fallback; a failed existing-plugin reconciliation stops with an error. Importing still recognizes an enabled plugin as an existing Ratel connection and does not add a second gateway. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server. Agent Setup offers **Fix duplicate installation** when both the plugin and an explicit Ratel MCP entry are present, and **Switch to plugin** for MCP-only installations. Both actions preserve the existing MCP connection unless plugin installation succeeds, and only recognized Ratel entries are removed.
 
@@ -50,7 +55,7 @@ If an agent already has the plugin, `link` reconciles that marketplace channel a
 Node.js 20.6 or newer is required.
 
 ```bash
-npm install --global @ratel-ai/ratel-local@0.8.0-rc.0
+npm install --global @ratel-ai/ratel-local@0.8.0
 ratel-local --version
 ```
 
@@ -77,7 +82,7 @@ marketplace channel.
 If you do not have a global installation, run the release-pinned package:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.0-rc.0 setup
+npx -y @ratel-ai/ratel-local@0.8.0 setup
 ```
 
 #### 3. Confirm Ratel Local and restart

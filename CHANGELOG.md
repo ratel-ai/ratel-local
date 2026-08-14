@@ -4,34 +4,30 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
-## [0.8.0-rc.0] - 2026-08-14
+## [0.8.0] - 2026-08-14
 
 ### Added
+- Added one persistent per-user daemon with a lightweight project-scoped `connect` bridge, canonical project registration, isolated user/project/local configuration, reusable generation-safe gateways, loopback authentication, and live client and gateway status in the UI.
+- Added the idempotent `ratel-local setup` wizard for daemon installation, version replacement, plugin-first Claude Code and Codex linking, and separately previewed MCP/skill import. Scoped control-plane mutations are revision checked, recoverable, and backed up where restoration is supported.
 - Added a daemon-owned OTLP log relay for native Claude Code and Codex events, deriving the Cloud `/logs` endpoint from the saved trace endpoint and preserving protobuf payloads unchanged. Host-aware levels now offer Claude Redacted, Tool details, and Full content, and Codex Redacted traces, Tool activity, and Prompt content. Existing `traces enable` and setup automation remain on the safest Redacted level; every content-bearing CLI and Agent Setup change requires explicit privacy confirmation.
 - Added the off-by-default `RATEL_FEATURE_CLOUD_TELEMETRY=1` daemon feature flag. It gates Cloud credential loading, loopback relay routes, Ratel runtime export, native exporter mutations, setup prompts, and UI controls together, and is persisted explicitly into installed launchd/systemd services.
 - Added daemon-owned Ratel Cloud trace export: native Claude Code, Codex, and daemon-hosted Ratel SDK OTLP/HTTP protobuf traces use the same bounded loopback relay without merging, correlating, decoding, or rewriting payloads. The Settings page persists the Cloud endpoint and API key for foreground and background daemons; the relay is available only behind the feature flag and returns `503` until configured.
 - Added opt-in native trace exporter setup for Claude Code and Codex through Agent Setup, `ratel-local traces`, and the final optional setup step. The daemon derives the live loopback endpoint, applies atomic secret-free user-config mutations, repairs stale ports, and requires explicit irreversible conflict overwrite. Interactive CLI and Agent Setup flows can collect a missing Ratel Cloud API key through masked input and save it directly to the daemon; non-interactive runs remain secret-free.
+- Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
+- Added `ratel-local retrieval status|configure|reset|prepare` and Settings-page retrieval controls, with transactional scoped writes, model/source preflight, explicit cache, memory, multilingual, privacy, trace, and reconnect guidance, and packed-package smoke CI for five native targets.
 
 ### Changed
 - Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.
+- The bundled plugin now runs `ratel-local connect` against the persistent daemon. After upgrading from the stable 0.5 line, run `ratel-local setup` once to install or replace the service and reconcile selected agent plugins; existing Ratel configuration remains in place.
+- Simplified retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind Save, while missing models require explicit download confirmation before settings are committed.
+- Upgraded `@ratel-ai/sdk` to 0.5.2 and raised the published package's minimum Node.js version to 20.6. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
+- Stable plugin installation follows the repository's default `main` branch. Immutable tag pinning and marketplace reconciliation remain isolated to explicitly versioned prerelease packages.
 
 ### Fixed
 - Kept connector discovery and invocation on the live daemon catalog while the initial daemon attachment is still in flight, and handled stale bootstrap calls locally instead of forwarding them as unknown gateway tools.
 - Resolved passive tool-usage hook paths from either the Codex or Claude Code plugin-root environment so both hosts can run the shared hooks.
 - Forced every managed Claude telemetry level, including Redacted, to disable raw API body capture; file-backed raw capture is reported as custom sensitive content instead of Redacted.
 - Made malformed Cloud settings and Ratel telemetry-provider initialization fail open so the Local daemon and MCP gateway remain available.
-
-## [0.7.0-rc.0] - 2026-07-31
-
-### Added
-- Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
-- Added `ratel-local retrieval status|configure|reset|prepare` and a Retrieval settings page, with transactional scoped writes, model/source preflight, and explicit cache, memory, multilingual, privacy, trace, and reconnect guidance.
-- Added opt-in generation build health reporting and packed-package smoke CI for five native targets.
-
-### Changed
-- Simplified Retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind the Save button, while missing models show an explicit download confirmation and progress before settings are committed.
-- Upgraded `@ratel-ai/sdk` to 0.5.2. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
-- Raised the published package's minimum Node.js version from 20.0 to 20.6 to match the SDK runtime dependency.
 
 ## [0.6.0-rc.1] - 2026-07-31
 

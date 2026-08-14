@@ -24,7 +24,7 @@ shared `assets/icon.svg` remains referenced by the Codex manifest.
 The plugin MCP config starts the lightweight scoped connector through `npx`:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.0-rc.0 connect
+npx -y @ratel-ai/ratel-local@0.8.0 connect
 ```
 
 The connector forwards the agent's resolved project root to the authenticated
@@ -35,7 +35,7 @@ connections only between sessions in the same canonical project.
 Run complete onboarding once on macOS or Linux:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.0-rc.0 setup
+npx -y @ratel-ai/ratel-local@0.8.0 setup
 ```
 
 The wizard installs, updates, or starts the daemon; detects Claude Code and
@@ -97,6 +97,11 @@ For GitHub distribution, publish the repo and add the root marketplace:
 claude plugin marketplace add ratel-ai/ratel-local
 claude plugin install ratel-local@ratel
 ```
+
+Stable Ratel Local packages use the marketplace from the repository's default
+`main` branch. Prerelease packages alone reconcile that same marketplace to the
+immutable Git tag matching their exact package version; stable `0.8.0` does not
+use an RC branch or ref.
 
 If Claude Code is already running, restart it or run `/reload-plugins` inside
 the session.
