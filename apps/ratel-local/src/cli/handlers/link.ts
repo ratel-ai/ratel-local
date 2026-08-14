@@ -50,7 +50,7 @@ export async function runLink(
   ctx: HandlerCtx,
   opts: LinkOptions = {},
 ): Promise<BackupManifest | null> {
-  ctx.prompts.intro("Ratel · link agent at Ratel");
+  ctx.prompts.intro("Connect to Ratel Local");
 
   const agentHost = opts.agentKind
     ? new NamedAgentHostAdapter(opts.agentKind)
@@ -63,9 +63,10 @@ export async function runLink(
         ctx,
         opts,
         resolveHostKind(opts.agentKind, pluginHost.state.host.kind),
+        pluginHost.state.host.displayName,
       );
       ctx.prompts.outro(
-        pluginLinkNoOpMessage(pluginHost.state.host.displayName, pluginHost.connection),
+        pluginConnectionReadyMessage(pluginHost.state.host.displayName, pluginHost.connection),
       );
       return null;
     }
@@ -77,8 +78,8 @@ export async function runLink(
   const hostKind = resolveHostKind(opts.agentKind, agentState.host.kind);
   const connection = await getAgentHostRatelConnection(hostKind, agentState, ctx);
   if (connection.plugin) {
-    await reconcileExistingPlugin(ctx, opts, hostKind);
-    ctx.prompts.outro(pluginLinkNoOpMessage(agentState.host.displayName, connection));
+    await reconcileExistingPlugin(ctx, opts, hostKind, agentState.host.displayName);
+    ctx.prompts.outro(pluginConnectionReadyMessage(agentState.host.displayName, connection));
     return null;
   }
 
@@ -259,19 +260,40 @@ async function reconcileExistingPlugin(
   ctx: HandlerCtx,
   opts: LinkOptions,
   hostKind: SupportedAgentHostKind,
+  displayName: string,
 ): Promise<void> {
   const installPlugin =
     opts.installPlugin ?? ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
-  const plugin = await attemptRatelAgentPluginInstall(hostKind, installPlugin, {
-    reconcileMarketplace: true,
-  });
+  const spinner = ctx.prompts.spinner();
+  spinner.start(`Connecting ${displayName}…`);
+  let plugin: Awaited<ReturnType<typeof attemptRatelAgentPluginInstall>>;
+  try {
+    plugin = await attemptRatelAgentPluginInstall(hostKind, installPlugin, {
+      reconcileMarketplace: true,
+    });
+  } catch (error) {
+    spinner.stop(`${displayName} couldn't connect`);
+    throw error;
+  }
+  spinner.stop(
+    plugin.installed ? `${displayName} is connected` : `${displayName} couldn't connect`,
+  );
   ctx.prompts.note(
     plugin.message,
-    plugin.installed ? "Plugin channel ready" : "Plugin channel unchanged",
+    plugin.installed ? `${displayName} connected` : "Connection issue",
   );
   if (!plugin.installed) {
     throw new Error(plugin.message);
   }
+}
+
+function pluginConnectionReadyMessage(
+  displayName: string,
+  connection: Parameters<typeof pluginLinkNoOpMessage>[1],
+): string {
+  return connection.kind === "duplicate"
+    ? pluginLinkNoOpMessage(displayName, connection)
+    : `${displayName} is ready to use with Ratel Local.`;
 }
 
 function resolveHostKind(

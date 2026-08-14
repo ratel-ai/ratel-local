@@ -407,11 +407,11 @@ async function onboardAgents(
   }
 
   const importSelection = await ctx.prompts.multiselect<SupportedAgentHostKind>({
-    message: "Preview existing MCP servers and skills to import from which agents?",
+    message: "Would you like to import existing tools and skills?",
     options: selected.map((kind) => ({
       value: kind,
       label: agentDisplayName(kind),
-      hint: "Runs a separate preview and confirmation workflow.",
+      hint: "You'll review everything before importing.",
     })),
     initialValues: [],
     required: false,

@@ -190,15 +190,21 @@ describe("runLink", () => {
       JSON.stringify({ enabledPlugins: { "ratel-local@ratel": true } }),
     );
     const messages: string[] = [];
+    const progress: string[] = [];
     const installs: unknown[] = [];
     const prompts: PromptAdapter = {
       ...silentPromptAdapter(),
-      note(message) {
-        messages.push(message);
+      note(message, title) {
+        messages.push(title ? `${title}: ${message}` : message);
       },
       outro(message) {
         messages.push(message);
       },
+      spinner: () => ({
+        start: (message) => progress.push(`start:${message}`),
+        stop: (message) => progress.push(`stop:${message}`),
+        message() {},
+      }),
     };
     const { ctx } = ctxOf(fs, prompts, false);
 
@@ -223,7 +229,9 @@ describe("runLink", () => {
       },
     ]);
     expect(messages.join("\n")).toMatch(/v0\.6\.0-rc\.0/);
-    expect(messages.join("\n")).toMatch(/linked through the Ratel Local plugin/i);
+    expect(messages.join("\n")).toMatch(/Claude Code connected/i);
+    expect(messages.join("\n")).toMatch(/Claude Code is ready to use with Ratel Local/i);
+    expect(progress).toEqual(["start:Connecting Claude Code…", "stop:Claude Code is connected"]);
   });
 
   it("reports a failed RC switch without adding an MCP fallback when stable is restored", async () => {

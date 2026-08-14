@@ -306,10 +306,15 @@ describe("runSetup", () => {
 
   it("detects agents, connects the selected hosts, and offers import separately", async () => {
     let selection = 0;
+    const importPrompt: string[] = [];
     const prompts: PromptAdapter = {
       ...silentPromptAdapter(),
-      async multiselect<T>() {
+      async multiselect<T>({ message, options }) {
         selection++;
+        if (selection === 2) {
+          importPrompt.push(message);
+          importPrompt.push(...options.map(({ label, hint }) => `${label}: ${hint ?? ""}`));
+        }
         return (
           selection === 1 ? ["claude-code", "codex"] : selection === 2 ? ["codex"] : []
         ) as T[];
@@ -342,6 +347,11 @@ describe("runSetup", () => {
 
     expect(linkAgent.mock.calls.map(([, kind]) => kind)).toEqual(["claude-code", "codex"]);
     expect(importAgent.mock.calls.map(([, kind]) => kind)).toEqual(["codex"]);
+    expect(importPrompt).toEqual([
+      "Would you like to import existing tools and skills?",
+      "Claude Code: You'll review everything before importing.",
+      "Codex: You'll review everything before importing.",
+    ]);
   });
 
   it("keeps plain --yes automation daemon-only unless agents are explicit", async () => {
