@@ -20,7 +20,7 @@ All notable changes to this package are documented here. The format is based on 
 - Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.
 - The bundled plugin now runs `ratel-local connect` against the persistent daemon. After upgrading from the stable 0.5 line, run `ratel-local setup` once to install or replace the service and reconcile selected agent plugins; existing Ratel configuration remains in place.
 - Simplified retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind Save, while missing models require explicit download confirmation before settings are committed.
-- Upgraded `@ratel-ai/sdk` to 0.5.2 and raised the published package's minimum Node.js version to 20.6. Direct SDK consumers must now await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
+- Upgraded and exactly pinned `@ratel-ai/sdk` to 0.9.1, moved runtime telemetry initialization out of the SDK onto the explicitly retained legacy OTLP initializer, and pinned that initializer's compatible telemetry vocabulary so npm cannot hoist a breaking patch. The published package now requires Node.js 20.6 or newer. Direct SDK consumers must await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
 - Stable plugin installation follows the repository's default `main` branch. Immutable tag pinning and marketplace reconciliation remain isolated to explicitly versioned prerelease packages.
 
 ### Fixed
@@ -28,6 +28,7 @@ All notable changes to this package are documented here. The format is based on 
 - Resolved passive tool-usage hook paths from either the Codex or Claude Code plugin-root environment so both hosts can run the shared hooks.
 - Forced every managed Claude telemetry level, including Redacted, to disable raw API body capture; file-backed raw capture is reported as custom sensitive content instead of Redacted.
 - Made malformed Cloud settings and Ratel telemetry-provider initialization fail open so the Local daemon and MCP gateway remain available.
+- Prevented clean global installs from resolving incompatible SDK or legacy telemetry patch releases and crashing before the CLI could start; packed-package validation now enforces the reviewed compatibility pins.
 
 ## [0.6.0-rc.1] - 2026-07-31
 

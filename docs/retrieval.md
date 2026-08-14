@@ -36,7 +36,7 @@ daemon only when reconnecting the client is unavailable.
 
 ### Built-in
 
-Omitting `embedding`, or selecting `--source built-in`, uses the SDK 0.5.2 pinned
+Omitting `embedding`, or selecting `--source built-in`, uses the SDK-pinned
 `BAAI/bge-small-en-v1.5` model.
 
 ```json

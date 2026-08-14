@@ -29,10 +29,10 @@ import {
   writeJson,
 } from "@ratel-ai/ratel-local-core";
 import {
-  type ConfigureTelemetryOptions,
-  configureTelemetry,
+  init as initializeRatelTelemetry,
   type TelemetryHandle,
-} from "@ratel-ai/sdk";
+  type TelemetryInitOptions,
+} from "@ratel-ai/telemetry-otlp";
 import {
   CLOUD_API_KEY_ENV,
   type CloudOtlpTraceRelayOptions,
@@ -136,7 +136,9 @@ type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>
 type ProbeDaemon = (
   port: number,
 ) => Promise<{ ok: boolean; reachable?: boolean; status?: DaemonStatusBody; error?: string }>;
-type ConfigureRatelTelemetry = (options?: ConfigureTelemetryOptions) => Promise<TelemetryHandle>;
+type ConfigureRatelTelemetry = (
+  options?: TelemetryInitOptions,
+) => TelemetryHandle | Promise<TelemetryHandle>;
 
 interface DaemonHandlerDeps {
   open?: typeof openBrowser;
@@ -309,7 +311,7 @@ export async function runDaemonServer(
   const ensureRatelTelemetry = async () => {
     if (ratelTelemetry || !activeCloudOptions) return;
     try {
-      ratelTelemetry = await (opts.configureRatelTelemetry ?? configureTelemetry)({
+      ratelTelemetry = await (opts.configureRatelTelemetry ?? initializeRatelTelemetry)({
         endpoint: `http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`,
         serviceName: "ratel-local",
       });

@@ -5,16 +5,44 @@ import { fileURLToPath } from "node:url";
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = resolve(appRoot, "dist");
 
-const packageJson = await readJson(resolve(appRoot, "package.json"));
+const packageJson = await readJson<{
+  version?: unknown;
+  dependencies?: Record<string, unknown>;
+}>(resolve(appRoot, "package.json"));
+const requiredRatelSdkVersion = "0.9.1";
+const ratelSdkVersion = packageJson.dependencies?.["@ratel-ai/sdk"];
+if (ratelSdkVersion !== requiredRatelSdkVersion) {
+  throw new Error(`@ratel-ai/sdk must be pinned exactly to ${requiredRatelSdkVersion}`);
+}
+const legacyTelemetryPins = {
+  "@ratel-ai/telemetry": "0.1.2",
+  "@ratel-ai/telemetry-otlp": "0.1.1",
+} as const;
+for (const [name, version] of Object.entries(legacyTelemetryPins)) {
+  if (packageJson.dependencies?.[name] !== version) {
+    throw new Error(`${name} must be pinned exactly to ${version}`);
+  }
+}
 for (const workspacePackagePath of [
   "../../package.json",
   "../../packages/core/package.json",
   "../../packages/ui/package.json",
 ]) {
-  const workspacePackage = await readJson(resolve(appRoot, workspacePackagePath));
+  const workspacePackage = await readJson<{
+    version?: unknown;
+    dependencies?: Record<string, unknown>;
+  }>(resolve(appRoot, workspacePackagePath));
   if (workspacePackage.version !== packageJson.version) {
     throw new Error(
       `${workspacePackagePath} version ${String(workspacePackage.version)} does not match published package version ${String(packageJson.version)}`,
+    );
+  }
+  if (
+    workspacePackagePath === "../../packages/core/package.json" &&
+    workspacePackage.dependencies?.["@ratel-ai/sdk"] !== requiredRatelSdkVersion
+  ) {
+    throw new Error(
+      `${workspacePackagePath} must pin @ratel-ai/sdk exactly to ${requiredRatelSdkVersion}`,
     );
   }
 }
