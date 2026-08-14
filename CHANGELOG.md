@@ -29,6 +29,7 @@ All notable changes to this package are documented here. The format is based on 
 - Forced every managed Claude telemetry level, including Redacted, to disable raw API body capture; file-backed raw capture is reported as custom sensitive content instead of Redacted.
 - Made malformed Cloud settings and Ratel telemetry-provider initialization fail open so the Local daemon and MCP gateway remain available.
 - Prevented clean global installs from resolving incompatible SDK or legacy telemetry patch releases and crashing before the CLI could start; packed-package validation now enforces the reviewed compatibility pins.
+- Made setup reuse a stable locally installed CLI for its login service instead of fetching an unpublished version through `npx`; setup now uses welcoming progress and failure guidance, and uninstall clears stale runtime state instead of reporting an old PID or version.
 
 ## [0.6.0-rc.1] - 2026-07-31
 

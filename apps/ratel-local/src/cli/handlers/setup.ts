@@ -95,27 +95,31 @@ export interface SetupServiceExecutableInput {
 }
 
 export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Promise<SetupResult> {
-  ctx.prompts.intro("Ratel · persistent daemon setup");
+  ctx.prompts.intro("Set up Ratel Local");
   ctx.prompts.note(
-    "One login service hosts Ratel for every agent session. Each connector sends its project root, so user, project, and local MCP configs remain isolated.",
-    "How it works",
+    "Ratel Local runs quietly in the background, so your coding agents can use it whenever they need it. Each project keeps its own tools and settings.",
+    "What to expect",
   );
 
   const inspectService = options.inspect ?? ((parsed) => inspectDaemonService(parsed, ctx));
   const inspect = () => inspectForSetup(ctx.argv, inspectService);
-  const install = options.install ?? (() => runDaemonCommand("install", ctx, options));
-  const start = options.start ?? (() => runDaemonCommand("start", ctx, options));
+  const quietLifecycleLog = () => {};
+  const install =
+    options.install ??
+    (() => runDaemonCommand("install", ctx, options, undefined, quietLifecycleLog));
+  const start =
+    options.start ?? (() => runDaemonCommand("start", ctx, options, undefined, quietLifecycleLog));
   const upgrade =
     options.upgrade ??
     (async (port: number) => {
-      await runDaemonCommand("uninstall", ctx, options);
-      await runDaemonCommand("install", ctx, options, port);
+      await runDaemonCommand("uninstall", ctx, options, undefined, quietLifecycleLog);
+      await runDaemonCommand("install", ctx, options, port, quietLifecycleLog);
     });
   const daemon = await ensureDaemon(ctx, options, { inspect, install, start, upgrade });
   if (!daemon.ready) return daemon.result;
 
   if (options.daemonOnly) {
-    ctx.prompts.outro("setup complete · daemon ready");
+    ctx.prompts.outro("You're all set — Ratel Local is ready.");
     return daemon.result;
   }
 
@@ -124,8 +128,8 @@ export async function runSetup(ctx: HandlerCtx, options: SetupOptions = {}): Pro
   await onboardAgentTraces(ctx, options, onboarding.connected);
   ctx.prompts.outro(
     onboarding.connected.length > 0
-      ? "setup complete · daemon ready · agent onboarding complete"
-      : "setup complete · daemon ready",
+      ? "You're all set — Ratel Local is ready and your agents are connected."
+      : "You're all set — Ratel Local is ready.",
   );
   return daemon.result;
 }
@@ -218,27 +222,37 @@ async function ensureDaemon(
     const confirmed = options.yes
       ? true
       : await ctx.prompts.confirm({
-          message: `Replace daemon version ${currentVersion} with ${options.expectedVersion}?`,
+          message: `Update Ratel Local from ${currentVersion} to ${options.expectedVersion}? Your projects and settings will stay the same.`,
           initialValue: true,
         });
     if (ctx.prompts.isCancel(confirmed) || confirmed === false) {
       ctx.prompts.cancel("setup cancelled");
       return { result: { ...status, changed: false }, ready: false };
     }
-    await actions.upgrade(status.port);
-    const running = await actions.inspect();
-    if (running.state !== "running" || running.version !== options.expectedVersion) {
-      throw new Error(`daemon did not report version ${options.expectedVersion} after replacement`);
-    }
-    ctx.prompts.note(`Updated the daemon to ${options.expectedVersion}.`, "Daemon");
+    const running = await runDaemonSetupStep(
+      ctx,
+      {
+        start: "Updating Ratel Local…",
+        success: "Ratel Local is ready",
+        failure: "We couldn't finish the update",
+        help: "We couldn't finish updating Ratel Local.",
+      },
+      async () => {
+        await actions.upgrade(status.port);
+        const next = await actions.inspect();
+        if (next.state !== "running" || next.version !== options.expectedVersion) {
+          throw new Error(
+            `daemon did not report version ${options.expectedVersion} after replacement`,
+          );
+        }
+        return next;
+      },
+    );
     return { result: { ...running, changed: true }, ready: true };
   }
 
   if (status.state === "running") {
-    ctx.prompts.note(
-      `The Ratel daemon is already running at http://127.0.0.1:${status.port}.`,
-      "Daemon",
-    );
+    ctx.prompts.note("Ratel Local is already running and ready to use.", "Ready");
     return { result: { ...status, changed: false }, ready: true };
   }
 
@@ -246,45 +260,88 @@ async function ensureDaemon(
     const confirmed = options.yes
       ? true
       : await ctx.prompts.confirm({
-          message: "Start the installed Ratel daemon now?",
+          message: "Ratel Local isn't running. Start it now?",
           initialValue: true,
         });
     if (ctx.prompts.isCancel(confirmed) || confirmed === false) {
       ctx.prompts.cancel("setup cancelled");
       return { result: { ...status, changed: false }, ready: false };
     }
-    await actions.start();
-    const running = await actions.inspect();
-    if (
-      running.state !== "running" ||
-      (options.expectedVersion && running.version !== options.expectedVersion)
-    ) {
-      throw new Error("daemon did not report running after start");
-    }
-    ctx.prompts.note("Started the installed Ratel daemon.", "Daemon");
+    const running = await runDaemonSetupStep(
+      ctx,
+      {
+        start: "Starting Ratel Local…",
+        success: "Ratel Local is ready",
+        failure: "Ratel Local couldn't start",
+        help: "Ratel Local couldn't start.",
+      },
+      async () => {
+        await actions.start();
+        const next = await actions.inspect();
+        if (
+          next.state !== "running" ||
+          (options.expectedVersion && next.version !== options.expectedVersion)
+        ) {
+          throw new Error("daemon did not report running after start");
+        }
+        return next;
+      },
+    );
     return { result: { ...running, changed: true }, ready: true };
   }
 
   const confirmed = options.yes
     ? true
     : await ctx.prompts.confirm({
-        message: `Install the Ratel daemon as a login service on port ${status.port}?`,
+        message:
+          "Set up Ratel Local on this computer? It will start automatically when you sign in.",
         initialValue: true,
       });
   if (ctx.prompts.isCancel(confirmed) || confirmed === false) {
     ctx.prompts.cancel("setup cancelled");
     return { result: { ...status, changed: false }, ready: false };
   }
-  await actions.install();
-  const running = await actions.inspect();
-  if (
-    running.state !== "running" ||
-    (options.expectedVersion && running.version !== options.expectedVersion)
-  ) {
-    throw new Error("daemon did not report running after installation");
-  }
-  ctx.prompts.note("Installed and started the Ratel daemon.", "Daemon");
+  const running = await runDaemonSetupStep(
+    ctx,
+    {
+      start: "Setting up Ratel Local…",
+      success: "Ratel Local is ready",
+      failure: "We couldn't finish setup",
+      help: "We couldn't finish setting up Ratel Local.",
+    },
+    async () => {
+      await actions.install();
+      const next = await actions.inspect();
+      if (
+        next.state !== "running" ||
+        (options.expectedVersion && next.version !== options.expectedVersion)
+      ) {
+        throw new Error("daemon did not report running after installation");
+      }
+      return next;
+    },
+  );
   return { result: { ...running, changed: true }, ready: true };
+}
+
+async function runDaemonSetupStep<T>(
+  ctx: HandlerCtx,
+  copy: { start: string; success: string; failure: string; help: string },
+  action: () => Promise<T>,
+): Promise<T> {
+  const spinner = ctx.prompts.spinner();
+  spinner.start(copy.start);
+  try {
+    const result = await action();
+    spinner.stop(copy.success);
+    return result;
+  } catch (error) {
+    spinner.stop(copy.failure);
+    throw new Error(
+      `${copy.help} Your projects and settings are safe. Run \`ratel-local daemon status\` to see what went wrong.`,
+      { cause: error },
+    );
+  }
 }
 
 async function onboardAgents(
@@ -419,6 +476,7 @@ async function runDaemonCommand(
   ctx: HandlerCtx,
   options: SetupOptions,
   installPort?: number,
+  log: (message: string) => void = ctx.log,
 ): Promise<void> {
   const flags: ParsedArgs["flags"] = {};
   if (verb === "install") {
@@ -436,7 +494,7 @@ async function runDaemonCommand(
     },
     ctx,
     options,
-    ctx.log,
+    log,
     options.serviceExecutable ??
       resolveSetupServiceExecutable({ expectedVersion: options.expectedVersion }),
   );
@@ -465,6 +523,13 @@ export function resolveSetupServiceExecutable(
   }
 
   const isExecutable = input.isExecutable ?? defaultIsExecutable;
+  const currentScript = input.argv1 ?? process.argv[1];
+  if (currentScript && isReusableServiceScript(currentScript)) {
+    return {
+      executablePath: input.execPath ?? process.execPath,
+      executableArgs: [currentScript],
+    };
+  }
   const npx = findOnPath("npx", env.PATH, isExecutable);
   if (npx && input.expectedVersion) {
     return {
@@ -473,7 +538,13 @@ export function resolveSetupServiceExecutable(
     };
   }
 
-  return { executablePath: input.argv1 ?? process.argv[1] ?? "ratel-local" };
+  return { executablePath: currentScript ?? "ratel-local" };
+}
+
+function isReusableServiceScript(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/");
+  if (normalized.includes("/.npm/_npx/") || normalized.includes("/pnpm/dlx/")) return false;
+  return /\.(?:c|m)?js$/.test(normalized) || normalized.endsWith("/ratel-local");
 }
 
 function findOnPath(

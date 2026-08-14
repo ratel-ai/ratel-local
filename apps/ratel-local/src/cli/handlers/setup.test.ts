@@ -65,6 +65,21 @@ describe("runSetup", () => {
     });
   });
 
+  it("persists the currently installed global package instead of fetching an unpublished version", () => {
+    expect(
+      resolveSetupServiceExecutable({
+        expectedVersion: "0.8.0",
+        env: { PATH: "/opt/node/bin" },
+        execPath: "/opt/node/bin/node",
+        argv1: "/home/u/.nvm/versions/node/v24/bin/ratel-local",
+        isExecutable: (path) => path === "/opt/node/bin/npx",
+      }),
+    ).toEqual({
+      executablePath: "/opt/node/bin/node",
+      executableArgs: ["/home/u/.nvm/versions/node/v24/bin/ratel-local"],
+    });
+  });
+
   it("is idempotent when the daemon is already running", async () => {
     const notes: string[] = [];
     const install = vi.fn(async () => {});
@@ -106,20 +121,34 @@ describe("runSetup", () => {
 
   it("installs a missing daemon service after confirmation", async () => {
     const install = vi.fn(async () => {});
+    const progress: string[] = [];
     let inspection = 0;
 
-    const result = await runSetup(setupCtx(), {
-      inspect: async () => {
-        inspection++;
-        return inspection === 1
-          ? { state: "not-installed", port: 7331 }
-          : { state: "running", port: 7331 };
+    const result = await runSetup(
+      setupCtx({
+        prompts: {
+          ...silentPromptAdapter(),
+          spinner: () => ({
+            start: (message) => progress.push(`start:${message}`),
+            stop: (message) => progress.push(`stop:${message}`),
+            message() {},
+          }),
+        },
+      }),
+      {
+        inspect: async () => {
+          inspection++;
+          return inspection === 1
+            ? { state: "not-installed", port: 7331 }
+            : { state: "running", port: 7331 };
+        },
+        install,
+        start: vi.fn(async () => {}),
       },
-      install,
-      start: vi.fn(async () => {}),
-    });
+    );
 
     expect(install).toHaveBeenCalledOnce();
+    expect(progress).toEqual(["start:Setting up Ratel Local…", "stop:Ratel Local is ready"]);
     expect(result).toEqual({ state: "running", port: 7331, changed: true });
   });
 
@@ -195,6 +224,8 @@ describe("runSetup", () => {
 
   it("replaces a daemon service running an incompatible package version", async () => {
     const upgrade = vi.fn(async () => {});
+    const confirmationMessages: string[] = [];
+    const progress: string[] = [];
     let inspection = 0;
     const ctx = setupCtx({
       argv: {
@@ -203,6 +234,18 @@ describe("runSetup", () => {
         rest: [],
         extras: [],
         flags: { port: "8444" },
+      },
+      prompts: {
+        ...silentPromptAdapter(),
+        confirm: async ({ message }) => {
+          confirmationMessages.push(message);
+          return true;
+        },
+        spinner: () => ({
+          start: (message) => progress.push(`start:${message}`),
+          stop: (message) => progress.push(`stop:${message}`),
+          message() {},
+        }),
       },
     });
 
@@ -220,12 +263,45 @@ describe("runSetup", () => {
     });
 
     expect(upgrade).toHaveBeenCalledWith(7331);
+    expect(confirmationMessages).toEqual([
+      "Update Ratel Local from 0.4.0 to 0.6.0-rc.0? Your projects and settings will stay the same.",
+    ]);
+    expect(progress).toEqual(["start:Updating Ratel Local…", "stop:Ratel Local is ready"]);
     expect(result).toEqual({
       state: "running",
       port: 7331,
       version: "0.6.0-rc.0",
       changed: true,
     });
+  });
+
+  it("stops update progress with actionable diagnostics when the service does not start", async () => {
+    const progress: string[] = [];
+    const ctx = setupCtx({
+      prompts: {
+        ...silentPromptAdapter(),
+        spinner: () => ({
+          start: (message) => progress.push(`start:${message}`),
+          stop: (message) => progress.push(`stop:${message}`),
+          message() {},
+        }),
+      },
+    });
+
+    await expect(
+      runSetup(ctx, {
+        expectedVersion: "0.8.0",
+        inspect: async () => ({ state: "running", port: 5731, version: "0.8.0-rc.0" }),
+        upgrade: async () => {
+          throw new Error(
+            "daemon did not become healthy at http://127.0.0.1:5731/healthz: fetch failed",
+          );
+        },
+      }),
+    ).rejects.toThrow(
+      "We couldn't finish updating Ratel Local. Your projects and settings are safe. Run `ratel-local daemon status` to see what went wrong.",
+    );
+    expect(progress).toEqual(["start:Updating Ratel Local…", "stop:We couldn't finish the update"]);
   });
 
   it("detects agents, connects the selected hosts, and offers import separately", async () => {

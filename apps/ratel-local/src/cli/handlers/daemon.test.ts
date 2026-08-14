@@ -961,6 +961,22 @@ describe("runDaemon", () => {
     expect(logs.join("\n")).toContain("http://127.0.0.1:5731/mcp");
   });
 
+  it("clears stale daemon state when uninstalling the macOS service", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    fs.files.set(paths.plist, "<plist />");
+    fs.files.set(paths.state, JSON.stringify({ pid: 123, version: "0.8.0-rc.0" }));
+
+    await runDaemon(daemonArgs({ verb: "uninstall" }), makeCtx(fs), {}, () => {}, {
+      platform: "darwin",
+      getUid: () => 501,
+      commandRunner: async () => ({ stdout: "", stderr: "" }),
+    });
+
+    expect(fs.files.has(paths.plist)).toBe(false);
+    expect(fs.files.has(paths.state)).toBe(false);
+  });
+
   it("rejects ephemeral ports for persistent login services", async () => {
     const fs = new MemFs();
 
@@ -1079,6 +1095,21 @@ describe("runDaemon", () => {
       { command: "systemctl", args: ["--user", "enable", "--now", SYSTEMD_SERVICE] },
     ]);
     expect(logs.join("\n")).toContain("http://127.0.0.1:5731/mcp");
+  });
+
+  it("clears stale daemon state when uninstalling the Linux service", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    fs.files.set(paths.systemdService, "[Service]");
+    fs.files.set(paths.state, JSON.stringify({ pid: 123, version: "0.8.0-rc.0" }));
+
+    await runDaemon(daemonArgs({ verb: "uninstall" }), makeCtx(fs), {}, () => {}, {
+      platform: "linux",
+      commandRunner: async () => ({ stdout: "", stderr: "" }),
+    });
+
+    expect(fs.files.has(paths.systemdService)).toBe(false);
+    expect(fs.files.has(paths.state)).toBe(false);
   });
 
   it("reports daemon status from the persisted state and live probe", async () => {

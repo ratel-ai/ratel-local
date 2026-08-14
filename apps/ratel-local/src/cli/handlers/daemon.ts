@@ -917,6 +917,7 @@ async function uninstallDaemon(
   await bootoutDaemon(ctx, opts, { ignoreFailure: true });
   const paths = daemonPaths(ctx.env.homeDir);
   await ctx.fs.remove(paths.plist);
+  await ctx.fs.remove(paths.state);
   log(`[ratel] daemon uninstalled: ${paths.plist}`);
 }
 
@@ -998,6 +999,7 @@ async function uninstallLinuxDaemon(
   const paths = daemonPaths(ctx.env.homeDir);
   await systemctl(opts, ["disable", "--now", SYSTEMD_SERVICE], { ignoreFailure: true });
   await ctx.fs.remove(paths.systemdService);
+  await ctx.fs.remove(paths.state);
   await systemctl(opts, ["daemon-reload"], { ignoreFailure: true });
   log(`[ratel] daemon uninstalled: ${paths.systemdService}`);
 }
