@@ -8,6 +8,20 @@ How a new version is published to npm. Read end-to-end before cutting a release.
 - **`ts.yml`** runs build / typecheck / lint / test plus packed-package smoke checks on Linux x64/arm64, macOS x64/arm64, and Windows x64 on every PR and on push to `main`.
 - **`verify-install.yml`** runs daily and on-demand: `npx -y @ratel-ai/ratel-local@latest --help` on Ubuntu.
 
+## Stable and prerelease channels
+
+- A stable release uses an exact `X.Y.Z` version and `vX.Y.Z` tag. The workflow
+  publishes it under npm's `latest` dist-tag. Stable plugin installation follows
+  the repository's default `main` branch and must not carry an RC branch or tag
+  override.
+- A prerelease uses an exact `X.Y.Z-rc.N` version and matching immutable
+  `vX.Y.Z-rc.N` tag. The workflow publishes it under npm's `rc` dist-tag, and
+  the package's plugin installer pins both Codex and Claude Code marketplaces to
+  that matching Git tag.
+- Treat `@rc` as a convenience only while an active prerelease is newer than
+  production. Exact prerelease versions are the reproducible install path. After
+  a GA promotion, do not leave `rc` pointing at an older release than `latest`.
+
 ## Cutting a release
 
 ### Per-release flow
@@ -25,14 +39,32 @@ How a new version is published to npm. Read end-to-end before cutting a release.
      ```
      The packed `package.json` must show real semver ranges; workspace-protocol dependencies would break installs.
 4. **(Optional dry-run)** `workflow_dispatch` `release.yml` with `dry_run: true` to validate the auth + publish path end-to-end without consuming a version number.
-5. **Commit, tag, push:**
+5. **Commit the release preparation** on `release/X.Y.Z` (or the corresponding
+   prerelease branch), open a PR to `main`, and merge it only after CI and review.
+   Create the tag from the verified merged `main` commit, then push the tag:
    ```
-   git commit -am "release: vX.Y.Z"
+   git add <release-files>
+   git commit -m "release: vX.Y.Z"
+   git push origin release/X.Y.Z
+   # open and merge the PR, then:
+   git switch main
+   git pull --ff-only origin main
    git tag vX.Y.Z
-   git push origin main vX.Y.Z
+   git push origin vX.Y.Z
    ```
 6. **Watch `release.yml`** to completion. Inspect the GitHub Release on success.
-7. **For RCs**: validate the package on a real machine (`npx -y @ratel-ai/ratel-local@rc --help` from a terminal without the package globally installed). Iterate (`-rc.2`, `-rc.3`, …) until happy, then bump to the un-suffixed version and tag again to promote to `latest`.
+7. **For RCs**: validate the exact package version on a real machine (for
+   example, `npx -y @ratel-ai/ratel-local@0.8.0-rc.1 --help`) from a terminal
+   without the package globally installed. Iterate (`-rc.2`, `-rc.3`, …) until
+   happy, then bump every synchronized pin to the un-suffixed version and tag
+   again to promote to `latest`.
+8. **After a GA promotion**, inspect `npm view @ratel-ai/ratel-local dist-tags
+   --json`. If `rc` points to a version older than `latest`, an npm maintainer
+   must remove the obsolete tag with authenticated registry access:
+   `npm dist-tag rm @ratel-ai/ratel-local rc`. Trusted Publisher OIDC covers the
+   publish command but not general registry mutations such as `dist-tag`; this
+   cleanup is a separate approval-gated public action. A later RC publish will
+   recreate the `rc` tag.
 
 ## Sharp edges
 
