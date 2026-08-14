@@ -1064,7 +1064,7 @@ function AgentTraceExporterSection(props: {
   if (featureDisabled) {
     return (
       <SetupActionSection
-        description="Set RATEL_FEATURE_CLOUD_TELEMETRY=1 and restart or reinstall the daemon to enable this experimental integration."
+        description="Start a foreground daemon with RATEL_FEATURE_CLOUD_TELEMETRY=1, or reinstall the background service with that environment, to enable this experimental integration."
         title="Telemetry export"
       >
         <Badge variant="outline">Feature off</Badge>

@@ -80,7 +80,7 @@ export async function runTraces(
   }
   if (status.featureEnabled === false) {
     throw new ArgError(
-      "Cloud telemetry is disabled; set RATEL_FEATURE_CLOUD_TELEMETRY=1 and restart or reinstall the daemon",
+      "Cloud telemetry is disabled; start a foreground daemon with RATEL_FEATURE_CLOUD_TELEMETRY=1 or reinstall the background service with that environment",
     );
   }
 

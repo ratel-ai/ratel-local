@@ -217,8 +217,8 @@ function CloudTraceSettingsSection() {
         <Alert>
           <AlertTitle>Cloud telemetry is off</AlertTitle>
           <AlertDescription>
-            Set RATEL_FEATURE_CLOUD_TELEMETRY=1 and restart or reinstall the daemon to enable this
-            experimental integration.
+            Start a foreground daemon with RATEL_FEATURE_CLOUD_TELEMETRY=1, or reinstall the
+            background service with that environment, to enable this experimental integration.
           </AlertDescription>
         </Alert>
       </section>

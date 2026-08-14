@@ -634,7 +634,7 @@ export async function runDaemonServer(
     log(`[ratel] Cloud OTLP log endpoint available at ${state.uiUrl}${OTLP_LOGS_PATH}`);
   } else {
     log(
-      `[ratel] Cloud telemetry disabled; set ${CLOUD_TELEMETRY_FEATURE_ENV}=1 and restart to enable it`,
+      `[ratel] Cloud telemetry disabled; start a foreground daemon with ${CLOUD_TELEMETRY_FEATURE_ENV}=1 or reinstall the background service with that environment`,
     );
   }
   if (featureFlags.cloudTelemetry && activeCloudOptions) {

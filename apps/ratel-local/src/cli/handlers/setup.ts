@@ -34,8 +34,9 @@ Options:
   --port N    choose the daemon port for first installation (default: 5731)
   --help      show this help
 
-Native trace setup is experimental and is offered only when the daemon starts
-with RATEL_FEATURE_CLOUD_TELEMETRY=1.`;
+Native trace setup is experimental and is offered only when setup is invoked
+with RATEL_FEATURE_CLOUD_TELEMETRY=1. The running daemon must have the same
+feature enabled.`;
 
 export type SetupDaemonState = "running" | "stopped" | "not-installed";
 
