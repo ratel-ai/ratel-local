@@ -370,6 +370,7 @@ describe("runSetup", () => {
     };
     const configureAgentTraces = vi.fn(async () => {});
     await runSetup(setupCtx({ prompts }), {
+      processEnv: { RATEL_FEATURE_CLOUD_TELEMETRY: "1" },
       inspect: async () => ({ state: "running", port: 5731 }),
       detectAgents: async () => [
         {

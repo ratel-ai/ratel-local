@@ -85,7 +85,7 @@ describe("Claude Code native trace configuration", () => {
       OTEL_LOG_TOOL_DETAILS: "1",
       OTEL_LOG_TOOL_CONTENT: "0",
     });
-    expect(toolSettings.env.OTEL_LOG_RAW_API_BODIES).toBeUndefined();
+    expect(toolSettings.env.OTEL_LOG_RAW_API_BODIES).toBe("0");
     expect(inspectAgentTraceHost("claude-code", toolDetails, ENDPOINT)).toMatchObject({
       state: "configured",
       level: "tool-details",
@@ -99,14 +99,14 @@ describe("Claude Code native trace configuration", () => {
       OTEL_LOG_TOOL_DETAILS: "1",
       OTEL_LOG_TOOL_CONTENT: "1",
     });
-    expect(fullSettings.env.OTEL_LOG_RAW_API_BODIES).toBeUndefined();
+    expect(fullSettings.env.OTEL_LOG_RAW_API_BODIES).toBe("0");
     expect(inspectAgentTraceHost("claude-code", full, ENDPOINT)).toMatchObject({
       state: "configured",
       level: "full-content",
     });
   });
 
-  it("downgrades content gates without touching unrelated exporters or raw API settings", () => {
+  it("downgrades every content gate, including pre-existing raw API body capture", () => {
     const before = JSON.stringify({
       env: {
         OTEL_METRICS_EXPORTER: "otlp",
@@ -120,7 +120,7 @@ describe("Claude Code native trace configuration", () => {
     expect(redacted.env).toMatchObject({
       OTEL_LOGS_EXPORTER: "otlp",
       OTEL_METRICS_EXPORTER: "otlp",
-      OTEL_LOG_RAW_API_BODIES: "1",
+      OTEL_LOG_RAW_API_BODIES: "0",
       OTEL_LOG_USER_PROMPTS: "0",
       OTEL_LOG_ASSISTANT_RESPONSES: "0",
       OTEL_LOG_TOOL_DETAILS: "0",
@@ -182,6 +182,17 @@ describe("Claude Code native trace configuration", () => {
     expect(status.conflictingFields).toContain("OTEL_EXPORTER_OTLP_TRACES_HEADERS");
     expect(status.warnings.join(" ")).toContain("OTEL_LOG_TOOL_CONTENT");
     expect(JSON.stringify(status)).not.toContain(secret);
+  });
+
+  it("never classifies raw API body file capture as a redacted level", () => {
+    const configured = JSON.parse(
+      rewriteClaudeTraceConfig(null, ENDPOINT, "enable", "redacted"),
+    ) as { env: Record<string, string> };
+    configured.env.OTEL_LOG_RAW_API_BODIES = "file:/tmp/claude-raw";
+
+    const status = inspectAgentTraceHost("claude-code", JSON.stringify(configured), ENDPOINT);
+    expect(status).toMatchObject({ state: "configured", level: "custom" });
+    expect(status.warnings.join(" ")).toContain("OTEL_LOG_RAW_API_BODIES");
   });
 
   it("treats malformed and partially drifted settings as non-writable", () => {

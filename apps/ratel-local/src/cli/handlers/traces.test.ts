@@ -103,6 +103,13 @@ describe("runTraces", () => {
     );
   });
 
+  it("refuses telemetry mutations while the daemon feature flag is off", async () => {
+    const { ctx } = context("enable", { agent: "claude-code", yes: true });
+    const request = vi.fn(async () => response({ ...status(), featureEnabled: false }));
+    await expect(runTraces(ctx, { request })).rejects.toThrow(/RATEL_FEATURE_CLOUD_TELEMETRY=1/);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("prepares and commits a secret-free enable", async () => {
     const calls: Array<{ path: string; body?: unknown }> = [];
     const { ctx, output } = context("enable", { agent: ["claude-code", "codex"], yes: true });

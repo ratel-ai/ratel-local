@@ -173,6 +173,12 @@ was explicitly requested. `ratel-local daemon`, `ratel-local link`, and
 Manage native trace and structured-log export through the CLI, never by directly
 editing Claude Code or Codex configuration:
 
+Cloud telemetry ships off by default. Before offering setup or changing an
+exporter, check `ratel-local traces status`. If the feature is off, explain that
+the user must start or install the daemon with
+`RATEL_FEATURE_CLOUD_TELEMETRY=1`; do not treat saved Cloud credentials as an
+enablement signal.
+
 ```bash
 # Always inspect semantic state first
 ratel-local traces status

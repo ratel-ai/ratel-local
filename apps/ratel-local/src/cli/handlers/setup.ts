@@ -6,6 +6,7 @@ import {
   SUPPORTED_AGENT_HOSTS,
   type SupportedAgentHostKind,
 } from "@ratel-ai/ratel-local-core";
+import { featureFlagsFromEnv } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { inspectDaemonService, runDaemon } from "./daemon.js";
 import { runImport } from "./import.js";
@@ -31,7 +32,10 @@ Options:
   --yes       accept daemon actions and explicitly selected agent links;
               never imports MCPs automatically; never enables traces unless requested
   --port N    choose the daemon port for first installation (default: 5731)
-  --help      show this help`;
+  --help      show this help
+
+Native trace setup is experimental and is offered only when the daemon starts
+with RATEL_FEATURE_CLOUD_TELEMETRY=1.`;
 
 export type SetupDaemonState = "running" | "stopped" | "not-installed";
 
@@ -131,6 +135,10 @@ async function onboardAgentTraces(
   connected: SupportedAgentHostKind[],
 ): Promise<void> {
   if (connected.length === 0) return;
+  const cloudTelemetryEnabled = featureFlagsFromEnv(
+    options.processEnv ?? process.env,
+  ).cloudTelemetry;
+  if (!cloudTelemetryEnabled && !options.traces) return;
   let selected: SupportedAgentHostKind[];
   if (options.yes) {
     if (!options.traces) {

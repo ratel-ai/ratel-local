@@ -4,21 +4,22 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.8.0-rc.0] - 2026-08-14
+
 ### Added
 - Added a daemon-owned OTLP log relay for native Claude Code and Codex events, deriving the Cloud `/logs` endpoint from the saved trace endpoint and preserving protobuf payloads unchanged. Host-aware levels now offer Claude Redacted, Tool details, and Full content, and Codex Redacted traces, Tool activity, and Prompt content. Existing `traces enable` and setup automation remain on the safest Redacted level; every content-bearing CLI and Agent Setup change requires explicit privacy confirmation.
-
-### Fixed
-- Kept connector discovery and invocation on the live daemon catalog while the initial daemon attachment is still in flight, and handled stale bootstrap calls locally instead of forwarding them as unknown gateway tools.
-- Resolved passive tool-usage hook paths from either the Codex or Claude Code plugin-root environment so both hosts can run the shared hooks.
-
-## [0.8.0-rc.0] - 2026-08-05
-
-### Added
-- Added daemon-owned Ratel Cloud trace export: native Claude Code, Codex, and daemon-hosted Ratel SDK OTLP/HTTP protobuf traces use the same bounded loopback relay without merging, correlating, decoding, or rewriting payloads. The Settings page persists the Cloud endpoint and API key for foreground and background daemons; the relay is always available and returns `503` until configured.
+- Added the off-by-default `RATEL_FEATURE_CLOUD_TELEMETRY=1` daemon feature flag. It gates Cloud credential loading, loopback relay routes, Ratel runtime export, native exporter mutations, setup prompts, and UI controls together, and is persisted explicitly into installed launchd/systemd services.
+- Added daemon-owned Ratel Cloud trace export: native Claude Code, Codex, and daemon-hosted Ratel SDK OTLP/HTTP protobuf traces use the same bounded loopback relay without merging, correlating, decoding, or rewriting payloads. The Settings page persists the Cloud endpoint and API key for foreground and background daemons; the relay is available only behind the feature flag and returns `503` until configured.
 - Added opt-in native trace exporter setup for Claude Code and Codex through Agent Setup, `ratel-local traces`, and the final optional setup step. The daemon derives the live loopback endpoint, applies atomic secret-free user-config mutations, repairs stale ports, and requires explicit irreversible conflict overwrite. Interactive CLI and Agent Setup flows can collect a missing Ratel Cloud API key through masked input and save it directly to the daemon; non-interactive runs remain secret-free.
 
 ### Changed
 - Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.
+
+### Fixed
+- Kept connector discovery and invocation on the live daemon catalog while the initial daemon attachment is still in flight, and handled stale bootstrap calls locally instead of forwarding them as unknown gateway tools.
+- Resolved passive tool-usage hook paths from either the Codex or Claude Code plugin-root environment so both hosts can run the shared hooks.
+- Forced every managed Claude telemetry level, including Redacted, to disable raw API body capture; file-backed raw capture is reported as custom sensitive content instead of Redacted.
+- Made malformed Cloud settings and Ratel telemetry-provider initialization fail open so the Local daemon and MCP gateway remain available.
 
 ## [0.7.0-rc.0] - 2026-07-31
 

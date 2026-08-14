@@ -43,6 +43,7 @@ import {
   OTLP_TRACES_PATH,
 } from "../../cloud/otlp-trace-relay.js";
 import {
+  type CloudTraceSettings,
   CloudTraceSettingsStore,
   type CloudTraceSettingsStoreLike,
   cloudTraceSettingsPath,
@@ -64,6 +65,12 @@ import {
   type RetrievalHealthStats,
 } from "../../daemon/scoped-gateway-pool.js";
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
+import {
+  CLOUD_TELEMETRY_FEATURE_ENV,
+  type FeatureFlags,
+  featureFlagServiceEnvironment,
+  featureFlagsFromEnv,
+} from "../../feature-flags.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
 import { startUiServer } from "../../ui/server.js";
@@ -265,14 +272,28 @@ export async function runDaemonServer(
     createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry });
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
+  const featureFlags = featureFlagsFromEnv(daemonProcessEnv);
   const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
   const cloudTraceSettingsStore =
     opts.cloudTraceSettingsStore ??
     new CloudTraceSettingsStore(cloudTraceSettingsPath(ctx.env.homeDir));
-  const persistedCloudSettings = await cloudTraceSettingsStore.load();
+  let persistedCloudSettings: CloudTraceSettings | undefined;
+  if (featureFlags.cloudTelemetry) {
+    try {
+      persistedCloudSettings = await cloudTraceSettingsStore.load();
+    } catch (error) {
+      log(`[ratel] ignored invalid Cloud trace settings: ${(error as Error).message}`);
+    }
+  }
   let environmentCloudOptions: CloudOtlpTraceRelayOptions | undefined;
   try {
-    environmentCloudOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
+    if (featureFlags.cloudTelemetry) {
+      try {
+        environmentCloudOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
+      } catch (error) {
+        log(`[ratel] ignored invalid Cloud telemetry environment: ${(error as Error).message}`);
+      }
+    }
   } finally {
     delete daemonProcessEnv[CLOUD_API_KEY_ENV];
   }
@@ -287,10 +308,14 @@ export async function runDaemonServer(
   let daemonPort = port;
   const ensureRatelTelemetry = async () => {
     if (ratelTelemetry || !activeCloudOptions) return;
-    ratelTelemetry = await (opts.configureRatelTelemetry ?? configureTelemetry)({
-      endpoint: `http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`,
-      serviceName: "ratel-local",
-    });
+    try {
+      ratelTelemetry = await (opts.configureRatelTelemetry ?? configureTelemetry)({
+        endpoint: `http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`,
+        serviceName: "ratel-local",
+      });
+    } catch (error) {
+      log(`[ratel] Ratel runtime telemetry disabled: ${(error as Error).message}`);
+    }
   };
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
@@ -479,7 +504,9 @@ export async function runDaemonServer(
     skillRegistrationControlPlane,
     preparedChanges,
     cloudTraceSettings: {
+      featureEnabled: featureFlags.cloudTelemetry,
       status: async () => ({
+        featureEnabled: featureFlags.cloudTelemetry,
         configured: activeCloudOptions !== undefined,
         endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
       }),
@@ -495,16 +522,22 @@ export async function runDaemonServer(
         cloudOtlpRelay.configure({ ...next, fetch: opts.cloudOtlpFetch, log });
         await ensureRatelTelemetry();
         log("[ratel] Ratel Cloud trace export configured");
-        return { configured: true, endpoint: next.endpoint.toString() };
+        return {
+          featureEnabled: featureFlags.cloudTelemetry,
+          configured: true,
+          endpoint: next.endpoint.toString(),
+        };
       },
     },
     agentTraceExporters: preparedChanges
       ? {
+          featureEnabled: featureFlags.cloudTelemetry,
           status: async () => ({
             ...(await getAgentTraceStatus(ctx, {
               endpoint: loopbackTraceEndpoint(`http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`),
             })),
             cloudConfigured: activeCloudOptions !== undefined,
+            featureEnabled: featureFlags.cloudTelemetry,
           }),
           prepare: ({ action, level, hostKinds, overwrite }) =>
             prepareAgentTraceChange(ctx, {
@@ -523,7 +556,12 @@ export async function runDaemonServer(
     daemonToken,
     sessionTokens: uiSessions,
     publicRoute: async (req, res, path) => {
-      if (await cloudOtlpRelay.handleRequest(req, res, path)) {
+      if (!featureFlags.cloudTelemetry && (path === OTLP_TRACES_PATH || path === OTLP_LOGS_PATH)) {
+        req.resume();
+        writePlain(res, 404, "Not found\n");
+        return true;
+      }
+      if (featureFlags.cloudTelemetry && (await cloudOtlpRelay.handleRequest(req, res, path))) {
         return true;
       }
       if (req.method === "GET" && path === "/healthz") {
@@ -581,12 +619,7 @@ export async function runDaemonServer(
   });
 
   daemonPort = ui.port;
-  try {
-    await ensureRatelTelemetry();
-  } catch (error) {
-    await Promise.allSettled([mcp.shutdown(), ui.shutdown(), gatewayPool.shutdown()]);
-    throw error;
-  }
+  await ensureRatelTelemetry();
 
   const state = stateForPort(ui.port);
   await writeDaemonState(ctx, state);
@@ -596,9 +629,15 @@ export async function runDaemonServer(
   log(`[ratel] daemon running at ${state.uiUrl}`);
   log(`[ratel] daemon UI: ${state.uiUrl}`);
   log(`[ratel] MCP HTTP endpoint: ${state.mcpUrl}`);
-  log(`[ratel] Cloud OTLP trace endpoint available at ${state.uiUrl}${OTLP_TRACES_PATH}`);
-  log(`[ratel] Cloud OTLP log endpoint available at ${state.uiUrl}${OTLP_LOGS_PATH}`);
-  if (activeCloudOptions) {
+  if (featureFlags.cloudTelemetry) {
+    log(`[ratel] Cloud OTLP trace endpoint available at ${state.uiUrl}${OTLP_TRACES_PATH}`);
+    log(`[ratel] Cloud OTLP log endpoint available at ${state.uiUrl}${OTLP_LOGS_PATH}`);
+  } else {
+    log(
+      `[ratel] Cloud telemetry disabled; set ${CLOUD_TELEMETRY_FEATURE_ENV}=1 and restart to enable it`,
+    );
+  }
+  if (featureFlags.cloudTelemetry && activeCloudOptions) {
     log("[ratel] Ratel Cloud trace export configured");
     log("[ratel] Ratel runtime Cloud trace export enabled");
   }
@@ -732,6 +771,7 @@ export function createLaunchAgentPlist(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
+  featureFlags?: FeatureFlags;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const args = [
@@ -744,6 +784,16 @@ export function createLaunchAgentPlist(input: {
     "--no-open",
     "--auto-config",
   ];
+  const serviceEnvironment = {
+    ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
+    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+  };
+  const environmentXml = Object.entries(serviceEnvironment)
+    .map(
+      ([key, value]) =>
+        `    <key>${escapePlist(key)}</key>\n    <string>${escapePlist(value)}</string>`,
+    )
+    .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -761,13 +811,10 @@ ${args.map((arg) => `    <string>${escapePlist(arg)}</string>`).join("\n")}
   <key>WorkingDirectory</key>
   <string>${escapePlist(input.homeDir)}</string>
 ${
-  input.pathEnv
+  environmentXml
     ? `  <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key>
-    <string>${escapePlist(input.pathEnv)}</string>
-    <key>${DAEMON_INSTALL_PATH_ENV}</key>
-    <string>${escapePlist(input.pathEnv)}</string>
+${environmentXml}
   </dict>
 `
     : ""
@@ -786,11 +833,19 @@ export function createSystemdUserService(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
+  featureFlags?: FeatureFlags;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const command = [input.executablePath, ...(input.executableArgs ?? [])]
     .map(systemdQuote)
     .join(" ");
+  const serviceEnvironment = {
+    ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
+    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+  };
+  const environmentLines = Object.entries(serviceEnvironment)
+    .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
+    .join("\n");
   return `[Unit]
 Description=Ratel Local daemon
 After=network.target
@@ -799,13 +854,7 @@ After=network.target
 Type=simple
 ExecStart=${command} daemon run --port ${input.port} --no-open --auto-config
 WorkingDirectory=${systemdQuote(input.homeDir)}
-${
-  input.pathEnv
-    ? `Environment=${systemdQuote(`PATH=${input.pathEnv}`)}
-Environment=${systemdQuote(`${DAEMON_INSTALL_PATH_ENV}=${input.pathEnv}`)}
-`
-    : ""
-}Restart=always
+${environmentLines ? `${environmentLines}\n` : ""}Restart=always
 RestartSec=2
 StandardOutput=append:${systemdPath(paths.stdoutLog)}
 StandardError=append:${systemdPath(paths.stderrLog)}
@@ -841,6 +890,7 @@ async function installDaemon(
       homeDir: ctx.env.homeDir,
       port,
       pathEnv: (options.processEnv ?? process.env).PATH,
+      featureFlags: featureFlagsFromEnv(options.processEnv ?? process.env),
     }),
   );
   await bootstrapDaemon(ctx, opts);
@@ -927,6 +977,7 @@ async function installLinuxDaemon(
       homeDir: ctx.env.homeDir,
       port,
       pathEnv: (options.processEnv ?? process.env).PATH,
+      featureFlags: featureFlagsFromEnv(options.processEnv ?? process.env),
     }),
   );
   await systemctl(opts, ["daemon-reload"]);

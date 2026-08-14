@@ -219,6 +219,46 @@ describe("UI server — auth", () => {
     }
   });
 
+  it("keeps Cloud settings read-only while its feature flag is off", async () => {
+    const save = vi.fn();
+    const cloudSession = await spin(undefined, {
+      cloudTraceSettings: {
+        featureEnabled: false,
+        status: async () => ({
+          featureEnabled: false,
+          configured: false,
+          endpoint: "https://cloud.ratel.sh/api/v1/traces",
+        }),
+        save,
+      },
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${cloudSession.handle.port}/api/cloud-traces`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${cloudSession.token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            endpoint: "https://cloud.example.test/api/v1/traces",
+            apiKey: "cloud-test-secret",
+          }),
+        },
+      );
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "Cloud telemetry is disabled by feature flag",
+      });
+      expect(save).not.toHaveBeenCalled();
+    } finally {
+      await cloudSession.handle.shutdown();
+      await rm(cloudSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists registered projects using projectId in the response", async () => {
     const projectId = "prj_registered" as ProjectId;
     const projectSession = await spin(undefined, {
@@ -780,6 +820,46 @@ describe("UI server — auth", () => {
 });
 
 describe("UI server — native agent traces", () => {
+  it("rejects exporter mutations while the feature flag is off", async () => {
+    const endpoint = loopbackTraceEndpoint("http://127.0.0.1:5731/otlp/v1/traces");
+    const prepare = vi.fn();
+    const traceSession = await spin(undefined, {
+      agentTraceExporters: {
+        featureEnabled: false,
+        status: async () => ({
+          featureEnabled: false,
+          endpoint,
+          logsEndpoint: loopbackLogEndpoint(endpoint),
+          cloudConfigured: false,
+          hosts: [],
+        }),
+        prepare,
+      },
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${traceSession.handle.port}/api/agent-traces/prepare`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${traceSession.token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ action: "enable", hostKinds: ["codex"] }),
+        },
+      );
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: "Cloud telemetry is disabled by feature flag",
+      });
+      expect(prepare).not.toHaveBeenCalled();
+    } finally {
+      await traceSession.handle.shutdown();
+      await rm(traceSession.assetDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns semantic status and prepares a secret-free change", async () => {
     const endpoint = loopbackTraceEndpoint("http://127.0.0.1:5731/otlp/v1/traces");
     const prepare = vi.fn(async () => ({

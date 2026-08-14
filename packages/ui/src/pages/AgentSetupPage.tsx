@@ -161,6 +161,7 @@ interface AgentTraceHostStatus {
 }
 
 interface AgentTracesResponse {
+  featureEnabled?: boolean;
   endpoint: string;
   logsEndpoint?: string;
   cloudConfigured: boolean;
@@ -172,6 +173,7 @@ interface PreparedAgentTraceResponse {
 }
 
 interface CloudTraceSettingsStatus {
+  featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
 }
@@ -1045,6 +1047,7 @@ function AgentTraceExporterSection(props: {
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   status?: AgentTracesResponse;
 }) {
+  const featureDisabled = props.status?.featureEnabled === false;
   const host = props.status?.hosts.find(({ hostKind }) => hostKind === props.hostKind);
   const observedDefaultLevel = defaultTraceLevel(host);
   const observedHostKind = host?.hostKind;
@@ -1057,6 +1060,17 @@ function AgentTraceExporterSection(props: {
     setSelectedLevel(observedDefaultLevel);
     setPendingConfirmation(null);
   }, [observedDefaultLevel, observedHostKind]);
+
+  if (featureDisabled) {
+    return (
+      <SetupActionSection
+        description="Set RATEL_FEATURE_CLOUD_TELEMETRY=1 and restart or reinstall the daemon to enable this experimental integration."
+        title="Telemetry export"
+      >
+        <Badge variant="outline">Feature off</Badge>
+      </SetupActionSection>
+    );
+  }
 
   if (!host || !props.status) {
     return (

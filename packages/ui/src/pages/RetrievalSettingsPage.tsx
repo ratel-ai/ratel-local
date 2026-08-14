@@ -74,6 +74,7 @@ export interface RetrievalPreparationInspection {
 }
 
 export interface CloudTraceSettingsStatus {
+  featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
 }
@@ -204,6 +205,25 @@ function CloudTraceSettingsSection() {
   });
   const apiKeyConfigured = cloudQuery.data?.configured ?? false;
   const showApiKeyInput = !apiKeyConfigured || editingApiKey;
+
+  if (cloudQuery.data?.featureEnabled === false) {
+    return (
+      <section aria-labelledby="cloud-settings-title" className="grid gap-3">
+        <div className="grid gap-1 px-1">
+          <h2 className="text-lg font-semibold" id="cloud-settings-title">
+            Ratel Cloud
+          </h2>
+        </div>
+        <Alert>
+          <AlertTitle>Cloud telemetry is off</AlertTitle>
+          <AlertDescription>
+            Set RATEL_FEATURE_CLOUD_TELEMETRY=1 and restart or reinstall the daemon to enable this
+            experimental integration.
+          </AlertDescription>
+        </Alert>
+      </section>
+    );
+  }
 
   return (
     <section aria-labelledby="cloud-settings-title" className="grid gap-3">

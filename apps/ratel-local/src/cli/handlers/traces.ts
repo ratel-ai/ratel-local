@@ -28,13 +28,16 @@ Flags:
 
 Enable and disable require at least one --agent. Non-interactive conflict
 replacement requires both --overwrite and --yes. Non-interactive content-bearing
-levels require --level, --confirm-content, and --yes.`;
+levels require --level, --confirm-content, and --yes. Cloud telemetry mutations
+also require RATEL_FEATURE_CLOUD_TELEMETRY=1 on the running daemon.`;
 
 interface AgentTraceApiStatus extends AgentTraceStatus {
+  featureEnabled?: boolean;
   cloudConfigured: boolean;
 }
 
 interface CloudTraceSettingsStatus {
+  featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
 }
@@ -74,6 +77,11 @@ export async function runTraces(
       renderStatus(ctx, filtered);
     }
     return;
+  }
+  if (status.featureEnabled === false) {
+    throw new ArgError(
+      "Cloud telemetry is disabled; set RATEL_FEATURE_CLOUD_TELEMETRY=1 and restart or reinstall the daemon",
+    );
   }
 
   const yes = booleanFlag(ctx.argv.flags.yes, "--yes");
@@ -238,6 +246,7 @@ function renderStatus(ctx: HandlerCtx, status: AgentTraceApiStatus): void {
     }
     for (const warning of host.warnings) ctx.log(`  warning: ${warning}`);
   }
+  ctx.log(`Cloud telemetry feature: ${status.featureEnabled === false ? "disabled" : "enabled"}`);
   ctx.log(`Cloud relay: ${status.cloudConfigured ? "configured" : "not configured"}`);
 }
 

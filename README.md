@@ -163,6 +163,28 @@ immutable gateway generation. See the [retrieval configuration and preflight
 guide](docs/retrieval.md) for local, Hugging Face, Ollama, and
 OpenAI-compatible embedding sources plus privacy and memory guidance.
 
+### Experimental Cloud telemetry
+
+Native Claude Code and Codex telemetry relay plus Ratel runtime trace export
+ship dark. Enable the daemon-wide feature explicitly before configuring an API
+key or native exporter:
+
+```bash
+# New installation or interactive foreground setup
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local setup
+
+# Existing background service
+ratel-local daemon uninstall
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon install
+
+ratel-local traces status
+```
+
+Only the exact value `1` enables the feature. Setup persists the enabled flag in
+new macOS launchd and Linux systemd service definitions. See the [Cloud OTLP
+relay and native exporter setup contract](docs/cloud-otlp-relay.md) for privacy
+levels, precedence, failure behavior, and rollback instructions.
+
 ### Verify capability search
 
 Ask the agent to call Ratel Local explicitly:

@@ -109,20 +109,24 @@ export interface StartUiServerOptions {
 }
 
 export interface CloudTraceSettingsStatus {
+  featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
 }
 
 export interface CloudTraceSettingsControlPlane {
+  featureEnabled?: boolean;
   status(): Promise<CloudTraceSettingsStatus>;
   save(input: { endpoint: string; apiKey?: string }): Promise<CloudTraceSettingsStatus>;
 }
 
 export interface AgentTraceExportersStatus extends AgentTraceStatus {
+  featureEnabled?: boolean;
   cloudConfigured: boolean;
 }
 
 export interface AgentTraceExportersControlPlane {
+  featureEnabled?: boolean;
   status(): Promise<AgentTraceExportersStatus>;
   prepare(input: {
     action: AgentTraceAction;
@@ -240,6 +244,9 @@ async function handleRequest(
         return;
       }
       if (req.method === "PATCH") {
+        if (opts.cloudTraceSettings.featureEnabled === false) {
+          throw new UiRouteError(403, "Cloud telemetry is disabled by feature flag");
+        }
         const body = await readJsonBody(req);
         if (typeof body.endpoint !== "string" || !body.endpoint.trim()) {
           throw new UiRouteError(422, "Cloud trace endpoint is required");
@@ -267,6 +274,9 @@ async function handleRequest(
     }
 
     if (path === "/api/agent-traces/prepare" && opts.agentTraceExporters && req.method === "POST") {
+      if (opts.agentTraceExporters.featureEnabled === false) {
+        throw new UiRouteError(403, "Cloud telemetry is disabled by feature flag");
+      }
       const body = await readJsonBody(req);
       if (body.action !== "enable" && body.action !== "disable") {
         throw new UiRouteError(422, "action must be enable or disable");

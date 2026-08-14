@@ -143,6 +143,7 @@ const CLAUDE_CONTENT_FIELDS = [
   "OTEL_LOG_ASSISTANT_RESPONSES",
   "OTEL_LOG_TOOL_DETAILS",
   "OTEL_LOG_TOOL_CONTENT",
+  "OTEL_LOG_RAW_API_BODIES",
 ] as const;
 
 const CLAUDE_SUPPORTED_LEVELS: AgentTraceLevel[] = [
@@ -475,7 +476,11 @@ function inspectClaude(
     );
   }
 
-  const warnings = CLAUDE_PRIVACY_FIELDS.filter((field) => env[field] === "1").map(
+  const warnings = CLAUDE_PRIVACY_FIELDS.filter((field) =>
+    field === "OTEL_LOG_RAW_API_BODIES"
+      ? env[field] !== undefined && env[field] !== "0"
+      : env[field] === "1",
+  ).map(
     (field) => `${field} is enabled; Claude telemetry may include additional sensitive content.`,
   );
   const traceSignal = inspectClaudeRoute(env, "traces", endpoint);
@@ -643,6 +648,7 @@ function claudeContentEnv(
     OTEL_LOG_ASSISTANT_RESPONSES: level === "full-content" ? "1" : "0",
     OTEL_LOG_TOOL_DETAILS: level === "tool-details" || level === "full-content" ? "1" : "0",
     OTEL_LOG_TOOL_CONTENT: level === "full-content" ? "1" : "0",
+    OTEL_LOG_RAW_API_BODIES: "0",
   };
 }
 
@@ -652,6 +658,9 @@ function inspectClaudeLevel(env: Record<string, string>): AgentTraceObservedLeve
   const assistantResponses = enabled("OTEL_LOG_ASSISTANT_RESPONSES");
   const toolDetails = enabled("OTEL_LOG_TOOL_DETAILS");
   const toolContent = enabled("OTEL_LOG_TOOL_CONTENT");
+  const rawApiBodies =
+    env.OTEL_LOG_RAW_API_BODIES !== undefined && env.OTEL_LOG_RAW_API_BODIES !== "0";
+  if (rawApiBodies) return "custom";
   if (!userPrompts && !assistantResponses && !toolDetails && !toolContent) return "redacted";
   if (!userPrompts && !assistantResponses && toolDetails && !toolContent) return "tool-details";
   if (userPrompts && assistantResponses && toolDetails && toolContent) return "full-content";
