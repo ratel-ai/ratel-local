@@ -23,6 +23,8 @@ export interface ConnectorProxyOptions {
   log?: (message: string) => void;
   connectTimeoutMs?: number;
   initialConnectionGraceMs?: number;
+  automaticReconnect?: boolean;
+  reconnectDelaysMs?: number[];
 }
 
 export interface ConnectorProxyHandle {
@@ -58,6 +60,12 @@ export async function runConnectorProxy(
   let backend: Client | null = null;
   let attaching: Promise<Client> | null = null;
   let closed = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  const notificationTimers = new Set<ReturnType<typeof setTimeout>>();
+  const reconnectDelaysMs = options.reconnectDelaysMs?.length
+    ? options.reconnectDelaysMs
+    : [250, 500, 1_000, 2_000, 5_000];
 
   const server = new Server(
     { name: "ratel-local-connector", version: options.serverVersion },
@@ -82,7 +90,10 @@ export async function runConnectorProxy(
         client.onclose = () => {
           if (backend !== client) return;
           backend = null;
-          if (!closed) void server.sendToolListChanged().catch(() => undefined);
+          if (!closed) {
+            void server.sendToolListChanged().catch(() => undefined);
+            scheduleReconnect();
+          }
         };
         client.onerror = (error) => {
           log(`[ratel] daemon connection error: ${error.message}`);
@@ -97,6 +108,43 @@ export async function runConnectorProxy(
       });
     return attaching;
   };
+
+  function scheduleReconnect(): void {
+    if (!options.automaticReconnect || closed || backend || attaching || reconnectTimer) {
+      return;
+    }
+    const delayMs = reconnectDelaysMs[Math.min(reconnectAttempt, reconnectDelaysMs.length - 1)];
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void attach()
+        .then(() => {
+          reconnectAttempt = 0;
+          scheduleToolListChanged();
+        })
+        .catch((error) => {
+          reconnectAttempt += 1;
+          log(`[ratel] daemon reconnect failed: ${(error as Error).message}`);
+          scheduleReconnect();
+        });
+    }, delayMs);
+    reconnectTimer.unref?.();
+  }
+
+  function scheduleToolListChanged(): void {
+    const timer = setTimeout(() => {
+      notificationTimers.delete(timer);
+      if (!closed) void server.sendToolListChanged().catch(() => undefined);
+    }, 0);
+    timer.unref?.();
+    notificationTimers.add(timer);
+  }
+
+  function clearScheduledWork(): void {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    for (const timer of notificationTimers) clearTimeout(timer);
+    notificationTimers.clear();
+  }
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     if (!backend && attaching) await attaching.catch(() => undefined);
@@ -120,10 +168,17 @@ export async function runConnectorProxy(
         return jsonResult({ state: "running", message: "Ratel daemon is already connected." });
       }
       try {
-        await options.startDaemon();
+        const status = await options.daemonStatus();
+        const started = status.state !== "running";
+        if (started) await options.startDaemon();
         await attach();
-        await server.sendToolListChanged();
-        return jsonResult({ state: "running", message: "Ratel daemon started and connected." });
+        scheduleToolListChanged();
+        return jsonResult({
+          state: "running",
+          message: started
+            ? "Ratel daemon started and connected."
+            : "Ratel daemon was already running and is now connected.",
+        });
       } catch (err) {
         return jsonResult(
           {
@@ -143,6 +198,7 @@ export async function runConnectorProxy(
   server.onclose = () => {
     if (closed) return;
     closed = true;
+    clearScheduledWork();
     const current = backend;
     backend = null;
     void current?.close();
@@ -158,6 +214,7 @@ export async function runConnectorProxy(
       log(
         `[ratel] daemon unavailable; connector entered bootstrap mode: ${(err as Error).message}`,
       );
+      scheduleReconnect();
     });
   await Promise.race([
     initialAttach.catch(() => undefined),
@@ -168,6 +225,7 @@ export async function runConnectorProxy(
     shutdown: async () => {
       if (closed) return;
       closed = true;
+      clearScheduledWork();
       const current = backend;
       backend = null;
       await server.close();

@@ -1,7 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ToolListChangedNotificationSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 import { runConnectorProxy } from "./proxy.js";
 
@@ -77,6 +81,74 @@ describe("runConnectorProxy", () => {
     expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual([
       "search_capabilities",
     ]);
+
+    await host.close();
+    await connector.shutdown();
+    await remote.server.close();
+  });
+
+  it("attaches to an already-running daemon without restarting it", async () => {
+    const remote = await backend();
+    const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    const connectBackend = vi
+      .fn<() => Promise<Client>>()
+      .mockRejectedValueOnce(new Error("initial connection failed"))
+      .mockResolvedValue(remote.client);
+    const startDaemon = vi.fn(async () => {});
+    const connector = await runConnectorProxy({
+      serverTransport: connectorTransport,
+      connectBackend,
+      daemonStatus: async () => ({ state: "running" }),
+      startDaemon,
+      serverVersion: "1.0.0",
+    });
+    const host = new Client({ name: "host", version: "1.0.0" });
+    await host.connect(hostTransport);
+
+    const start = await host.callTool({ name: "ratel_daemon_start", arguments: {} });
+
+    expect(start.isError).not.toBe(true);
+    expect(startDaemon).not.toHaveBeenCalled();
+    expect(connectBackend).toHaveBeenCalledTimes(2);
+    expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual([
+      "search_capabilities",
+    ]);
+
+    await host.close();
+    await connector.shutdown();
+    await remote.server.close();
+  });
+
+  it("returns the recovery result before notifying the host to refresh tools", async () => {
+    const remote = await backend();
+    const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    const connectBackend = vi
+      .fn<() => Promise<Client>>()
+      .mockRejectedValueOnce(new Error("daemon offline"))
+      .mockResolvedValue(remote.client);
+    const connector = await runConnectorProxy({
+      serverTransport: connectorTransport,
+      connectBackend,
+      daemonStatus: async () => ({ state: "stopped" }),
+      startDaemon: async () => {},
+      serverVersion: "1.0.0",
+    });
+    const host = new Client(
+      { name: "host", version: "1.0.0" },
+      { capabilities: { tools: { listChanged: true } } },
+    );
+    let callResolved = false;
+    let notificationBeforeResult = false;
+    host.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      if (!callResolved) notificationBeforeResult = true;
+    });
+    await host.connect(hostTransport);
+
+    await host.callTool({ name: "ratel_daemon_start", arguments: {} });
+    callResolved = true;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(notificationBeforeResult).toBe(false);
 
     await host.close();
     await connector.shutdown();
@@ -239,5 +311,38 @@ describe("runConnectorProxy", () => {
     );
     await host.close();
     await connector.shutdown();
+  });
+
+  it("reattaches with backoff after the daemon disconnects when recovery is enabled", async () => {
+    const first = await backend();
+    const second = await backend();
+    const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    const connectBackend = vi
+      .fn<() => Promise<Client>>()
+      .mockResolvedValueOnce(first.client)
+      .mockRejectedValueOnce(new Error("daemon restarting"))
+      .mockResolvedValue(second.client);
+    const connector = await runConnectorProxy({
+      serverTransport: connectorTransport,
+      connectBackend,
+      daemonStatus: async () => ({ state: "running" }),
+      startDaemon: async () => {},
+      serverVersion: "1.0.0",
+      automaticReconnect: true,
+      reconnectDelaysMs: [0],
+    });
+    const host = new Client({ name: "host", version: "1.0.0" });
+    await host.connect(hostTransport);
+
+    await first.server.close();
+    await vi.waitFor(() => expect(connectBackend).toHaveBeenCalledTimes(3));
+
+    expect((await host.listTools()).tools.map((tool) => tool.name)).toEqual([
+      "search_capabilities",
+    ]);
+
+    await host.close();
+    await connector.shutdown();
+    await second.server.close();
   });
 });

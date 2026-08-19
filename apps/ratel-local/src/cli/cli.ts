@@ -29,7 +29,7 @@ import { type AgentPluginInstaller, createRatelAgentPluginInstaller } from "../a
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { daemonLoopbackUrl, requestRunningDaemon, requireDaemonJson } from "./daemon-api.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
-import { runConnect } from "./handlers/connect.js";
+import { CONNECT_USAGE, runConnect } from "./handlers/connect.js";
 import { daemonPaths, runDaemon } from "./handlers/daemon.js";
 import { runDoctor } from "./handlers/doctor.js";
 import { IMPORT_USAGE, runImport } from "./handlers/import.js";
@@ -156,6 +156,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "traces" && (parsed.verb === undefined || parsed.flags.help === true)) {
     log(TRACES_USAGE);
+    return {};
+  }
+
+  if (parsed.group === "connect" && parsed.flags.help === true) {
+    log(CONNECT_USAGE);
     return {};
   }
 

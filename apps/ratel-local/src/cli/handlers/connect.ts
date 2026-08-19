@@ -21,6 +21,22 @@ import {
 import { resolveAutoConfig, type ServeOptions } from "./serve.js";
 import type { HandlerCtx } from "./types.js";
 
+export const CONNECTOR_RECOVERY_FEATURE_ENV = "RATEL_FEATURE_CONNECTOR_RECOVERY";
+
+export const CONNECT_USAGE = `usage: ratel-local connect [options]
+
+Bridge one agent MCP session to the project-scoped Ratel daemon.
+
+Options:
+  --project-root PATH       resolve project and local Ratel configuration from PATH
+  --daemon-url URL          override the authenticated loopback MCP endpoint
+  --agent-host HOST         declare claude-code or codex
+  --link-scope SCOPE        declare user, project, or local link scope
+  --help                    show this help
+
+Set ${CONNECTOR_RECOVERY_FEATURE_ENV}=1 to opt into automatic connector reattachment
+after a daemon interruption.`;
+
 export interface ConnectBackendInput {
   daemonUrl: URL;
   token: string;
@@ -37,6 +53,8 @@ export interface ConnectOptions extends ServeOptions {
   startDaemon?: () => Promise<void>;
   connectorTransport?: Transport;
   readToken?: (homeDir: string) => Promise<string | null>;
+  automaticReconnect?: boolean;
+  reconnectDelaysMs?: number[];
 }
 
 export async function runConnect(
@@ -111,6 +129,10 @@ export async function runConnect(
     startDaemon: start,
     serverVersion: version,
     log,
+    automaticReconnect:
+      options.automaticReconnect ??
+      (options.processEnv ?? process.env)[CONNECTOR_RECOVERY_FEATURE_ENV] === "1",
+    reconnectDelaysMs: options.reconnectDelaysMs,
   });
 }
 
