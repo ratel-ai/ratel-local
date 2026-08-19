@@ -1047,7 +1047,6 @@ function AgentTraceExporterSection(props: {
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   status?: AgentTracesResponse;
 }) {
-  const featureDisabled = props.status?.featureEnabled === false;
   const host = props.status?.hosts.find(({ hostKind }) => hostKind === props.hostKind);
   const observedDefaultLevel = defaultTraceLevel(host);
   const observedHostKind = host?.hostKind;
@@ -1061,16 +1060,7 @@ function AgentTraceExporterSection(props: {
     setPendingConfirmation(null);
   }, [observedDefaultLevel, observedHostKind]);
 
-  if (featureDisabled) {
-    return (
-      <SetupActionSection
-        description="Start a foreground daemon with RATEL_FEATURE_CLOUD_TELEMETRY=1, or reinstall the background service with that environment, to enable this experimental integration."
-        title="Telemetry export"
-      >
-        <Badge variant="outline">Feature off</Badge>
-      </SetupActionSection>
-    );
-  }
+  if (!agentTelemetryVisible(props.status)) return null;
 
   if (!host || !props.status) {
     return (
@@ -1237,6 +1227,10 @@ function AgentTraceExporterSection(props: {
       </div>
     </SetupActionSection>
   );
+}
+
+export function agentTelemetryVisible(status: { featureEnabled?: boolean } | undefined): boolean {
+  return status?.featureEnabled === true;
 }
 
 function RatelCloudTraceSetup(props: {

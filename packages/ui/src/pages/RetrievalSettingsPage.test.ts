@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   availableRetrievalScopes,
   cloudTraceSettingsPatch,
+  cloudTraceSettingsVisible,
   retrievalConfigFromDraft,
   retrievalDownloadConfirmationCopy,
   retrievalDraftFromConfig,
@@ -16,6 +17,24 @@ import {
 } from "./RetrievalSettingsPage";
 
 describe("retrieval settings model", () => {
+  it("hides Cloud settings unless the feature flag is enabled", () => {
+    expect(cloudTraceSettingsVisible(undefined)).toBe(false);
+    expect(
+      cloudTraceSettingsVisible({
+        featureEnabled: false,
+        configured: false,
+        endpoint: "https://cloud.ratel.sh/api/v1/traces",
+      }),
+    ).toBe(false);
+    expect(
+      cloudTraceSettingsVisible({
+        featureEnabled: true,
+        configured: false,
+        endpoint: "https://cloud.ratel.sh/api/v1/traces",
+      }),
+    ).toBe(true);
+  });
+
   it("requires an API key only for first-time Cloud setup", () => {
     expect(() =>
       cloudTraceSettingsPatch(

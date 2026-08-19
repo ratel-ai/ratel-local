@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentCardStatusModel,
+  agentTelemetryVisible,
   agentTraceCardModel,
   agentTraceInstallCopy,
   agentTraceLevelChoices,
@@ -43,6 +44,12 @@ describe("Agent card status", () => {
 });
 
 describe("Agent Setup native trace card", () => {
+  it("hides native telemetry setup unless the feature flag is enabled", () => {
+    expect(agentTelemetryVisible(undefined)).toBe(false);
+    expect(agentTelemetryVisible({ featureEnabled: false })).toBe(false);
+    expect(agentTelemetryVisible({ featureEnabled: true })).toBe(true);
+  });
+
   it.each([
     ["disabled", "enable", false],
     ["configured", "disable", false],

@@ -123,9 +123,7 @@ export function SettingsPage({
           <PageHeaderBackRow>
             <PageHeaderTitle>Settings</PageHeaderTitle>
           </PageHeaderBackRow>
-          <PageHeaderDescription>
-            Manage agents, cloud tracing, and retrieval.
-          </PageHeaderDescription>
+          <PageHeaderDescription>Manage agents and retrieval.</PageHeaderDescription>
         </PageHeaderContent>
       </PageHeader>
 
@@ -220,24 +218,7 @@ function CloudTraceSettingsSection() {
   const apiKeyConfigured = cloudQuery.data?.configured ?? false;
   const showApiKeyInput = !apiKeyConfigured || editingApiKey;
 
-  if (cloudQuery.data?.featureEnabled === false) {
-    return (
-      <section aria-labelledby="cloud-settings-title" className="grid gap-3">
-        <div className="grid gap-1 px-1">
-          <h2 className="text-lg font-semibold" id="cloud-settings-title">
-            Ratel Cloud
-          </h2>
-        </div>
-        <Alert>
-          <AlertTitle>Cloud telemetry is off</AlertTitle>
-          <AlertDescription>
-            Start a foreground daemon with RATEL_FEATURE_CLOUD_TELEMETRY=1, or reinstall the
-            background service with that environment, to enable this experimental integration.
-          </AlertDescription>
-        </Alert>
-      </section>
-    );
-  }
+  if (!cloudTraceSettingsVisible(cloudQuery.data)) return null;
 
   return (
     <section aria-labelledby="cloud-settings-title" className="grid gap-3">
@@ -890,6 +871,10 @@ export function cloudTraceSettingsPatch(
     endpoint: status.endpoint.trim(),
     ...(trimmedApiKey ? { apiKey: trimmedApiKey } : {}),
   };
+}
+
+export function cloudTraceSettingsVisible(status: CloudTraceSettingsStatus | undefined): boolean {
+  return status?.featureEnabled === true;
 }
 
 export function retrievalDraftKey(draft: RetrievalDraft): string {
