@@ -180,26 +180,43 @@ describe("runConnectorProxy", () => {
     await connector.shutdown();
   });
 
-  it("initializes stdio in bootstrap mode while a daemon connection is hung", async () => {
+  it("keeps the first tool list pending while a slow daemon attachment is in flight", async () => {
+    const remote = await backend();
     const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    let finishAttach: ((client: Client) => void) | undefined;
+    const connectBackend = vi.fn(
+      () =>
+        new Promise<Client>((resolve) => {
+          finishAttach = resolve;
+        }),
+    );
     const connector = await runConnectorProxy({
       serverTransport: connectorTransport,
-      connectBackend: () => new Promise<Client>(() => {}),
-      daemonStatus: async () => ({ state: "unavailable" }),
+      connectBackend,
+      daemonStatus: async () => ({ state: "running" }),
       startDaemon: async () => {},
       serverVersion: "1.0.0",
-      connectTimeoutMs: 20,
+      connectTimeoutMs: 10,
       initialConnectionGraceMs: 1,
     });
     const host = new Client({ name: "host", version: "1.0.0" });
     await host.connect(hostTransport);
 
-    expect((await host.listTools()).tools.map((tool) => tool.name)).toContain(
-      "ratel_daemon_status",
-    );
+    let settled = false;
+    const tools = host.listTools().then((result) => {
+      settled = true;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(settled).toBe(false);
+    finishAttach?.(remote.client);
+    expect((await tools).tools.map((tool) => tool.name)).toEqual(["search_capabilities"]);
+    expect(connectBackend).toHaveBeenCalledOnce();
 
     await host.close();
     await connector.shutdown();
+    await remote.server.close();
   });
 
   it("waits for an in-flight initial attachment before returning the first tool list", async () => {

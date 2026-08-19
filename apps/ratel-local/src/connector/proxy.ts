@@ -21,6 +21,7 @@ export interface ConnectorProxyOptions {
   startDaemon: () => Promise<void>;
   serverVersion: string;
   log?: (message: string) => void;
+  /** @deprecated Attachment now waits for the backend handshake to settle. */
   connectTimeoutMs?: number;
   initialConnectionGraceMs?: number;
   automaticReconnect?: boolean;
@@ -77,32 +78,39 @@ export async function runConnectorProxy(
     },
   );
 
+  const adoptBackend = async (client: Client): Promise<Client> => {
+    if (closed) {
+      await client.close().catch(() => undefined);
+      throw new Error("connector is closed");
+    }
+    if (backend) {
+      if (backend !== client) await client.close().catch(() => undefined);
+      return backend;
+    }
+    backend = client;
+    client.onclose = () => {
+      if (backend !== client) return;
+      backend = null;
+      if (!closed) {
+        void server.sendToolListChanged().catch(() => undefined);
+        scheduleReconnect();
+      }
+    };
+    client.onerror = (error) => {
+      log(`[ratel] daemon connection error: ${error.message}`);
+    };
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      await server.sendToolListChanged();
+    });
+    return client;
+  };
+
   const attach = async (): Promise<Client> => {
     if (backend) return backend;
     if (attaching) return attaching;
-    attaching = connectWithTimeout(options.connectBackend, options.connectTimeoutMs ?? 8_000)
-      .then((client) => {
-        if (closed) {
-          void client.close();
-          throw new Error("connector is closed");
-        }
-        backend = client;
-        client.onclose = () => {
-          if (backend !== client) return;
-          backend = null;
-          if (!closed) {
-            void server.sendToolListChanged().catch(() => undefined);
-            scheduleReconnect();
-          }
-        };
-        client.onerror = (error) => {
-          log(`[ratel] daemon connection error: ${error.message}`);
-        };
-        client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-          await server.sendToolListChanged();
-        });
-        return client;
-      })
+    attaching = options
+      .connectBackend()
+      .then(adoptBackend)
       .finally(() => {
         attaching = null;
       });
@@ -232,30 +240,6 @@ export async function runConnectorProxy(
       await current?.close();
     },
   };
-}
-
-async function connectWithTimeout(
-  connect: () => Promise<Client>,
-  timeoutMs: number,
-): Promise<Client> {
-  const pending = connect();
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      reject(new Error(`daemon connection timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([pending, timeout]);
-  } catch (err) {
-    if (timedOut) void pending.then((client) => client.close()).catch(() => undefined);
-    throw err;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function delay(ms: number): Promise<void> {

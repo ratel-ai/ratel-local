@@ -1,7 +1,7 @@
 {
   "name": "ratel-local",
   "displayName": "Ratel Local",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Persistent project-scoped Ratel gateway with BM25, semantic, and hybrid capability search.",
   "author": {
     "name": "Agentified",
