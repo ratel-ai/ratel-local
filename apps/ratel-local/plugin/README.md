@@ -24,7 +24,7 @@ shared `assets/icon.svg` remains referenced by the Codex manifest.
 The plugin MCP config starts the lightweight scoped connector through `npx`:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.1 connect
+npx -y @ratel-ai/ratel-local@0.8.2 connect
 ```
 
 The connector forwards the agent's resolved project root to the authenticated
@@ -35,7 +35,7 @@ connections only between sessions in the same canonical project.
 Run complete onboarding once on macOS or Linux:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.1 setup
+npx -y @ratel-ai/ratel-local@0.8.2 setup
 ```
 
 The wizard installs, updates, or starts the daemon; detects Claude Code and
@@ -47,12 +47,14 @@ For unattended daemon setup, use `setup --daemon-only --yes`. Agent automation
 requires explicit repeatable `--agent` flags, and `--yes` never imports native
 configuration automatically.
 
-If the daemon is missing, stopped, or temporarily detached, the connector still
-starts and exposes status, start, and setup-guidance MCP tools. The start tool
-checks daemon health first: it attaches to an already-running daemon without
-restarting it. Set `RATEL_FEATURE_CONNECTOR_RECOVERY=1` to opt into bounded
-automatic reattachment after daemon interruptions. The setup tool returns the
-terminal command above; it never launches interactive prompts on MCP stdio.
+While the initial daemon handshake is pending, the connector waits and exposes
+the complete catalog once attachment succeeds. If attachment actually fails, or
+if a live connection is later lost, it exposes status, start, and setup-guidance
+MCP tools. The start tool checks daemon health first: it attaches to an
+already-running daemon without restarting it. Set
+`RATEL_FEATURE_CONNECTOR_RECOVERY=1` to opt into bounded automatic reattachment
+after later daemon interruptions. The setup tool returns the terminal command
+above; it never launches interactive prompts on MCP stdio.
 
 ## Hooks
 
@@ -103,7 +105,7 @@ claude plugin install ratel-local@ratel
 
 Stable Ratel Local packages use the marketplace from the repository's default
 `main` branch. Prerelease packages alone reconcile that same marketplace to the
-immutable Git tag matching their exact package version; stable `0.8.1` does not
+immutable Git tag matching their exact package version; stable `0.8.2` does not
 use an RC branch or ref.
 
 If Claude Code is already running, restart it or run `/reload-plugins` inside

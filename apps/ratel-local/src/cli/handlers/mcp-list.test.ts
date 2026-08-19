@@ -1,4 +1,5 @@
-import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
+import type { BackupFs, HierarchyEnv, JsonFs, ServerEntry } from "@ratel-ai/ratel-local-core";
+import { parseConfig, resolveMcpEntries } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it } from "vitest";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
@@ -7,6 +8,20 @@ import type { HandlerCtx } from "./types.js";
 
 const HOME = "/home/u";
 const ROOT = "/r";
+
+function userOAuthKey(name: string, entry: ServerEntry) {
+  const [resolved] = resolveMcpEntries({
+    homeDir: HOME,
+    documents: [
+      {
+        ref: { scope: "user" },
+        config: parseConfig({ mcpServers: { [name]: entry } }),
+      },
+    ],
+  });
+  if (!resolved) throw new Error(`failed to resolve ${name}`);
+  return resolved.oauthKey;
+}
 
 class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
@@ -139,18 +154,22 @@ describe("runMcpList", () => {
         },
       })}\n`,
     );
+    const freshKey = userOAuthKey("fresh", { type: "http", url: "https://fresh.example" });
+    const staleKey = userOAuthKey("stale", { type: "http", url: "https://stale.example" });
     fs.files.set(
-      "/home/u/.ratel/oauth/fresh.json",
+      freshKey.path,
       JSON.stringify({
         tokens: { access_token: "abc", token_type: "Bearer" },
         expires_at: Date.now() + 60_000,
+        resource_fingerprint: freshKey.fingerprint,
       }),
     );
     fs.files.set(
-      "/home/u/.ratel/oauth/stale.json",
+      staleKey.path,
       JSON.stringify({
         tokens: { access_token: "abc", token_type: "Bearer" },
         expires_at: Date.now() - 60_000,
+        resource_fingerprint: staleKey.fingerprint,
       }),
     );
 
@@ -166,5 +185,28 @@ describe("runMcpList", () => {
     expect(out).toMatch(/fresh[^\n]*ok/);
     // past expires_at → expired.
     expect(out).toMatch(/stale[^\n]*expired/);
+  });
+
+  it("requires auth when scoped credentials belong to a different resource", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      "/home/u/.ratel/config.json",
+      `${JSON.stringify({
+        mcpServers: { remote: { type: "http", url: "https://current.example" } },
+      })}\n`,
+    );
+    const key = userOAuthKey("remote", { type: "http", url: "https://current.example" });
+    fs.files.set(
+      key.path,
+      JSON.stringify({
+        tokens: { access_token: "abc" },
+        resource_fingerprint: "credentials-for-an-old-url",
+      }),
+    );
+
+    const { ctx, logs } = makeCtx(fs, {});
+    await runMcpList(ctx);
+
+    expect(logs.join("\n")).toMatch(/remote[^\n]*needs auth/);
   });
 });
