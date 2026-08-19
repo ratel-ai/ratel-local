@@ -935,9 +935,16 @@ describe("runDaemon", () => {
     const fs = new MemFs();
     const commands: Array<{ command: string; args: string[] }> = [];
     const logs: string[] = [];
+    const progress: string[] = [];
+    const ctx = makeCtx(fs);
+    ctx.prompts.spinner = () => ({
+      start: (message) => progress.push(`start:${message}`),
+      message() {},
+      stop: (message) => progress.push(`stop:${message}`),
+    });
     await runDaemon(
       daemonArgs({ verb: "install", flags: { telemetry: "off", open: false } }),
-      makeCtx(fs),
+      ctx,
       {},
       (message) => logs.push(message),
       {
@@ -958,7 +965,66 @@ describe("runDaemon", () => {
       { command: "launchctl", args: ["bootstrap", "gui/501", paths.plist] },
       { command: "launchctl", args: ["kickstart", "-k", "gui/501/ai.ratel.local.daemon"] },
     ]);
-    expect(logs.join("\n")).toContain("http://127.0.0.1:5731/mcp");
+    expect(progress).toEqual(["start:Setting up Ratel Local…", "stop:Ratel Local is ready"]);
+    expect(logs).toEqual([]);
+  });
+
+  it("keeps restart visibly active with friendly lifecycle copy", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    fs.files.set(
+      paths.plist,
+      createLaunchAgentPlist({
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+      }),
+    );
+    const progress: string[] = [];
+    const logs: string[] = [];
+    const ctx = makeCtx(fs);
+    ctx.prompts.spinner = () => ({
+      start: (message) => progress.push(`start:${message}`),
+      message: (message) => progress.push(`message:${message}`),
+      stop: (message) => progress.push(`stop:${message}`),
+    });
+
+    await runDaemon(
+      daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+      ctx,
+      {},
+      (message) => logs.push(message),
+      {
+        platform: "darwin",
+        getUid: () => 501,
+        commandRunner: async () => ({ stdout: "", stderr: "" }),
+        probe: offlineThenHealthyProbe(),
+      },
+    );
+
+    expect(progress).toEqual([
+      "start:Restarting Ratel Local…",
+      "message:Starting Ratel Local again…",
+      "stop:Ratel Local is ready",
+    ]);
+    expect(logs).toEqual([]);
+  });
+
+  it("ends the lifecycle state clearly when the daemon cannot start", async () => {
+    const fs = new MemFs();
+    const progress: string[] = [];
+    const ctx = makeCtx(fs);
+    ctx.prompts.spinner = () => ({
+      start: (message) => progress.push(`start:${message}`),
+      message() {},
+      stop: (message) => progress.push(`stop:${message}`),
+    });
+
+    await expect(
+      runDaemon(daemonArgs({ verb: "start" }), ctx, {}, () => {}, { platform: "darwin" }),
+    ).rejects.toThrow(/not installed/);
+
+    expect(progress).toEqual(["start:Starting Ratel Local…", "stop:Ratel Local couldn't start"]);
   });
 
   it("clears stale daemon state when uninstalling the macOS service", async () => {
@@ -1072,9 +1138,16 @@ describe("runDaemon", () => {
     const fs = new MemFs();
     const commands: Array<{ command: string; args: string[] }> = [];
     const logs: string[] = [];
+    const progress: string[] = [];
+    const ctx = makeCtx(fs);
+    ctx.prompts.spinner = () => ({
+      start: (message) => progress.push(`start:${message}`),
+      message() {},
+      stop: (message) => progress.push(`stop:${message}`),
+    });
     await runDaemon(
       daemonArgs({ verb: "install", flags: { telemetry: "off", open: false } }),
-      makeCtx(fs),
+      ctx,
       {},
       (message) => logs.push(message),
       {
@@ -1094,7 +1167,8 @@ describe("runDaemon", () => {
       { command: "systemctl", args: ["--user", "daemon-reload"] },
       { command: "systemctl", args: ["--user", "enable", "--now", SYSTEMD_SERVICE] },
     ]);
-    expect(logs.join("\n")).toContain("http://127.0.0.1:5731/mcp");
+    expect(progress).toEqual(["start:Setting up Ratel Local…", "stop:Ratel Local is ready"]);
+    expect(logs).toEqual([]);
   });
 
   it("clears stale daemon state when uninstalling the Linux service", async () => {

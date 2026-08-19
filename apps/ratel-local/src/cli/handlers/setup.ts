@@ -495,8 +495,11 @@ async function runDaemonCommand(
     ctx,
     options,
     log,
-    options.serviceExecutable ??
-      resolveSetupServiceExecutable({ expectedVersion: options.expectedVersion }),
+    {
+      ...(options.serviceExecutable ??
+        resolveSetupServiceExecutable({ expectedVersion: options.expectedVersion })),
+      lifecycleProgress: false,
+    },
   );
 }
 

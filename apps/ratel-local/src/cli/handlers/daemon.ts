@@ -162,6 +162,7 @@ interface DaemonHandlerDeps {
   cloudOtlpFetch?: typeof fetch;
   configureRatelTelemetry?: ConfigureRatelTelemetry;
   cloudTraceSettingsStore?: CloudTraceSettingsStoreLike;
+  lifecycleProgress?: boolean;
 }
 
 export interface DaemonServiceStatus {
@@ -187,11 +188,36 @@ export async function runDaemon(
     return runDaemonServer(parsed, ctx, options, log, opts);
   }
   if (verb === "install") {
-    await installDaemon(parsed, ctx, options, log, opts);
+    await runDaemonLifecycle(
+      ctx,
+      opts,
+      {
+        start: "Setting up Ratel Local…",
+        success: "Ratel Local is ready",
+        failure: "Ratel Local couldn't be set up",
+      },
+      () =>
+        installDaemon(
+          parsed,
+          ctx,
+          options,
+          opts.lifecycleProgress === false ? log : () => {},
+          opts,
+        ),
+    );
     return {};
   }
   if (verb === "uninstall") {
-    await uninstallDaemon(ctx, log, opts);
+    await runDaemonLifecycle(
+      ctx,
+      opts,
+      {
+        start: "Removing Ratel Local…",
+        success: "Ratel Local was removed",
+        failure: "Ratel Local couldn't be removed",
+      },
+      () => uninstallDaemon(ctx, opts.lifecycleProgress === false ? log : () => {}, opts),
+    );
     return {};
   }
   if (verb === "status") {
@@ -199,16 +225,48 @@ export async function runDaemon(
     return {};
   }
   if (verb === "start") {
-    await startDaemon(parsed, ctx, options, log, opts);
+    await runDaemonLifecycle(
+      ctx,
+      opts,
+      {
+        start: "Starting Ratel Local…",
+        success: "Ratel Local is ready",
+        failure: "Ratel Local couldn't start",
+      },
+      () =>
+        startDaemon(parsed, ctx, options, opts.lifecycleProgress === false ? log : () => {}, opts),
+    );
     return {};
   }
   if (verb === "stop") {
-    await stopDaemon(ctx, log, opts);
+    await runDaemonLifecycle(
+      ctx,
+      opts,
+      {
+        start: "Stopping Ratel Local…",
+        success: "Ratel Local is stopped",
+        failure: "Ratel Local couldn't stop",
+      },
+      () => stopDaemon(ctx, opts.lifecycleProgress === false ? log : () => {}, opts),
+    );
     return {};
   }
   if (verb === "restart") {
-    await stopDaemon(ctx, log, opts);
-    await startDaemon(parsed, ctx, options, log, opts);
+    await runDaemonLifecycle(
+      ctx,
+      opts,
+      {
+        start: "Restarting Ratel Local…",
+        success: "Ratel Local is ready",
+        failure: "Ratel Local couldn't restart",
+      },
+      async (spinner) => {
+        const lifecycleLog = opts.lifecycleProgress === false ? log : () => {};
+        await stopDaemon(ctx, lifecycleLog, opts);
+        spinner?.message("Starting Ratel Local again…");
+        await startDaemon(parsed, ctx, options, lifecycleLog, opts);
+      },
+    );
     return {};
   }
   if (verb === "open") {
@@ -216,6 +274,27 @@ export async function runDaemon(
     return {};
   }
   throw new Error(`unknown daemon verb: ${verb}`);
+}
+
+async function runDaemonLifecycle(
+  ctx: HandlerCtx,
+  opts: DaemonHandlerDeps,
+  copy: { start: string; success: string; failure: string },
+  action: (spinner?: ReturnType<HandlerCtx["prompts"]["spinner"]>) => Promise<void>,
+): Promise<void> {
+  if (opts.lifecycleProgress === false) {
+    await action();
+    return;
+  }
+  const spinner = ctx.prompts.spinner();
+  spinner.start(copy.start);
+  try {
+    await action(spinner);
+    spinner.stop(copy.success);
+  } catch (error) {
+    spinner.stop(copy.failure);
+    throw error;
+  }
 }
 
 export async function inspectDaemonService(
