@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress, ProgressLabel } from "@/components/ui/progress";
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { streamRatelApi } from "@/lib/ratel-api";
 import { ratelQueryKeys } from "@/lib/ratel-query";
 import type { RuntimeUiContext } from "@/lib/runtime-context";
 import { useRatelMutation } from "@/lib/use-ratel-mutation";
@@ -72,6 +73,19 @@ export interface RetrievalPreparationInspection {
   runtimeMemoryMb: number | null;
   remoteDataTransfer: boolean;
 }
+
+export interface RetrievalPreparationProgress {
+  phase: "downloading" | "verifying";
+  file?: string;
+  loadedBytes: number;
+  totalBytes: number;
+  percent: number;
+}
+
+type RetrievalPreparationStreamEvent =
+  | { type: "progress"; progress: RetrievalPreparationProgress }
+  | { type: "result"; result: RetrievalPreflightView }
+  | { type: "error"; error: string };
 
 export interface CloudTraceSettingsStatus {
   featureEnabled?: boolean;
@@ -339,11 +353,14 @@ function RetrievalEditor({
   scope: RatelScope;
   scopes: RatelScope[];
 }) {
-  const { context, request } = useRatelApp();
+  const { context, request, token } = useRatelApp();
   const [draft, setDraft] = useState(() => retrievalDraftFromConfig(initial));
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [savePhase, setSavePhase] = useState<"idle" | "preparing" | "saving">("idle");
   const [inspection, setInspection] = useState<RetrievalPreparationInspection | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<RetrievalPreparationProgress | null>(
+    null,
+  );
   const target = retrievalTarget(scope, context);
   const hasOverride = config?.scopes[scope]?.available
     ? config.scopes[scope].config.retrieval !== undefined
@@ -369,11 +386,24 @@ function RetrievalEditor({
   });
   const preparationMutation = useMutation({
     mutationKey: [...ratelQueryKeys.context(context), "retrieval", "preflight"],
-    mutationFn: (nextDraft: RetrievalDraft) =>
-      request("/api/retrieval/prepare", {
-        method: "POST",
-        body: { retrieval: retrievalConfigFromDraft(nextDraft) },
-      }) as Promise<RetrievalPreflightView>,
+    mutationFn: async (nextDraft: RetrievalDraft) => {
+      let result: RetrievalPreflightView | null = null;
+      await streamRatelApi<RetrievalPreparationStreamEvent>(
+        { context, token },
+        "/api/retrieval/prepare/stream",
+        {
+          method: "POST",
+          body: { retrieval: retrievalConfigFromDraft(nextDraft) },
+        },
+        (event) => {
+          if (event.type === "progress") setDownloadProgress(event.progress);
+          if (event.type === "result") result = event.result;
+          if (event.type === "error") throw new Error(event.error);
+        },
+      );
+      if (!result) throw new Error("Retrieval preparation ended without a result");
+      return result as RetrievalPreflightView;
+    },
   });
   const inspectionMutation = useMutation({
     mutationKey: [...ratelQueryKeys.context(context), "retrieval", "inspect"],
@@ -415,6 +445,7 @@ function RetrievalEditor({
 
   const prepareAndSave = async () => {
     setSavePhase("preparing");
+    setDownloadProgress(null);
     try {
       await preparationMutation.mutateAsync(draft);
       setSavePhase("saving");
@@ -556,10 +587,15 @@ function RetrievalEditor({
           </AlertDialogHeader>
 
           {savePhase !== "idle" ? (
-            <Progress value={null}>
-              <ProgressLabel>
-                {savePhase === "preparing" ? "Preparing retrieval…" : "Saving settings…"}
-              </ProgressLabel>
+            <Progress value={retrievalProgressValue(savePhase, downloadProgress)}>
+              <ProgressLabel>{retrievalProgressLabel(savePhase, downloadProgress)}</ProgressLabel>
+              {savePhase === "preparing" && downloadProgress ? (
+                <ProgressValue>
+                  {() =>
+                    formatByteProgress(downloadProgress.loadedBytes, downloadProgress.totalBytes)
+                  }
+                </ProgressValue>
+              ) : null}
             </Progress>
           ) : null}
 
@@ -889,6 +925,43 @@ export function retrievalDownloadConfirmationCopy(inspection: RetrievalPreparati
     title: "Download the embedding model?",
     description: `${inspection.model ?? "The selected embedding model"} is not cached on this machine. Ratel will download it, verify it, then save these settings.`,
   };
+}
+
+export function retrievalProgressValue(
+  savePhase: "idle" | "preparing" | "saving",
+  progress: RetrievalPreparationProgress | null,
+): number | null {
+  if (savePhase !== "preparing" || !progress) return null;
+  return progress.phase === "verifying" ? 100 : Math.max(0, Math.min(100, progress.percent));
+}
+
+export function retrievalProgressLabel(
+  savePhase: "idle" | "preparing" | "saving",
+  progress: RetrievalPreparationProgress | null,
+): string {
+  if (savePhase === "saving") return "Saving settings…";
+  if (progress?.phase === "verifying") return "Verifying the model…";
+  if (progress?.phase === "downloading") {
+    return progress.file ? `Downloading ${progress.file}…` : "Downloading the model…";
+  }
+  return "Preparing retrieval…";
+}
+
+function formatByteProgress(loadedBytes: number, totalBytes: number): string {
+  const percent = totalBytes === 0 ? 100 : Math.min(100, (loadedBytes / totalBytes) * 100);
+  return `${formatBytes(loadedBytes)} of ${formatBytes(totalBytes)} · ${Math.round(percent)}%`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index++) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
 export function showsEmbeddingFields(draft: RetrievalDraft): boolean {

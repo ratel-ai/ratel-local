@@ -1523,8 +1523,15 @@ describe("UI server — add / edit / remove", () => {
       skillImportControlPlane,
       skillRegistrationControlPlane,
       preparedChanges,
-      retrievalPreflight: async (retrieval) => {
+      retrievalPreflight: async (retrieval, options) => {
         preflightedRetrieval.push(retrieval);
+        options.onProgress?.({
+          phase: "downloading",
+          file: "model.safetensors",
+          loadedBytes: 64,
+          totalBytes: 128,
+          percent: 50,
+        });
         return {
           status: "ready",
           method: retrieval.method,
@@ -1654,6 +1661,38 @@ describe("UI server — add / edit / remove", () => {
         {
           method: "hybrid",
           embedding: { ollama: "nomic-embed-text" },
+        },
+      ]);
+
+      const streamedRetrieval = await fetch(
+        `${base}/api/retrieval/prepare/stream?projectId=${project.id}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ retrieval: { method: "semantic" } }),
+        },
+      );
+      expect(streamedRetrieval.status).toBe(200);
+      expect(streamedRetrieval.headers.get("content-type")).toContain("application/x-ndjson");
+      expect(
+        (await streamedRetrieval.text())
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual([
+        {
+          type: "progress",
+          progress: {
+            phase: "downloading",
+            file: "model.safetensors",
+            loadedBytes: 64,
+            totalBytes: 128,
+            percent: 50,
+          },
+        },
+        {
+          type: "result",
+          result: expect.objectContaining({ status: "ready", source: "ollama" }),
         },
       ]);
 

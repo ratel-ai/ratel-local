@@ -1214,7 +1214,7 @@ command = "codex"
     });
 
     expect(probeCalls.sort()).toEqual(["fs", "remote"]);
-    expect(spinnerCalls[0]).toMatch(/^start:Spinning up/);
+    expect(spinnerCalls).toContainEqual(expect.stringMatching(/^start:Spinning up/));
     expect(spinnerCalls.at(-1)).toMatch(/^stop:/);
 
     const fsNote = notes.find((n) => n.title?.includes("fs"));

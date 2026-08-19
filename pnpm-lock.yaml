@@ -66,6 +66,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@huggingface/hub':
+        specifier: 2.14.4
+        version: 2.14.4
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -799,6 +802,20 @@ packages:
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: ^4
+
+  '@huggingface/blake3-jit@0.0.2':
+    resolution: {integrity: sha512-Bq7B5qabyjrJfhBsl85Jd2QBtf+HzRD7h7A9GfN2lzrrsABhOa5evVPgzoCTxR7Ub0QFj7YDK1YkYRWBU25+2w==}
+
+  '@huggingface/hub@2.14.4':
+    resolution: {integrity: sha512-eGRmqPM3DGv7VbQveTuT+RnSHXQ1uYa+pxdVrNNBAea9rQzI9rMPRt7Z8DE8AXYeI4dWCpElXsx8uTKURn/p2A==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  '@huggingface/tasks@0.21.34':
+    resolution: {integrity: sha512-NRc1vw2Q/nZQPKjlzEkXxi0YNXstI1hXoaVruvJbgeznpXtEmPD0pey/ujIWTnhmsBQIVexr/QJJ5pyIJBPrMw==}
+
+  '@huggingface/xetchunk-wasm@0.1.0':
+    resolution: {integrity: sha512-wWpp2qwPgf9kv1KLJjcDUk/OrpDOsFoQ3Qpz0U5LGn20csoymBf8eneOv6wm/GzPBzlWac1OYiR0aa1vT6aM2Q==}
 
   '@inquirer/ansi@2.0.5':
     resolution: {integrity: sha512-doc2sWgJpbFQ64UflSVd17ibMGDuxO1yKgOgLMwavzESnXjFWJqUeG8saYosqKpHp4kWiM5x1nXvEjbpx90gzw==}
@@ -1982,6 +1999,10 @@ packages:
     resolution: {integrity: sha512-aCj4O5wKyszjMmDT4tZj93kxyydN/K5zPWSCe6/0AV/AA1pqe5ZBIw0a2ZfPQV7lL5/yb5HsUreJ6UFAF1tEQw==}
     engines: {node: '>=18'}
 
+  cli-progress@3.12.0:
+    resolution: {integrity: sha512-tRkV3HJ1ASwm19THiiLIXLO7Im7wlTuKnvkYaTkyoAPefqjNg7W7DHKUlGRxy9vxDvbyCYQkQozvptuMkGCg8A==}
+    engines: {node: '>=4'}
+
   cli-spinners@2.9.2:
     resolution: {integrity: sha512-ywqV+5MmyL4E7ybXgKys4DugZbX0FC6LnwrhjuykIjnK9k8OQacQ7axGKnjDXWNhns0xot3bZI5h55H8yo9cJg==}
     engines: {node: '>=6'}
@@ -2439,6 +2460,9 @@ packages:
 
   fuzzysort@3.1.0:
     resolution: {integrity: sha512-sR9BNCjBg6LNgwvxlBd0sBABvQitkLzoVY9MYYROQVX/FvfJ4Mai9LsGhDgd8qYdds0bY77VzYd5iuB+v5rwQQ==}
+
+  gearhash-jit@1.0.2:
+    resolution: {integrity: sha512-UhzJL4KXSdqAKepy/tZwmi2Rcy0YMmtiC4DQS4SURCuIWdh8ECZtnXK2ePRMLigfB61hRKdLK/Vgg2bSw73izQ==}
 
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
@@ -4436,6 +4460,22 @@ snapshots:
     dependencies:
       hono: 4.12.18
 
+  '@huggingface/blake3-jit@0.0.2': {}
+
+  '@huggingface/hub@2.14.4':
+    dependencies:
+      '@huggingface/tasks': 0.21.34
+      '@huggingface/xetchunk-wasm': 0.1.0
+    optionalDependencies:
+      cli-progress: 3.12.0
+
+  '@huggingface/tasks@0.21.34': {}
+
+  '@huggingface/xetchunk-wasm@0.1.0':
+    dependencies:
+      '@huggingface/blake3-jit': 0.0.2
+      gearhash-jit: 1.0.2
+
   '@inquirer/ansi@2.0.5': {}
 
   '@inquirer/confirm@6.0.13(@types/node@24.12.4)':
@@ -5457,6 +5497,11 @@ snapshots:
     dependencies:
       restore-cursor: 5.1.0
 
+  cli-progress@3.12.0:
+    dependencies:
+      string-width: 4.2.3
+    optional: true
+
   cli-spinners@2.9.2: {}
 
   cli-width@4.1.0: {}
@@ -5925,6 +5970,8 @@ snapshots:
   function-bind@1.1.2: {}
 
   fuzzysort@3.1.0: {}
+
+  gearhash-jit@1.0.2: {}
 
   gensync@1.0.0-beta.2: {}
 

@@ -8,6 +8,8 @@ import {
   retrievalDraftKey,
   retrievalMethodLabel,
   retrievalNeedsPreparation,
+  retrievalProgressLabel,
+  retrievalProgressValue,
   retrievalScopeLabel,
   retrievalTarget,
   showsEmbeddingFields,
@@ -175,5 +177,20 @@ describe("retrieval settings model", () => {
       description:
         "The built-in embedding model is not cached on this machine. Ratel will download it once, verify it, then save these settings.",
     });
+  });
+
+  it("uses determinate byte progress while a model is downloading", () => {
+    const progress = {
+      phase: "downloading" as const,
+      file: "model.safetensors",
+      loadedBytes: 64,
+      totalBytes: 128,
+      percent: 50,
+    };
+
+    expect(retrievalProgressValue("preparing", progress)).toBe(50);
+    expect(retrievalProgressLabel("preparing", progress)).toBe("Downloading model.safetensors…");
+    expect(retrievalProgressValue("preparing", { ...progress, phase: "verifying" })).toBe(100);
+    expect(retrievalProgressValue("saving", progress)).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requestRatelApi } from "./ratel-api";
+import { requestRatelApi, streamRatelApi } from "./ratel-api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -42,5 +42,31 @@ describe("requestRatelApi", () => {
     await expect(
       requestRatelApi({ context: { kind: "global" }, token: "secret" }, "/api/skills/missing"),
     ).rejects.toThrow("Skill not found");
+  });
+
+  it("streams newline-delimited progress events with the same auth and context", async () => {
+    const body = [
+      JSON.stringify({ type: "progress", progress: { percent: 50 } }),
+      JSON.stringify({ type: "result", result: { status: "ready" } }),
+      "",
+    ].join("\n");
+    const fetchMock = vi.fn(async () => new Response(body));
+    vi.stubGlobal("fetch", fetchMock);
+    const events: unknown[] = [];
+
+    await streamRatelApi(
+      { context: { kind: "project", projectId: "project/a" }, token: "secret" },
+      "/api/retrieval/prepare/stream",
+      { method: "POST", body: { retrieval: { method: "semantic" } } },
+      (event) => events.push(event),
+    );
+
+    expect(events).toEqual([
+      { type: "progress", progress: { percent: 50 } },
+      { type: "result", result: { status: "ready" } },
+    ]);
+    const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe("/api/retrieval/prepare/stream?projectId=project%2Fa");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer secret");
   });
 });

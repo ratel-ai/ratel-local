@@ -6,6 +6,7 @@ import {
   type RetrievalConfig,
   type RetrievalPreflightOptions,
   type RetrievalPreflightResult,
+  type RetrievalPreparationProgress,
   ratelConfigPath,
   readJson,
   resolveScope,
@@ -147,7 +148,19 @@ async function prepareRetrieval(
       : ((await readScopedRetrieval(ctx, scope)) ?? {
           method: "bm25" as const,
         });
-  const result = await dependencies.preflight(retrieval, { homeDir: ctx.env.homeDir });
+  const spinner = ctx.prompts.spinner();
+  spinner.start("Preparing retrieval…");
+  let result: RetrievalPreflightResult;
+  try {
+    result = await dependencies.preflight(retrieval, {
+      homeDir: ctx.env.homeDir,
+      onProgress: (progress) => spinner.message(retrievalProgressMessage(progress)),
+    });
+    spinner.stop("Retrieval is ready");
+  } catch (error) {
+    spinner.stop("Retrieval couldn't be prepared");
+    throw error;
+  }
   ctx.log(result.message);
   if (result.runtimeMemoryMb !== null) {
     ctx.log(
@@ -172,6 +185,24 @@ async function prepareRetrieval(
       "Reconnect the affected agent/context to acquire the prepared retrieval generation; restart the daemon only as a fallback.",
     );
   }
+}
+
+function retrievalProgressMessage(progress: RetrievalPreparationProgress): string {
+  if (progress.phase === "verifying") return "Verifying the retrieval model…";
+  const file = progress.file ? ` ${progress.file}` : "";
+  return `Downloading${file}… ${Math.round(progress.percent)}% (${formatBytes(progress.loadedBytes)} of ${formatBytes(progress.totalBytes)})`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index++) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
 function configuredRetrieval(ctx: HandlerCtx): RetrievalConfig {

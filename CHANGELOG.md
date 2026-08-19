@@ -30,6 +30,7 @@ All notable changes to this package are documented here. The format is based on 
 - Made malformed Cloud settings and Ratel telemetry-provider initialization fail open so the Local daemon and MCP gateway remain available.
 - Prevented clean global installs from resolving incompatible SDK or legacy telemetry patch releases and crashing before the CLI could start; packed-package validation now enforces the reviewed compatibility pins.
 - Made setup reuse a stable locally installed CLI for its login service instead of fetching an unpublished version through `npx`; setup and agent onboarding now use welcoming progress and simpler import guidance, and uninstall clears stale runtime state instead of reporting an old PID or version.
+- Added real byte and percentage progress for Hugging Face retrieval-model downloads in Settings, plus explicit loading states for CLI retrieval preparation and first-time agent linking.
 
 ## [0.6.0-rc.1] - 2026-07-31
 

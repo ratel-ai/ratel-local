@@ -159,10 +159,21 @@ export async function runLink(
   }
 
   if (preparedChange && ctx.preparedChanges) {
-    const commit = await ctx.preparedChanges.commit<{
-      mode: "plugin" | "mcp-fallback" | "config";
-      message?: string;
-    }>(preparedChange.changeId);
+    const spinner = ctx.prompts.spinner();
+    spinner.start(`Connecting ${agentState.host.displayName}…`);
+    const commit = await ctx.preparedChanges
+      .commit<{
+        mode: "plugin" | "mcp-fallback" | "config";
+        message?: string;
+      }>(preparedChange.changeId)
+      .then((result) => {
+        spinner.stop(`${agentState.host.displayName} is connected`);
+        return result;
+      })
+      .catch((error) => {
+        spinner.stop(`${agentState.host.displayName} couldn't connect`);
+        throw error;
+      });
     if (commit.result.mode === "plugin") {
       ctx.prompts.note(commit.result.message ?? "Plugin installed", "Plugin installed");
       ctx.prompts.outro(

@@ -96,6 +96,7 @@ describe("runLink", () => {
     const claudeBefore = JSON.stringify({ mcpServers: { fs: { type: "stdio", command: "echo" } } });
     fs.files.set(HOME_CLAUDE, claudeBefore);
     const messages: string[] = [];
+    const progress: string[] = [];
     const prompts: PromptAdapter = {
       ...autoConfirm(),
       note(message) {
@@ -104,6 +105,11 @@ describe("runLink", () => {
       outro(message) {
         messages.push(message);
       },
+      spinner: () => ({
+        start: (message) => progress.push(`start:${message}`),
+        stop: (message) => progress.push(`stop:${message}`),
+        message() {},
+      }),
     };
     const { ctx } = ctxOf(fs, prompts, false);
 
@@ -121,6 +127,7 @@ describe("runLink", () => {
     expect(fs.files.get(HOME_CLAUDE)).toBe(claudeBefore);
     expect(messages.join("\n")).toMatch(/plugin installed/i);
     expect(messages.join("\n")).toMatch(/reload|restart/i);
+    expect(progress).toEqual(["start:Connecting Claude Code…", "stop:Claude Code is connected"]);
   });
 
   it("explains the plugin failure before applying the MCP fallback", async () => {

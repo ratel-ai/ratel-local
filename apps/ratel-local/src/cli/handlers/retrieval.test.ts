@@ -6,6 +6,7 @@ import type {
 } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import { parseArgs } from "../args.js";
+import { silentPromptAdapter } from "../prompts.js";
 import { type CliRetrievalMutator, runRetrieval } from "./retrieval.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -44,6 +45,7 @@ function context(argv: string[], fs = new MemFs()) {
     fs,
     log: (message) => log.push(message),
     prompts: {
+      ...silentPromptAdapter(),
       isCancel: () => false,
       text: async () => "",
       select: async () => "",
@@ -201,6 +203,12 @@ describe("retrieval CLI", () => {
 
   it("prepares the effective model and prints resource and privacy disclosures", async () => {
     const { ctx, fs, log } = context(["retrieval", "prepare"]);
+    const progress: string[] = [];
+    ctx.prompts.spinner = () => ({
+      start: (message) => progress.push(`start:${message}`),
+      stop: (message) => progress.push(`stop:${message}`),
+      message: (message) => progress.push(`message:${message}`),
+    });
     fs.files.set(
       `${HOME}/.ratel/config.json`,
       JSON.stringify({ retrieval: { method: "semantic" } }),
@@ -216,11 +224,28 @@ describe("retrieval CLI", () => {
       reconnectRequired: true,
       message: "model ready",
     };
-    const preflight = vi.fn().mockResolvedValue(result);
+    const preflight = vi.fn(async (_retrieval, options) => {
+      options.onProgress?.({
+        phase: "downloading",
+        file: "model.safetensors",
+        loadedBytes: 64,
+        totalBytes: 128,
+        percent: 50,
+      });
+      return result;
+    });
 
     await runRetrieval(ctx, { preflight });
 
-    expect(preflight).toHaveBeenCalledWith({ method: "semantic" }, { homeDir: HOME });
+    expect(preflight).toHaveBeenCalledWith(
+      { method: "semantic" },
+      expect.objectContaining({ homeDir: HOME, onProgress: expect.any(Function) }),
+    );
+    expect(progress).toEqual([
+      "start:Preparing retrieval…",
+      "message:Downloading model.safetensors… 50% (64 B of 128 B)",
+      "stop:Retrieval is ready",
+    ]);
     expect(log.join("\n")).toContain("model ready");
     expect(log.join("\n")).toContain("~130 MB");
     expect(log.join("\n")).toContain("metadata and queries stay local");
@@ -258,7 +283,7 @@ describe("retrieval CLI", () => {
         method: "hybrid",
         embedding: { ollama: "nomic-embed-text" },
       } satisfies RetrievalConfig,
-      { homeDir: HOME },
+      expect.objectContaining({ homeDir: HOME, onProgress: expect.any(Function) }),
     );
   });
 

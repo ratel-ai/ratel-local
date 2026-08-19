@@ -131,7 +131,9 @@ Preflight does not start the gateway:
 - Ollama and endpoint sources send one representative embedding request.
 - Endpoint preflight fails before the request when its `apiKeyEnv` is absent.
 
-The browser UI exposes the same source choices and preflight action under **Retrieval**.
+The CLI shows an active preparation state. The browser UI exposes the same source choices under
+**Retrieval**; when a Hugging Face model is missing, its confirmation dialog reports actual bytes
+transferred and percentage before switching to model verification and saving.
 
 ## Storage and lifecycle
 

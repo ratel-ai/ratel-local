@@ -319,6 +319,15 @@ async function handleRequest(
     }
 
     const requestContext = await contextForRequest(opts, projectId, projectRoot);
+    if (path === "/api/retrieval/prepare/stream" && req.method === "POST") {
+      await streamRetrievalPreparation(
+        req,
+        res,
+        requestContext.ctx,
+        opts.retrievalPreflight ?? preflightRetrieval,
+      );
+      return;
+    }
     const response = await route(
       req,
       path,
@@ -363,6 +372,43 @@ async function handleRequest(
       ...(code ? { code } : {}),
       ...(conflicts ? { conflicts } : {}),
     });
+  }
+}
+
+async function streamRetrievalPreparation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: HandlerCtx,
+  retrievalPreflight: (
+    retrieval: RetrievalConfig,
+    options: RetrievalPreflightOptions,
+  ) => Promise<RetrievalPreflightResult>,
+): Promise<void> {
+  res.writeHead(200, {
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.flushHeaders();
+  const writeEvent = (event: unknown) => res.write(`${JSON.stringify(event)}\n`);
+  try {
+    const body = await readJsonBody(req);
+    const retrieval =
+      body.retrieval === undefined
+        ? ((await loadMergedConfig(ctx))?.retrieval ?? { method: "bm25" as const })
+        : parseRetrievalBody(body.retrieval);
+    const result = await retrievalPreflight(retrieval, {
+      homeDir: ctx.env.homeDir,
+      onProgress: (progress) => writeEvent({ type: "progress", progress }),
+    });
+    writeEvent({ type: "result", result });
+  } catch (error) {
+    writeEvent({
+      type: "error",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    res.end();
   }
 }
 
