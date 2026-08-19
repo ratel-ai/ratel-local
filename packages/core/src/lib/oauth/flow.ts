@@ -223,6 +223,27 @@ export type PkceFlowFn = (
 ) => Promise<AuthStepResult>;
 
 /**
+ * Dynamic registrations are bound to the redirect URI sent during DCR. Replace
+ * registrations made with an old (including `:0`) callback before starting a
+ * new interactive flow. Explicitly configured clients remain authoritative.
+ */
+export async function reconcileInteractiveClientRegistration(
+  store: RatelOAuthStore,
+  redirectUrl: string | URL,
+  staticClientId?: string,
+): Promise<boolean> {
+  if (staticClientId) return false;
+  const clientInformation = (await store.load()).client_information;
+  if (!clientInformation) return false;
+  const registeredRedirects = clientInformation.redirect_uris;
+  if (registeredRedirects?.some((registered) => sameUrl(registered, String(redirectUrl)))) {
+    return false;
+  }
+  await store.clearClientRegistration();
+  return true;
+}
+
+/**
  * Default `AuthStep` implementation: refresh-first. Tries `refreshTokens` against the
  * upstream's stored OAuth state; if that succeeds, registers the upstream's tools
  * with mode="refresh" — no callback server, no browser pop. Only when refresh is
@@ -256,6 +277,15 @@ export function defaultAuthStep(deps: DefaultAuthStepDeps = {}): AuthStep {
       log(`[ratel] ${name}: OAuth target changed; clearing stored credentials`);
       await store.clear("all");
       state = {};
+    }
+    if (
+      entry.clientId &&
+      state.client_information &&
+      state.client_information.client_id !== entry.clientId
+    ) {
+      log(`[ratel] ${name}: configured OAuth client changed; clearing stored credentials`);
+      await store.clearClientRegistration();
+      state = await store.load();
     }
     const tokens = state.tokens;
     const canRefresh = tokens?.refresh_token !== undefined;
@@ -344,6 +374,10 @@ export async function runPkceFlow(
 
   try {
     const store = new RatelOAuthStore(storePath(name), deps.storeFingerprint?.(name));
+    if (await reconcileInteractiveClientRegistration(store, cb.url, entry.clientId)) {
+      log(`[ratel] ${name}: OAuth callback changed; registering this device again`);
+    }
+    await store.save({ redirect_url: String(cb.url) });
     const oauthFetchTracker = createOAuthFetchTracker(store, deps.fetch ?? fetch);
     const provider = new RatelOAuthProvider({
       store,

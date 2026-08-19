@@ -5,7 +5,12 @@ import type { McpServerHandle } from "@ratel-ai/sdk";
 import { ToolCatalog, type UpstreamServerInfo } from "@ratel-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerEntry } from "../config.js";
-import { type AuthStep, defaultAuthStep, runAuthFlow } from "./flow.js";
+import {
+  type AuthStep,
+  defaultAuthStep,
+  reconcileInteractiveClientRegistration,
+  runAuthFlow,
+} from "./flow.js";
 import { RatelOAuthStore } from "./store.js";
 
 function fakeHandle(toolIds: string[] = []): McpServerHandle {
@@ -368,6 +373,35 @@ describe("defaultAuthStep", () => {
     expect(result.status).toBe("authorized");
   });
 
+  it("uses a configured client instead of refreshing credentials from a different DCR client", async () => {
+    await seedRefreshable("splice");
+    const refreshTokens = vi.fn(async () => undefined);
+    const pkceFlow = vi.fn(async () => ({
+      status: "authorized" as const,
+      handle: fakeHandle(["splice__after-pkce"]),
+      mode: "interactive" as const,
+    }));
+    const step = defaultAuthStep({ storePath, refreshTokens, pkceFlow });
+
+    const result = await step(
+      "splice",
+      {
+        type: "http",
+        url: "https://splice.example/mcp",
+        clientId: "manually-registered-client",
+        callbackPort: 51390,
+      },
+      { catalog: new ToolCatalog() },
+    );
+
+    expect(refreshTokens).not.toHaveBeenCalled();
+    expect(pkceFlow).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: "authorized", mode: "interactive" });
+    expect(
+      (await new RatelOAuthStore(storePath("splice")).load()).client_information,
+    ).toBeUndefined();
+  });
+
   it("clears credentials for a changed OAuth target before starting interactive auth", async () => {
     const oldStore = new RatelOAuthStore(storePath("stripe"), "old-target");
     await oldStore.save({
@@ -402,5 +436,71 @@ describe("defaultAuthStep", () => {
     expect(refreshTokens).not.toHaveBeenCalled();
     expect(pkceFlow).toHaveBeenCalledTimes(1);
     expect(result.status).toBe("authorized");
+  });
+});
+
+describe("interactive OAuth client registration", () => {
+  let oauthDir: string;
+  beforeEach(async () => {
+    oauthDir = await mkdtemp(join(tmpdir(), "ratel-interactive-oauth-"));
+  });
+  afterEach(async () => {
+    await rm(oauthDir, { recursive: true, force: true });
+  });
+
+  it("discards a stale dynamic client before using a different real callback", async () => {
+    const store = new RatelOAuthStore(join(oauthDir, "splice.json"), "splice-resource");
+    await store.save({
+      client_information: {
+        client_id: "stale-client",
+        redirect_uris: ["http://127.0.0.1:0/cb"],
+      },
+      tokens: {
+        access_token: "stale-token",
+        token_type: "Bearer",
+        refresh_token: "stale-refresh",
+      },
+      code_verifier: "stale-verifier",
+      state: "stale-state",
+      discovery_state: { authorizationServerUrl: "https://splice.example/oauth" },
+    });
+
+    await expect(
+      reconcileInteractiveClientRegistration(store, "http://127.0.0.1:51388/cb"),
+    ).resolves.toBe(true);
+
+    expect(await store.load()).toEqual({
+      resource_fingerprint: "splice-resource",
+      discovery_state: { authorizationServerUrl: "https://splice.example/oauth" },
+    });
+  });
+
+  it("reuses a dynamic client only when its callback exactly matches", async () => {
+    const store = new RatelOAuthStore(join(oauthDir, "splice.json"));
+    await store.save({
+      client_information: {
+        client_id: "matching-client",
+        redirect_uris: ["http://127.0.0.1:51388/cb"],
+      },
+    });
+
+    await expect(
+      reconcileInteractiveClientRegistration(store, "http://127.0.0.1:51388/cb"),
+    ).resolves.toBe(false);
+    expect((await store.load()).client_information?.client_id).toBe("matching-client");
+  });
+
+  it("discards a dynamic client whose registered callback is unknown", async () => {
+    const store = new RatelOAuthStore(join(oauthDir, "unknown-callback.json"));
+    await store.save({
+      client_information: { client_id: "unknown-client", redirect_uris: [] },
+      tokens: { access_token: "old", token_type: "bearer" },
+    });
+
+    await expect(
+      reconcileInteractiveClientRegistration(store, "http://127.0.0.1:51388/cb"),
+    ).resolves.toBe(true);
+    expect((await store.load()).client_information).toBeUndefined();
+    expect((await store.load()).tokens).toBeUndefined();
   });
 });

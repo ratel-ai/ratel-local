@@ -46,6 +46,8 @@ export interface TransportRuntimeInputs {
   cwd: string;
   oauthStorePath: string;
   oauthStoreFingerprint?: string;
+  /** Callback already bound to stored credentials. Absent during unauthenticated discovery. */
+  oauthRedirectUrl?: string;
 }
 
 export type TransportFactory = (
@@ -83,8 +85,6 @@ export interface BuildGatewayOptions {
   /** Resolved scoped retrieval block. Overrides config.retrieval when supplied. */
   retrieval?: RetrievalConfig;
 }
-
-const PLACEHOLDER_REDIRECT_URL = "http://127.0.0.1:0/cb";
 
 const AUTH_SHAPED_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
   /prepareTokenRequest/i,
@@ -209,6 +209,12 @@ export async function buildGatewayFromConfig(
           );
           continue;
         }
+        const refreshedState = await store.load();
+        const oauthRedirectUrl =
+          refreshedState.redirect_url ??
+          refreshedState.client_information?.redirect_uris?.[0] ??
+          fixedCallbackUrl(entry);
+        if (oauthRedirectUrl) runtime.oauthRedirectUrl = oauthRedirectUrl;
       }
     }
 
@@ -394,6 +400,7 @@ export const defaultTransportFactory: TransportFactory = (name, entry, runtime) 
           entry,
           runtime?.oauthStorePath ?? defaultOAuthStorePath(name),
           runtime?.oauthStoreFingerprint,
+          runtime?.oauthRedirectUrl,
         ),
       );
     default:
@@ -405,20 +412,18 @@ function buildHttpTransport(
   entry: ServerEntry,
   oauthStorePath: string,
   oauthStoreFingerprint?: string,
+  oauthRedirectUrl?: string,
 ): Transport {
   const url = new URL(expandEnvPlaceholders(entry.url ?? ""));
   const headers = resolveHttpHeaders(entry);
   const opts: ConstructorParameters<typeof StreamableHTTPClientTransport>[1] = headers
     ? { requestInit: { headers } }
     : {};
-  const path = oauthStorePath;
-  if (existsSync(path)) {
-    const store = new RatelOAuthStore(path, oauthStoreFingerprint);
+  if (oauthRedirectUrl) {
+    const store = new RatelOAuthStore(oauthStorePath, oauthStoreFingerprint);
     const provider = new RatelOAuthProvider({
       store,
-      // Always set redirectUrl so the SDK takes the refresh-token branch instead of
-      // the prepareTokenRequest non-interactive path. See SDK auth.js line 259.
-      redirectUrl: redirectUrlFromStoredFile(path) ?? PLACEHOLDER_REDIRECT_URL,
+      redirectUrl: oauthRedirectUrl,
       scope: entry.scope,
       staticClientId: entry.clientId,
       staticClientSecret: entry.clientSecret,
@@ -455,7 +460,7 @@ export function resolveHttpHeaders(
 
 export { expandEnvPlaceholders } from "./env-placeholders.js";
 
-/** Test seam: read `client_information.redirect_uris[0]` from an on-disk OAuth store. */
+/** Test and compatibility seam for inspecting a stored DCR callback. */
 export function redirectUrlFromStoredFile(path: string): string | undefined {
   try {
     if (!existsSync(path)) return undefined;
@@ -465,9 +470,15 @@ export function redirectUrlFromStoredFile(path: string): string | undefined {
     const list = parsed.client_information?.redirect_uris;
     if (Array.isArray(list) && typeof list[0] === "string") return list[0];
   } catch {
-    // ignore — placeholder will be used
+    // Invalid or inaccessible state has no usable registered callback.
   }
   return undefined;
+}
+
+function fixedCallbackUrl(entry: ServerEntry): string | undefined {
+  return entry.callbackPort && entry.callbackPort > 0
+    ? `http://127.0.0.1:${entry.callbackPort}/cb`
+    : undefined;
 }
 
 function isUnauthorized(err: unknown): boolean {

@@ -66,6 +66,12 @@ describe("RatelOAuthStore", () => {
     expect(state.tokens?.access_token).toBe("atk");
   });
 
+  it("round-trips the real callback used by static OAuth clients", async () => {
+    const store = newStore();
+    await store.save({ redirect_url: "http://127.0.0.1:51390/cb" });
+    expect((await store.load()).redirect_url).toBe("http://127.0.0.1:51390/cb");
+  });
+
   it("persists and enforces the configured OAuth resource fingerprint", async () => {
     const path = join(dir, "oauth", "scoped.json");
     const store = new RatelOAuthStore(path, "resource-v1");

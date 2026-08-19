@@ -32,6 +32,7 @@ All notable changes to this package are documented here. The format is based on 
 - Made setup reuse a stable locally installed CLI for its login service instead of fetching an unpublished version through `npx`; setup and agent onboarding now use welcoming progress and simpler import guidance, and uninstall clears stale runtime state instead of reporting an old PID or version.
 - Added real byte and percentage progress for Hugging Face retrieval-model downloads in Settings, plus friendly loading states for direct daemon lifecycle commands, CLI retrieval preparation, and agent linking.
 - Hid Ratel Cloud settings and native telemetry-export controls unless the daemon is running with the Cloud telemetry feature flag enabled.
+- Fixed OAuth dynamic registration for strict native-app providers: Ratel now registers the callback port it actually opened, declares a native client, and safely replaces stale registrations created with a different callback (including the old `:0` placeholder).
 
 ## [0.6.0-rc.1] - 2026-07-31
 

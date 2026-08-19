@@ -19,6 +19,8 @@ export interface UnsupportedOAuthMarker {
 
 export interface OAuthStoreState {
   resource_fingerprint?: string;
+  /** Last real loopback callback used for this client, including static clients. */
+  redirect_url?: string;
   tokens?: OAuthTokens;
   expires_at?: number;
   client_information?: OAuthClientInformationFull;
@@ -85,6 +87,9 @@ export class RatelOAuthStore {
     const state: OAuthStoreState = {};
     if (typeof parsed.resource_fingerprint === "string") {
       state.resource_fingerprint = parsed.resource_fingerprint;
+    }
+    if (typeof parsed.redirect_url === "string") {
+      state.redirect_url = parsed.redirect_url;
     }
     if (
       this.expectedFingerprint &&
@@ -169,6 +174,25 @@ export class RatelOAuthStore {
           delete next.discovery_state;
           break;
       }
+      await this.writeAtomic(next);
+    });
+  }
+
+  /**
+   * Forget a dynamically registered client and everything bound to it while
+   * preserving resource discovery and credential-isolation metadata.
+   */
+  async clearClientRegistration(): Promise<void> {
+    await this.withLock(async () => {
+      const current = await this.load();
+      const next: OAuthStoreState = { ...current };
+      delete next.client_information;
+      delete next.redirect_url;
+      delete next.tokens;
+      delete next.expires_at;
+      delete next.code_verifier;
+      delete next.state;
+      delete next.unsupported;
       await this.writeAtomic(next);
     });
   }

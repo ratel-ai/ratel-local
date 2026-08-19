@@ -825,6 +825,45 @@ describe("buildGatewayFromConfig", () => {
       await ok.server.close();
     });
 
+    it("reuses the real stored callback for a pre-registered static client", async () => {
+      const ok = await startUpstream([{ name: "ping", description: "Ping." }]);
+      const store = new RatelOAuthStore(storePath("static"));
+      await store.save({
+        redirect_url: "http://127.0.0.1:51390/cb",
+        tokens: {
+          access_token: "stored",
+          token_type: "Bearer",
+          refresh_token: "refresh",
+        },
+      });
+      const bootRedirects: Array<string | undefined> = [];
+
+      const handle = await buildGatewayFromConfig(
+        {
+          mcpServers: {
+            static: {
+              type: "http",
+              url: "https://static.example/mcp",
+              clientId: "configured-client",
+            },
+          },
+        },
+        {
+          transportFactory: (_name, _entry, runtime) => {
+            bootRedirects.push(runtime?.oauthRedirectUrl);
+            return ok.clientTransport;
+          },
+          oauthStorePath: storePath,
+          refreshTokens: async () => undefined,
+        },
+      );
+
+      expect(bootRedirects).toEqual(["http://127.0.0.1:51390/cb"]);
+
+      await handle.close();
+      await ok.server.close();
+    });
+
     it("marks upstream needsAuth and skips register when refresh fails", async () => {
       const ok = await startUpstream([{ name: "ping", description: "Ping." }]);
       await seedStoredTokens("locked", Date.now() - 5_000);
@@ -922,6 +961,7 @@ describe("buildGatewayFromConfig", () => {
     it("skips proactive refresh for HTTP upstreams without stored tokens", async () => {
       const ok = await startUpstream([{ name: "ping", description: "Ping." }]);
       const refreshTokens = vi.fn();
+      const bootRedirects: Array<string | undefined> = [];
 
       const handle = await buildGatewayFromConfig(
         {
@@ -930,20 +970,24 @@ describe("buildGatewayFromConfig", () => {
           },
         },
         {
-          transportFactory: () => ok.clientTransport,
+          transportFactory: (_name, _entry, runtime) => {
+            bootRedirects.push(runtime?.oauthRedirectUrl);
+            return ok.clientTransport;
+          },
           oauthStorePath: storePath,
           refreshTokens,
         },
       );
 
       expect(refreshTokens).not.toHaveBeenCalled();
+      expect(bootRedirects).toEqual([undefined]);
       expect(handle.catalog.has("fresh__ping")).toBe(true);
 
       await handle.close();
       await ok.server.close();
     });
 
-    it("redirectUrlFromStoredFile reads client_information.redirect_uris[0] from the OAuth file", async () => {
+    it("redirectUrlFromStoredFile reads client_information.redirect_uris[0]", async () => {
       const fs = await import("node:fs/promises");
       const path = join(oauthDir, "demo.json");
       await fs.writeFile(
