@@ -1017,10 +1017,15 @@ async function startDaemon(
   if (!(await ctx.fs.exists(paths.plist))) {
     throw new Error(`daemon is not installed; run "ratel-local daemon install" first`);
   }
+  const port = await daemonPort(parsed, ctx);
+  const probe = opts.probe ?? probeDaemon;
+  if ((await probe(port)).ok) {
+    log(`[ratel] daemon already running at http://127.0.0.1:${port}`);
+    return;
+  }
   await bootstrapDaemon(ctx, opts, { ignoreFailure: true });
   await kickstartDaemon(ctx, opts);
-  const port = await daemonPort(parsed, ctx);
-  await waitForDaemon(port, opts.probe ?? probeDaemon, options.serverVersion);
+  await waitForDaemon(port, probe, options.serverVersion);
   log(`[ratel] daemon started at http://127.0.0.1:${port}`);
 }
 
@@ -1094,9 +1099,14 @@ async function startLinuxDaemon(
   if (!(await ctx.fs.exists(paths.systemdService))) {
     throw new Error(`daemon is not installed; run "ratel-local daemon install" first`);
   }
-  await systemctl(opts, ["start", SYSTEMD_SERVICE]);
   const port = await daemonPort(parsed, ctx);
-  await waitForDaemon(port, opts.probe ?? probeDaemon, options.serverVersion);
+  const probe = opts.probe ?? probeDaemon;
+  if ((await probe(port)).ok) {
+    log(`[ratel] daemon already running at http://127.0.0.1:${port}`);
+    return;
+  }
+  await systemctl(opts, ["start", SYSTEMD_SERVICE]);
+  await waitForDaemon(port, probe, options.serverVersion);
   log(`[ratel] daemon started at http://127.0.0.1:${port}`);
 }
 

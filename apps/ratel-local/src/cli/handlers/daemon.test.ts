@@ -1027,6 +1027,34 @@ describe("runDaemon", () => {
     expect(progress).toEqual(["start:Starting Ratel Local…", "stop:Ratel Local couldn't start"]);
   });
 
+  it("does not kickstart an already-running macOS daemon", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    fs.files.set(paths.plist, "<plist />");
+    const commands: Array<{ command: string; args: string[] }> = [];
+    const logs: string[] = [];
+
+    await runDaemon(
+      daemonArgs({ verb: "start", flags: { telemetry: "off", open: false } }),
+      makeCtx(fs),
+      {},
+      (message) => logs.push(message),
+      {
+        platform: "darwin",
+        getUid: () => 501,
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
+          return { stdout: "", stderr: "" };
+        },
+        probe: async () => ({ ok: true }),
+        lifecycleProgress: false,
+      },
+    );
+
+    expect(commands).toEqual([]);
+    expect(logs).toEqual(["[ratel] daemon already running at http://127.0.0.1:5731"]);
+  });
+
   it("clears stale daemon state when uninstalling the macOS service", async () => {
     const fs = new MemFs();
     const paths = daemonPaths(HOME);
@@ -1184,6 +1212,33 @@ describe("runDaemon", () => {
 
     expect(fs.files.has(paths.systemdService)).toBe(false);
     expect(fs.files.has(paths.state)).toBe(false);
+  });
+
+  it("does not start an already-running Linux daemon again", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    fs.files.set(paths.systemdService, "[Service]");
+    const commands: Array<{ command: string; args: string[] }> = [];
+    const logs: string[] = [];
+
+    await runDaemon(
+      daemonArgs({ verb: "start", flags: { telemetry: "off", open: false } }),
+      makeCtx(fs),
+      {},
+      (message) => logs.push(message),
+      {
+        platform: "linux",
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
+          return { stdout: "", stderr: "" };
+        },
+        probe: async () => ({ ok: true }),
+        lifecycleProgress: false,
+      },
+    );
+
+    expect(commands).toEqual([]);
+    expect(logs).toEqual(["[ratel] daemon already running at http://127.0.0.1:5731"]);
   });
 
   it("reports daemon status from the persisted state and live probe", async () => {

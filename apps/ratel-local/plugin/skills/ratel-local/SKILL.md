@@ -19,7 +19,7 @@ the plugin `.mcp.json`.
 
 ## Plugin Runtime
 
-The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.8.0 connect`.
+The plugin `.mcp.json` runs `npx -y @ratel-ai/ratel-local@0.8.1 connect`.
 The connector sends its resolved project root to the authenticated loopback
 daemon, which loads the appropriate config chain and shares upstream
 connections only within that canonical project scope. Do not replace the
@@ -28,27 +28,28 @@ into the plugin `.mcp.json`.
 
 Stable packages install the Ratel marketplace from the repository's default
 `main` branch. Only prerelease package versions reconcile the marketplace to an
-immutable matching Git tag. Never add an RC branch or ref for stable `0.8.0`.
+immutable matching Git tag. Never add an RC branch or ref for stable `0.8.1`.
 
 Run the setup wizard once from a terminal:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.0 setup
+npx -y @ratel-ai/ratel-local@0.8.1 setup
 ```
 
 This is the default onboarding path: it makes the daemon ready, detects Claude
 Code and Codex, connects selected agents through the plugin-first link flow,
 then separately offers a previewed and confirmed MCP/skill import.
 
-When the daemon is unavailable, the connector exposes
+When the daemon is unavailable or the connector is temporarily detached, it exposes
 `ratel_daemon_status`, `ratel_daemon_start`, and `ratel_daemon_setup`. The
-setup tool returns the terminal command; interactive setup must never be run on
-MCP stdio.
+start tool checks health and attaches without restarting an already-running
+daemon. The setup tool returns the terminal command; interactive setup must
+never be run on MCP stdio.
 
 For human CLI work, install the package globally and use the `ratel-local` bin:
 
 ```bash
-pnpm add -g @ratel-ai/ratel-local@0.8.0
+pnpm add -g @ratel-ai/ratel-local@0.8.1
 ratel-local --version
 ```
 
@@ -374,7 +375,7 @@ ratel-local backup list
 ## Debug Checklist
 
 1. Confirm Node and `npx` are available.
-2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.8.0` with `connect`.
+2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.8.1` with `connect`.
 3. Run `ratel-local daemon status`; if needed, run `ratel-local setup`.
 4. Run `ratel-local mcp list` to verify Ratel config has upstreams.
 5. Run `ratel-local connect` from the relevant project to reproduce the scoped bridge outside the host, or `ratel-local serve --auto-config` to isolate the gateway itself.
@@ -384,7 +385,8 @@ ratel-local backup list
 
 Common findings:
 
-- Bootstrap tools only: the daemon is missing or stopped; use `ratel_daemon_status`, then run the setup command returned by `ratel_daemon_setup` or call `ratel_daemon_start` for an installed service.
+- Bootstrap tools only: the daemon may be missing, stopped, or temporarily detached. Call `ratel_daemon_status` first. When it reports `running`, `ratel_daemon_start` safely reattaches without restarting the daemon. When it reports `stopped`, call `ratel_daemon_start`; when it reports `not-installed`, use the command returned by `ratel_daemon_setup`.
+- Repeated daemon interruptions: set `RATEL_FEATURE_CONNECTOR_RECOVERY=1` on the connector process to opt into bounded automatic reattachment. The feature is off by default while it rolls out.
 - Empty catalog: no Ratel configs were found or all configs have empty `mcpServers`.
 - Dense retrieval startup failure: run `ratel-local retrieval status`, then `ratel-local retrieval prepare` in the affected project. Reset that scope to BM25 when the configured model or endpoint should not be used.
 - Missing project tools: the host did not expose a useful project root; set `RATEL_PROJECT_ROOT` or run from the project directory.

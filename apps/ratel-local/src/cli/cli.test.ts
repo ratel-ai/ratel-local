@@ -314,6 +314,17 @@ describe("runCli — help and routing", () => {
     }
   });
 
+  it("prints connect help without starting an MCP connector", async () => {
+    const logs: string[] = [];
+
+    const result = await runCli(["connect", "--help"], {
+      logger: (message) => logs.push(message),
+    });
+
+    expect(logs.join("\n")).toContain("usage: ratel-local connect");
+    expect(result.shutdown).toBeUndefined();
+  });
+
   it("--version logs the injected package version", async () => {
     const logs: string[] = [];
     await runCli(["--version"], { cliVersion: "1.2.3", logger: (m) => logs.push(m) });

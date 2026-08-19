@@ -4,6 +4,15 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-19
+
+### Fixed
+- Made connector recovery probe daemon health before taking lifecycle action, attach to an already-running daemon without restarting it, and return the recovery tool result before asking hosts to refresh their tool catalog.
+- Made `daemon start` idempotent on macOS and Linux so a healthy daemon and its active MCP sessions are preserved; explicit `daemon restart` retains restart semantics.
+- Added bounded automatic connector reattachment behind the off-by-default `RATEL_FEATURE_CONNECTOR_RECOVERY=1` rollout flag.
+- Made `ratel-local connect --help` print connector usage instead of starting a live MCP bridge.
+- Expanded bootstrap-mode guidance to distinguish a missing or stopped daemon from a temporarily detached connector.
+
 ## [0.8.0] - 2026-08-14
 
 ### Added
