@@ -105,6 +105,25 @@ describe("ClaudeCodeAgentHostAdapter", () => {
     );
   });
 
+  it("creates missing home and project configs when installing connector scopes", async () => {
+    const adapter = new ClaudeCodeAgentHostAdapter();
+    const state = await adapter.read(ctxOf({}));
+    const input = linkInput(state, new Map());
+    input.installGatewayScopes = new Set(["user", "project", "local"]);
+
+    const changes = await adapter.planChanges(input);
+
+    expect(changes.changes.map(({ path, before }) => ({ path, before }))).toEqual([
+      { path: HOME_CLAUDE, before: null },
+      { path: PROJECT_MCP, before: null },
+    ]);
+    const home = JSON.parse(changes.changes[0]?.after ?? "{}");
+    const project = JSON.parse(changes.changes[1]?.after ?? "{}");
+    expect(home.mcpServers["ratel-local"].args).toContain("user");
+    expect(home.projects[ROOT].mcpServers["ratel-local"].args).toContain("local");
+    expect(project.mcpServers["ratel-local"].args).toContain("project");
+  });
+
   it("rewrites user and local entries in one home config write", async () => {
     const adapter = new ClaudeCodeAgentHostAdapter();
     const ctx = ctxOf({

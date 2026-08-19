@@ -4,17 +4,18 @@ import {
   beginAgentImportWorkflow,
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core/agent-import-workflow";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { type StructuredPatchHunk, structuredPatch } from "diff";
 import {
   ArrowLeft,
   Check,
+  ChevronRight,
   Download,
   FileText,
   GitCompare,
   LinkIcon,
   RefreshCw,
-  SearchIcon,
   Sparkles,
   Wrench,
   X,
@@ -22,7 +23,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useMeasure from "react-use-measure";
-import { type BackupManifest, type JsonRequestInit, type ServerEntry, useRatelApp } from "@/App";
+import { type JsonRequestInit, type ServerEntry, useRatelApp } from "@/App";
 import { SkillImportPicker, skillKey } from "@/components/import-skills-dialog";
 import {
   PageHeader,
@@ -30,9 +31,9 @@ import {
   PageHeaderBackRow,
   PageHeaderContent,
   PageHeaderDescription,
-  PageHeaderSidebarTrigger,
   PageHeaderTitle,
 } from "@/components/page-header";
+import { PageSurface, PageSurfaceContent, PageSurfaceFooter } from "@/components/page-surface";
 import {
   ResponsiveToolbar,
   ResponsiveToolbarButton,
@@ -41,9 +42,10 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DetailGrid, DetailLabel } from "@/components/ui/detail-grid";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -52,7 +54,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { importStatuslineAction, linkThenRefreshImportPreview } from "@/lib/agent-import-flow";
-import { availableSkillsForKind, fetchSkills, type SkillSummary } from "@/lib/skills";
+import { REFRESH_SHORTCUT } from "@/lib/keyboard-shortcuts";
+import { ratelApiQueryOptions, ratelQueryKeys } from "@/lib/ratel-query";
+import {
+  applySkillImportSelections,
+  availableSkillsForKind,
+  buildSkillImportSelections,
+  defaultSkillImportTarget,
+  discoveredSkillSummaries,
+  type SkillSummary,
+  type SkillsResponse,
+  uniqueSkillImports,
+} from "@/lib/skills";
+import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
 type AgentHostKind = "claude-code" | "codex";
@@ -100,7 +114,7 @@ interface RatelConnectionState {
   plugin: boolean;
 }
 
-interface DetectedAgentHostSummary {
+export interface DetectedAgentHostSummary {
   kind: AgentHostKind;
   displayName: string;
   detection: AgentHostDetection;
@@ -120,7 +134,62 @@ interface AgentHostsResponse {
   hosts: DetectedAgentHostSummary[];
 }
 
-function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
+type AgentTraceState = "disabled" | "configured" | "stale" | "conflict" | "invalid";
+type AgentTraceLevel =
+  | "off"
+  | "redacted"
+  | "tool-details"
+  | "full-content"
+  | "tool-activity"
+  | "prompt-content";
+type AgentTraceObservedLevel = AgentTraceLevel | "custom" | "unknown";
+
+interface AgentTraceHostStatus {
+  hostKind: AgentHostKind;
+  displayName: string;
+  configPath: string;
+  state: AgentTraceState;
+  level: AgentTraceObservedLevel;
+  supportedLevels: AgentTraceLevel[];
+  signals?: {
+    traces: "disabled" | "configured" | "stale" | "conflict";
+    logs: "disabled" | "configured" | "stale" | "conflict";
+  };
+  restartRequired: boolean;
+  conflictingFields: string[];
+  warnings: string[];
+}
+
+interface AgentTracesResponse {
+  featureEnabled?: boolean;
+  endpoint: string;
+  logsEndpoint?: string;
+  cloudConfigured: boolean;
+  hosts: AgentTraceHostStatus[];
+}
+
+interface PreparedAgentTraceResponse {
+  changeId: string;
+}
+
+interface CloudTraceSettingsStatus {
+  featureEnabled?: boolean;
+  configured: boolean;
+  endpoint: string;
+}
+
+export function cloudTraceSetupPatch(
+  endpoint: string,
+  apiKey: string,
+): { endpoint: string; apiKey: string } {
+  const normalizedEndpoint = endpoint.trim();
+  const normalizedApiKey = apiKey.trim();
+  if (!normalizedEndpoint) throw new Error("Ratel Cloud trace endpoint is unavailable");
+  if (!normalizedApiKey) throw new Error("Ratel Cloud API key is required");
+  return { endpoint: normalizedEndpoint, apiKey: normalizedApiKey };
+}
+
+export function agentHostsFromResponse(body: unknown): DetectedAgentHostSummary[] {
   if (
     typeof body === "object" &&
     body !== null &&
@@ -137,8 +206,7 @@ interface AgentCandidate {
   entry: ServerEntry;
 }
 
-interface FileChange {
-  kind: "write";
+interface PlannedFileWrite {
   path: string;
   before: string | null;
   after: string;
@@ -152,13 +220,14 @@ interface ImportConflict {
 }
 
 interface AgentPlanPreview {
+  changeId: string;
   flow: SetupFlow;
   host: DetectedAgentHostSummary;
   candidates: AgentCandidate[];
   selected: string[];
   plan: {
-    ratelChanges: FileChange[];
-    agentChanges: FileChange[];
+    ratelChanges: PlannedFileWrite[];
+    agentChanges: PlannedFileWrite[];
     summary: {
       movedFromUser: string[];
       movedFromProject: string[];
@@ -172,8 +241,38 @@ interface AgentPlanPreview {
       overwrittenRatelEntries: AgentScope[];
     };
   };
-  stageHashes: { ratel: string; agent: string };
   emptyReason: string | null;
+}
+
+interface PreparedAgentChangeResponse {
+  changeId: string;
+  kind: string;
+  expiresAt: string;
+  preview: Omit<AgentPlanPreview, "changeId">;
+}
+
+function useAgentAction() {
+  const { context } = useRatelApp();
+  const mutation = useRatelMutation<unknown, { action: () => Promise<unknown>; label: string }>({
+    invalidate: [ratelQueryKeys.config(context)],
+    mutationFn: ({ action }) => action(),
+    successMessage: (_data, { label }) => label,
+  });
+  return {
+    isPending: mutation.isPending,
+    runAction: async (label: string, action: () => Promise<unknown>) => {
+      try {
+        await mutation.mutateAsync({ action, label });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+function agentPreviewFromPrepared(change: PreparedAgentChangeResponse): AgentPlanPreview {
+  return { ...change.preview, changeId: change.changeId };
 }
 
 const POSTURE_COPY: Record<
@@ -216,57 +315,82 @@ const CLAUDE_CODE_ICON_SRC = new URL("../assets/claudecode-color.svg", import.me
  * page (for the import section). Fail-soft to an empty list so a skills hiccup
  * never blocks the MCP setup flows.
  */
-function useAvailableSkills() {
-  const { request } = useRatelApp();
-  const [available, setAvailable] = useState<SkillSummary[]>([]);
-  const reload = useCallback(async () => {
-    try {
-      const data = await fetchSkills(request);
-      setAvailable(data.available);
-    } catch {
-      setAvailable([]);
-    }
-  }, [request]);
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-  return { available, reload };
+function useAvailableSkills(initialAvailable?: SkillSummary[]) {
+  const { context, token } = useRatelApp();
+  const query = useQuery(
+    ratelApiQueryOptions<SkillsResponse>({
+      context,
+      path: "/api/skills",
+      queryKey: ratelQueryKeys.skills(context),
+      token,
+    }),
+  );
+  return {
+    available: query.data ? discoveredSkillSummaries(query.data) : (initialAvailable ?? []),
+    reload: async () => {
+      await query.refetch();
+    },
+  };
 }
 
-export function AgentSetupPage() {
-  const { clearSetupIntent, config, openCommandMenu, refresh, request, setupIntent, token } =
-    useRatelApp();
+function useAgentHosts(initialHosts?: DetectedAgentHostSummary[]) {
+  const { context, token } = useRatelApp();
+  const query = useQuery(
+    ratelApiQueryOptions<unknown>({
+      context,
+      path: "/api/agent-hosts",
+      queryKey: ratelQueryKeys.agentHosts(context),
+      token,
+    }),
+  );
+  return {
+    hosts: query.data ? agentHostsFromResponse(query.data) : (initialHosts ?? []),
+    scanHosts: async () => {
+      await query.refetch();
+    },
+    scanning: query.isFetching,
+  };
+}
+
+function useAgentTraces() {
+  const { context, token } = useRatelApp();
+  const query = useQuery(
+    ratelApiQueryOptions<AgentTracesResponse>({
+      context,
+      path: "/api/agent-traces",
+      queryKey: ratelQueryKeys.agentTraces(),
+      token,
+    }),
+  );
+  return {
+    status: query.data,
+    reload: async () => {
+      await query.refetch();
+    },
+  };
+}
+
+export interface AgentSetupRouteData {
+  available: SkillSummary[];
+  hosts: DetectedAgentHostSummary[];
+}
+
+export function AgentSettingsSection({ initialData }: { initialData?: AgentSetupRouteData }) {
+  const { clearSetupIntent, pagePath, refresh, setupIntent } = useRatelApp();
   const navigate = useNavigate();
-  const { available } = useAvailableSkills();
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
-  const [scanning, setScanning] = useState(false);
+  const { available } = useAvailableSkills(initialData?.available);
+  const { hosts, scanHosts, scanning } = useAgentHosts(initialData?.hosts);
   const handledIntent = useRef<number | null>(null);
-  const backups = config?.backups ?? [];
-
-  const scanHosts = useCallback(async () => {
-    setScanning(true);
-    try {
-      const body = await request<unknown>("/api/agent-hosts");
-      setHosts(agentHostsFromResponse(body));
-    } catch {
-      setHosts([]);
-    } finally {
-      setScanning(false);
-    }
-  }, [request]);
-
   const openAgent = useCallback(
     (kind: AgentHostKind, operation?: SetupFlow) => {
-      const search = new URLSearchParams();
-      if (token) search.set("t", token);
-      if (operation) search.set("operation", operation);
-      void navigate({ to: `/agent-setup/${kind}?${search.toString()}` } as never);
+      const path = pagePath(`/agent-setup/${kind}`);
+      const separator = path.includes("?") ? "&" : "?";
+      void navigate({
+        to: operation ? `${path}${separator}operation=${operation}` : path,
+      } as never);
     },
-    [navigate, token],
+    [navigate, pagePath],
   );
-  useEffect(() => {
-    void scanHosts();
-  }, [scanHosts]);
 
   useEffect(() => {
     if (setupIntent && handledIntent.current !== setupIntent.id) {
@@ -277,115 +401,76 @@ export function AgentSetupPage() {
   }, [clearSetupIntent, hosts, openAgent, setupIntent]);
 
   return (
-    <main className="grid w-full gap-4 px-4 py-5 sm:px-6">
-      <PageHeader className="sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-        <PageHeaderContent>
-          <PageHeaderBackRow>
-            <PageHeaderTitle>Agent Setup</PageHeaderTitle>
-            <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
-            </div>
-          </PageHeaderBackRow>
-          <PageHeaderDescription className="max-w-sm sm:max-w-2xl">
-            Inspect supported agent configs, then open an agent to import or link MCP entries.
-          </PageHeaderDescription>
-        </PageHeaderContent>
-        <PageHeaderActions className="hidden sm:flex">
-          <ResponsiveToolbar>
-            <ResponsiveToolbarGroup>
-              <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
-                disabled={scanning}
-                icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
-                kbd="⌘R"
-                label="Refresh"
-                onClick={() => void Promise.all([refresh(), scanHosts()])}
-              />
-            </ResponsiveToolbarGroup>
-          </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
-        </PageHeaderActions>
-      </PageHeader>
-
-      <section className="grid gap-3">
-        <div className="grid gap-3 xl:grid-cols-2">
-          {hosts.map((host) => (
-            <AgentDirectoryCard
-              host={host}
-              key={host.kind}
-              onOpen={() => openAgent(host.kind)}
-              unmanagedSkillCount={availableSkillsForKind(available, host.kind).length}
-            />
-          ))}
+    <section aria-labelledby="agents-settings-title" className="grid gap-3">
+      <div className="flex items-end justify-between gap-3 px-1">
+        <div>
+          <h2 className="text-lg font-semibold" id="agents-settings-title">
+            Agents
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Connections and native integrations for Claude Code and Codex.
+          </p>
         </div>
-      </section>
+        <Button
+          aria-label="Refresh agents"
+          disabled={scanning}
+          onClick={() => void Promise.all([refresh(), scanHosts()])}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw />
+          Refresh
+          {scanning ? <Button.LoadingIndicator label="Refreshing agents" /> : null}
+        </Button>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {hosts.map((host) => (
+          <AgentDirectoryCard
+            host={host}
+            key={host.kind}
+            onOpen={() => openAgent(host.kind)}
+            unmanagedSkillCount={availableSkillsForKind(available, host.kind).length}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
 
-      <Backups backups={backups} />
+export function LegacyAgentSetupRedirect() {
+  const { pagePath } = useRatelApp();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    void navigate({ replace: true, to: pagePath("/settings") } as never);
+  }, [navigate, pagePath]);
+
+  return (
+    <main className="grid min-h-48 place-items-center px-6 text-sm text-muted-foreground">
+      Opening agent settings…
     </main>
   );
 }
 
-export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupFlow }) {
-  const { openCommandMenu, refresh, request, token } = useRatelApp();
+export function AgentDetailPage(props: {
+  initialData?: AgentSetupRouteData;
+  kind: AgentHostKind;
+  operation?: SetupFlow;
+}) {
+  const { pagePath, refresh, request } = useRatelApp();
   const navigate = useNavigate();
-  const { available, reload: reloadSkills } = useAvailableSkills();
+  const { available, reload: reloadSkills } = useAvailableSkills(props.initialData?.available);
   const agentAvailable = availableSkillsForKind(available, props.kind);
-  const [hosts, setHosts] = useState<DetectedAgentHostSummary[]>([]);
-  const [scanning, setScanning] = useState(false);
-
-  const scanHosts = useCallback(async () => {
-    setScanning(true);
-    try {
-      const body = await request<unknown>("/api/agent-hosts");
-      setHosts(agentHostsFromResponse(body));
-    } catch {
-      setHosts([]);
-    } finally {
-      setScanning(false);
-    }
-  }, [request]);
-
-  useEffect(() => {
-    void scanHosts();
-  }, [scanHosts]);
+  const { hosts, scanHosts, scanning } = useAgentHosts(props.initialData?.hosts);
+  const agentTraces = useAgentTraces();
 
   const host = hosts.find((item) => item.kind === props.kind);
   const goBack = () => {
-    const target = token ? `/agent-setup?t=${encodeURIComponent(token)}` : "/agent-setup";
-    void navigate({ to: target } as never);
+    void navigate({ to: pagePath("/settings") } as never);
   };
   const switchHost = (kind: AgentHostKind) => {
-    const search = new URLSearchParams();
-    if (token) search.set("t", token);
-    void navigate({ to: `/agent-setup/${kind}?${search.toString()}` } as never);
+    void navigate({ to: pagePath(`/agent-setup/${kind}`) } as never);
   };
   const primaryPath = host?.scopes.find((scope) => scope.available)?.path ?? host?.scopes[0]?.path;
 
@@ -396,33 +481,21 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
           <PageHeaderBackRow>
             <Button onClick={goBack} size="sm" type="button" variant="ghost">
               <ArrowLeft />
-              Agents
+              Settings
             </Button>
             <div className="flex items-center gap-1 sm:hidden">
-              <ButtonGroup>
-                <Button
-                  aria-label="Search"
-                  onClick={openCommandMenu}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <SearchIcon />
-                  <span className="sr-only">Search</span>
-                </Button>
-                <Button
-                  aria-label="Refresh"
-                  disabled={scanning}
-                  onClick={() => void Promise.all([refresh(), scanHosts()])}
-                  size="icon-lg"
-                  type="button"
-                  variant="outline"
-                >
-                  <RefreshCw className={cn(scanning && "animate-spin")} />
-                  <span className="sr-only">Refresh</span>
-                </Button>
-              </ButtonGroup>
-              <PageHeaderSidebarTrigger />
+              <Button
+                aria-label="Refresh"
+                disabled={scanning}
+                onClick={() => void Promise.all([refresh(), scanHosts()])}
+                size="icon-lg"
+                type="button"
+                variant="outline"
+              >
+                <RefreshCw />
+                {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
+                <span className="sr-only">Refresh</span>
+              </Button>
             </div>
           </PageHeaderBackRow>
           <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2">
@@ -457,65 +530,44 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
             ) : null}
             <ResponsiveToolbarGroup>
               <ResponsiveToolbarButton
-                icon={<SearchIcon />}
-                kbd="⌘K"
-                label="Search"
-                onClick={openCommandMenu}
-              />
-              <ResponsiveToolbarButton
                 disabled={scanning}
-                icon={<RefreshCw className={cn(scanning && "animate-spin")} />}
-                kbd="⌘R"
+                icon={
+                  <>
+                    <RefreshCw />
+                    {scanning && <Button.LoadingIndicator label="Refreshing agent setup" />}
+                  </>
+                }
+                shortcut={REFRESH_SHORTCUT.hotkey}
                 label="Refresh"
                 onClick={() => void Promise.all([refresh(), scanHosts()])}
               />
             </ResponsiveToolbarGroup>
           </ResponsiveToolbar>
-          <PageHeaderSidebarTrigger className="hidden sm:inline-flex" />
         </PageHeaderActions>
       </PageHeader>
 
       {host ? (
         <section className="grid gap-5">
-          <DetailGrid>
+          <DetailGrid className="items-center">
             <DetailLabel>Host</DetailLabel>
-            <div className="flex min-w-0 items-center gap-2">
-              <AgentIcon kind={host.kind} />
+            <div className="flex min-h-5 min-w-0 items-center gap-2">
+              <AgentIconFrame kind={host.kind} />
               <span className="font-medium">{host.displayName}</span>
             </div>
             <DetailLabel>Status</DetailLabel>
-            <LinkStatusBadge host={host} />
+            <AgentStatusSummary host={host} unmanagedSkillCount={agentAvailable.length} />
             {host.kind === "claude-code" && host.statusline ? (
               <>
                 <DetailLabel>Statusline</DetailLabel>
-                <ClaudeStatuslineBadge state={host.statusline} />
+                <ClaudeStatuslineStatus state={host.statusline} />
                 <DetailLabel>Ratel Local</DetailLabel>
-                <StatusBadge tone={host.statusline.ratelEnabled ? "success" : "warning"}>
+                <AgentStatusText tone={host.statusline.ratelEnabled ? "success" : "warning"}>
                   {host.statusline.ratelEnabled ? "Enabled" : "Not enabled"}
-                </StatusBadge>
-              </>
-            ) : null}
-            {missingRatelEntryNames(host).length > 0 || agentAvailable.length > 0 ? (
-              <>
-                <DetailLabel>Coverage</DetailLabel>
-                <div className="grid gap-1">
-                  {missingRatelEntryNames(host).length > 0 ? (
-                    <p className="text-sm text-amber-700 dark:text-amber-400">
-                      {missingRatelEntryNames(host).length} native tool
-                      {missingRatelEntryNames(host).length === 1 ? "" : "s"} not in Ratel.
-                    </p>
-                  ) : null}
-                  {agentAvailable.length > 0 ? (
-                    <p className="text-sm text-amber-700 dark:text-amber-400">
-                      {agentAvailable.length} skill{agentAvailable.length === 1 ? "" : "s"} not
-                      managed by Ratel.
-                    </p>
-                  ) : null}
-                </div>
+                </AgentStatusText>
               </>
             ) : null}
             <DetailLabel>Config</DetailLabel>
-            <code className="min-w-0 truncate rounded-md bg-background px-2 py-1.5 font-mono text-xs text-muted-foreground">
+            <code className="flex min-h-5 min-w-0 items-center truncate font-mono text-xs text-muted-foreground">
               {primaryPath ?? "Known paths unavailable"}
             </code>
           </DetailGrid>
@@ -527,6 +579,8 @@ export function AgentDetailPage(props: { kind: AgentHostKind; operation?: SetupF
             onScanHosts={scanHosts}
             onSkillsImported={reloadSkills}
             request={request}
+            traceStatus={agentTraces.status}
+            onTraceStatusChanged={agentTraces.reload}
           />
         </section>
       ) : (
@@ -560,12 +614,15 @@ function AgentPageSwitcher(props: {
           </span>
         </SelectValue>
       </SelectTrigger>
-      <SelectContent align="end" alignItemWithTrigger={false} className="min-w-56">
+      <SelectContent
+        align="end"
+        alignItemWithTrigger={false}
+        className="w-72 min-w-0 max-w-[calc(100vw-2rem)]"
+      >
         {props.hosts.map((host) => (
           <SelectItem key={host.kind} value={host.kind}>
             <AgentIconFrame kind={host.kind} />
-            <span>{host.displayName}</span>
-            <LinkStatusBadge host={host} />
+            <span className="min-w-0 flex-1 truncate">{host.displayName}</span>
           </SelectItem>
         ))}
       </SelectContent>
@@ -581,41 +638,152 @@ function AgentDirectoryCard(props: {
   const posture = POSTURE_COPY[props.host.posture];
   const primaryPath =
     props.host.scopes.find((scope) => scope.available)?.path ?? props.host.scopes[0]?.path;
+  const configPath = primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable";
   return (
-    <div className="group grid gap-3 border border-border bg-background p-4 transition-colors hover:border-brand-green/60 hover:bg-brand-green/5">
+    <PageSurface className="group h-full transition-colors hover:border-foreground/20 hover:bg-muted/20 focus-within:border-ring/50">
       <button
-        className="flex w-full min-w-0 items-start gap-3 text-left"
+        className="grid h-full w-full min-w-0 grid-rows-[1fr_auto] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35"
         onClick={props.onOpen}
         type="button"
       >
-        <AgentIcon kind={props.host.kind} />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <h4 className="min-w-0 truncate text-xl font-semibold tracking-tight">
-              {props.host.displayName}
-            </h4>
-            <LinkStatusBadge host={props.host} />
+        <PageSurfaceContent className="grid min-w-0 content-start gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <AgentIcon kind={props.host.kind} />
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate text-lg font-semibold tracking-tight">
+                {props.host.displayName}
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">{posture.description}</p>
+            </div>
+            <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{posture.description}</p>
-          {missingRatelEntryNames(props.host).length > 0 ? (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-              {missingRatelEntryNames(props.host).length} native tool
-              {missingRatelEntryNames(props.host).length === 1 ? "" : "s"} not in Ratel.
-            </p>
-          ) : null}
-          {props.unmanagedSkillCount > 0 ? (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
-              {props.unmanagedSkillCount} skill{props.unmanagedSkillCount === 1 ? "" : "s"} not
-              managed by Ratel.
-            </p>
-          ) : null}
-          <p className="mt-3 truncate font-mono text-xs text-muted-foreground">
-            {primaryPath ?? props.host.detection.reasons[0] ?? "Known paths unavailable"}
-          </p>
-        </div>
+          <AgentStatusSummary
+            className="pl-[3.75rem]"
+            host={props.host}
+            unmanagedSkillCount={props.unmanagedSkillCount}
+          />
+        </PageSurfaceContent>
+        <PageSurfaceFooter className="grid min-w-0 gap-1">
+          <span className="font-mono text-[10px] text-muted-foreground uppercase">Config</span>
+          <code className="truncate font-mono text-xs text-muted-foreground" title={configPath}>
+            {configPath}
+          </code>
+        </PageSurfaceFooter>
       </button>
+    </PageSurface>
+  );
+}
+
+function AgentStatusSummary(props: {
+  className?: string;
+  host: DetectedAgentHostSummary;
+  unmanagedSkillCount: number;
+}) {
+  const status = agentCardStatusModel({
+    connectionKind: props.host.connection.kind,
+    linked: props.host.connection.linked,
+    missingToolCount: missingRatelEntryNames(props.host).length,
+    posture: props.host.posture,
+    unmanagedSkillCount: props.unmanagedSkillCount,
+  });
+  const connectionTone =
+    props.host.connection.kind === "duplicate"
+      ? "warning"
+      : props.host.connection.linked
+        ? "success"
+        : "muted";
+
+  return (
+    <div
+      className={cn(
+        "flex min-h-5 min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs",
+        props.className,
+      )}
+      data-slot="agent-status-summary"
+    >
+      <AgentStatusText tone={connectionTone}>{status.connectionLabel}</AgentStatusText>
+      <span aria-hidden="true" className="text-border">
+        ·
+      </span>
+      <AgentStatusText dot={false} tone={status.tone}>
+        {status.healthLabel}
+      </AgentStatusText>
     </div>
   );
+}
+
+function AgentStatusText(props: {
+  children: React.ReactNode;
+  dot?: boolean;
+  tone: "muted" | "success" | "warning";
+}) {
+  const dotClass =
+    props.tone === "success"
+      ? "bg-emerald-500"
+      : props.tone === "warning"
+        ? "bg-amber-500"
+        : "bg-muted-foreground/50";
+  return (
+    <span
+      className={cn(
+        "inline-flex min-h-5 items-center gap-1.5 text-xs",
+        props.tone === "success" && "text-emerald-700 dark:text-emerald-300",
+        props.tone === "warning" && "text-amber-700 dark:text-amber-300",
+        props.tone === "muted" && "text-muted-foreground",
+      )}
+      data-slot="agent-status-text"
+    >
+      {props.dot === false ? null : (
+        <span aria-hidden="true" className={cn("size-1.5 rounded-full", dotClass)} />
+      )}
+      {props.children}
+    </span>
+  );
+}
+
+export function agentCardStatusModel(input: {
+  connectionKind: RatelConnectionKind;
+  linked: boolean;
+  missingToolCount: number;
+  posture: AgentPosture;
+  unmanagedSkillCount: number;
+}): {
+  connectionLabel: string;
+  healthLabel: string;
+  tone: "muted" | "success" | "warning";
+} {
+  const connectionLabel =
+    input.posture === "unavailable"
+      ? "Unavailable"
+      : input.connectionKind === "duplicate"
+        ? "Duplicate connection"
+        : input.connectionKind === "plugin"
+          ? "Plugin connected"
+          : input.linked
+            ? "Connected"
+            : "Not connected";
+  const attentionParts = [
+    input.missingToolCount > 0
+      ? `${input.missingToolCount} tool${input.missingToolCount === 1 ? "" : "s"}`
+      : null,
+    input.unmanagedSkillCount > 0
+      ? `${input.unmanagedSkillCount} skill${input.unmanagedSkillCount === 1 ? "" : "s"}`
+      : null,
+  ].filter((part): part is string => Boolean(part));
+
+  if (attentionParts.length > 0) {
+    const needs =
+      input.missingToolCount + input.unmanagedSkillCount === 1 ? "needs setup" : "need setup";
+    return {
+      connectionLabel,
+      healthLabel: `${attentionParts.join(" · ")} ${needs}`,
+      tone: "warning",
+    };
+  }
+  if (input.posture === "unavailable" || !input.linked) {
+    return { connectionLabel, healthLabel: "Setup needed", tone: "muted" };
+  }
+  return { connectionLabel, healthLabel: "Ready", tone: "success" };
 }
 
 function AgentOperationPanel(props: {
@@ -625,15 +793,22 @@ function AgentOperationPanel(props: {
   onScanHosts: () => Promise<void>;
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+  traceStatus?: AgentTracesResponse;
+  onTraceStatusChanged: () => Promise<void>;
 }) {
   const canImport =
     missingRatelEntryNames(props.host).length > 0 || props.availableSkills.length > 0;
   const canLink = props.host.posture !== "unavailable" && !props.host.connection.linked;
   const canRepairConnection =
     props.host.connection.kind === "duplicate" || props.host.connection.kind === "explicit";
-  const canManageStatusline = props.hostKind === "claude-code" && Boolean(props.host.statusline);
   return (
-    <section className="-mx-4 grid gap-5 border-border border-y bg-muted/10 px-4 py-5 sm:-mx-6 sm:px-6">
+    <section className="grid gap-7">
+      <AgentTraceExporterSection
+        hostKind={props.hostKind}
+        onStatusChanged={props.onTraceStatusChanged}
+        request={props.request}
+        status={props.traceStatus}
+      />
       {props.hostKind === "claude-code" && props.host.statusline ? (
         <ClaudeStatuslineSection
           onScanHosts={props.onScanHosts}
@@ -682,16 +857,463 @@ function AgentOperationPanel(props: {
           />
         </SetupActionSection>
       ) : null}
-      {!canImport && !canLink && !canRepairConnection && !canManageStatusline ? (
-        <div>
-          <h3 className="text-lg font-semibold tracking-tight">Nothing to do</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            This agent is linked, all native entries are already in Ratel, and every skill is
-            managed through Ratel.
-          </p>
-        </div>
-      ) : null}
     </section>
+  );
+}
+
+const TRACE_STATE_COPY: Record<
+  AgentTraceState,
+  { label: string; variant: "secondary" | "outline" | "warning" | "destructive" }
+> = {
+  disabled: { label: "Disabled", variant: "outline" },
+  configured: { label: "Configured", variant: "secondary" },
+  stale: { label: "Needs repair", variant: "warning" },
+  conflict: { label: "Conflict", variant: "warning" },
+  invalid: { label: "Invalid config", variant: "destructive" },
+};
+
+export function agentTraceCardModel(state: AgentTraceState): {
+  action: "enable" | "repair" | "disable" | "confirm-overwrite" | null;
+  irreversibleConfirmation: boolean;
+} {
+  if (state === "disabled") return { action: "enable", irreversibleConfirmation: false };
+  if (state === "stale") return { action: "repair", irreversibleConfirmation: false };
+  if (state === "configured") return { action: "disable", irreversibleConfirmation: false };
+  if (state === "conflict") {
+    return { action: "confirm-overwrite", irreversibleConfirmation: true };
+  }
+  return { action: null, irreversibleConfirmation: false };
+}
+
+export function agentTraceInstallCopy(state: AgentTraceState): {
+  actionLabel: string | null;
+  description: string;
+  title: string;
+} {
+  const actionLabel =
+    state === "disabled"
+      ? "Enable"
+      : state === "configured"
+        ? "Disable"
+        : state === "stale"
+          ? "Repair"
+          : state === "conflict"
+            ? "Review"
+            : null;
+  return {
+    actionLabel,
+    description: "Send native telemetry to Ratel's local relay.",
+    title: "Native telemetry",
+  };
+}
+
+export interface AgentTraceLevelChoice {
+  value: AgentTraceLevel;
+  label: string;
+  description: string;
+  contentBearing: boolean;
+}
+
+export function agentTraceLevelChoices(hostKind: AgentHostKind): AgentTraceLevelChoice[] {
+  const choices: AgentTraceLevelChoice[] = [
+    {
+      value: "off",
+      label: "Off",
+      description: "Do not route this agent's native traces or logs through Ratel.",
+      contentBearing: false,
+    },
+    {
+      value: "redacted",
+      label: "Redacted",
+      description:
+        hostKind === "claude-code"
+          ? "Route trace metadata and structured logs with prompts, responses, tool details, and tool content disabled."
+          : "Route Codex trace spans only; structured logs and prompt content stay off.",
+      contentBearing: false,
+    },
+  ];
+  if (hostKind === "claude-code") {
+    choices.push(
+      {
+        value: "tool-details",
+        label: "Tool details",
+        description:
+          "Include tool execution details while prompts, assistant responses, and tool content stay disabled.",
+        contentBearing: true,
+      },
+      {
+        value: "full-content",
+        label: "Full content",
+        description: "Include prompts, assistant responses, tool details, and tool content.",
+        contentBearing: true,
+      },
+    );
+  } else {
+    choices.push(
+      {
+        value: "tool-activity",
+        label: "Tool activity",
+        description:
+          "Add structured Codex tool logs while user prompt logging stays off. Tool results include an output snippet.",
+        contentBearing: true,
+      },
+      {
+        value: "prompt-content",
+        label: "Prompt content",
+        description:
+          "Also include Codex user prompts. Tool-result output snippets remain included; assistant response bodies are not promised.",
+        contentBearing: true,
+      },
+    );
+  }
+  return choices;
+}
+
+export function agentTraceSelectionModel(
+  state: AgentTraceState,
+  currentLevel: AgentTraceObservedLevel,
+  selectedLevel: AgentTraceLevel,
+  signals?: AgentTraceHostStatus["signals"],
+  hostKind?: AgentHostKind,
+): {
+  actionLabel: string;
+  changed: boolean;
+  requiresOverwriteConfirmation: boolean;
+  requiresPrivacyConfirmation: boolean;
+} {
+  const ownsRatelSignal =
+    signals?.traces === "configured" ||
+    signals?.traces === "stale" ||
+    signals?.logs === "configured" ||
+    signals?.logs === "stale";
+  const anySignalConflict = signals?.traces === "conflict" || signals?.logs === "conflict";
+  const targetConflict = signals
+    ? selectedLevel === "off"
+      ? Boolean(anySignalConflict && !ownsRatelSignal)
+      : hostKind === "codex" && selectedLevel === "redacted"
+        ? signals.traces === "conflict"
+        : Boolean(anySignalConflict)
+    : state === "conflict";
+  const conflictOff = targetConflict && selectedLevel === "off";
+  const changed =
+    !conflictOff && (state === "stale" || targetConflict || currentLevel !== selectedLevel);
+  return {
+    actionLabel: conflictOff
+      ? "Keep existing"
+      : selectedLevel === "off"
+        ? "Turn off"
+        : targetConflict
+          ? "Review change"
+          : state === "stale" && currentLevel === selectedLevel
+            ? "Repair"
+            : "Apply",
+    changed,
+    requiresOverwriteConfirmation: targetConflict && selectedLevel !== "off",
+    requiresPrivacyConfirmation:
+      selectedLevel === "tool-details" ||
+      selectedLevel === "full-content" ||
+      selectedLevel === "tool-activity" ||
+      selectedLevel === "prompt-content",
+  };
+}
+
+function defaultTraceLevel(host: AgentTraceHostStatus | undefined): AgentTraceLevel {
+  if (!host) return "off";
+  if (host.supportedLevels?.includes(host.level as AgentTraceLevel)) {
+    return host.level as AgentTraceLevel;
+  }
+  return host.state === "disabled" ? "off" : "redacted";
+}
+
+function traceLevelPrivacyWarning(level: AgentTraceLevel): string | null {
+  if (level === "tool-details") {
+    return "Tool details may expose sensitive command, file, and integration metadata.";
+  }
+  if (level === "full-content") {
+    return "Full content may expose source code, credentials, personal data, prompts, responses, and tool input or output.";
+  }
+  if (level === "tool-activity") {
+    return "Codex tool activity includes codex.tool_result output snippets, which may expose sensitive content. User prompt logging remains off.";
+  }
+  if (level === "prompt-content") {
+    return "Codex prompt content includes user prompts plus tool-result output snippets. Codex does not document assistant-response body capture.";
+  }
+  return null;
+}
+
+function AgentTraceExporterSection(props: {
+  hostKind: AgentHostKind;
+  onStatusChanged: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+  status?: AgentTracesResponse;
+}) {
+  const host = props.status?.hosts.find(({ hostKind }) => hostKind === props.hostKind);
+  const observedDefaultLevel = defaultTraceLevel(host);
+  const observedHostKind = host?.hostKind;
+  const [selectedLevel, setSelectedLevel] = useState<AgentTraceLevel>(() => observedDefaultLevel);
+  const [pendingConfirmation, setPendingConfirmation] = useState<AgentTraceLevel | null>(null);
+  const [restartNotice, setRestartNotice] = useState(false);
+  const { isPending, runAction } = useAgentAction();
+  useEffect(() => {
+    if (!observedHostKind) return;
+    setSelectedLevel(observedDefaultLevel);
+    setPendingConfirmation(null);
+  }, [observedDefaultLevel, observedHostKind]);
+
+  if (!agentTelemetryVisible(props.status)) return null;
+
+  if (!host || !props.status) {
+    return (
+      <SetupActionSection
+        description="Reading the user-level native trace exporter configuration."
+        title="Native trace export"
+      >
+        <Badge variant="outline">Checking</Badge>
+      </SetupActionSection>
+    );
+  }
+
+  const stateCopy = TRACE_STATE_COPY[host.state];
+  const choices = agentTraceLevelChoices(props.hostKind).filter(({ value }) =>
+    (
+      host.supportedLevels ?? agentTraceLevelChoices(props.hostKind).map((item) => item.value)
+    ).includes(value),
+  );
+  const selectedChoice = choices.find(({ value }) => value === selectedLevel) ?? choices[0];
+  const selection = agentTraceSelectionModel(
+    host.state,
+    host.level,
+    selectedLevel,
+    host.signals,
+    host.hostKind,
+  );
+  const privacyWarning = traceLevelPrivacyWarning(selectedLevel);
+  const apply = async (level: AgentTraceLevel, overwrite = false) => {
+    const action = level === "off" ? "disable" : "enable";
+    const label = action === "enable" ? "Native trace detail updated" : "Native traces turned off";
+    const ok = await runAction(label, async () => {
+      const prepared = await props.request<PreparedAgentTraceResponse>(
+        "/api/agent-traces/prepare",
+        {
+          method: "POST",
+          body: { action, level, hostKinds: [props.hostKind], overwrite },
+        },
+      );
+      return props.request(`/api/changes/${encodeURIComponent(prepared.changeId)}/commit`, {
+        method: "POST",
+      });
+    });
+    if (ok) {
+      setPendingConfirmation(null);
+      setRestartNotice(true);
+      await props.onStatusChanged();
+    }
+  };
+  const requestApply = () => {
+    if (selection.requiresOverwriteConfirmation || selection.requiresPrivacyConfirmation) {
+      setPendingConfirmation(selectedLevel);
+      return;
+    }
+    void apply(selectedLevel);
+  };
+
+  return (
+    <SetupActionSection description="Native diagnostics for this agent." title="Telemetry export">
+      <div className="grid gap-3">
+        <InstallActionRow
+          action={
+            host.state === "invalid" ? null : (
+              <Button
+                disabled={isPending || !selection.changed || pendingConfirmation !== null}
+                onClick={requestApply}
+                variant={selectedLevel === "off" ? "outline" : "default"}
+              >
+                {selection.actionLabel}
+                {isPending ? <Button.LoadingIndicator label="Updating trace detail" /> : null}
+              </Button>
+            )
+          }
+          description={selectedChoice.description}
+          meta={<Badge variant={stateCopy.variant}>{stateCopy.label}</Badge>}
+          title="Native telemetry"
+        />
+
+        {host.state !== "invalid" ? (
+          <div className="grid max-w-xl gap-1.5">
+            <Label htmlFor={`native-trace-level-${props.hostKind}`}>Telemetry detail</Label>
+            <Select
+              disabled={isPending || pendingConfirmation !== null}
+              onValueChange={(value) => setSelectedLevel(value as AgentTraceLevel)}
+              value={selectedLevel}
+            >
+              <SelectTrigger className="w-full" id={`native-trace-level-${props.hostKind}`}>
+                <SelectValue>{selectedChoice.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((choice) => (
+                  <SelectItem key={choice.value} value={choice.value}>
+                    {choice.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{selectedChoice.description}</p>
+          </div>
+        ) : null}
+
+        {privacyWarning ? (
+          <Alert variant="destructive">
+            <AlertTitle>Sensitive telemetry content</AlertTitle>
+            <AlertDescription>{privacyWarning}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {!props.status.cloudConfigured ? (
+          <RatelCloudTraceSetup onConfigured={props.onStatusChanged} request={props.request} />
+        ) : null}
+
+        {host.restartRequired || restartNotice ? (
+          <p className="text-sm text-muted-foreground">
+            Start a new {host.displayName} session for persisted exporter changes to take effect.
+          </p>
+        ) : null}
+        {host.conflictingFields.length > 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Conflicting fields: {host.conflictingFields.join(", ")}
+          </p>
+        ) : null}
+        {host.warnings.map((warning) => (
+          <p className="text-sm text-muted-foreground" key={warning}>
+            Warning: {warning}
+          </p>
+        ))}
+
+        {pendingConfirmation ? (
+          <Alert variant="destructive">
+            <AlertTitle>
+              {selection.requiresOverwriteConfirmation
+                ? "Replace exporter and apply this detail level?"
+                : "Confirm sensitive telemetry content"}
+            </AlertTitle>
+            <AlertDescription>
+              {selection.requiresPrivacyConfirmation
+                ? traceLevelPrivacyWarning(pendingConfirmation)
+                : null}
+              {selection.requiresOverwriteConfirmation
+                ? " Ratel does not retain a backup and cannot restore the previous exporter."
+                : null}
+            </AlertDescription>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button
+                disabled={isPending}
+                onClick={() => setPendingConfirmation(null)}
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={isPending}
+                onClick={() =>
+                  void apply(pendingConfirmation, selection.requiresOverwriteConfirmation)
+                }
+                variant="destructive"
+              >
+                Confirm and apply
+                {isPending ? <Button.LoadingIndicator label="Applying trace detail" /> : null}
+              </Button>
+            </div>
+          </Alert>
+        ) : null}
+      </div>
+    </SetupActionSection>
+  );
+}
+
+export function agentTelemetryVisible(status: { featureEnabled?: boolean } | undefined): boolean {
+  return status?.featureEnabled === true;
+}
+
+function RatelCloudTraceSetup(props: {
+  onConfigured: () => Promise<void>;
+  request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const { isPending, runAction } = useAgentAction();
+
+  const save = async () => {
+    const ok = await runAction("Ratel Cloud tracing configured", async () => {
+      const cloud = await props.request<CloudTraceSettingsStatus>("/api/cloud-traces");
+      return props.request<CloudTraceSettingsStatus>("/api/cloud-traces", {
+        method: "PATCH",
+        body: cloudTraceSetupPatch(cloud.endpoint, apiKey),
+      });
+    });
+    if (ok) {
+      setApiKey("");
+      setEditing(false);
+      await props.onConfigured();
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border bg-background px-4 py-3">
+      {editing ? (
+        <form
+          className="grid max-w-xl gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <div className="grid gap-1.5">
+            <Label htmlFor="ratel-cloud-trace-api-key">Ratel Cloud API key</Label>
+            <Input
+              autoComplete="new-password"
+              autoFocus
+              disabled={isPending}
+              id="ratel-cloud-trace-api-key"
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder="Paste API key"
+              type="password"
+              value={apiKey}
+            />
+          </div>
+          <p className="text-muted-foreground text-xs">
+            The key is stored by the local daemon and is never returned to the browser.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              disabled={isPending}
+              onClick={() => {
+                setApiKey("");
+                setEditing(false);
+              }}
+              type="button"
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button disabled={isPending || !apiKey.trim()} type="submit">
+              Save API key
+              {isPending ? <Button.LoadingIndicator label="Saving Ratel Cloud API key" /> : null}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-medium text-sm">Cloud key required</p>
+            <p className="text-xs text-muted-foreground">
+              Add a key before exporting to Ratel Cloud.
+            </p>
+          </div>
+          <Button onClick={() => setEditing(true)} type="button" variant="outline">
+            Add API key
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -700,7 +1322,7 @@ function AgentConnectionRepairSection(props: {
   onScanHosts: () => Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
-  const { runAction } = useRatelApp();
+  const { isPending, runAction } = useAgentAction();
   const duplicate = props.host.connection.kind === "duplicate";
   const actionLabel = duplicate ? "Fix duplicate installation" : "Switch to plugin";
   const commit = async () => {
@@ -733,8 +1355,13 @@ function AgentConnectionRepairSection(props: {
               : "Ratel installs the plugin first and removes the old MCP entry only after installation succeeds."}
           </p>
         </div>
-        <Button className="min-h-12 px-6 text-base md:min-w-44" onClick={() => void commit()}>
+        <Button
+          className="min-h-12 px-6 text-base md:min-w-44"
+          disabled={isPending}
+          onClick={() => void commit()}
+        >
           {duplicate ? <Wrench /> : <Sparkles />}
+          {isPending && <Button.LoadingIndicator label={actionLabel} />}
           {actionLabel}
         </Button>
       </div>
@@ -747,7 +1374,7 @@ function ClaudeStatuslineSection(props: {
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
   state: ClaudeStatuslineState;
 }) {
-  const { runAction } = useRatelApp();
+  const { isPending, runAction } = useAgentAction();
   const installed = props.state.status === "installed";
   const otherConfigured = props.state.status === "other";
   const actionLabel = installed
@@ -755,12 +1382,6 @@ function ClaudeStatuslineSection(props: {
     : otherConfigured
       ? "Replace statusline"
       : "Install statusline";
-  const description = installed
-    ? "Remove the Ratel-owned statusLine command from Claude Code."
-    : otherConfigured
-      ? "Replace the existing Claude Code statusLine command with Ratel's statusline."
-      : "Show Claude context usage, Ratel enablement, and Ratel tool telemetry in the statusline.";
-
   const commit = async () => {
     const ok = await runAction(actionLabel, () =>
       installed
@@ -774,31 +1395,54 @@ function ClaudeStatuslineSection(props: {
   };
 
   return (
-    <SetupActionSection description={description} title={actionLabel}>
-      <div className="grid gap-4 border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-        <div>
-          <p className="font-medium text-sm">Context and Ratel telemetry at a glance</p>
-          <p className="mt-1 max-w-xl text-muted-foreground text-xs">
-            Shows model, context-window usage, session duration, git branch, whether Ratel is
-            enabled, and the estimated tool tokens/tool count Ratel keeps out of Claude's prompt.
-          </p>
-          {!props.state.ratelEnabled ? (
-            <p className="mt-2 max-w-xl text-amber-700 text-xs dark:text-amber-400">
-              Ratel is not enabled in Claude Code yet, so the statusline will report that until the
-              gateway is linked or the plugin is enabled.
-            </p>
-          ) : null}
-        </div>
-        <Button
-          className="min-h-12 px-6 text-base md:min-w-44"
-          onClick={() => void commit()}
-          variant={installed ? "outline" : "default"}
-        >
-          {installed ? <X /> : <FileText />}
-          {actionLabel}
-        </Button>
-      </div>
+    <SetupActionSection description="Show Ratel status in Claude Code." title="Statusline">
+      <InstallActionRow
+        action={
+          <Button
+            disabled={isPending}
+            onClick={() => void commit()}
+            variant={installed ? "outline" : "default"}
+          >
+            {installed ? <X /> : <FileText />}
+            {isPending ? <Button.LoadingIndicator label={actionLabel} /> : null}
+            {actionLabel}
+          </Button>
+        }
+        description={
+          installed
+            ? "Installed and managed by Ratel."
+            : otherConfigured
+              ? "Replace the current custom statusline."
+              : "See context use and Ratel activity at a glance."
+        }
+        meta={
+          !props.state.ratelEnabled ? (
+            <span className="text-amber-700 text-xs dark:text-amber-300">Connect Ratel first</span>
+          ) : null
+        }
+        title="Claude Code statusline"
+      />
     </SetupActionSection>
+  );
+}
+
+function InstallActionRow(props: {
+  action: React.ReactNode;
+  description: string;
+  meta?: React.ReactNode;
+  title: string;
+}) {
+  return (
+    <div className="grid gap-4 rounded-xl border border-border bg-background p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <p className="font-medium text-sm">{props.title}</p>
+          {props.meta}
+        </div>
+        <p className="mt-1 text-muted-foreground text-xs">{props.description}</p>
+      </div>
+      {props.action ? <div className="flex md:justify-end">{props.action}</div> : null}
+    </div>
   );
 }
 
@@ -827,28 +1471,47 @@ function PreviewFlow(props: {
   onSkillsImported: () => void | Promise<void>;
   request: <T>(path: string, init?: JsonRequestInit) => Promise<T>;
 }) {
-  const { runAction } = useRatelApp();
+  const { context } = useRatelApp();
+  const { runAction } = useAgentAction();
   const [preview, setPreview] = useState<AgentPlanPreview | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const endpoint =
-    props.flow === "import" ? "/api/agent-preview/import" : "/api/agent-preview/link";
+    props.flow === "import" ? "/api/agents/import/prepare" : "/api/agents/link/prepare";
   const previewPath = `${endpoint}?r=${refreshNonce}`;
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
-        const body = await props.request<AgentPlanPreview>(previewPath, {
+        const body = await props.request<PreparedAgentChangeResponse>(previewPath, {
           method: "POST",
           body: {
             hostKind: props.hostKind,
           },
         });
-        if (cancelled) return;
-        setPreview(body);
+        if (cancelled) {
+          await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+            method: "DELETE",
+          });
+          return;
+        }
+        setPreview((current) => {
+          if (current) {
+            void props.request(`/api/changes/${encodeURIComponent(current.changeId)}`, {
+              method: "DELETE",
+            });
+          }
+          return agentPreviewFromPrepared(body);
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not build the setup preview");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -875,21 +1538,25 @@ function PreviewFlow(props: {
     [props.host.connection.linked, props.host.statusline?.status, props.hostKind],
   );
 
-  const applyRatel = async (
+  const setPreparedDialogOpen = (open: boolean) => {
+    setDialogOpen(open);
+    if (!open && preview) {
+      void props.request(`/api/changes/${encodeURIComponent(preview.changeId)}`, {
+        method: "DELETE",
+      });
+      setPreview(null);
+      setRefreshNonce((value) => value + 1);
+    }
+  };
+
+  const applyImport = async (
     importPreview: AgentPlanPreview,
-    conflictStrategy: ConflictStrategy,
-    replaceConflicts: string[],
+    _conflictStrategy: ConflictStrategy,
+    _replaceConflicts: string[],
   ) => {
-    const applied = await runAction("Ratel config changes applied", () =>
-      props.request("/api/agent-apply/import/ratel", {
+    const applied = await runAction("Ratel and agent config changes applied", () =>
+      props.request(`/api/changes/${encodeURIComponent(importPreview.changeId)}/commit`, {
         method: "POST",
-        body: {
-          hostKind: props.hostKind,
-          selection: importPreview.selected,
-          conflictStrategy,
-          replaceConflicts,
-          planHash: importPreview.stageHashes.ratel,
-        },
       }),
     );
     if (!applied) return false;
@@ -898,27 +1565,15 @@ function PreviewFlow(props: {
     return true;
   };
 
-  const applyAgent = async (
+  const commitAgentChange = async (
     activePreview: AgentPlanPreview,
-    options?: {
-      conflictStrategy?: ConflictStrategy;
-      replaceConflicts?: string[];
-    },
+    _options?: { conflictStrategy?: ConflictStrategy; replaceConflicts?: string[] },
   ) => {
-    const path =
-      props.flow === "import" ? "/api/agent-apply/import/agent" : "/api/agent-apply/link";
     const applied = await runAction(
       props.flow === "import" ? "Source agent cleanup applied" : "Link complete",
       () =>
-        props.request(path, {
+        props.request(`/api/changes/${encodeURIComponent(activePreview.changeId)}/commit`, {
           method: "POST",
-          body: {
-            hostKind: props.hostKind,
-            selection: props.flow === "import" ? activePreview.selected : undefined,
-            conflictStrategy: props.flow === "import" ? options?.conflictStrategy : undefined,
-            replaceConflicts: props.flow === "import" ? options?.replaceConflicts : undefined,
-            planHash: activePreview.stageHashes.agent,
-          },
         }),
     );
     if (!applied) return false;
@@ -928,21 +1583,22 @@ function PreviewFlow(props: {
   };
 
   const applyLinkFromImport = async () => {
-    const linkPreview = await props.request<AgentPlanPreview>("/api/agent-preview/link", {
+    const prepared = await props.request<PreparedAgentChangeResponse>("/api/agents/link/prepare", {
       method: "POST",
       body: { hostKind: props.hostKind },
     });
+    const linkPreview = agentPreviewFromPrepared(prepared);
     if (linkPreview.plan.agentChanges.length > 0) {
       const linked = await runAction("Link complete", () =>
-        props.request("/api/agent-apply/link", {
+        props.request(`/api/changes/${encodeURIComponent(linkPreview.changeId)}/commit`, {
           method: "POST",
-          body: {
-            hostKind: props.hostKind,
-            planHash: linkPreview.stageHashes.agent,
-          },
         }),
       );
       if (!linked) return false;
+    } else {
+      await props.request(`/api/changes/${encodeURIComponent(linkPreview.changeId)}`, {
+        method: "DELETE",
+      });
     }
     await props.onScanHosts();
     setRefreshNonce((value) => value + 1);
@@ -967,54 +1623,31 @@ function PreviewFlow(props: {
     replaceConflicts: string[],
     selectedSkills: SkillSummary[],
   ) => {
-    if (importPreview.plan.ratelChanges.length > 0) {
-      const ratelApplied = await applyRatel(importPreview, conflictStrategy, replaceConflicts);
-      if (!ratelApplied) return false;
-    }
-    if (importPreview.plan.agentChanges.length > 0) {
-      const agentApplied = await applyAgent(importPreview, {
-        conflictStrategy,
-        replaceConflicts,
+    if (importPreview.plan.ratelChanges.length > 0 || importPreview.plan.agentChanges.length > 0) {
+      const configsApplied = await applyImport(importPreview, conflictStrategy, replaceConflicts);
+      if (!configsApplied) return false;
+    } else {
+      await props.request(`/api/changes/${encodeURIComponent(importPreview.changeId)}`, {
+        method: "DELETE",
       });
-      if (!agentApplied) return false;
     }
     if (selectedSkills.length > 0) {
-      const skillsApplied = await activateSelectedSkills(selectedSkills);
+      const skillsApplied = await importSelectedSkills(selectedSkills);
       if (!skillsApplied) return false;
     }
     return true;
   };
 
-  const activateSelectedSkills = async (selectedSkills: SkillSummary[]) => {
-    type ActivateSkillsResponse = {
-      managed: Array<{ id: string; mode: string }>;
-      skipped?: Array<{ id: string; reason: string }>;
-    };
-    const idsBySource = new Map<SkillSummary["source"], string[]>();
-    for (const skill of selectedSkills) {
-      if (skill.source !== "claude" && skill.source !== "codex") continue;
-      const ids = idsBySource.get(skill.source) ?? [];
-      ids.push(skill.id);
-      idsBySource.set(skill.source, ids);
-    }
-    const managed: ActivateSkillsResponse["managed"] = [];
-    const skipped: NonNullable<ActivateSkillsResponse["skipped"]> = [];
-    const applied = await runAction("Skill management complete", async () => {
-      for (const [source, ids] of idsBySource) {
-        const result = await props.request<ActivateSkillsResponse>("/api/skills/activate", {
-          method: "POST",
-          body: { ids, source },
-        });
-        managed.push(...result.managed);
-        skipped.push(...(result.skipped ?? []));
-      }
-      return {
-        log: [
-          `Now managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
-          ...(skipped.length > 0 ? [skippedSkillsMessage(skipped)] : []),
-        ],
-      };
-    });
+  const importSelectedSkills = async (selectedSkills: SkillSummary[]) => {
+    const applied = await runAction(
+      `Now managing ${selectedSkills.length} skill${selectedSkills.length === 1 ? "" : "s"}`,
+      async () => {
+        const target = defaultSkillImportTarget(context);
+        if (!target) throw new Error("Select Global or a project before importing skills");
+        const selections = buildSkillImportSelections(selectedSkills, context, target);
+        await applySkillImportSelections(props.request, selections);
+      },
+    );
     if (!applied) return false;
     await props.onSkillsImported();
     setRefreshNonce((value) => value + 1);
@@ -1024,7 +1657,7 @@ function PreviewFlow(props: {
   const commitLink = async () => {
     if (!preview) return false;
     if (agentChanges.length > 0) {
-      const linked = await applyAgent(preview);
+      const linked = await commitAgentChange(preview);
       if (!linked) return false;
     }
     setDialogOpen(false);
@@ -1039,6 +1672,23 @@ function PreviewFlow(props: {
         </div>
       ) : null}
 
+      {error && !preview ? (
+        <Alert variant="destructive">
+          <AlertTitle>Could not build {props.flow} preview</AlertTitle>
+          <AlertDescription className="grid justify-items-start gap-3">
+            <span>{error}</span>
+            <Button
+              onClick={() => setRefreshNonce((value) => value + 1)}
+              size="sm"
+              variant="outline"
+            >
+              <RefreshCw />
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {preview ? (
         <>
           {friendlyNoOp ? (
@@ -1047,7 +1697,7 @@ function PreviewFlow(props: {
             <SetupRecap
               availableSkills={props.availableSkills}
               flow={props.flow}
-              onOpen={() => setDialogOpen(true)}
+              onOpen={() => setPreparedDialogOpen(true)}
               preview={preview}
             />
           )}
@@ -1062,7 +1712,7 @@ function PreviewFlow(props: {
               onCommit={commitImport}
               onInstallStatusline={installStatuslineFromImport}
               onLink={applyLinkFromImport}
-              onOpenChange={setDialogOpen}
+              onOpenChange={setPreparedDialogOpen}
               open={dialogOpen}
               preview={preview}
               request={props.request}
@@ -1075,7 +1725,7 @@ function PreviewFlow(props: {
           {!friendlyNoOp && props.flow === "link" ? (
             <LinkSceneDialog
               onCommit={commitLink}
-              onOpenChange={setDialogOpen}
+              onOpenChange={setPreparedDialogOpen}
               open={dialogOpen}
               preview={preview}
             />
@@ -1084,93 +1734,6 @@ function PreviewFlow(props: {
       ) : null}
     </div>
   );
-}
-
-function Backups(props: { backups: BackupManifest[] }) {
-  return (
-    <section className="grid gap-3 border-border border-t pt-4">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h3 className="font-medium">Backups</h3>
-          <p className="text-sm text-muted-foreground">
-            Recent changes created by import, link, and other config writes.
-          </p>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {props.backups.length} backup{props.backups.length === 1 ? "" : "s"}
-        </p>
-      </div>
-      {props.backups.length === 0 ? (
-        <div className="py-6 text-sm text-muted-foreground">No backups yet.</div>
-      ) : (
-        <div className="divide-y divide-border border border-border">
-          {props.backups.map((backup, index) => (
-            <BackupRow
-              backup={backup}
-              key={`${backup.createdAt}-${backup.action}`}
-              latest={index === 0}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function BackupRow(props: { backup: BackupManifest; latest: boolean }) {
-  const paths = props.backup.entries.map((entry) => entry.originalPath).join(", ");
-  return (
-    <div
-      className={cn(
-        "grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center",
-        props.latest && "bg-muted/25",
-      )}
-    >
-      <div className="grid min-w-0 gap-1.5">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <p className="font-medium">{restoreActionLabel(props.backup.action)}</p>
-          <span className="text-xs text-muted-foreground">
-            {restoreCreatedLabel(props.backup.createdAt)}
-          </span>
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-          <span className={cn(props.latest && "font-medium text-foreground")}>
-            {props.latest ? "Latest backup" : "Previous backup"}
-          </span>
-          <span aria-hidden="true">/</span>
-          <span>{backupFileSummary(props.backup.entries.length)}</span>
-        </div>
-        <p className="truncate font-mono text-xs text-muted-foreground">{paths}</p>
-      </div>
-    </div>
-  );
-}
-
-const RESTORE_ACTION_LABELS: Record<BackupManifest["action"], string> = {
-  add: "Added tool source",
-  edit: "Edited tool source",
-  import: "Imported agent sources",
-  link: "Linked agent config",
-  remove: "Removed tool source",
-};
-
-function restoreActionLabel(action: BackupManifest["action"]) {
-  return RESTORE_ACTION_LABELS[action] ?? action;
-}
-
-function restoreCreatedLabel(createdAt: string) {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return createdAt;
-  return date.toLocaleString(undefined, {
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-  });
-}
-
-function backupFileSummary(count: number) {
-  return `${count} config file${count === 1 ? "" : "s"} backed up`;
 }
 
 function SetupRecap(props: {
@@ -1218,11 +1781,6 @@ function importAvailabilityLabel(mcpCount: number, skillCount: number) {
   return `${parts.join(" and ")} available.`;
 }
 
-function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>) {
-  const details = skipped.map((skill) => `${skill.id}: ${skill.reason}`).join("; ");
-  return `Could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
-}
-
 type ImportScene =
   | "link"
   | "skills"
@@ -1254,7 +1812,7 @@ function ImportSceneDialog(props: {
     props.workflow.step === "link" ? "link" : "skills",
   );
   const [workflow, setWorkflow] = useState(props.workflow);
-  const [committing, setCommitting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"commit" | "link" | "statusline" | null>(null);
   const [draftPreview, setDraftPreview] = useState<AgentPlanPreview>(props.preview);
   const [draftSelection, setDraftSelection] = useState<string[]>(props.preview.selected);
   const [draftSkillSelection, setDraftSkillSelection] = useState<Set<string>>(new Set());
@@ -1263,8 +1821,11 @@ function ImportSceneDialog(props: {
   const statuslineAction = importStatuslineAction(props.statuslineStatus);
   const wasOpenRef = useRef(false);
   const previewRequestIdRef = useRef(0);
+  const activeChangeIdRef = useRef(draftPreview.changeId);
   const selected = new Set(draftSelection);
-  const selectedSkills = props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill)));
+  const selectedSkills = uniqueSkillImports(
+    props.skills.filter((skill) => draftSkillSelection.has(skillKey(skill))),
+  );
   const conflicts = draftPreview.plan.summary.conflicts;
   const requiresConflictSelection =
     draftSelection.length > 0 && conflicts.length > 0 && conflictStrategy === "replace-selected";
@@ -1303,9 +1864,29 @@ function ImportSceneDialog(props: {
     setReplaceConflicts([]);
   }, [props.open, props.preview, props.workflow]);
 
+  useEffect(() => {
+    activeChangeIdRef.current = draftPreview.changeId;
+  }, [draftPreview.changeId]);
+
+  useEffect(() => {
+    if (props.open) return;
+    void props.request(`/api/changes/${encodeURIComponent(activeChangeIdRef.current)}`, {
+      method: "DELETE",
+    });
+  }, [props.open, props.request]);
+
+  useEffect(
+    () => () => {
+      void props.request(`/api/changes/${encodeURIComponent(activeChangeIdRef.current)}`, {
+        method: "DELETE",
+      });
+    },
+    [props.request],
+  );
+
   const loadDraftPreview = useCallback(async () => {
     const requestId = ++previewRequestIdRef.current;
-    const body = await props.request<AgentPlanPreview>("/api/agent-preview/import", {
+    const body = await props.request<PreparedAgentChangeResponse>("/api/agents/import/prepare", {
       method: "POST",
       body: {
         hostKind: props.hostKind,
@@ -1314,7 +1895,13 @@ function ImportSceneDialog(props: {
         replaceConflicts,
       },
     });
-    return requestId === previewRequestIdRef.current ? body : null;
+    if (requestId !== previewRequestIdRef.current) {
+      await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+        method: "DELETE",
+      });
+      return null;
+    }
+    return agentPreviewFromPrepared(body);
   }, [conflictStrategy, draftSelection, props.hostKind, props.request, replaceConflicts]);
 
   useEffect(() => {
@@ -1322,16 +1909,29 @@ function ImportSceneDialog(props: {
     let cancelled = false;
     const refreshDraftPreview = async () => {
       const body = await loadDraftPreview();
-      if (!cancelled && body) setDraftPreview(body);
+      if (!cancelled && body) {
+        setDraftPreview((current) => {
+          if (current.changeId !== body.changeId) {
+            void props.request(`/api/changes/${encodeURIComponent(current.changeId)}`, {
+              method: "DELETE",
+            });
+          }
+          return body;
+        });
+      } else if (body) {
+        await props.request(`/api/changes/${encodeURIComponent(body.changeId)}`, {
+          method: "DELETE",
+        });
+      }
     };
     void refreshDraftPreview();
     return () => {
       cancelled = true;
     };
-  }, [loadDraftPreview, props.open]);
+  }, [loadDraftPreview, props.open, props.request]);
 
   const commit = async () => {
-    setCommitting(true);
+    setPendingAction("commit");
     try {
       const committed = await props.onCommit(
         draftPreview,
@@ -1345,12 +1945,12 @@ function ImportSceneDialog(props: {
       if (next.step === "statusline") setScene("statusline");
       else props.onOpenChange(false);
     } finally {
-      setCommitting(false);
+      setPendingAction(null);
     }
   };
 
   const linkAndContinue = async () => {
-    setCommitting(true);
+    setPendingAction("link");
     try {
       const refreshedPreview = await linkThenRefreshImportPreview(props.onLink, async () => {
         const preview = await loadDraftPreview();
@@ -1362,7 +1962,7 @@ function ImportSceneDialog(props: {
       setWorkflow(advanceAgentImportWorkflow(workflow, { type: "link-completed" }));
       setScene("skills");
     } finally {
-      setCommitting(false);
+      setPendingAction(null);
     }
   };
 
@@ -1373,7 +1973,7 @@ function ImportSceneDialog(props: {
   };
 
   const installStatusline = async () => {
-    setCommitting(true);
+    setPendingAction("statusline");
     try {
       if (
         !(await props.onInstallStatusline(statuslineAction.force)) ||
@@ -1383,7 +1983,7 @@ function ImportSceneDialog(props: {
       setWorkflow(advanceAgentImportWorkflow(workflow, { type: "statusline-installed" }));
       props.onOpenChange(false);
     } finally {
-      setCommitting(false);
+      setPendingAction(null);
     }
   };
 
@@ -1432,11 +2032,21 @@ function ImportSceneDialog(props: {
               <Button onClick={() => props.onOpenChange(false)} type="button" variant="outline">
                 Cancel import
               </Button>
-              <Button disabled={committing} onClick={skipLink} type="button" variant="outline">
+              <Button
+                disabled={pendingAction !== null}
+                onClick={skipLink}
+                type="button"
+                variant="outline"
+              >
                 Continue without linking
               </Button>
-              <Button disabled={committing} onClick={() => void linkAndContinue()} type="button">
+              <Button
+                disabled={pendingAction !== null}
+                onClick={() => void linkAndContinue()}
+                type="button"
+              >
                 <LinkIcon />
+                {pendingAction === "link" && <Button.LoadingIndicator label="Linking Ratel" />}
                 Link Ratel and continue
               </Button>
             </>
@@ -1628,11 +2238,14 @@ function ImportSceneDialog(props: {
                 Back
               </Button>
               <Button
-                disabled={committing || !hasSelectedImport}
+                disabled={pendingAction !== null || !hasSelectedImport}
                 onClick={() => void commit()}
                 type="button"
               >
                 <FileText />
+                {pendingAction === "commit" && (
+                  <Button.LoadingIndicator label="Committing import" />
+                )}
                 Commit import
               </Button>
             </>
@@ -1659,8 +2272,15 @@ function ImportSceneDialog(props: {
               <Button onClick={skipStatusline} type="button" variant="outline">
                 Skip
               </Button>
-              <Button disabled={committing} onClick={() => void installStatusline()} type="button">
+              <Button
+                disabled={pendingAction !== null}
+                onClick={() => void installStatusline()}
+                type="button"
+              >
                 <FileText />
+                {pendingAction === "statusline" && (
+                  <Button.LoadingIndicator label={statuslineAction.actionLabel} />
+                )}
                 {statuslineAction.actionLabel}
               </Button>
             </>
@@ -1702,6 +2322,7 @@ function LinkSceneDialog(props: {
             </Button>
             <Button disabled={committing} onClick={() => void commit()} type="button">
               <LinkIcon />
+              {committing && <Button.LoadingIndicator label="Committing link" />}
               Commit link
             </Button>
           </>
@@ -1998,7 +2619,7 @@ function LinkedCoveredPreview(props: { flow: SetupFlow; host: DetectedAgentHostS
   );
 }
 
-function ChangeList(props: { changes: FileChange[]; defaultOpen?: boolean; title: string }) {
+function ChangeList(props: { changes: PlannedFileWrite[]; defaultOpen?: boolean; title: string }) {
   if (props.changes.length === 0) return null;
   const stats = props.changes.reduce(
     (total, change) => {
@@ -2048,7 +2669,7 @@ type DiffRow =
       oldLine: number | null;
     };
 
-function UnifiedDiff(props: { change: FileChange }) {
+function UnifiedDiff(props: { change: PlannedFileWrite }) {
   const before = props.change.before ?? "";
   const patch = structuredPatch(
     props.change.path,
@@ -2144,7 +2765,7 @@ function DiffRowsTable(props: { conflictSelection?: "agent" | "ratel"; rows: Dif
   );
 }
 
-function DiffStatBadge(props: { change: FileChange }) {
+function DiffStatBadge(props: { change: PlannedFileWrite }) {
   const stats = diffStats(props.change);
   return (
     <span className="shrink-0 font-mono text-xs">
@@ -2186,7 +2807,7 @@ function diffRowsFromHunk(hunk: StructuredPatchHunk): DiffRow[] {
   return rows;
 }
 
-function diffStats(change: FileChange) {
+function diffStats(change: PlannedFileWrite) {
   const patch = structuredPatch(
     change.path,
     change.path,
@@ -2251,14 +2872,14 @@ function LinkStatusBadge(props: { host: DetectedAgentHostSummary }) {
   return <StatusBadge tone="muted">Not linked</StatusBadge>;
 }
 
-function ClaudeStatuslineBadge(props: { state: ClaudeStatuslineState }) {
+function ClaudeStatuslineStatus(props: { state: ClaudeStatuslineState }) {
   if (props.state.status === "installed") {
-    return <StatusBadge tone="success">Installed</StatusBadge>;
+    return <AgentStatusText tone="success">Installed</AgentStatusText>;
   }
   if (props.state.status === "other") {
-    return <StatusBadge tone="warning">Other configured</StatusBadge>;
+    return <AgentStatusText tone="warning">Other configured</AgentStatusText>;
   }
-  return <StatusBadge tone="muted">Not installed</StatusBadge>;
+  return <AgentStatusText tone="muted">Not installed</AgentStatusText>;
 }
 
 function StatusBadge(props: { children: React.ReactNode; tone: "muted" | "success" | "warning" }) {

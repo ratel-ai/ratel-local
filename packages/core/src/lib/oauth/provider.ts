@@ -50,8 +50,9 @@ export class RatelOAuthProvider implements OAuthClientProvider {
   }
 
   get clientMetadata(): OAuthClientMetadata {
-    const metadata: OAuthClientMetadata = {
+    const metadata: OAuthClientMetadata & { application_type: "native" } = {
       client_name: this.opts.clientName ?? DEFAULT_CLIENT_NAME,
+      application_type: "native",
       redirect_uris: this._redirectUrl ? [String(this._redirectUrl)] : [],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
@@ -70,8 +71,6 @@ export class RatelOAuthProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
-    const stored = (await this.store.load()).client_information;
-    if (stored) return stored;
     if (this.opts.staticClientId) {
       const info: OAuthClientInformationMixed = { client_id: this.opts.staticClientId };
       if (this.opts.staticClientSecret) {
@@ -79,7 +78,7 @@ export class RatelOAuthProvider implements OAuthClientProvider {
       }
       return info;
     }
-    return undefined;
+    return (await this.store.load()).client_information;
   }
 
   async saveClientInformation(info: OAuthClientInformationMixed): Promise<void> {

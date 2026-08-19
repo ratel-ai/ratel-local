@@ -36,6 +36,7 @@ describe("RatelOAuthProvider", () => {
     expect(provider.clientMetadata.token_endpoint_auth_method).toBe("none");
     expect(provider.clientMetadata.grant_types).toEqual(["authorization_code", "refresh_token"]);
     expect(provider.clientMetadata.response_types).toEqual(["code"]);
+    expect(provider.clientMetadata).toMatchObject({ application_type: "native" });
   });
 
   it("redirectUrl reflects the constructor argument", () => {
@@ -72,7 +73,7 @@ describe("RatelOAuthProvider", () => {
     expect(persisted.expires_at ?? 0).toBeGreaterThanOrEqual(before + 60_000 - 50);
   });
 
-  it("clientInformation prefers stored DCR result over the static client_id", async () => {
+  it("clientInformation lets an explicitly configured client_id override a stale DCR result", async () => {
     const store = makeStore();
     await store.save({
       client_information: {
@@ -85,7 +86,7 @@ describe("RatelOAuthProvider", () => {
       staticClientId: "static-id",
     });
     const info = await provider.clientInformation();
-    expect(info?.client_id).toBe("dcr-id");
+    expect(info?.client_id).toBe("static-id");
   });
 
   it("clientInformation falls back to the static client_id when nothing is stored", async () => {

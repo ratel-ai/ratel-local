@@ -29,6 +29,7 @@ export interface PromptAdapter {
     placeholder?: string;
     initialValue?: string;
   }): Promise<string | symbol>;
+  password(opts: { message: string; mask?: string }): Promise<string | symbol>;
   spinner(): SpinnerHandle;
   isCancel(value: unknown): boolean;
   cancel(message?: string): void;
@@ -43,6 +44,7 @@ export function defaultPromptAdapter(): PromptAdapter {
     select: clack.select as PromptAdapter["select"],
     multiselect: clack.multiselect as PromptAdapter["multiselect"],
     text: clack.text as PromptAdapter["text"],
+    password: clack.password as PromptAdapter["password"],
     spinner: () => clack.spinner(),
     isCancel: clack.isCancel,
     cancel: clack.cancel,
@@ -64,6 +66,9 @@ export function silentPromptAdapter(): PromptAdapter {
       return CANCEL_SYMBOL;
     },
     async text() {
+      return "";
+    },
+    async password() {
       return "";
     },
     spinner: () => ({ start() {}, stop() {}, message() {} }),

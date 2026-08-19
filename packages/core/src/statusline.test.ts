@@ -1,11 +1,17 @@
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { BackupFs } from "./backup.js";
-import type { JsonFs } from "./io.js";
+import { type JsonFs, nodeFs } from "./io.js";
+import { createMutationEngine } from "./mutation-engine.js";
+import { createPreparedChangeCoordinator } from "./prepared-change-coordinator.js";
 import {
   ClaudeStatuslineConflictError,
   getClaudeCodeStatuslineState,
   installClaudeCodeStatusline,
+  prepareClaudeCodeStatuslineInstall,
+  prepareClaudeCodeStatuslineUninstall,
   renderRatelStatusline,
   uninstallClaudeCodeStatusline,
 } from "./statusline.js";
@@ -144,12 +150,51 @@ describe("Claude Code statusline settings", () => {
   });
 });
 
+describe("prepared Claude Code statusline changes", () => {
+  it("commits install and uninstall through one-use capabilities with backups", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-statusline-prepared-"));
+    try {
+      await mkdir(join(homeDir, ".ratel"), { recursive: true });
+      const context = { env: { homeDir }, fs: nodeFs, log: () => {} };
+      const engine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
+      const preparedChanges = createPreparedChangeCoordinator({ mutationEngine: engine });
+      const install = await prepareClaudeCodeStatuslineInstall(context, {
+        bin: { command: "ratel-local", args: [], source: "env" },
+        preparedChanges,
+      });
+      expect(install.preview).toMatchObject({ action: "install", changed: true });
+      const installed = await preparedChanges.commit(install.changeId);
+      expect(installed.backupManifest).not.toBeNull();
+      expect(
+        JSON.parse(await readFile(join(homeDir, ".claude", "settings.json"), "utf8")),
+      ).toHaveProperty("statusLine");
+
+      const uninstall = await prepareClaudeCodeStatuslineUninstall(context, { preparedChanges });
+      const removed = await preparedChanges.commit(uninstall.changeId);
+      expect(removed.backupManifest).not.toBeNull();
+      expect(
+        JSON.parse(await readFile(join(homeDir, ".claude", "settings.json"), "utf8")),
+      ).not.toHaveProperty("statusLine");
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Claude Ratel-on detection", () => {
   it("detects a linked Ratel Local entry", async () => {
     const fs = new MemFs();
     fs.files.set(
       CLAUDE_CONFIG,
-      JSON.stringify({ mcpServers: { "ratel-local": { type: "stdio", command: "ratel-local" } } }),
+      JSON.stringify({
+        mcpServers: {
+          "ratel-local": {
+            type: "stdio",
+            command: "ratel-local",
+            args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
+          },
+        },
+      }),
     );
     const state = await getClaudeCodeStatuslineState(ctx(fs));
     expect(state.ratelEnabled).toBe(true);

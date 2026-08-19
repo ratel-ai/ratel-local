@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AgentSetupPage } from "@/pages/AgentSetupPage";
+import { LegacyAgentSetupRedirect } from "@/pages/AgentSetupPage";
 
 type AppSearch = {
   t?: string;
@@ -7,8 +7,12 @@ type AppSearch = {
 
 export const Route = createFileRoute("/agent-setup")({
   validateSearch,
-  component: AgentSetupPage,
+  component: AgentSetupRoute,
 });
+
+function AgentSetupRoute() {
+  return <LegacyAgentSetupRedirect />;
+}
 
 function validateSearch(search: Record<string, unknown>): AppSearch {
   return {

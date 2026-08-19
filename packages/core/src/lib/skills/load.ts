@@ -1,7 +1,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
 import { isDirectoryEntry } from "../fs.js";
 
@@ -15,6 +15,31 @@ export interface LoadSkillsOptions {
   /** Called once per skill that fails to load (e.g. malformed frontmatter), so
    *  callers can surface the problem instead of silently dropping the skill. */
   onProblem?: (problem: { id: string; reason: string }) => void;
+}
+
+export interface LoadedSkillBundle {
+  skill: Skill;
+  fingerprintSource: string;
+  watchInputs: string[];
+}
+
+/** Load one skill and all resource bytes that contribute to its served body. */
+export async function loadSkillBundle(
+  skillDir: string,
+  registrationId?: string,
+): Promise<LoadedSkillBundle> {
+  const skillMdPath = join(skillDir, "SKILL.md");
+  const raw = await readFile(skillMdPath, "utf8");
+  const parsed = parseSkillMd(raw, skillMdPath, registrationId);
+  const bundle = await readBundledResources(skillDir);
+  return {
+    skill: skillFromParsed(parsed, renderBundledResources(parsed.body, bundle.resources)),
+    fingerprintSource: JSON.stringify({
+      skillMd: raw,
+      resources: bundle.resources.map(({ path, contents }) => ({ path, contents })),
+    }),
+    watchInputs: [dirname(skillDir), skillDir, skillMdPath, ...bundle.watchInputs],
+  };
 }
 
 /**
@@ -51,41 +76,19 @@ export async function loadSkills(
     for (const entry of entries) {
       if (!(await isDirectoryEntry(dir, entry))) continue;
       const skillDir = join(dir, entry.name);
-      const skillMd = join(skillDir, "SKILL.md");
-
-      let raw: string;
       try {
-        raw = await readFile(skillMd, "utf8");
-      } catch (err) {
-        // A subdirectory without a SKILL.md simply isn't a skill — ignore it.
-        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-          log(`[ratel] could not read ${skillMd}: ${(err as Error).message}`);
-        }
-        continue;
-      }
-
-      try {
-        const parsed = parseSkillMd(raw, skillMd);
-        const body = await appendBundledResources(parsed.body, skillDir);
-        if (byId.has(parsed.name)) {
+        const bundle = await loadSkillBundle(skillDir);
+        if (byId.has(bundle.skill.id)) {
           // Two SKILL.md files declare the same frontmatter `name`; the catalog
           // keys on it, so one would silently shadow the other. Warn — don't hide it.
           log(
-            `[ratel] duplicate skill name "${parsed.name}" (${skillMd}) — overriding the earlier one`,
+            `[ratel] duplicate skill name "${bundle.skill.id}" (${join(skillDir, "SKILL.md")}) — overriding the earlier one`,
           );
         }
-        byId.set(parsed.name, {
-          id: parsed.name,
-          name: parsed.name,
-          description: parsed.description,
-          // SDK 0.2.0 collapsed the skill model (ratel ADR-0012): `triggers` fold
-          // into `tags` (both indexed phrases), `stacks` move under non-indexed
-          // `metadata` carried for the push-path ranker.
-          tags: [...parsed.tags, ...parsed.triggers],
-          metadata: { stacks: parsed.stacks },
-          body,
-        });
+        byId.set(bundle.skill.id, bundle.skill);
       } catch (err) {
+        // A subdirectory without a SKILL.md simply isn't a skill — ignore it.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
         const reason = (err as Error).message;
         log(`[ratel] skipping skill ${entry.name}: ${reason}`);
         options.onProblem?.({ id: entry.name, reason });
@@ -107,17 +110,37 @@ interface ParsedSkill {
   body: string;
 }
 
+function skillFromParsed(parsed: ParsedSkill, body: string): Skill {
+  return {
+    id: parsed.name,
+    name: parsed.name,
+    description: parsed.description,
+    // SDK 0.2.0 collapsed the skill model (ratel ADR-0012): `triggers` fold
+    // into `tags` (both indexed phrases), `stacks` move under non-indexed
+    // `metadata` carried for the push-path ranker.
+    tags: [...parsed.tags, ...parsed.triggers],
+    metadata: { stacks: parsed.stacks },
+    body,
+  };
+}
+
 /**
  * Parse a `SKILL.md` into frontmatter fields + body. Frontmatter is the block
  * between the leading `---` fences; values are flat inline scalars (the same
  * constraint Claude Code's skill validator enforces).
  */
-export function parseSkillMd(raw: string, source: string): ParsedSkill {
+export function parseSkillMd(raw: string, source: string, registrationId?: string): ParsedSkill {
   const fm = extractFrontmatter(raw);
   if (!fm) {
     throw new SkillLoadError(`${source}: missing YAML frontmatter`);
   }
-  const name = typeof fm.data.name === "string" ? fm.data.name : undefined;
+  const declaredName = typeof fm.data.name === "string" ? fm.data.name : undefined;
+  if (declaredName && registrationId && declaredName !== registrationId) {
+    throw new SkillLoadError(
+      `${source}: frontmatter 'name' (${declaredName}) must match registration id (${registrationId})`,
+    );
+  }
+  const name = declaredName ?? registrationId;
   if (!name) {
     throw new SkillLoadError(`${source}: frontmatter 'name' is required`);
   }
@@ -225,34 +248,66 @@ function stripQuotes(s: string): string {
  * and any sibling `*.md` reference files) so the agent can run or read them
  * once the body is in context. Returns the body unchanged when there are none.
  */
-async function appendBundledResources(body: string, skillDir: string): Promise<string> {
-  const resources: string[] = [];
+interface BundledResource {
+  path: string;
+  contents: string;
+}
+
+async function readBundledResources(
+  skillDir: string,
+): Promise<{ resources: BundledResource[]; watchInputs: string[] }> {
+  const resourcePaths: string[] = [];
+  const watchInputs: string[] = [];
 
   let entries: Dirent[];
   try {
     entries = await readdir(skillDir, { withFileTypes: true });
   } catch {
-    return body;
+    return { resources: [], watchInputs };
   }
 
-  for (const entry of entries) {
+  for (const entry of entries.sort((a, b) => compareText(a.name, b.name))) {
     if (entry.isDirectory() && entry.name === "scripts") {
+      const scriptsDir = join(skillDir, "scripts");
+      watchInputs.push(scriptsDir);
       try {
-        const scripts = await readdir(join(skillDir, "scripts"), { withFileTypes: true });
-        for (const s of scripts) {
-          if (s.isFile()) resources.push(join(skillDir, "scripts", s.name));
+        const scripts = await readdir(scriptsDir, { withFileTypes: true });
+        for (const script of scripts.sort((a, b) => compareText(a.name, b.name))) {
+          if (script.isFile()) resourcePaths.push(join(scriptsDir, script.name));
         }
       } catch {
         // ignore an unreadable scripts dir
       }
     } else if (entry.isFile() && entry.name.endsWith(".md") && entry.name !== "SKILL.md") {
-      resources.push(join(skillDir, entry.name));
+      resourcePaths.push(join(skillDir, entry.name));
     }
   }
 
+  const resources: Array<{ path: string; contents: string }> = [];
+  for (const path of resourcePaths.sort()) {
+    watchInputs.push(path);
+    try {
+      resources.push({ path, contents: await readFile(path, "utf8") });
+    } catch {
+      // Keep resource loading fail-soft, matching the enclosing legacy loader.
+    }
+  }
+  return { resources, watchInputs };
+}
+
+function renderBundledResources(body: string, resources: BundledResource[]): string {
   if (resources.length === 0) return body;
-  const list = resources.map((p) => `- ${p}`).join("\n");
-  return `${body}\n\n---\n\n## Bundled resources (absolute paths)\n\n${list}\n`;
+  const list = resources.map((resource) => `- ${resource.path}`).join("\n");
+  const contents = resources
+    .map(
+      (resource) => `### ${resource.path}\n\n${resource.contents.trimEnd() || "(empty resource)"}`,
+    )
+    .join("\n\n");
+  return `${body}\n\n---\n\n## Bundled resources (absolute paths)\n\n${list}\n\n## Bundled resource contents\n\n${contents}\n`;
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function expandHome(p: string): string {

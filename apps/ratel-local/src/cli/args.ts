@@ -1,11 +1,18 @@
 export type Group =
   | "mcp"
   | "backup"
+  | "retrieval"
+  | "project"
   | "skill"
+  | "doctor"
   | "import"
   | "link"
+  | "setup"
+  | "traces"
   | "statusline"
   | "serve"
+  | "connect"
+  | "daemon"
   | "ui"
   | "help"
   | "version";
@@ -14,11 +21,29 @@ export type McpVerb = "add" | "remove" | "list" | "get" | "edit" | "auth";
 
 export type BackupVerb = "list";
 
+export type RetrievalVerb = "status" | "configure" | "reset" | "prepare";
+
+export type ProjectVerb = "list" | "add" | "remove";
+
 export type StatuslineVerb = "install" | "uninstall";
 
+export type TracesVerb = "status" | "enable" | "disable";
+
+export type DaemonVerb =
+  | "run"
+  | "install"
+  | "uninstall"
+  | "status"
+  | "start"
+  | "stop"
+  | "restart"
+  | "open";
+
 export type SkillVerb =
-  | "activate"
-  | "deactivate"
+  | "import"
+  | "add-scope"
+  | "remove-scope"
+  | "remove"
   | "list"
   | "suggest"
   | "preload-hook"
@@ -29,11 +54,30 @@ const MCP_VERBS: ReadonlySet<string> = new Set(["add", "remove", "list", "get", 
 
 const BACKUP_VERBS: ReadonlySet<string> = new Set(["list"]);
 
+const RETRIEVAL_VERBS: ReadonlySet<string> = new Set(["status", "configure", "reset", "prepare"]);
+
+const PROJECT_VERBS: ReadonlySet<string> = new Set(["list", "add", "remove"]);
+
 const STATUSLINE_VERBS: ReadonlySet<string> = new Set(["install", "uninstall"]);
 
+const TRACES_VERBS: ReadonlySet<string> = new Set(["status", "enable", "disable"]);
+
+const DAEMON_VERBS: ReadonlySet<string> = new Set([
+  "run",
+  "install",
+  "uninstall",
+  "status",
+  "start",
+  "stop",
+  "restart",
+  "open",
+]);
+
 const SKILL_VERBS: ReadonlySet<string> = new Set([
-  "activate",
-  "deactivate",
+  "import",
+  "add-scope",
+  "remove-scope",
+  "remove",
   "list",
   "suggest",
   "preload-hook",
@@ -124,6 +168,28 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
+  } else if (first === "retrieval") {
+    group = "retrieval";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!RETRIEVAL_VERBS.has(candidate)) {
+        throw new ArgError(`unknown retrieval verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "project") {
+    group = "project";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!PROJECT_VERBS.has(candidate)) {
+        throw new ArgError(`unknown project verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
   } else if (first === "skill") {
     group = "skill";
     i = 1;
@@ -135,7 +201,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
-  } else if (first === "import" || first === "link") {
+  } else if (first === "import" || first === "link" || first === "setup" || first === "doctor") {
     group = first;
     i = 1;
   } else if (first === "statusline") {
@@ -149,9 +215,28 @@ export function parseArgs(argv: string[]): ParsedArgs {
       verb = candidate;
       i = 2;
     }
-  } else if (first === "serve") {
-    group = "serve";
+  } else if (first === "traces") {
+    group = "traces";
     i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!TRACES_VERBS.has(candidate)) {
+        throw new ArgError(`unknown traces verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "serve" || first === "connect") {
+    group = "serve";
+    if (first === "connect") group = "connect";
+    i = 1;
+  } else if (first === "daemon") {
+    group = "daemon";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-") && DAEMON_VERBS.has(argv[1])) {
+      verb = argv[1];
+      i = 2;
+    }
   } else if (first === "ui") {
     group = "ui";
     i = 1;
@@ -236,7 +321,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       continue;
     }
 
-    if (group === "serve") {
+    if (group === "serve" || group === "daemon") {
       configPaths.push(tok);
     } else {
       rest.push(tok);

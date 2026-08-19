@@ -1,6 +1,9 @@
 import {
+  type ClaudeStatuslineChangeResult,
   getClaudeCodeStatuslineState,
   installClaudeCodeStatusline,
+  prepareClaudeCodeStatuslineInstall,
+  prepareClaudeCodeStatuslineUninstall,
   type ResolvedBin,
   renderRatelStatusline,
   uninstallClaudeCodeStatusline,
@@ -39,10 +42,7 @@ export async function runStatuslineInstallStep(
     }
   }
 
-  const result = await installClaudeCodeStatusline(ctx, {
-    bin: opts.bin,
-    force: state.status === "other",
-  });
+  const result = await commitStatuslineInstall(ctx, opts.bin, state.status === "other");
   if (result.changed) {
     ctx.prompts.note(`Installed the Ratel statusline into ${result.path}`, "Statusline");
     return "installed";
@@ -95,7 +95,7 @@ export async function runStatusline(ctx: HandlerCtx): Promise<void> {
           return;
         }
       }
-      const result = await installClaudeCodeStatusline(ctx, { bin, force });
+      const result = await commitStatuslineInstall(ctx, bin, force);
       ctx.log(
         result.changed
           ? `installed Ratel statusline into ${result.path}`
@@ -116,7 +116,7 @@ export async function runStatusline(ctx: HandlerCtx): Promise<void> {
           return;
         }
       }
-      const result = await uninstallClaudeCodeStatusline(ctx);
+      const result = await commitStatuslineUninstall(ctx);
       ctx.log(
         result.changed
           ? `removed Ratel statusline from ${result.path}`
@@ -128,4 +128,30 @@ export async function runStatusline(ctx: HandlerCtx): Promise<void> {
     default:
       ctx.log(STATUSLINE_USAGE);
   }
+}
+
+async function commitStatuslineInstall(
+  ctx: HandlerCtx,
+  bin: ResolvedBin,
+  force: boolean,
+): Promise<ClaudeStatuslineChangeResult> {
+  if (!ctx.preparedChanges) {
+    return installClaudeCodeStatusline(ctx, { bin, force });
+  }
+  const prepared = await prepareClaudeCodeStatuslineInstall(ctx, {
+    bin,
+    force,
+    preparedChanges: ctx.preparedChanges,
+  });
+  return (await ctx.preparedChanges.commit<ClaudeStatuslineChangeResult>(prepared.changeId)).result;
+}
+
+async function commitStatuslineUninstall(ctx: HandlerCtx): Promise<ClaudeStatuslineChangeResult> {
+  if (!ctx.preparedChanges) {
+    return uninstallClaudeCodeStatusline(ctx);
+  }
+  const prepared = await prepareClaudeCodeStatuslineUninstall(ctx, {
+    preparedChanges: ctx.preparedChanges,
+  });
+  return (await ctx.preparedChanges.commit<ClaudeStatuslineChangeResult>(prepared.changeId)).result;
 }

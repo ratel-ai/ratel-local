@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ServerEntry } from "../lib/index.js";
-import { parseCodexMcpServers, rewriteCodexConfig } from "./codex.js";
+import { CodexAgentHostAdapter, parseCodexMcpServers, rewriteCodexConfig } from "./codex.js";
 
 function envRef(name: string): string {
   return ["$", `{${name}}`].join("");
@@ -11,6 +11,39 @@ function gatewayEntry(entry: ServerEntry) {
 }
 
 describe("Codex agent host helpers", () => {
+  it("links Codex user scope through the connector with host metadata", async () => {
+    const files = new Map([["/home/u/.codex/config.toml", '[mcp_servers.fs]\ncommand = "node"\n']]);
+    const adapter = new CodexAgentHostAdapter();
+    const context = {
+      env: { homeDir: "/home/u", projectRoot: "/repo" },
+      fs: {
+        read: async (path: string) => files.get(path) ?? null,
+        writeAtomic: async () => {},
+        exists: async (path: string) => files.has(path),
+      },
+    };
+    const state = await adapter.read(context);
+    const changes = await adapter.planChanges({
+      state,
+      bin: { command: "ratel-local", args: [], source: "path" },
+      ratelConfigPaths: {
+        user: "/home/u/.ratel/config.json",
+        project: "/repo/.ratel/config.json",
+        local: "/repo/.ratel/config.local.json",
+      },
+      installGatewayScopes: new Set(["user"]),
+      removeEntriesByScope: new Map(),
+    });
+
+    expect(parseCodexMcpServers(changes.changes[0].after)["ratel-local"]?.args).toEqual([
+      "connect",
+      "--agent-host",
+      "codex",
+      "--link-scope",
+      "user",
+    ]);
+  });
+
   it("reads stdio and http MCP entries from Codex config.toml", () => {
     const entries = parseCodexMcpServers(`
 [mcp_servers.fs]

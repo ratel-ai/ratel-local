@@ -22,6 +22,17 @@ async function writeSkill(dir: string, name: string, contents: string): Promise<
 }
 
 describe("parseSkillMd", () => {
+  it("uses the registration id when frontmatter omits name", () => {
+    const parsed = parseSkillMd(
+      `---\ndescription: Reviews a pull request\n---\nReview carefully.`,
+      "/skills/review/SKILL.md",
+      "review",
+    );
+
+    expect(parsed.name).toBe("review");
+    expect(parsed.description).toBe("Reviews a pull request");
+  });
+
   it("parses frontmatter fields and body", () => {
     const parsed = parseSkillMd(
       `---\nname: api-design\ndescription: REST API patterns\ntags: [backend, api]\n---\n\n# Body\n\ncontent`,
@@ -146,7 +157,9 @@ describe("loadSkills", () => {
     const [skill] = await loadSkills([root]);
     expect(skill.body).toContain("Bundled resources");
     expect(skill.body).toContain(join(dir, "scripts", "scan.sh"));
+    expect(skill.body).toContain("echo hi");
     expect(skill.body).toContain(join(dir, "REFERENCE.md"));
+    expect(skill.body).toContain("# ref");
   });
 
   it("dedupes by id across directories — the later directory wins", async () => {

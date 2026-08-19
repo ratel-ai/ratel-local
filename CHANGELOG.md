@@ -4,6 +4,71 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-14
+
+### Added
+- Added one persistent per-user daemon with a lightweight project-scoped `connect` bridge, canonical project registration, isolated user/project/local configuration, reusable generation-safe gateways, loopback authentication, and live client and gateway status in the UI.
+- Added the idempotent `ratel-local setup` wizard for daemon installation, version replacement, plugin-first Claude Code and Codex linking, and separately previewed MCP/skill import. Scoped control-plane mutations are revision checked, recoverable, and backed up where restoration is supported.
+- Added a daemon-owned OTLP log relay for native Claude Code and Codex events, deriving the Cloud `/logs` endpoint from the saved trace endpoint and preserving protobuf payloads unchanged. Host-aware levels now offer Claude Redacted, Tool details, and Full content, and Codex Redacted traces, Tool activity, and Prompt content. Existing `traces enable` and setup automation remain on the safest Redacted level; every content-bearing CLI and Agent Setup change requires explicit privacy confirmation.
+- Added the off-by-default `RATEL_FEATURE_CLOUD_TELEMETRY=1` daemon feature flag. It gates Cloud credential loading, loopback relay routes, Ratel runtime export, native exporter mutations, setup prompts, and UI controls together, and is persisted explicitly into installed launchd/systemd services.
+- Added daemon-owned Ratel Cloud trace export: native Claude Code, Codex, and daemon-hosted Ratel SDK OTLP/HTTP protobuf traces use the same bounded loopback relay without merging, correlating, decoding, or rewriting payloads. The Settings page persists the Cloud endpoint and API key for foreground and background daemons; the relay is available only behind the feature flag and returns `503` until configured.
+- Added opt-in native trace exporter setup for Claude Code and Codex through Agent Setup, `ratel-local traces`, and the final optional setup step. The daemon derives the live loopback endpoint, applies atomic secret-free user-config mutations, repairs stale ports, and requires explicit irreversible conflict overwrite. Interactive CLI and Agent Setup flows can collect a missing Ratel Cloud API key through masked input and save it directly to the daemon; non-interactive runs remain secret-free.
+- Added opt-in `semantic` and `hybrid` retrieval with scoped, atomic configuration; validated local, Hugging Face, Ollama, and OpenAI-compatible embedding sources; fail-closed dense startup; and generation-safe OAuth reconnect behavior. BM25 remains the model-free default.
+- Added `ratel-local retrieval status|configure|reset|prepare` and Settings-page retrieval controls, with transactional scoped writes, model/source preflight, explicit cache, memory, multilingual, privacy, trace, and reconnect guidance, and packed-package smoke CI for five native targets.
+
+### Changed
+- Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.
+- The bundled plugin now runs `ratel-local connect` against the persistent daemon. After upgrading from the stable 0.5 line, run `ratel-local setup` once to install or replace the service and reconcile selected agent plugins; existing Ratel configuration remains in place.
+- Simplified retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind Save, while missing models require explicit download confirmation before settings are committed.
+- Upgraded and exactly pinned `@ratel-ai/sdk` to 0.9.1, moved runtime telemetry initialization out of the SDK onto the explicitly retained legacy OTLP initializer, and pinned that initializer's compatible telemetry vocabulary so npm cannot hoist a breaking patch. The published package now requires Node.js 20.6 or newer. Direct SDK consumers must await `ToolCatalog.register()` and `SkillCatalog.register()`; Ratel Local awaits every registration and batches gateway skills in one call.
+- Stable plugin installation follows the repository's default `main` branch. Immutable tag pinning and marketplace reconciliation remain isolated to explicitly versioned prerelease packages.
+
+### Fixed
+- Kept connector discovery and invocation on the live daemon catalog while the initial daemon attachment is still in flight, and handled stale bootstrap calls locally instead of forwarding them as unknown gateway tools.
+- Resolved passive tool-usage hook paths from either the Codex or Claude Code plugin-root environment so both hosts can run the shared hooks.
+- Forced every managed Claude telemetry level, including Redacted, to disable raw API body capture; file-backed raw capture is reported as custom sensitive content instead of Redacted.
+- Made malformed Cloud settings and Ratel telemetry-provider initialization fail open so the Local daemon and MCP gateway remain available.
+- Prevented clean global installs from resolving incompatible SDK or legacy telemetry patch releases and crashing before the CLI could start; packed-package validation now enforces the reviewed compatibility pins.
+- Made setup reuse a stable locally installed CLI for its login service instead of fetching an unpublished version through `npx`; setup and agent onboarding now use welcoming progress and simpler import guidance, and uninstall clears stale runtime state instead of reporting an old PID or version.
+- Added real byte and percentage progress for Hugging Face retrieval-model downloads in Settings, plus friendly loading states for direct daemon lifecycle commands, CLI retrieval preparation, and agent linking.
+- Hid Ratel Cloud settings and native telemetry-export controls unless the daemon is running with the Cloud telemetry feature flag enabled.
+- Fixed OAuth dynamic registration for strict native-app providers: Ratel now registers the callback port it actually opened, declares a native client, and safely replaces stale registrations created with a different callback (including the old `:0` placeholder).
+
+## [0.6.0-rc.1] - 2026-07-31
+
+### Changed
+- Replaced the legacy symlink-based skill manager with scoped reference/copy registrations. Global native imports automatically mark the host skill manual-only, while project/local registrations never edit repository-owned skill metadata.
+- The daemon safely migrates verified legacy skill links to user-scoped references on startup; `ratel-local doctor --fix` provides the same recoverable migration explicitly. Ambiguous or externally changed entries are left untouched with diagnostics.
+- Removed the deprecated `skill activate` and `skill deactivate` compatibility commands.
+
+### Fixed
+- Preserved the setup-time PATH separately in macOS launchd and Linux systemd daemon services so npm/npx cannot reorder agent plugin executables ahead of the user's working installation. Agent command startup failures now report the command and PATH source used.
+- Skill imports can now keep the first deterministic harness copy when Claude Code and Codex expose the same skill ID, report later copies as skipped duplicates, and skip existing user registrations so repeated imports are no-ops.
+
+## [0.6.0-rc.0] - 2026-07-24
+
+### Added
+- Added a versioned canonical-root project registry, project-aware HTTP/CLI/UI flows, URL-scoped daemon pages, connector v2 metadata, and an active-client read model.
+- Added a single provenance-preserving MCP/skill snapshot resolver, scoped OAuth stores, deterministic runtime revisions, and generational gateways that keep existing sessions on their acquired revision.
+- Added recoverable scoped mutations with cross-process locking, CAS previews, journals, rollback/recovery, opaque skill discovery candidates, owned-copy markers, and safe local Git excludes.
+- Added `ratel-local doctor` for transaction recovery plus project, snapshot, and legacy OAuth diagnostics with stable actionable codes.
+- Added `ratel-local connect`, a lightweight stdio MCP bridge that carries the agent's resolved project root to the persistent daemon and exposes actionable daemon status/start/setup tools while the daemon is unavailable.
+- Added the idempotent `ratel-local setup` wizard, which installs a missing daemon login service, starts an installed service, replaces an incompatible daemon version, or reports an already-running matching daemon. It supports `--yes` automation and a custom first-install `--port`.
+- Expanded `ratel-local setup` into complete onboarding: after making the daemon ready it detects Claude Code and Codex, connects selected agents through the existing plugin-first link flow, and separately offers the transactional MCP/skill import preview. Repeatable `--agent`, `--agent auto`, and `--daemon-only` support explicit automation; plain `--yes` remains daemon-only and never imports native configuration.
+
+### Changed
+- Prerelease `link` and setup flows now pin the single Ratel marketplace to the immutable tag matching the package version for both Codex and Claude Code, reconcile existing plugin installs onto that channel, and attempt to restore the stable plugin when an RC switch fails.
+- New agent links use `ratel-local connect`; `serve --config` remains as the legacy explicit-config runtime.
+- Skills now support explicit user/project/local reference or copy registrations. `skill activate` and `skill deactivate` remain deprecated user-scope compatibility wrappers.
+- The daemon reconciles disk state on every gateway acquire and uses targeted parent/resource watchers for near-immediate invalidation.
+- CLI and UI agent imports apply Ratel and native-agent config rewrites as one recoverable transaction.
+- Rebuilt the browser UI around the persistent daemon with global and project-scoped routes, dedicated project and MCP-client views, and a cloud-aligned visual system across tools, skills, and agent setup.
+
+### Fixed
+- Hardened the daemon and UI control plane with loopback-only authenticated requests, validated installed-service identity, safe canonical project admission, and serialized project-root mutations.
+- Routed OAuth through live daemon gateways, preserving results across bulk authentication while keeping scoped stores isolated.
+- Restored the legacy skill lifecycle aliases and tightened automated setup argument validation so existing workflows fail clearly instead of being silently misinterpreted.
+
 ## [0.5.0] - 2026-07-24
 
 ### Changed

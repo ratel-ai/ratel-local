@@ -1,11 +1,19 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { BackupFs, JsonFs, ResolvedBin } from "@ratel-ai/ratel-local-core";
+import {
+  type BackupFs,
+  createMutationEngine,
+  createPreparedChangeCoordinator,
+  type JsonFs,
+  nodeFs,
+  type ResolvedBin,
+} from "@ratel-ai/ratel-local-core";
 import { describe, expect, it } from "vitest";
 import { CANCEL_SYMBOL, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
-import type { SkillManagePaths } from "../skills/manage.js";
+import type { SkillPaths } from "../skills/paths.js";
 import { runImport } from "./import.js";
+import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
 
 const HOME = "/home/u";
@@ -17,8 +25,6 @@ const CLAUDE_SETTINGS = "/home/u/.claude/settings.json";
 const HOME_CODEX = "/home/u/.codex/config.toml";
 const PROJECT_MCP = "/r/.mcp.json";
 const RATEL_USER = "/home/u/.ratel/config.json";
-const RATEL_PROJECT = "/r/.ratel/config.json";
-const RATEL_LOCAL = "/r/.ratel/config.local.json";
 
 class MemFs implements BackupFs, JsonFs {
   files = new Map<string, string>();
@@ -70,12 +76,15 @@ function ctxOf(
       env: { homeDir: HOME, projectRoot: withProjectRoot ? ROOT : undefined },
       fs,
       log: (m) => logs.push(m),
+      preparedChanges: createTestPreparedChanges(fs),
       prompts,
     },
   };
 }
 
-async function makeSkillPaths(): Promise<SkillManagePaths & { root: string }> {
+type TestSkillPaths = SkillPaths & { root: string; manifestPath: string };
+
+async function makeSkillPaths(): Promise<TestSkillPaths> {
   const root = await mkdtemp(join(tmpdir(), "ratel-import-skills-"));
   return {
     root,
@@ -86,7 +95,7 @@ async function makeSkillPaths(): Promise<SkillManagePaths & { root: string }> {
   };
 }
 
-async function writeCliClaudeSkill(paths: SkillManagePaths, name: string): Promise<string> {
+async function writeCliClaudeSkill(paths: SkillPaths, name: string): Promise<string> {
   const dir = join(paths.nativeDir, name);
   await mkdir(dir, { recursive: true });
   const text = `---\nname: ${name}\ndescription: d\n---\n# body`;
@@ -94,13 +103,13 @@ async function writeCliClaudeSkill(paths: SkillManagePaths, name: string): Promi
   return text;
 }
 
-async function writeMalformedClaudeSkill(paths: SkillManagePaths, name: string): Promise<void> {
+async function writeMalformedClaudeSkill(paths: SkillPaths, name: string): Promise<void> {
   const dir = join(paths.nativeDir, name);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "SKILL.md"), "# missing frontmatter", "utf8");
 }
 
-async function writeCliCodexSkill(paths: SkillManagePaths, name: string): Promise<string> {
+async function writeCliCodexSkill(paths: SkillPaths, name: string): Promise<string> {
   const dir = join(paths.codexDir, name);
   await mkdir(dir, { recursive: true });
   const text = `---\nname: ${name}\ndescription: d\n---\n# body`;
@@ -232,7 +241,7 @@ describe("runImport", () => {
     expect(claude.mcpServers["ratel-local"]).toEqual({
       type: "stdio",
       command: "ratel-local",
-      args: ["serve", "--config", RATEL_USER],
+      args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
     });
   });
 
@@ -313,6 +322,56 @@ command = "echo"
     expect(notes.at(-1)?.message).toMatch(/No native Claude Code MCP servers/i);
   });
 
+  it("rolls back the combined import while preserving the previously committed agent link", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-cli-import-transaction-"));
+    try {
+      const claudePath = join(homeDir, ".claude.json");
+      const ratelPath = join(homeDir, ".ratel", "config.json");
+      const originalClaude = JSON.stringify({
+        mcpServers: { fs: { type: "stdio", command: "echo" } },
+      });
+      await writeFile(claudePath, originalClaude, "utf8");
+      const mutationEngine = await createMutationEngine({
+        controlDir: join(homeDir, ".ratel"),
+        hooks: {
+          beforeApplyOperation(_operation, index) {
+            if (index === 1) throw new Error("fail-agent-publication");
+          },
+        },
+      });
+      const ctx: HandlerCtx = {
+        argv: { group: "import", configPaths: [], rest: [], extras: [], flags: {} },
+        env: { homeDir },
+        fs: nodeFs,
+        log: () => {},
+        preparedChanges: createPreparedChangeCoordinator({ mutationEngine }),
+        prompts: autoConfirm(),
+      };
+
+      await expect(
+        runImport(ctx, {
+          bin: BIN,
+          yes: true,
+          agentKind: "claude-code",
+        }),
+      ).rejects.toThrow("fail-agent-publication");
+
+      await expect(readFile(ratelPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      const linkedClaude = JSON.parse(await readFile(claudePath, "utf8"));
+      expect(linkedClaude.mcpServers.fs).toEqual({ type: "stdio", command: "echo" });
+      expect(linkedClaude.mcpServers["ratel-local"].args).toEqual([
+        "connect",
+        "--agent-host",
+        "claude-code",
+        "--link-scope",
+        "user",
+      ]);
+      expect(await readdir(join(homeDir, ".ratel", "transactions"))).toEqual([]);
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("shows the detected agent and MCP source paths before selection", async () => {
     const fs = new MemFs();
     fs.files.set(
@@ -365,7 +424,7 @@ command = "codex"
     expect(fs.files.get(HOME_CODEX)).toContain("[mcp_servers.ratel-local]");
   });
 
-  it("global+project: writes both Claude files with the right --config arg lists", async () => {
+  it("global+project: writes both Claude files with scoped connector metadata", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -384,11 +443,13 @@ command = "codex"
 
     const claudeProj = JSON.parse(fs.files.get(PROJECT_MCP) as string);
     expect(claudeProj.mcpServers["ratel-local"].args).toEqual([
-      "serve",
-      "--config",
-      RATEL_USER,
-      "--config",
-      RATEL_PROJECT,
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "project",
+      "--project-root",
+      ROOT,
     ]);
   });
 
@@ -413,22 +474,30 @@ command = "codex"
     await runImport(ctx, { bin: BIN, yes: true });
 
     const claude = JSON.parse(fs.files.get(HOME_CLAUDE) as string);
-    expect(claude.mcpServers["ratel-local"].args).toEqual(["serve", "--config", RATEL_USER]);
+    expect(claude.mcpServers["ratel-local"].args).toEqual([
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "user",
+    ]);
     expect(claude.projects[ROOT].mcpServers["ratel-local"].args).toEqual([
-      "serve",
-      "--config",
-      RATEL_USER,
-      "--config",
-      RATEL_PROJECT,
-      "--config",
-      RATEL_LOCAL,
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "local",
+      "--project-root",
+      ROOT,
     ]);
     expect(JSON.parse(fs.files.get(PROJECT_MCP) as string).mcpServers["ratel-local"].args).toEqual([
-      "serve",
-      "--config",
-      RATEL_USER,
-      "--config",
-      RATEL_PROJECT,
+      "connect",
+      "--agent-host",
+      "claude-code",
+      "--link-scope",
+      "project",
+      "--project-root",
+      ROOT,
     ]);
   });
 
@@ -587,17 +656,19 @@ command = "codex"
       expect(claude.mcpServers["ratel-local"]).toEqual({
         type: "stdio",
         command: "ratel-local",
-        args: ["serve", "--config", RATEL_USER],
+        args: ["connect", "--agent-host", "claude-code", "--link-scope", "user"],
       });
-      expect((await lstat(join(skillPaths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
+      expect(await pathExists(join(skillPaths.managedDir, "api-design"))).toBe(false);
       expect(
         await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8"),
       ).toContain("disable-model-invocation: true");
-      const manifest = JSON.parse(await readFile(skillPaths.manifestPath, "utf8"));
-      expect(manifest.managed[0]).toMatchObject({
-        id: "api-design",
-        mode: "linked",
+      const scoped = JSON.parse(
+        await readFile(join(skillPaths.root, ".ratel", "config.json"), "utf8"),
+      );
+      expect(scoped.skills.entries["api-design"]).toMatchObject({
+        mode: "reference",
         source: "claude",
+        hostPolicy: { mode: "manual-only", source: "claude" },
       });
     } finally {
       await rm(skillPaths.root, { recursive: true, force: true });
@@ -628,7 +699,7 @@ command = "codex"
         JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers["ratel-local"],
       ).toBeUndefined();
       expect(JSON.parse(fs.files.get(HOME_CLAUDE) as string).mcpServers.fs).toBeUndefined();
-      expect((await lstat(join(skillPaths.managedDir, "api-design"))).isSymbolicLink()).toBe(true);
+      expect(await pathExists(join(skillPaths.managedDir, "api-design"))).toBe(false);
       expect(
         await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8"),
       ).toContain("disable-model-invocation: true");
@@ -653,6 +724,37 @@ command = "codex"
 
       expect(JSON.parse(fs.files.get(CLAUDE_SETTINGS) as string).statusLine.command).toContain(
         "ratel-local statusline",
+      );
+    } finally {
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-running a successful skill-only import is idempotent", async () => {
+    const fs = new MemFs();
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliClaudeSkill(skillPaths, "api-design");
+      const { ctx } = ctxOf(fs, autoConfirm(), false);
+      const options = {
+        agentKind: "claude-code" as const,
+        bin: BIN,
+        skillPaths,
+        yes: true,
+      };
+
+      await runImport(ctx, options);
+      const configPath = join(skillPaths.root, ".ratel", "config.json");
+      const configAfterFirstImport = await readFile(configPath, "utf8");
+      const skillAfterFirstImport = await readFile(
+        join(skillPaths.nativeDir, "api-design", "SKILL.md"),
+        "utf8",
+      );
+
+      await expect(runImport(ctx, options)).resolves.toBeNull();
+      expect(await readFile(configPath, "utf8")).toBe(configAfterFirstImport);
+      expect(await readFile(join(skillPaths.nativeDir, "api-design", "SKILL.md"), "utf8")).toBe(
+        skillAfterFirstImport,
       );
     } finally {
       await rm(skillPaths.root, { recursive: true, force: true });
@@ -705,9 +807,11 @@ command = "codex"
         skillPaths,
       });
 
-      expect((await lstat(join(skillPaths.managedDir, "valid-policy"))).isSymbolicLink()).toBe(
-        true,
-      );
+      expect(await pathExists(join(skillPaths.managedDir, "valid-policy"))).toBe(false);
+      expect(
+        JSON.parse(await readFile(join(skillPaths.root, ".ratel", "config.json"), "utf8")).skills
+          .entries["valid-policy"],
+      ).toMatchObject({ mode: "reference", source: "claude" });
       expect(await pathExists(join(skillPaths.managedDir, "broken-policy"))).toBe(false);
       expect(logs.join("\n")).toMatch(/managing 1 skill as invoke-only/);
       expect(logs.join("\n")).toMatch(/could not manage selected skill.*broken-policy/i);
@@ -731,15 +835,17 @@ command = "codex"
       });
 
       expect(fs.files.size).toBe(0);
-      expect((await lstat(join(skillPaths.managedDir, "review-flow"))).isSymbolicLink()).toBe(true);
+      expect(await pathExists(join(skillPaths.managedDir, "review-flow"))).toBe(false);
       expect(
         await readFile(join(skillPaths.codexDir, "review-flow", "agents", "openai.yaml"), "utf8"),
       ).toContain("allow_implicit_invocation: false");
-      const manifest = JSON.parse(await readFile(skillPaths.manifestPath, "utf8"));
-      expect(manifest.managed[0]).toMatchObject({
-        id: "review-flow",
-        mode: "linked",
+      const scoped = JSON.parse(
+        await readFile(join(skillPaths.root, ".ratel", "config.json"), "utf8"),
+      );
+      expect(scoped.skills.entries["review-flow"]).toMatchObject({
+        mode: "reference",
         source: "codex",
+        hostPolicy: { mode: "manual-only", source: "codex-legacy" },
       });
       expect(logs.join("\n")).toMatch(/managing 1 skill as invoke-only/);
     } finally {
@@ -979,7 +1085,7 @@ command = "codex"
     expect(backupKeys.length).toBeGreaterThan(0);
   });
 
-  it("logs a backup location if executor fails mid-flight", async () => {
+  it("retains a backup and rolls back if a prepared commit fails mid-flight", async () => {
     const fs = new MemFs();
     fs.files.set(
       HOME_CLAUDE,
@@ -995,10 +1101,11 @@ command = "codex"
       }),
     );
     fs.failNextWriteAt = HOME_CLAUDE;
-    const { ctx, logs } = ctxOf(fs, autoConfirm(), false);
+    const before = fs.files.get(HOME_CLAUDE);
+    const { ctx } = ctxOf(fs, autoConfirm(), false);
     await expect(runImport(ctx, { bin: BIN, yes: true })).rejects.toThrow();
-    expect(logs.join("\n")).toMatch(/partial backup may exist under ~\/\.ratel\/backups\//);
-    expect(logs.join("\n")).not.toMatch(/ratel-local backup undo/);
+    expect(fs.files.get(HOME_CLAUDE)).toBe(before);
+    expect([...fs.files.keys()].some((path) => path.includes("/.ratel/backups/"))).toBe(true);
   });
 
   it("multiselect deselects an entry: only selected ones land in Ratel, deselected ones stay in Claude", async () => {
@@ -1107,7 +1214,7 @@ command = "codex"
     });
 
     expect(probeCalls.sort()).toEqual(["fs", "remote"]);
-    expect(spinnerCalls[0]).toMatch(/^start:Spinning up/);
+    expect(spinnerCalls).toContainEqual(expect.stringMatching(/^start:Spinning up/));
     expect(spinnerCalls.at(-1)).toMatch(/^stop:/);
 
     const fsNote = notes.find((n) => n.title?.includes("fs"));

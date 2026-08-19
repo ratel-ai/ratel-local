@@ -6,7 +6,7 @@ import {
 } from "../gateway-entry.js";
 import type { HierarchyEnv } from "../hierarchy.js";
 import { ProjectRootNotFoundError } from "../hierarchy.js";
-import type { FileChange } from "../import-plan.js";
+import type { PlannedFileWrite } from "../import-plan.js";
 import { isPlainObject } from "../json.js";
 import type { ServerEntry } from "../lib/index.js";
 import type {
@@ -26,10 +26,13 @@ interface ClaudeConfigDoc {
   scope: AgentScope;
   path: string;
   raw: Record<string, unknown>;
+  rawText: string;
   mcpServers: Record<string, ServerEntry>;
 }
 
 export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
+  readonly supportedScopes = ["user", "project", "local"] as const;
+
   async detect(ctx: AgentHostContext): Promise<AgentHostDetection> {
     const paths = [
       claudeConfigPath("user", ctx.env),
@@ -37,6 +40,9 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     ];
     const present: string[] = [];
     for (const path of paths) {
+      if (ctx.env.projectRoot && path === claudeConfigPath("project", ctx.env)) {
+        await ctx.assertProjectPath?.(ctx.env.projectRoot, path);
+      }
       if ((await ctx.fs.read(path)) !== null) present.push(path);
     }
     return {
@@ -55,6 +61,7 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     const user = await readClaudeConfig("user", ctx.env, ctx.fs);
     scopes.push(toScopeState("user", "User", claudeConfigPath("user", ctx.env), user));
     if (ctx.env.projectRoot) {
+      await ctx.assertProjectPath?.(ctx.env.projectRoot, claudeConfigPath("project", ctx.env));
       const project = await readClaudeConfig("project", ctx.env, ctx.fs);
       const local = await readClaudeConfig("local", ctx.env, ctx.fs);
       scopes.push(
@@ -66,7 +73,7 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
   }
 
   async planChanges(input: AgentHostPlanInput): Promise<AgentHostChangeSet> {
-    const changes: FileChange[] = [];
+    const changes: PlannedFileWrite[] = [];
     const installedGatewayScopes: AgentScope[] = [];
     const removedNativeEntries: AgentHostRemovedEntry[] = [];
     const byScope = scopesByName(input.state);
@@ -82,43 +89,52 @@ export class ClaudeCodeAgentHostAdapter implements AgentHostAdapter {
     const userWrite = Boolean(userRemove?.size || userInstall);
     const projectWrite = Boolean(projectRemove?.size || projectInstall);
     const localWrite = Boolean(localRemove?.size || localInstall);
+    const projectRoot = deriveProjectRoot(input.ratelConfigPaths);
     const userGateway = userInstall
-      ? makeRatelGatewayEntry({ bin: input.bin, configPaths: [input.ratelConfigPaths.user] })
+      ? makeRatelGatewayEntry({
+          bin: input.bin,
+          agentHost: "claude-code",
+          linkScope: "user",
+        })
       : undefined;
     const projectGateway =
       projectInstall && input.ratelConfigPaths.project
         ? makeRatelGatewayEntry({
             bin: input.bin,
-            configPaths: [input.ratelConfigPaths.user, input.ratelConfigPaths.project],
+            agentHost: "claude-code",
+            linkScope: "project",
+            projectRoot,
           })
         : undefined;
     const localGateway =
       localInstall && input.ratelConfigPaths.project && input.ratelConfigPaths.local
         ? makeRatelGatewayEntry({
             bin: input.bin,
-            configPaths: [
-              input.ratelConfigPaths.user,
-              input.ratelConfigPaths.project,
-              input.ratelConfigPaths.local,
-            ],
+            agentHost: "claude-code",
+            linkScope: "local",
+            projectRoot,
           })
         : undefined;
 
     const home = user ?? local;
-    if (home?.raw && (userWrite || localWrite)) {
+    if (home && (userWrite || localWrite)) {
       const next = rewriteHomeClaude(
-        home.raw,
+        home.raw ?? {},
         userGateway,
         localGateway,
         userWrite ? (userRemove ?? new Set()) : null,
         localWrite ? (localRemove ?? new Set()) : null,
-        deriveProjectRoot(input.ratelConfigPaths),
+        projectRoot,
       );
-      pushJsonWrite(changes, home.path, home.raw, next);
+      pushJsonWrite(changes, home.path, home.rawText ?? null, next);
     }
-    if (project?.raw && projectWrite) {
-      const next = rewriteProjectClaude(project.raw, projectGateway, projectRemove ?? new Set());
-      pushJsonWrite(changes, project.path, project.raw, next);
+    if (project && projectWrite) {
+      const next = rewriteProjectClaude(
+        project.raw ?? {},
+        projectGateway,
+        projectRemove ?? new Set(),
+      );
+      pushJsonWrite(changes, project.path, project.rawText ?? null, next);
     }
 
     for (const [scope, names] of input.removeEntriesByScope) {
@@ -165,7 +181,7 @@ async function readClaudeConfig(
     throw new Error(`Failed to parse ${path}: ${(err as Error).message}`);
   }
   if (!isPlainObject(raw)) throw new Error(`${path}: root must be a JSON object`);
-  return { scope, path, raw, mcpServers: readClaudeMcpServers(scope, raw, env) };
+  return { scope, path, raw, rawText: text, mcpServers: readClaudeMcpServers(scope, raw, env) };
 }
 
 function toScopeState(
@@ -181,6 +197,7 @@ function toScopeState(
     available: doc !== null,
     mcpServers: doc?.mcpServers ?? {},
     raw: doc?.raw,
+    rawText: doc?.rawText,
   };
 }
 
@@ -271,12 +288,11 @@ function asServerEntries(v: unknown): Record<string, ServerEntry> {
 }
 
 function pushJsonWrite(
-  changes: FileChange[],
+  changes: PlannedFileWrite[],
   path: string,
-  before: Record<string, unknown>,
+  beforeText: string | null,
   after: Record<string, unknown>,
 ) {
-  const beforeText = serializeJson(before);
   const afterText = serializeJson(after);
   if (beforeText !== afterText)
     changes.push({ kind: "write", path, before: beforeText, after: afterText });

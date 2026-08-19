@@ -78,6 +78,8 @@ export interface AuthProbeOptions {
   authStep?: AuthStep;
   /** Override `~/.ratel/oauth/<name>.json` path. */
   storePath?: (serverName: string) => string;
+  /** Bind persisted credentials to the resolved upstream resource. */
+  storeFingerprint?: (serverName: string) => string | undefined;
   /** Override the user-action timeout for the loopback callback. */
   callbackTimeoutMs?: number;
   /** Sink for human-readable auth-flow progress messages. */
@@ -108,6 +110,7 @@ export async function authProbeEntry(
     defaultAuthStep({
       logger: options.logger,
       storePath: options.storePath ?? defaultOAuthStorePath,
+      storeFingerprint: options.storeFingerprint,
       callbackTimeoutMs: options.callbackTimeoutMs,
     });
 

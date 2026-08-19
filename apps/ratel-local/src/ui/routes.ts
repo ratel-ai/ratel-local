@@ -1,51 +1,73 @@
 import { type SpawnOptions, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { type Dirent, existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   type AuthFlowResult,
   addServerEntry,
-  applyAgentImportAgent,
-  applyAgentImportRatel,
-  applyAgentLink,
   assertRatelScope,
   authorizeServer,
+  type ClaudeStatuslineChangeResult,
   editServerEntry,
   getAgentHostsState,
   getConfigState,
   type ImportConflictStrategy,
-  importAgentServers,
-  installClaudeCodeStatusline,
   isDirectoryEntry,
   loadSkills,
+  type PreparedChangeCoordinator,
   parseSkillMd,
-  previewAgentImport,
-  previewAgentLink,
+  prepareAgentImport,
+  prepareAgentLink,
+  prepareAgentRatelMcpFallbackRemoval,
+  prepareClaudeCodeStatuslineInstall,
+  prepareClaudeCodeStatuslineUninstall,
   type ResolvedBin,
-  removeAgentRatelMcpFallback,
+  type RuntimeContextRef,
+  type RuntimeRevision,
   removeServerEntry,
   type ServerEntry,
   type SupportedAgentHostKind,
-  uninstallClaudeCodeStatusline,
 } from "@ratel-ai/ratel-local-core";
 import {
   attemptRatelAgentPluginInstall,
   unavailableAgentPluginInstaller,
 } from "../agent-plugin.js";
-import { runLink } from "../cli/handlers/link.js";
 import type { HandlerCtx } from "../cli/handlers/types.js";
-import {
-  activateSkills,
-  deactivateSkills,
-  defaultSkillManagePaths,
-  listManaged,
-  type SkillSource,
-} from "../cli/skills/manage.js";
+import { defaultSkillPaths, type SkillSource } from "../cli/skills/paths.js";
 
 export interface ApiResponse {
   status: number;
   body: unknown;
+}
+
+export interface ActiveMcpClientSummary {
+  sessionId: string;
+  name: string;
+  version: string;
+  protocolVersion: string;
+  connectedAt: string;
+  lastSeenAt: string;
+  requestCount: number;
+  title?: string;
+  userAgent?: string;
+  remoteAddress?: string;
+  capabilities: string[];
+  context: RuntimeContextRef;
+  runtimeRevision: RuntimeRevision;
+  stale: boolean;
+  scope: "user" | "project";
+  scopeKey: string;
+  projectRoot?: string;
+  connectorProtocolVersion?: string;
+  agentHost?: "claude-code" | "codex";
+  linkScope?: "user" | "project" | "local";
+  connectorVersion?: string;
+}
+
+export interface ActiveMcpClientReader {
+  listActiveClients(): ActiveMcpClientSummary[];
+  currentRevision?(context: RuntimeContextRef): RuntimeRevision | undefined;
 }
 
 function ok(body: unknown): ApiResponse {
@@ -72,18 +94,33 @@ export async function getAgentHosts(ctx: HandlerCtx): Promise<ApiResponse> {
   return ok(await getAgentHostsState(ctx));
 }
 
-/** Where a skill sits: an unmanaged skill's agent, or "ratel" for managed ones. */
+export function getMcpClients(
+  registry?: ActiveMcpClientReader,
+  context: RuntimeContextRef = { kind: "global" },
+): ApiResponse {
+  const clients = (registry?.listActiveClients() ?? []).filter((client) =>
+    sameRuntimeContext(client.context, context),
+  );
+  return ok({ clients });
+}
+
+function sameRuntimeContext(a: RuntimeContextRef, b: RuntimeContextRef): boolean {
+  return (
+    a.kind === b.kind &&
+    (a.kind === "global" || (b.kind === "project" && a.projectId === b.projectId))
+  );
+}
+
+/** Where a skill sits: an unmanaged skill's agent, or "ratel" for owned ones. */
 type SkillOrigin = SkillSource | "ratel";
 
 /**
- * The skills Ratel serves (under the managed folder `~/.ratel/skills`) plus the
- * unmanaged skills available to manage, from Claude Code (`~/.claude/skills`)
- * and Codex (`~/.codex/skills`). Each carries a `source`: managed skills report
- * the agent they came from (or "ratel" when created here); available skills
- * report the agent whose folder they live in. Loaded as the gateway loads them.
+ * Legacy read model for callers without the scoped resolver. Real Ratel-owned
+ * skills live under `~/.ratel/skills`; native Claude Code and Codex skills are
+ * listed as import candidates. Symlinks are not interpreted as registrations.
  */
 export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
-  const paths = defaultSkillManagePaths(ctx.env.homeDir);
+  const paths = defaultSkillPaths(ctx.env.homeDir);
   const { managedDir, nativeDir, codexDir } = paths;
   const problems: Array<{ id: string; where: "managed" | "available"; reason: string }> = [];
 
@@ -102,17 +139,8 @@ export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
     onProblem: (p) => problems.push({ ...p, where: "available" }),
   });
 
-  // Managed skills carry their origin agent; one created directly in Ratel has
-  // no manifest entry → "ratel".
-  const manifestEntries = await listManaged(paths);
-  const originById = new Map(
-    manifestEntries.map((m) => [m.id, (m.source ?? "claude") as SkillOrigin]),
-  );
-  const modeById = new Map(manifestEntries.map((m) => [m.id, m.mode ?? "moved"]));
-
-  // Available = every unmanaged skill from each agent. A name that lives in both
-  // Claude and Codex appears once per agent (each independently manageable, told
-  // apart by `source`); a name already managed is excluded (it lives in Ratel).
+  // Available = every native skill not shadowed by an owned Ratel copy. A name
+  // present in both hosts remains distinct through its source.
   const available: Array<ReturnType<typeof skillSummary> & { source: SkillSource }> = [];
   for (const [skills, source] of [
     [claude, "claude"],
@@ -130,8 +158,8 @@ export async function getSkills(ctx: HandlerCtx): Promise<ApiResponse> {
     codexDir,
     managed: managed.map((s) => ({
       ...skillSummary(s),
-      source: originById.get(s.id) ?? "ratel",
-      mode: modeById.get(s.id) ?? "ratel",
+      source: "ratel",
+      mode: "ratel",
     })),
     available,
     problems,
@@ -169,7 +197,7 @@ function expandHome(p: string, home: string): string {
  * when nothing matches.
  */
 async function findSkillFile(homeDir: string, id: string): Promise<FoundSkill | null> {
-  const { managedDir, nativeDir, codexDir } = defaultSkillManagePaths(homeDir);
+  const { managedDir, nativeDir, codexDir } = defaultSkillPaths(homeDir);
   const sources: Array<{ dir: string; kind: FoundSkill["kind"] }> = [
     { dir: expandHome(managedDir, homeDir), kind: "managed" },
     { dir: expandHome(nativeDir, homeDir), kind: "claude" },
@@ -213,17 +241,7 @@ export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse
   const found = await findSkillFile(ctx.env.homeDir, id);
   if (!found) return { status: 404, body: { error: `unknown skill: ${id}`, isError: true } };
   const { parsed, kind } = found;
-  // Managed skills report their origin agent (from the manifest), or "ratel"
-  // when created here; unmanaged ones report the agent folder they live in.
-  let source: SkillOrigin;
-  if (kind === "managed") {
-    const entry = (await listManaged(defaultSkillManagePaths(ctx.env.homeDir))).find(
-      (m) => m.id === id,
-    );
-    source = entry?.source ?? "ratel";
-  } else {
-    source = kind;
-  }
+  const source: SkillOrigin = kind === "managed" ? "ratel" : kind;
   return ok({
     id: parsed.name,
     name: parsed.name,
@@ -233,40 +251,8 @@ export async function getSkill(ctx: HandlerCtx, id: string): Promise<ApiResponse
     body: parsed.body,
     state: kind === "managed" ? "active" : "available",
     source,
+    editable: kind === "managed" && (await isOwnedEditableSkill(found.filePath, id)),
   });
-}
-
-/** Manage skills through Ratel as invoke-only. `ids` omitted = activate all;
- *  `source` ("claude"|"codex") disambiguates a name present in both agents. */
-export async function activateSkillsRoute(
-  ctx: HandlerCtx,
-  body: { ids?: unknown; source?: unknown },
-): Promise<ApiResponse> {
-  const ids = optionalStringArray(body.ids, "ids");
-  const source = body.source === "claude" || body.source === "codex" ? body.source : undefined;
-  const result = await activateSkills(defaultSkillManagePaths(ctx.env.homeDir), {
-    ids,
-    source,
-    logger: ctx.log,
-  });
-  const responseBody = {
-    managed: result.managed.map((m) => ({ id: m.id, mode: m.mode ?? "moved" })),
-    skipped: result.skipped,
-  };
-  return ok(responseBody);
-}
-
-/** Stop managing skills through Ratel. `ids` omitted = all. */
-export async function deactivateSkillsRoute(
-  ctx: HandlerCtx,
-  body: { ids?: unknown },
-): Promise<ApiResponse> {
-  const ids = optionalStringArray(body.ids, "ids");
-  const result = await deactivateSkills(defaultSkillManagePaths(ctx.env.homeDir), {
-    ids,
-    logger: ctx.log,
-  });
-  return ok({ unmanaged: result.unmanaged.map((m) => m.id), skipped: result.skipped });
 }
 
 const SAFE_SKILL_NAME = /^[a-z0-9][a-z0-9-]*$/i;
@@ -288,7 +274,7 @@ export async function createSkillRoute(
   const tags = optionalStringArray(body.tags, "tags") ?? [];
   const skillBody = typeof body.body === "string" ? body.body : "";
 
-  const { managedDir } = defaultSkillManagePaths(ctx.env.homeDir);
+  const { managedDir } = defaultSkillPaths(ctx.env.homeDir);
   const skillDir = join(managedDir, name);
   if (existsSync(join(skillDir, "SKILL.md"))) {
     throw new Error(`a skill named "${name}" already exists`);
@@ -296,6 +282,11 @@ export async function createSkillRoute(
   const contents = buildSkillMd({ name, description, tags, body: skillBody });
   await mkdir(skillDir, { recursive: true });
   await writeFile(join(skillDir, "SKILL.md"), contents, "utf8");
+  await writeFile(
+    join(skillDir, ".ratel-skill.json"),
+    `${JSON.stringify({ version: 1, id: name }, null, 2)}\n`,
+    "utf8",
+  );
   return ok({ created: name });
 }
 
@@ -326,6 +317,15 @@ export async function updateSkillRoute(
       body: { error: "manage the skill with Ratel before editing it", isError: true },
     };
   }
+  if (!(await isOwnedEditableSkill(found.filePath, id))) {
+    return {
+      status: 409,
+      body: {
+        error: "only a real Ratel-owned copy with a matching marker can be edited",
+        isError: true,
+      },
+    };
+  }
   const description = requiredString(body.description, "description");
   const tags = optionalStringArray(body.tags, "tags") ?? [];
   // Distinguish "omitted" (a malformed request) from an intentionally empty
@@ -335,6 +335,21 @@ export async function updateSkillRoute(
   const contents = rewriteSkillMd(found.raw, { description, tags, body: nextBody });
   await writeFileAtomic(found.filePath, contents);
   return ok({ updated: id });
+}
+
+async function isOwnedEditableSkill(filePath: string, id: string): Promise<boolean> {
+  const skillDir = dirname(filePath);
+  try {
+    const info = await lstat(skillDir);
+    if (!info.isDirectory() || info.isSymbolicLink()) return false;
+    const marker = JSON.parse(await readFile(join(skillDir, ".ratel-skill.json"), "utf8")) as {
+      version?: unknown;
+      id?: unknown;
+    };
+    return marker.version === 1 && marker.id === id;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -539,114 +554,67 @@ function resolveUiRatelBin(): ResolvedBin {
   return { command, args: [], source: "env" };
 }
 
-export async function doImport(ctx: HandlerCtx): Promise<ApiResponse> {
-  const { log } = await withCapture(ctx, (c) =>
-    importAgentServers(c, { envVar: resolveRatelBin() }).then(() => undefined),
-  );
-  return ok({ log });
-}
-
-export async function doLink(ctx: HandlerCtx): Promise<ApiResponse> {
-  const log: string[] = [];
-  const captureCtx: HandlerCtx = {
-    ...ctx,
-    log: (message) => log.push(message),
-    prompts: {
-      ...ctx.prompts,
-      intro() {},
-      note(message, title) {
-        log.push(title ? `${title}: ${message}` : message);
-      },
-      outro(message) {
-        log.push(message);
-      },
-      cancel(message) {
-        if (message) log.push(message);
-      },
-    },
-  };
-  await runLink(captureCtx, { yes: true, envVar: resolveRatelBin() });
-  return ok({ log });
-}
-
-export async function previewImport(
+export async function prepareImport(
   ctx: HandlerCtx,
   body: Record<string, unknown>,
+  preparedChanges: PreparedChangeCoordinator,
 ): Promise<ApiResponse> {
   return ok(
-    await previewAgentImport(ctx, normalizeImportBody(body), { envVar: resolveRatelBin() }),
+    await prepareAgentImport(ctx, normalizeImportBody(body), {
+      envVar: resolveRatelBin(),
+      preparedChanges,
+    }),
   );
 }
 
-export async function previewLink(
+export async function prepareLink(
   ctx: HandlerCtx,
   body: Record<string, unknown>,
+  preparedChanges: PreparedChangeCoordinator,
 ): Promise<ApiResponse> {
-  return ok(await previewAgentLink(ctx, normalizeLinkBody(body), { envVar: resolveRatelBin() }));
-}
-
-export async function applyImportRatel(
-  ctx: HandlerCtx,
-  body: Record<string, unknown>,
-): Promise<ApiResponse> {
-  const { result, log } = await withCapture(ctx, (c) =>
-    applyAgentImportRatel(c, normalizeApplyImportBody(body), { envVar: resolveRatelBin() }),
+  const input = normalizeLinkBody(body);
+  return ok(
+    await prepareAgentLink(ctx, input, {
+      envVar: resolveRatelBin(),
+      preparedChanges,
+      beforeCommit: async () => {
+        const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+        const pluginResult = await attemptRatelAgentPluginInstall(input.hostKind, installPlugin);
+        if (pluginResult.installed) {
+          return {
+            action: "cancel",
+            result: {
+              flow: "link" as const,
+              hostKind: input.hostKind,
+              mode: "plugin" as const,
+              log: [pluginResult.message, "Reload or restart the agent to load the plugin."],
+            },
+          };
+        }
+        if (pluginResult.pluginAvailable) {
+          throw new Error(pluginResult.message);
+        }
+        return {
+          action: "commit",
+          result: {
+            flow: "link" as const,
+            hostKind: input.hostKind,
+            mode: "mcp-fallback" as const,
+            log: [
+              pluginResult.message,
+              "Plugin installation failed; applied the reviewed explicit MCP gateway fallback instead.",
+            ],
+          },
+        };
+      },
+    }),
   );
-  if (!result) log.push("nothing to apply");
-  return ok({ log });
-}
-
-export async function applyImportAgent(
-  ctx: HandlerCtx,
-  body: Record<string, unknown>,
-): Promise<ApiResponse> {
-  const { result, log } = await withCapture(ctx, (c) =>
-    applyAgentImportAgent(c, normalizeApplyImportBody(body), { envVar: resolveRatelBin() }),
-  );
-  if (!result) log.push("nothing to apply");
-  return ok({ log });
-}
-
-export async function applyLink(
-  ctx: HandlerCtx,
-  body: Record<string, unknown>,
-): Promise<ApiResponse> {
-  const input = normalizeApplyLinkBody(body);
-  const interop = { envVar: resolveRatelBin() };
-  const preview = await previewAgentLink(ctx, input, interop);
-  if (input.planHash !== preview.stageHashes.agent) {
-    throw new Error("preview is stale; scan again and review the latest changes before applying");
-  }
-  const shouldInstallPlugin =
-    preview.host.connection.kind === "none" && preview.plan.agentChanges.length > 0;
-  if (shouldInstallPlugin) {
-    const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
-    const pluginResult = await attemptRatelAgentPluginInstall(input.hostKind, installPlugin);
-    if (pluginResult.installed) {
-      return ok({
-        mode: "plugin",
-        log: [
-          pluginResult.message,
-          `Reload or restart ${preview.host.displayName} to load the plugin.`,
-        ],
-      });
-    }
-    const { result, log } = await withCapture(ctx, (c) => applyAgentLink(c, input, interop));
-    log.unshift(
-      pluginResult.message,
-      "Plugin installation failed; applied the reviewed explicit MCP gateway fallback instead.",
-    );
-    if (!result) log.push("nothing to apply");
-    return ok({ mode: "mcp-fallback", log });
-  }
-  const { result, log } = await withCapture(ctx, (c) => applyAgentLink(c, input, interop));
-  if (!result) log.push("nothing to apply");
-  return ok({ mode: "config", log });
 }
 
 export async function repairAgentConnection(
   ctx: HandlerCtx,
   body: Record<string, unknown>,
+  preparedChanges: PreparedChangeCoordinator,
 ): Promise<ApiResponse> {
   const hostKind = requiredHostKind(body.hostKind);
   const hosts = await getAgentHostsState(ctx);
@@ -662,20 +630,25 @@ export async function repairAgentConnection(
   }
 
   const log: string[] = [];
-  if (host.connection.kind === "explicit") {
-    const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
-    const pluginResult = await attemptRatelAgentPluginInstall(hostKind, installPlugin);
-    log.push(pluginResult.message);
-    if (!pluginResult.installed) {
-      throw new Error(`${pluginResult.message}\nYour existing MCP connection was left unchanged.`);
-    }
+  const installPlugin = ctx.installAgentPlugin ?? unavailableAgentPluginInstaller;
+  const pluginResult = await attemptRatelAgentPluginInstall(hostKind, installPlugin, {
+    reconcileMarketplace: host.connection.kind === "duplicate",
+  });
+  log.push(pluginResult.message);
+  if (!pluginResult.installed) {
+    throw new Error(`${pluginResult.message}\nYour existing MCP connection was left unchanged.`);
   }
 
-  const captured = await withCapture(ctx, (c) =>
-    removeAgentRatelMcpFallback(c, { hostKind }, { envVar: resolveRatelBin() }),
+  const prepared = await prepareAgentRatelMcpFallbackRemoval(
+    ctx,
+    { hostKind },
+    { envVar: resolveRatelBin(), preparedChanges },
   );
-  log.push(...captured.log);
-  if (!captured.result) throw new Error("No explicit Ratel MCP fallback was found to remove.");
+  if (prepared.preview.removedEntries === 0) {
+    preparedChanges.cancel(prepared.changeId);
+    throw new Error("No explicit Ratel MCP fallback was found to remove.");
+  }
+  await preparedChanges.commit(prepared.changeId);
   log.push(
     host.connection.kind === "duplicate"
       ? "Duplicate installation fixed. Ratel is now connected through the plugin."
@@ -687,29 +660,38 @@ export async function repairAgentConnection(
 export async function installClaudeStatuslineRoute(
   ctx: HandlerCtx,
   body: Record<string, unknown>,
+  preparedChanges: PreparedChangeCoordinator,
 ): Promise<ApiResponse> {
-  const { result, log } = await withCapture(ctx, (c) =>
-    installClaudeCodeStatusline(c, {
-      bin: resolveUiRatelBin(),
-      force: body.force === true,
-    }),
-  );
+  const prepared = await prepareClaudeCodeStatuslineInstall(ctx, {
+    bin: resolveUiRatelBin(),
+    force: body.force === true,
+    preparedChanges,
+  });
+  const commit = await preparedChanges.commit<ClaudeStatuslineChangeResult>(prepared.changeId);
+  const result = commit.result;
+  const log: string[] = [];
   log.push(
     result.changed
       ? `installed Ratel statusline into ${result.path}`
       : "Ratel statusline already installed",
   );
-  return ok({ log, state: result.state });
+  return ok({ ...commit, result: { ...result, log } });
 }
 
-export async function uninstallClaudeStatuslineRoute(ctx: HandlerCtx): Promise<ApiResponse> {
-  const { result, log } = await withCapture(ctx, (c) => uninstallClaudeCodeStatusline(c));
+export async function uninstallClaudeStatuslineRoute(
+  ctx: HandlerCtx,
+  preparedChanges: PreparedChangeCoordinator,
+): Promise<ApiResponse> {
+  const prepared = await prepareClaudeCodeStatuslineUninstall(ctx, { preparedChanges });
+  const commit = await preparedChanges.commit<ClaudeStatuslineChangeResult>(prepared.changeId);
+  const result = commit.result;
+  const log: string[] = [];
   log.push(
     result.changed
       ? `removed Ratel statusline from ${result.path}`
       : "no Ratel statusline to remove",
   );
-  return ok({ log, state: result.state });
+  return ok({ ...commit, result: { ...result, log } });
 }
 
 function formatAuthResults(results: AuthFlowResult[]): string[] {
@@ -733,23 +715,9 @@ function normalizeImportBody(body: Record<string, unknown>) {
   };
 }
 
-function normalizeApplyImportBody(body: Record<string, unknown>) {
-  return {
-    ...normalizeImportBody(body),
-    planHash: requiredString(body.planHash, "planHash"),
-  };
-}
-
 function normalizeLinkBody(body: Record<string, unknown>) {
   return {
     hostKind: requiredHostKind(body.hostKind),
-  };
-}
-
-function normalizeApplyLinkBody(body: Record<string, unknown>) {
-  return {
-    ...normalizeLinkBody(body),
-    planHash: requiredString(body.planHash, "planHash"),
   };
 }
 

@@ -1,16 +1,16 @@
 import {
   type BackupManifest,
+  documentRevision,
   editServerEntry,
   parseConfig,
   type RatelConfig,
   type RatelScope,
   ratelConfigPath,
-  readJson,
   resolveScope,
   type ServerEntry,
 } from "@ratel-ai/ratel-local-core";
 import type { PromptAdapter } from "../prompts.js";
-import type { HandlerCtx } from "./types.js";
+import type { CliServerMutator, HandlerCtx } from "./types.js";
 
 const FIELD_FLAGS = [
   "description",
@@ -34,17 +34,33 @@ const INTERACTIVE_FIELDS: { value: FieldFlag | "done"; label: string }[] = [
   { value: "done", label: "(done — write changes)" },
 ];
 
-export async function runEdit(ctx: HandlerCtx): Promise<BackupManifest> {
+export async function runEdit(
+  ctx: HandlerCtx,
+  options: { mutateServer?: CliServerMutator } = {},
+): Promise<BackupManifest | undefined> {
   const scope = readScope(ctx);
   const name = readRequiredString(ctx, "name");
   const path = ratelConfigPath(scope, ctx.env);
-  const current = await readJson<RatelConfig>(ctx.fs, path);
+  const raw = await ctx.fs.read(path);
+  const current = raw ? (JSON.parse(raw) as RatelConfig) : null;
   if (!current?.mcpServers[name]) {
     throw new Error(`entry "${name}" not found at scope ${scope}`);
   }
 
   const updated = await assembleUpdatedEntry(ctx, current.mcpServers[name]);
   parseConfig({ mcpServers: { [name]: updated } });
+
+  if (options.mutateServer) {
+    const result = await options.mutateServer({
+      action: "edit",
+      scope,
+      name,
+      entry: updated,
+      ...(raw ? { expectedRevision: documentRevision(Buffer.from(raw, "utf8")) } : {}),
+    });
+    ctx.log(`updated "${name}" at ${result.path}`);
+    return undefined;
+  }
 
   const result = await editServerEntry(ctx, { scope, name, entry: updated });
   ctx.log(`updated "${name}" at ${result.path}`);

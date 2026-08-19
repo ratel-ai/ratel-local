@@ -18,7 +18,7 @@ function DetailLabel({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
       data-slot="detail-label"
-      className={cn("font-mono text-[11px] text-muted-foreground uppercase", className)}
+      className={cn("font-mono text-xs text-muted-foreground uppercase", className)}
       {...props}
     />
   );

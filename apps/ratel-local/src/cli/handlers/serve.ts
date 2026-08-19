@@ -35,6 +35,11 @@ export interface ServeResult {
   shutdown: () => Promise<void>;
 }
 
+export interface ConfiguredGateway {
+  config: ReturnType<typeof mergeConfigs>;
+  gateway: Awaited<ReturnType<typeof buildGatewayFromConfig>>;
+}
+
 export interface AutoConfigResolution {
   configPaths: string[];
   projectRoot?: string;
@@ -46,32 +51,7 @@ export async function runServe(
   options: ServeOptions,
   log: (m: string) => void,
 ): Promise<ServeResult> {
-  const autoConfig = booleanFlag(parsed.flags["auto-config"]);
-  if (autoConfig && parsed.configPaths.length > 0) {
-    throw new Error("ratel-local serve: --auto-config cannot be combined with --config paths");
-  }
-  if (!autoConfig && parsed.configPaths.length === 0) {
-    throw new Error("usage: ratel-local serve <config.json> [--config <path> ...]");
-  }
-
-  const readConfig = options.readConfig ?? defaultReadConfig;
-  const configPaths = autoConfig
-    ? resolveAutoConfig(parsed, options, log).configPaths
-    : parsed.configPaths;
-  const parts = [];
-  for (const p of configPaths) {
-    const raw = await readConfig(p);
-    parts.push(parseConfig(raw));
-  }
-  const config = mergeConfigs(parts);
-
-  const trace = await resolveTraceSink(parsed, log);
-
-  const gateway = await buildGatewayFromConfig(config, {
-    transportFactory: options.transportFactory,
-    logger: log,
-    ...(trace ? { trace } : {}),
-  });
+  const { config, gateway } = await buildConfiguredGateway(parsed, options, log);
 
   const downstream = options.serverTransport ?? new StdioServerTransport();
   const exposed = await createMcpServer(gateway.catalog, {
@@ -93,6 +73,42 @@ export async function runServe(
       await gateway.close();
     },
   };
+}
+
+export async function buildConfiguredGateway(
+  parsed: ParsedArgs,
+  options: ServeOptions,
+  log: (m: string) => void,
+): Promise<ConfiguredGateway> {
+  const command = parsed.group;
+  const autoConfig = booleanFlag(parsed.flags["auto-config"]);
+  if (autoConfig && parsed.configPaths.length > 0) {
+    throw new Error(`ratel-local ${command}: --auto-config cannot be combined with --config paths`);
+  }
+  if (!autoConfig && parsed.configPaths.length === 0) {
+    throw new Error(`usage: ratel-local ${command} <config.json> [--config <path> ...]`);
+  }
+
+  const readConfig = options.readConfig ?? defaultReadConfig;
+  const configPaths = autoConfig
+    ? resolveAutoConfig(parsed, options, log).configPaths
+    : parsed.configPaths;
+  const parts = [];
+  for (const p of configPaths) {
+    const raw = await readConfig(p);
+    parts.push(parseConfig(raw));
+  }
+  const config = mergeConfigs(parts);
+
+  const trace = await resolveTraceSink(parsed, log, options.cwd ?? process.cwd());
+
+  const gateway = await buildGatewayFromConfig(config, {
+    transportFactory: options.transportFactory,
+    logger: log,
+    ...(trace ? { trace } : {}),
+  });
+
+  return { config, gateway };
 }
 
 export function resolveAutoConfig(
@@ -169,6 +185,7 @@ function resolveProjectRoot(input: {
 async function resolveTraceSink(
   parsed: ParsedArgs,
   log: (m: string) => void,
+  cwd: string,
 ): Promise<TraceSinkConfig | undefined> {
   const flag = parsed.flags.telemetry;
   const flagFile = parsed.flags["telemetry-file"];
@@ -180,7 +197,7 @@ async function resolveTraceSink(
   if (typeof flagFile === "string" && flagFile.length > 0) {
     return { kind: "jsonl", sessionId, path: flagFile };
   }
-  const bucket = projectBucketDir(defaultTelemetryDir(), process.cwd());
+  const bucket = projectBucketDir(defaultTelemetryDir(), cwd);
   try {
     await mkdir(bucket, { recursive: true });
   } catch (err) {

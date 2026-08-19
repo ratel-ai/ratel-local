@@ -15,7 +15,26 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type { SkillSummary } from "@/lib/skills";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { projectLabel } from "@/lib/projects";
+import { ratelQueryKeys } from "@/lib/ratel-query";
+import {
+  applySkillImportSelections,
+  availableSkillImportScopes,
+  buildSkillImportSelections,
+  defaultSkillImportTarget,
+  type SkillImportMode,
+  type SkillImportScope,
+  type SkillSummary,
+  uniqueSkillImports,
+} from "@/lib/skills";
+import { useRatelMutation } from "@/lib/use-ratel-mutation";
 import { cn } from "@/lib/utils";
 
 interface ImportSkillsDialogProps {
@@ -25,8 +44,6 @@ interface ImportSkillsDialogProps {
   available: SkillSummary[];
   /** Restrict the list to one agent's skills (Agent Setup). Omit to list all. */
   source?: SkillSource;
-  /** Called after successful activation so the caller can refresh its lists. */
-  onImported: () => void | Promise<void>;
 }
 
 /** A skill name can live in both Claude Code and Codex, so a row is keyed by source. */
@@ -37,32 +54,54 @@ export function skillKey(skill: SkillSummary): string {
 const INITIAL_SKILL_LIMIT = 30;
 const LOAD_MORE_SKILL_COUNT = 30;
 
-interface ActivateSkillsResponse {
-  managed: Array<{ id: string; mode: string }>;
-  skipped?: Array<{ id: string; reason: string }>;
-}
-
-/**
- * Manage unmanaged Claude Code / Codex skills through Ratel. A single screen:
- * pick skills, then activate. There is no conflict step — a name
- * already managed by Ratel is excluded from `available` upstream — so unlike the
- * MCP import this stays a simple checkbox list.
- */
+/** Import opaque discovery candidates into one explicit Ratel scope and mode. */
 export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
-  const { request, runAction, busy } = useRatelApp();
+  const { context, projects, request } = useRatelApp();
   const skills = props.source
     ? props.available.filter((skill) => skill.source === props.source)
     : props.available;
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const initialTarget = defaultSkillImportTarget(context);
+  const [scope, setScope] = useState<SkillImportScope>(initialTarget?.scope ?? "user");
+  const [mode, setMode] = useState<SkillImportMode>(initialTarget?.mode ?? "reference");
+  const availableScopes = availableSkillImportScopes(context);
+  const project =
+    context.kind === "project"
+      ? projects.find((candidate) => candidate.id === context.projectId)
+      : undefined;
+  const importMutation = useRatelMutation<
+    unknown,
+    { chosen: SkillSummary[]; mode: SkillImportMode; scope: SkillImportScope }
+  >({
+    invalidate: [ratelQueryKeys.skills(context)],
+    mutationKey: [...ratelQueryKeys.skills(context), "import"],
+    mutationFn: async (values) => {
+      const selections = buildSkillImportSelections(values.chosen, context, {
+        scope: values.scope,
+        mode: values.mode,
+      });
+      await applySkillImportSelections(request, selections);
+    },
+    onSuccess: () => props.onOpenChange(false),
+    successMessage: (_data, values) =>
+      `Imported ${values.chosen.length} skill${values.chosen.length === 1 ? "" : "s"} into ${values.scope}`,
+  });
 
   // Start each session with a clean slate; the user opts in per skill (or all).
   useEffect(() => {
     if (props.open) {
       setSelected(new Set());
+      const target = defaultSkillImportTarget(context);
+      if (target) {
+        setScope(target.scope);
+        setMode(target.mode);
+      }
     }
-  }, [props.open]);
+  }, [context, props.open]);
 
   const chosen = skills.filter((skill) => selected.has(skillKey(skill)));
+  const importable = uniqueSkillImports(chosen);
+  const skippedDuplicateCount = chosen.length - importable.length;
 
   const toggle = (skill: SkillSummary) => {
     setSelected((current) => {
@@ -86,40 +125,9 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
     });
   };
 
-  const submit = async () => {
-    if (chosen.length === 0) return;
-    // `activate` takes a single `source` to disambiguate a name present in both
-    // agents, so activate each source group separately.
-    const idsBySource = new Map<SkillSource, string[]>();
-    for (const skill of chosen) {
-      const ids = idsBySource.get(skill.source) ?? [];
-      ids.push(skill.id);
-      idsBySource.set(skill.source, ids);
-    }
-    const managed: ActivateSkillsResponse["managed"] = [];
-    const skipped: NonNullable<ActivateSkillsResponse["skipped"]> = [];
-    const ok = await runAction("Skill management complete", async () => {
-      for (const [source, ids] of idsBySource) {
-        const result = await request<ActivateSkillsResponse>("/api/skills/activate", {
-          method: "POST",
-          body: { ids, source },
-        });
-        managed.push(...result.managed);
-        skipped.push(...(result.skipped ?? []));
-      }
-      if (managed.length === 0 && skipped.length > 0)
-        throw new Error(skippedSkillsMessage(skipped));
-      return {
-        log: [
-          `Now managing ${managed.length} skill${managed.length === 1 ? "" : "s"}`,
-          ...(skipped.length > 0 ? [skippedSkillsMessage(skipped)] : []),
-        ],
-      };
-    });
-    if (ok) {
-      props.onOpenChange(false);
-      await props.onImported();
-    }
+  const submit = () => {
+    if (importable.length === 0) return;
+    importMutation.mutate({ chosen: importable, mode, scope });
   };
 
   return (
@@ -133,25 +141,98 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
+        {availableScopes.length > 0 ? (
+          <div className="grid gap-3 rounded-md border border-border bg-muted/15 p-3 sm:grid-cols-2">
+            <div className="grid gap-1.5 text-sm">
+              <span className="font-medium">Target scope</span>
+              <Select value={scope} onValueChange={(value) => setScope(value as SkillImportScope)}>
+                <SelectTrigger aria-label="Target scope" className="w-full">
+                  <SelectValue>{scopeLabel(scope)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {availableScopes.map((candidateScope) => (
+                    <SelectItem key={candidateScope} value={candidateScope}>
+                      {scopeLabel(candidateScope)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5 text-sm">
+              <span className="font-medium">Import mode</span>
+              <Select value={mode} onValueChange={(value) => setMode(value as SkillImportMode)}>
+                <SelectTrigger aria-label="Import mode" className="w-full">
+                  <SelectValue>{mode === "copy" ? "Owned copy" : "Reference"}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="reference">Reference</SelectItem>
+                  <SelectItem value="copy">Owned copy</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-muted-foreground text-xs sm:col-span-2">
+              {scope === "user" ? (
+                <>
+                  Destination: <strong className="text-foreground">Global</strong> · User scope
+                </>
+              ) : (
+                <>
+                  Project:{" "}
+                  <strong className="text-foreground">
+                    {project
+                      ? projectLabel(project)
+                      : context.kind === "project"
+                        ? context.projectId
+                        : "Unknown"}
+                  </strong>{" "}
+                  · {scopeLabel(scope)} scope
+                </>
+              )}
+            </p>
+          </div>
+        ) : (
+          <p className="rounded-md border border-border px-3 py-4 text-muted-foreground text-sm">
+            Select Global or a project before importing skills. All projects is read-only.
+          </p>
+        )}
+
         {skills.length === 0 ? (
           <p className="py-6 text-center text-muted-foreground text-sm">
             No external skills to manage.
           </p>
         ) : (
-          <SkillImportPicker
-            title="Skills"
-            onToggle={toggle}
-            onToggleAll={toggleAll}
-            resetKey={`${props.open}:${skills.length}`}
-            selected={selected}
-            skills={skills}
-          />
+          <>
+            <SkillImportPicker
+              title="Skills"
+              onToggle={toggle}
+              onToggleAll={toggleAll}
+              resetKey={`${props.open}:${skills.length}`}
+              selected={selected}
+              skills={skills}
+            />
+            {skippedDuplicateCount > 0 ? (
+              <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-800 text-xs dark:text-amber-300">
+                {skippedDuplicateCount === 1
+                  ? "1 selected harness copy shares"
+                  : `${skippedDuplicateCount} selected harness copies share`}{" "}
+                an ID with an earlier selection and will be skipped. Claude Code copies precede
+                Codex copies.
+              </p>
+            ) : null}
+          </>
         )}
 
         <DialogFooter>
           <DialogClose render={<Button size="sm" variant="outline" />}>Cancel</DialogClose>
-          <Button disabled={busy || chosen.length === 0} onClick={() => void submit()} size="sm">
-            {chosen.length > 0 ? `Manage ${chosen.length}` : "Manage"}
+          <Button
+            disabled={
+              importMutation.isPending || importable.length === 0 || availableScopes.length === 0
+            }
+            onClick={() => void submit()}
+            size="sm"
+          >
+            {importMutation.isPending && <Button.LoadingIndicator label="Managing skills" />}
+            {importable.length > 0 ? `Manage ${importable.length}` : "Manage"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -159,9 +240,8 @@ export function ImportSkillsDialog(props: ImportSkillsDialogProps) {
   );
 }
 
-function skippedSkillsMessage(skipped: Array<{ id: string; reason: string }>): string {
-  const details = skipped.map((s) => `${s.id}: ${s.reason}`).join("; ");
-  return `Could not manage selected skill${skipped.length === 1 ? "" : "s"} (${details})`;
+function scopeLabel(scope: SkillImportScope): string {
+  return scope[0].toUpperCase() + scope.slice(1);
 }
 
 export function SkillImportPicker(props: {

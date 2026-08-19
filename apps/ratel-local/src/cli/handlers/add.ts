@@ -1,27 +1,41 @@
+import { realpath } from "node:fs/promises";
 import {
   type AuthProbeResult,
   addServerEntry,
   authProbeEntry,
   type BackupManifest,
+  type McpConfigDocument,
+  type OAuthStoreKey,
   parseConfig,
   probeEntryInstructions,
+  projectIdFromCanonicalRoot,
   type RatelScope,
+  type ResolvedMcpEntry,
+  resolveMcpEntries,
   resolveScope,
   type ServerEntry,
 } from "@ratel-ai/ratel-local-core";
-import type { HandlerCtx } from "./types.js";
+import type { CliServerMutator, HandlerCtx } from "./types.js";
 
 const OAUTH_FLAGS = ["client-id", "client-secret", "callback-port", "oauth-scope"] as const;
 
 export type ProbeFn = (name: string, entry: ServerEntry) => Promise<string | undefined>;
-export type AuthProbeFn = (name: string, entry: ServerEntry) => Promise<AuthProbeResult>;
+export type AuthProbeFn = (
+  name: string,
+  entry: ServerEntry,
+  oauthKey: OAuthStoreKey,
+) => Promise<AuthProbeResult>;
 
 export interface RunAddOptions {
   probe?: ProbeFn;
   authProbe?: AuthProbeFn;
+  mutateServer?: CliServerMutator;
 }
 
-export async function runAdd(ctx: HandlerCtx, opts: RunAddOptions = {}): Promise<BackupManifest> {
+export async function runAdd(
+  ctx: HandlerCtx,
+  opts: RunAddOptions = {},
+): Promise<BackupManifest | undefined> {
   const scope = readScope(ctx);
   const name = readName(ctx);
   const entry = assembleEntry(ctx);
@@ -30,9 +44,15 @@ export async function runAdd(ctx: HandlerCtx, opts: RunAddOptions = {}): Promise
 
   parseConfig({ mcpServers: { [name]: entry } });
 
-  await maybeProbeAndAuth(ctx, name, entry, opts);
+  await maybeProbeAndAuth(ctx, scope, name, entry, opts);
 
   const force = ctx.argv.flags.force === true;
+  if (opts.mutateServer) {
+    const result = await opts.mutateServer({ action: "add", scope, name, entry, force });
+    ctx.log(`added "${name}" to ${result.path}`);
+    logEntryRecap(ctx, scope, name, entry);
+    return undefined;
+  }
   const result = await addServerEntry(ctx, { scope, name, entry, overwrite: force });
   ctx.log(`added "${name}" to ${result.path}`);
   logEntryRecap(ctx, scope, name, entry);
@@ -177,6 +197,7 @@ function parseHeaders(ctx: HandlerCtx): Record<string, string> | undefined {
 
 async function maybeProbeAndAuth(
   ctx: HandlerCtx,
+  scope: RatelScope,
   name: string,
   entry: ServerEntry,
   opts: RunAddOptions,
@@ -184,10 +205,18 @@ async function maybeProbeAndAuth(
   if (ctx.argv.flags["fetch-description"] === false) return;
 
   if (entry.type === "http" || entry.type === "sse") {
-    const authProbe = opts.authProbe ?? ((n, e) => authProbeEntry(n, e, { logger: ctx.log }));
+    const oauthEntry = await resolveNewMcpEntry(ctx, scope, name, entry);
+    const authProbe =
+      opts.authProbe ??
+      ((n, e, oauthKey) =>
+        authProbeEntry(n, e, {
+          logger: ctx.log,
+          storePath: () => oauthKey.path,
+          storeFingerprint: () => oauthKey.fingerprint,
+        }));
     let result: AuthProbeResult;
     try {
-      result = await authProbe(name, entry);
+      result = await authProbe(name, entry, oauthEntry.oauthKey);
     } catch (err) {
       ctx.log(
         `[ratel] could not authorize ${name}: ${(err as Error).message}; run \`ratel-local mcp auth ${name}\` to retry`,
@@ -220,6 +249,34 @@ async function maybeProbeAndAuth(
     entry.description = fetched;
     ctx.log(`[ratel] fetched description from ${name}'s upstream instructions`);
   }
+}
+
+async function resolveNewMcpEntry(
+  ctx: HandlerCtx,
+  scope: RatelScope,
+  name: string,
+  entry: ServerEntry,
+): Promise<ResolvedMcpEntry> {
+  const projectRoot = ctx.env.projectRoot
+    ? await realpath(ctx.env.projectRoot).catch(() => ctx.env.projectRoot)
+    : undefined;
+  if (scope !== "user" && !projectRoot) {
+    throw new Error(`--scope ${scope} requires a project root`);
+  }
+  const ref =
+    scope === "user"
+      ? ({ scope: "user" } as const)
+      : ({ scope, projectId: projectIdFromCanonicalRoot(projectRoot as string) } as const);
+  const documents: McpConfigDocument[] = [
+    { ref, config: parseConfig({ mcpServers: { [name]: entry } }) },
+  ];
+  const resolved = resolveMcpEntries({
+    homeDir: ctx.env.homeDir,
+    ...(projectRoot ? { projectRoot } : {}),
+    documents,
+  }).find((candidate) => candidate.name === name && candidate.status === "effective");
+  if (!resolved) throw new Error(`could not resolve OAuth scope for upstream "${name}"`);
+  return resolved;
 }
 
 function applyOAuthFlags(ctx: HandlerCtx, entry: ServerEntry): void {

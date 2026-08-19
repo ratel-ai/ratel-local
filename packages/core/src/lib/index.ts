@@ -1,10 +1,19 @@
-export type { RatelConfig, ServerEntry, SkillsConfig } from "./config.js";
+export type {
+  RatelConfig,
+  RatelConfigDocument,
+  RetrievalConfig,
+  ServerEntry,
+  SkillEntry,
+  SkillsConfig,
+} from "./config.js";
 export { ConfigError, mergeConfigs, parseConfig } from "./config.js";
+export { expandEnvPlaceholders } from "./env-placeholders.js";
 export { isDirectoryEntry } from "./fs.js";
 export type {
   BuildGatewayOptions,
   GatewayHandle,
   TransportFactory,
+  TransportRuntimeInputs,
 } from "./gateway.js";
 export {
   buildGatewayFromConfig,
@@ -16,13 +25,20 @@ export type {
   AuthStep,
   AuthStepResult,
 } from "./oauth/flow.js";
-export { defaultAuthStep, defaultOAuthStorePath, runAuthFlow } from "./oauth/flow.js";
+export {
+  DENSE_AUTH_RECONNECT_REASON,
+  defaultAuthStep,
+  defaultOAuthStorePath,
+  markDenseAuthReconnectRequired,
+  runAuthFlow,
+} from "./oauth/flow.js";
 export { RatelOAuthProvider } from "./oauth/provider.js";
 export { RatelOAuthStore } from "./oauth/store.js";
 export type { CreateMcpServerOptions, McpServerHandle } from "./server.js";
 export { createMcpServer } from "./server.js";
 export type { LoadSkillsOptions } from "./skills/load.js";
 export { defaultSkillDirs, loadSkills, parseSkillMd, SkillLoadError } from "./skills/load.js";
+export * from "./skills/resolve.js";
 export { AUTH_TOOL_ID } from "./tools/auth.js";
 export type { ToolTokenEstimate, UsageEstimatorOptions } from "./usage.js";
 export {

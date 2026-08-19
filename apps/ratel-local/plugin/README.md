@@ -21,13 +21,35 @@ Claude Code currently supports display names in plugin and marketplace metadata,
 but its documented manifest schema does not include icon or logo fields. The
 shared `assets/icon.svg` remains referenced by the Codex manifest.
 
-The plugin MCP config starts Ratel over stdio through `npx`:
+The plugin MCP config starts the lightweight scoped connector through `npx`:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.5.0 serve --auto-config
+npx -y @ratel-ai/ratel-local@0.8.0 connect
 ```
 
-`--auto-config` loads `~/.ratel/config.json` plus project and local Ratel configs when a project root is discoverable.
+The connector forwards the agent's resolved project root to the authenticated
+loopback daemon. The daemon loads `~/.ratel/config.json` plus that project's
+`.ratel/config.json` and `.ratel/config.local.json`, sharing upstream
+connections only between sessions in the same canonical project.
+
+Run complete onboarding once on macOS or Linux:
+
+```bash
+npx -y @ratel-ai/ratel-local@0.8.0 setup
+```
+
+The wizard installs, updates, or starts the daemon; detects Claude Code and
+Codex; connects selected agents through this plugin; and separately offers a
+previewed, confirmed import of native MCP servers and skills. Re-running setup
+is safe.
+
+For unattended daemon setup, use `setup --daemon-only --yes`. Agent automation
+requires explicit repeatable `--agent` flags, and `--yes` never imports native
+configuration automatically.
+
+If the daemon is missing or stopped, the connector still starts and exposes
+status, start, and setup-guidance MCP tools. The setup tool returns the terminal
+command above; it never launches interactive prompts on MCP stdio.
 
 ## Hooks
 
@@ -76,6 +98,11 @@ claude plugin marketplace add ratel-ai/ratel-local
 claude plugin install ratel-local@ratel
 ```
 
+Stable Ratel Local packages use the marketplace from the repository's default
+`main` branch. Prerelease packages alone reconcile that same marketplace to the
+immutable Git tag matching their exact package version; stable `0.8.0` does not
+use an RC branch or ref.
+
 If Claude Code is already running, restart it or run `/reload-plugins` inside
 the session.
 
@@ -93,4 +120,13 @@ Existing explicit config flows still work:
 
 ```bash
 ratel-local serve --config ~/.ratel/config.json
+```
+
+BM25 remains the default capability search method. Configure opt-in semantic
+or hybrid retrieval through the scoped CLI and preflight the model before
+reconnecting the agent:
+
+```bash
+ratel-local retrieval configure --scope project --method hybrid --source built-in
+ratel-local retrieval prepare --scope project
 ```

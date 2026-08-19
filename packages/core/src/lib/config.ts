@@ -1,4 +1,7 @@
+import { isAbsolute } from "node:path";
+import type { EmbeddingSpec, SearchMethod } from "@ratel-ai/sdk";
 import { isPlainObject } from "../json.js";
+import { isSafeSkillId } from "../skill-id.js";
 
 export interface ServerEntry {
   type: string;
@@ -22,21 +25,65 @@ export interface ServerEntry {
 
 const HTTP_ONLY_FIELDS = ["callbackPort", "clientId", "clientSecret", "scope"] as const;
 
-/** Ratel-managed skills: directories scanned for `<name>/SKILL.md`. */
+export type SkillSource = "claude" | "codex" | "ratel" | "unknown";
+
+export interface SkillHostPolicy {
+  mode: "manual-only";
+  source: "claude" | "codex-current" | "codex-legacy";
+  previousLine?: string;
+  createdFile?: boolean;
+  createdPolicy?: boolean;
+}
+
+export type SkillEntry =
+  | {
+      mode: "reference";
+      path: string;
+      source?: SkillSource;
+      hostPolicy?: SkillHostPolicy;
+    }
+  | {
+      mode: "copy";
+      source?: SkillSource;
+      copiedFrom?: { source: string; id: string };
+      hostPolicy?: SkillHostPolicy;
+    };
+
+/** Ratel-managed skills: explicit registrations plus legacy directories. */
 export interface SkillsConfig {
+  entries?: Record<string, SkillEntry>;
   dirs?: string[];
+}
+
+export interface RetrievalConfig {
+  method: SearchMethod;
+  /**
+   * Omit for the SDK's pinned built-in model. Explicit sources are validated
+   * here so dense retrieval never starts with an ambiguous or unsafe model
+   * selection.
+   */
+  embedding?: EmbeddingSpec;
+}
+
+/** Lossless on-disk shape. Mutations retain unknown top-level fields. */
+export interface RatelConfigDocument {
+  mcpServers?: Record<string, ServerEntry>;
+  skills?: SkillsConfig;
+  retrieval?: RetrievalConfig;
+  [key: string]: unknown;
 }
 
 export interface RatelConfig {
   mcpServers: Record<string, ServerEntry>;
   skills?: SkillsConfig;
+  retrieval?: RetrievalConfig;
 }
 
 export function parseConfig(input: unknown): RatelConfig {
   if (!isPlainObject(input)) {
     throw new ConfigError("root must be a JSON object");
   }
-  const mcpServers = (input as Record<string, unknown>).mcpServers;
+  const mcpServers = (input as Record<string, unknown>).mcpServers ?? {};
   if (!isPlainObject(mcpServers)) {
     throw new ConfigError("`mcpServers` must be a JSON object");
   }
@@ -51,7 +98,217 @@ export function parseConfig(input: unknown): RatelConfig {
   if (skills !== undefined) {
     config.skills = parseSkills(skills);
   }
+  const retrieval = (input as Record<string, unknown>).retrieval;
+  if (retrieval !== undefined) {
+    config.retrieval = parseRetrieval(retrieval);
+  }
   return config;
+}
+
+function parseRetrieval(raw: unknown): RetrievalConfig {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError("`retrieval` must be a JSON object");
+  }
+  assertOnlyKeys("retrieval", raw, ["method", "embedding"]);
+  const method = parseRetrievalMethod(raw.method);
+  if (method === "bm25" && raw.embedding !== undefined) {
+    throw new ConfigError(
+      "`retrieval.embedding` is inactive when `retrieval.method` is bm25; remove it or select semantic|hybrid",
+    );
+  }
+  return {
+    method,
+    ...(raw.embedding !== undefined
+      ? { embedding: parseEmbedding("retrieval.embedding", raw.embedding) }
+      : {}),
+  };
+}
+
+function parseRetrievalMethod(raw: unknown): SearchMethod {
+  if (raw === "bm25" || raw === "semantic" || raw === "hybrid") return raw;
+  throw new ConfigError("`retrieval.method` must be one of bm25|semantic|hybrid");
+}
+
+function parseEmbedding(path: string, raw: unknown): EmbeddingSpec {
+  if (typeof raw === "string") {
+    return parseLocalModelPath(path, raw);
+  }
+  if (!isPlainObject(raw)) {
+    throw new ConfigError(`\`${path}\` must be a local model path or a JSON object`);
+  }
+  if ("apiKey" in raw) {
+    throw new ConfigError(`\`${path}.apiKey\` is not allowed; use apiKeyEnv instead`);
+  }
+
+  const sources = ["huggingface", "local", "ollama", "url"].filter((key) => raw[key] !== undefined);
+  if (sources.length !== 1) {
+    throw new ConfigError(
+      `\`${path}\` must select exactly one source: huggingface|local|ollama|url`,
+    );
+  }
+
+  const source = sources[0];
+  switch (source) {
+    case "huggingface": {
+      assertOnlyKeys(path, raw, [
+        "huggingface",
+        "revision",
+        "queryPrefix",
+        "docPrefix",
+        "pooling",
+        "download",
+      ]);
+      const config: Extract<EmbeddingSpec, { huggingface: string }> = {
+        huggingface: nonEmptyString(`${path}.huggingface`, raw.huggingface),
+      };
+      const revision = optionalNonEmptyString(`${path}.revision`, raw.revision);
+      const queryPrefix = optionalString(`${path}.queryPrefix`, raw.queryPrefix);
+      const docPrefix = optionalString(`${path}.docPrefix`, raw.docPrefix);
+      const pooling = optionalPooling(`${path}.pooling`, raw.pooling);
+      const download = optionalBoolean(`${path}.download`, raw.download);
+      if (revision !== undefined) config.revision = revision;
+      if (queryPrefix !== undefined) config.queryPrefix = queryPrefix;
+      if (docPrefix !== undefined) config.docPrefix = docPrefix;
+      if (pooling !== undefined) config.pooling = pooling;
+      if (download !== undefined) config.download = download;
+      return config;
+    }
+    case "local": {
+      assertOnlyKeys(path, raw, ["local", "queryPrefix", "docPrefix", "pooling"]);
+      const config: Extract<EmbeddingSpec, { local: string }> = {
+        local: parseLocalModelPath(`${path}.local`, raw.local),
+      };
+      const queryPrefix = optionalString(`${path}.queryPrefix`, raw.queryPrefix);
+      const docPrefix = optionalString(`${path}.docPrefix`, raw.docPrefix);
+      const pooling = optionalPooling(`${path}.pooling`, raw.pooling);
+      if (queryPrefix !== undefined) config.queryPrefix = queryPrefix;
+      if (docPrefix !== undefined) config.docPrefix = docPrefix;
+      if (pooling !== undefined) config.pooling = pooling;
+      return config;
+    }
+    case "ollama": {
+      assertOnlyKeys(path, raw, ["ollama", "queryPrefix", "docPrefix"]);
+      const config: Extract<EmbeddingSpec, { ollama: string }> = {
+        ollama: nonEmptyString(`${path}.ollama`, raw.ollama),
+      };
+      const queryPrefix = optionalString(`${path}.queryPrefix`, raw.queryPrefix);
+      const docPrefix = optionalString(`${path}.docPrefix`, raw.docPrefix);
+      if (queryPrefix !== undefined) config.queryPrefix = queryPrefix;
+      if (docPrefix !== undefined) config.docPrefix = docPrefix;
+      return config;
+    }
+    case "url": {
+      assertOnlyKeys(path, raw, ["url", "model", "apiKeyEnv", "queryPrefix", "docPrefix"]);
+      const url = nonEmptyString(`${path}.url`, raw.url);
+      validateEmbeddingEndpoint(`${path}.url`, url);
+      const config: Extract<EmbeddingSpec, { url: string }> = {
+        url,
+        model: nonEmptyString(`${path}.model`, raw.model),
+      };
+      const apiKeyEnv = optionalNonEmptyString(`${path}.apiKeyEnv`, raw.apiKeyEnv);
+      const queryPrefix = optionalString(`${path}.queryPrefix`, raw.queryPrefix);
+      const docPrefix = optionalString(`${path}.docPrefix`, raw.docPrefix);
+      if (apiKeyEnv !== undefined) {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(apiKeyEnv)) {
+          throw new ConfigError(`\`${path}.apiKeyEnv\` must be an environment variable name`);
+        }
+        config.apiKeyEnv = apiKeyEnv;
+      }
+      if (queryPrefix !== undefined) config.queryPrefix = queryPrefix;
+      if (docPrefix !== undefined) config.docPrefix = docPrefix;
+      return config;
+    }
+    default:
+      throw new ConfigError(`\`${path}\` has an unsupported source`);
+  }
+}
+
+function parseLocalModelPath(path: string, raw: unknown): string {
+  const value = nonEmptyString(path, raw);
+  if (!(isAbsolute(value) || value === "~" || value.startsWith("~/"))) {
+    throw new ConfigError(`\`${path}\` must be an absolute path or start with ~/`);
+  }
+  return value;
+}
+
+function validateEmbeddingEndpoint(path: string, value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new ConfigError(`\`${path}\` must be an absolute http(s) URL`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ConfigError(`\`${path}\` must use http or https`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new ConfigError(`\`${path}\` must not contain credentials`);
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (isSecretQueryParameter(key)) {
+      throw new ConfigError(
+        `\`${path}\` must not contain credential query parameter \`${key}\`; use apiKeyEnv instead`,
+      );
+    }
+  }
+}
+
+function isSecretQueryParameter(key: string): boolean {
+  const normalized = key.toLowerCase().replaceAll(/[-_.]/g, "");
+  return SECRET_QUERY_PARAMETERS.has(normalized);
+}
+
+const SECRET_QUERY_PARAMETERS = new Set([
+  "apikey",
+  "token",
+  "accesstoken",
+  "authtoken",
+  "auth",
+  "authorization",
+  "password",
+  "secret",
+  "clientsecret",
+]);
+
+function assertOnlyKeys(
+  path: string,
+  raw: Record<string, unknown>,
+  allowed: readonly string[],
+): void {
+  const unexpected = Object.keys(raw).find((key) => !allowed.includes(key));
+  if (unexpected) {
+    throw new ConfigError(`\`${path}.${unexpected}\` is not supported`);
+  }
+}
+
+function nonEmptyString(path: string, raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new ConfigError(`\`${path}\` must be a non-empty string`);
+  }
+  return raw;
+}
+
+function optionalNonEmptyString(path: string, raw: unknown): string | undefined {
+  if (raw === undefined) return undefined;
+  return nonEmptyString(path, raw);
+}
+
+function optionalString(path: string, raw: unknown): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") throw new ConfigError(`\`${path}\` must be a string`);
+  return raw;
+}
+
+function optionalPooling(path: string, raw: unknown): "cls" | "mean" | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "cls" || raw === "mean") return raw;
+  throw new ConfigError(`\`${path}\` must be one of cls|mean`);
+}
+
+function optionalBoolean(path: string, raw: unknown): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "boolean") throw new ConfigError(`\`${path}\` must be a boolean`);
+  return raw;
 }
 
 function parseSkills(raw: unknown): SkillsConfig {
@@ -59,6 +316,21 @@ function parseSkills(raw: unknown): SkillsConfig {
     throw new ConfigError("`skills` must be a JSON object");
   }
   const skills: SkillsConfig = {};
+  if (raw.entries !== undefined) {
+    if (!isPlainObject(raw.entries)) {
+      throw new ConfigError("`skills.entries` must be a JSON object");
+    }
+    const entries: Record<string, SkillEntry> = {};
+    for (const [id, entry] of Object.entries(raw.entries)) {
+      if (!isSafeSkillId(id)) {
+        throw new ConfigError(
+          `\`skills.entries\` contains an unsafe skill id: ${JSON.stringify(id)}`,
+        );
+      }
+      entries[id] = parseSkillEntry(`skills.entries.${id}`, entry);
+    }
+    skills.entries = entries;
+  }
   if (raw.dirs !== undefined) {
     if (!Array.isArray(raw.dirs) || raw.dirs.some((d) => typeof d !== "string")) {
       throw new ConfigError("`skills.dirs` must be an array of strings");
@@ -66,6 +338,74 @@ function parseSkills(raw: unknown): SkillsConfig {
     skills.dirs = raw.dirs as string[];
   }
   return skills;
+}
+
+function parseSkillEntry(path: string, raw: unknown): SkillEntry {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError(`\`${path}\` must be a JSON object`);
+  }
+  const source = parseSkillSource(`${path}.source`, raw.source);
+  const hostPolicy = parseSkillHostPolicy(`${path}.hostPolicy`, raw.hostPolicy);
+  if (raw.mode === "reference") {
+    if (typeof raw.path !== "string" || raw.path.length === 0) {
+      throw new ConfigError(`\`${path}.path\` must be a non-empty string`);
+    }
+    return {
+      mode: "reference",
+      path: raw.path,
+      ...(source ? { source } : {}),
+      ...(hostPolicy ? { hostPolicy } : {}),
+    };
+  }
+  if (raw.mode === "copy") {
+    let copiedFrom: { source: string; id: string } | undefined;
+    if (raw.copiedFrom !== undefined) {
+      if (
+        !isPlainObject(raw.copiedFrom) ||
+        typeof raw.copiedFrom.source !== "string" ||
+        typeof raw.copiedFrom.id !== "string" ||
+        raw.copiedFrom.source.length === 0 ||
+        raw.copiedFrom.id.length === 0
+      ) {
+        throw new ConfigError(`\`${path}.copiedFrom\` must contain string source and id`);
+      }
+      copiedFrom = { source: raw.copiedFrom.source, id: raw.copiedFrom.id };
+    }
+    return {
+      mode: "copy",
+      ...(source ? { source } : {}),
+      ...(copiedFrom ? { copiedFrom } : {}),
+      ...(hostPolicy ? { hostPolicy } : {}),
+    };
+  }
+  throw new ConfigError(`\`${path}.mode\` must be one of reference|copy`);
+}
+
+function parseSkillHostPolicy(path: string, raw: unknown): SkillHostPolicy | undefined {
+  if (raw === undefined) return undefined;
+  if (
+    !isPlainObject(raw) ||
+    raw.mode !== "manual-only" ||
+    (raw.source !== "claude" && raw.source !== "codex-current" && raw.source !== "codex-legacy") ||
+    (raw.previousLine !== undefined && typeof raw.previousLine !== "string") ||
+    (raw.createdFile !== undefined && typeof raw.createdFile !== "boolean") ||
+    (raw.createdPolicy !== undefined && typeof raw.createdPolicy !== "boolean")
+  ) {
+    throw new ConfigError(`\`${path}\` is not a valid managed host policy`);
+  }
+  return {
+    mode: "manual-only",
+    source: raw.source,
+    ...(raw.previousLine === undefined ? {} : { previousLine: raw.previousLine }),
+    ...(raw.createdFile === undefined ? {} : { createdFile: raw.createdFile }),
+    ...(raw.createdPolicy === undefined ? {} : { createdPolicy: raw.createdPolicy }),
+  };
+}
+
+function parseSkillSource(path: string, raw: unknown): SkillSource | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "claude" || raw === "codex" || raw === "ratel" || raw === "unknown") return raw;
+  throw new ConfigError(`\`${path}\` must be one of claude|codex|ratel|unknown`);
 }
 
 function parseEntry(path: string, raw: unknown): ServerEntry {
@@ -191,13 +531,19 @@ function parseHttpLike(
 export function mergeConfigs(configs: readonly RatelConfig[]): RatelConfig {
   const out: Record<string, ServerEntry> = {};
   let skills: SkillsConfig | undefined;
+  let retrieval: RetrievalConfig | undefined;
   for (const c of configs) {
     for (const [name, entry] of Object.entries(c.mcpServers)) {
       out[name] = entry;
     }
     if (c.skills) skills = c.skills;
+    if (c.retrieval) retrieval = c.retrieval;
   }
-  return skills ? { mcpServers: out, skills } : { mcpServers: out };
+  return {
+    mcpServers: out,
+    ...(skills ? { skills } : {}),
+    ...(retrieval ? { retrieval } : {}),
+  };
 }
 
 export class ConfigError extends Error {

@@ -3,11 +3,22 @@ import { ClaudeCodeAgentHostAdapter } from "./agent-host/claude-code.js";
 import type { AgentHostState } from "./agent-host/index.js";
 import { getAgentHostRatelConnection } from "./agent-host/ratel-connection.js";
 import { type BackupFs, type BackupManifest, startBackup } from "./backup.js";
+import type { DocumentRevision } from "./context.js";
 import type { HierarchyEnv } from "./hierarchy.js";
 import type { JsonFs } from "./io.js";
 import { writeJson } from "./io.js";
 import { isPlainObject, stableJsonStringify } from "./json.js";
 import type { ResolvedBin } from "./locate-bin.js";
+import {
+  documentRevision,
+  MISSING_DOCUMENT_REVISION,
+  MutationConflictError,
+} from "./mutation-engine.js";
+import type {
+  PreparedChange,
+  PreparedChangeCommit,
+  PreparedChangeCoordinator,
+} from "./prepared-change-coordinator.js";
 import {
   readLatestToolTokenEstimates,
   summarizeToolTokenEstimates,
@@ -41,6 +52,23 @@ export interface ClaudeStatuslineUninstallResult {
   manifest: BackupManifest | null;
   state: ClaudeCodeStatuslineState;
 }
+
+export interface ClaudeStatuslineChangeReview {
+  action: "install" | "uninstall";
+  changed: boolean;
+  path: string;
+  command?: string;
+}
+
+export interface ClaudeStatuslineChangeResult {
+  changed: boolean;
+  path: string;
+  command?: string;
+  state: ClaudeCodeStatuslineState;
+}
+
+export type PreparedClaudeStatuslineChange = PreparedChange<ClaudeStatuslineChangeReview>;
+export type ClaudeStatuslineChangeCommit = PreparedChangeCommit<ClaudeStatuslineChangeResult>;
 
 export interface RenderRatelStatuslineOptions {
   telemetryDir?: string;
@@ -163,6 +191,59 @@ export async function installClaudeCodeStatusline(
   };
 }
 
+export async function prepareClaudeCodeStatuslineInstall(
+  ctx: StatuslineContext,
+  input: {
+    bin: ResolvedBin;
+    force?: boolean;
+    preparedChanges: PreparedChangeCoordinator;
+  },
+): Promise<PreparedClaudeStatuslineChange> {
+  const path = claudeCodeUserSettingsPath(ctx.env);
+  const document = await readSettingsDocumentStrict(ctx, path);
+  const current = document.value ?? {};
+  const existing = current.statusLine;
+  if (
+    existing !== undefined &&
+    existing !== null &&
+    !isRatelOwnedStatusline(existing) &&
+    !input.force
+  ) {
+    throw new ClaudeStatuslineConflictError(
+      `Claude Code already has a non-Ratel statusLine configured at ${path}; rerun with --force to replace it.`,
+    );
+  }
+  const command = claudeCodeStatuslineCommand(input.bin);
+  const target = { type: "command", command, padding: 0, refreshInterval: 30 };
+  const changed = !sameJson(existing, target);
+  const after = changed ? `${JSON.stringify({ ...current, statusLine: target }, null, 2)}\n` : null;
+  return input.preparedChanges.prepare({
+    kind: "statusline.install",
+    operations: after === null ? [] : [{ kind: "replace-file", path, contents: after }],
+    buildPreview: (mutation) => {
+      if (changed) {
+        assertPreparedDocumentSnapshot(path, document.text, mutation.baseRevisions[path]);
+      }
+      return { action: "install", changed, path, command };
+    },
+    captureBackup:
+      after === null
+        ? undefined
+        : async () => {
+            const session = startBackup(ctx.env, ctx.fs);
+            await session.capture(path);
+            return session.finalize("edit");
+          },
+    affectedContexts: [{ kind: "global" }],
+    result: async () => ({
+      changed,
+      path,
+      command,
+      state: await getClaudeCodeStatuslineState(ctx),
+    }),
+  });
+}
+
 export async function uninstallClaudeCodeStatusline(
   ctx: StatuslineContext,
   input: { now?: () => Date } = {},
@@ -190,6 +271,46 @@ export async function uninstallClaudeCodeStatusline(
     manifest,
     state: await getClaudeCodeStatuslineState(ctx),
   };
+}
+
+export async function prepareClaudeCodeStatuslineUninstall(
+  ctx: StatuslineContext,
+  input: { preparedChanges: PreparedChangeCoordinator },
+): Promise<PreparedClaudeStatuslineChange> {
+  const path = claudeCodeUserSettingsPath(ctx.env);
+  const document = await readSettingsDocumentStrict(ctx, path);
+  const current = document.value;
+  const changed = Boolean(current && isRatelOwnedStatusline(current.statusLine));
+  let after: string | null = null;
+  if (changed && current) {
+    const next = { ...current };
+    delete next.statusLine;
+    after = `${JSON.stringify(next, null, 2)}\n`;
+  }
+  return input.preparedChanges.prepare({
+    kind: "statusline.uninstall",
+    operations: after === null ? [] : [{ kind: "replace-file", path, contents: after }],
+    buildPreview: (mutation) => {
+      if (changed) {
+        assertPreparedDocumentSnapshot(path, document.text, mutation.baseRevisions[path]);
+      }
+      return { action: "uninstall", changed, path };
+    },
+    captureBackup:
+      after === null
+        ? undefined
+        : async () => {
+            const session = startBackup(ctx.env, ctx.fs);
+            await session.capture(path);
+            return session.finalize("edit");
+          },
+    affectedContexts: [{ kind: "global" }],
+    result: async () => ({
+      changed,
+      path,
+      state: await getClaudeCodeStatuslineState(ctx),
+    }),
+  });
 }
 
 export async function renderRatelStatusline(
@@ -337,6 +458,39 @@ async function readSettingsStrict(
   }
   if (!isPlainObject(parsed)) throw new Error(`${path}: root must be a JSON object`);
   return parsed;
+}
+
+async function readSettingsDocumentStrict(
+  ctx: StatuslineContext,
+  path: string,
+): Promise<{ text: string | null; value: Record<string, unknown> | null }> {
+  const text = await ctx.fs.read(path);
+  if (text === null) return { text: null, value: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Failed to parse ${path}: ${(err as Error).message}`);
+  }
+  if (!isPlainObject(parsed)) throw new Error(`${path}: root must be a JSON object`);
+  return { text, value: parsed };
+}
+
+function assertPreparedDocumentSnapshot(
+  path: string,
+  text: string | null,
+  actual: DocumentRevision | undefined,
+): void {
+  const expected = text === null ? MISSING_DOCUMENT_REVISION : documentRevision(text);
+  if (actual !== expected) {
+    throw new MutationConflictError(
+      "revision_conflict",
+      `document changed while preparing statusline change: ${path}`,
+      path,
+      expected,
+      actual,
+    );
+  }
 }
 
 async function readSettingsLenient(

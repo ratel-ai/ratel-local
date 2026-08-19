@@ -1,6 +1,6 @@
 {
   "name": "@ratel-ai/ratel-local-core",
-  "version": "0.5.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -20,8 +20,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@huggingface/hub": "2.14.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@ratel-ai/sdk": "^0.2.0",
+    "@ratel-ai/sdk": "0.9.1",
     "proper-lockfile": "^4.1.2",
     "smol-toml": "^1.6.1"
   }

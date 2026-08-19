@@ -1,0 +1,20 @@
+export const CLOUD_TELEMETRY_FEATURE_ENV = "RATEL_FEATURE_CLOUD_TELEMETRY";
+
+export interface FeatureFlags {
+  cloudTelemetry: boolean;
+}
+
+/**
+ * Resolve daemon-wide feature flags from the startup environment. Flags are
+ * deliberately opt-in: only the exact value `1` enables a feature.
+ */
+export function featureFlagsFromEnv(env: NodeJS.ProcessEnv): FeatureFlags {
+  return {
+    cloudTelemetry: env[CLOUD_TELEMETRY_FEATURE_ENV] === "1",
+  };
+}
+
+/** Environment entries that an installed daemon service must retain. */
+export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<string, string> {
+  return flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {};
+}

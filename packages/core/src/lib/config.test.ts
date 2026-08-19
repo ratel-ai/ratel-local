@@ -46,8 +46,14 @@ describe("parseConfig", () => {
     expect(() => parseConfig("not a config")).toThrow(/root.*object/i);
   });
 
-  it("rejects when mcpServers is missing or not an object", () => {
-    expect(() => parseConfig({})).toThrow(/mcpServers/);
+  it("accepts a skills-only document by defaulting mcpServers to an empty object", () => {
+    expect(parseConfig({ skills: { dirs: [] } })).toEqual({
+      mcpServers: {},
+      skills: { dirs: [] },
+    });
+  });
+
+  it("rejects when mcpServers is present but not an object", () => {
     expect(() => parseConfig({ mcpServers: "nope" })).toThrow(/mcpServers/);
   });
 
@@ -264,7 +270,203 @@ describe("mergeConfigs", () => {
   });
 });
 
+describe("parseConfig retrieval", () => {
+  it.each(["bm25", "semantic", "hybrid"] as const)("accepts the %s retrieval method", (method) => {
+    expect(parseConfig({ retrieval: { method } }).retrieval).toEqual({ method });
+  });
+
+  it("accepts every supported explicit embedding source", () => {
+    const embeddings = [
+      "/opt/models/bge",
+      "~/models/bge",
+      {
+        huggingface: "intfloat/e5-small-v2",
+        revision: "v1",
+        queryPrefix: "query: ",
+        docPrefix: "passage: ",
+        pooling: "mean",
+        download: false,
+      },
+      { local: "/opt/models/bge", pooling: "cls" },
+      { ollama: "nomic-embed-text", queryPrefix: "search_query: " },
+      {
+        url: "https://embeddings.example/v1/embeddings",
+        model: "text-embedding-3-small",
+        apiKeyEnv: "EMBEDDING_API_KEY",
+      },
+    ];
+
+    for (const embedding of embeddings) {
+      expect(parseConfig({ retrieval: { method: "semantic", embedding } }).retrieval).toEqual({
+        method: "semantic",
+        embedding,
+      });
+    }
+  });
+
+  it("rejects malformed, unknown, and incomplete retrieval methods", () => {
+    expect(() => parseConfig({ retrieval: "semantic" })).toThrow(/retrieval.*object/i);
+    expect(() => parseConfig({ retrieval: {} })).toThrow(/retrieval\.method/);
+    expect(() => parseConfig({ retrieval: { method: "dense" } })).toThrow(/bm25\|semantic\|hybrid/);
+    expect(() => parseConfig({ retrieval: { method: "semantic", fallback: "bm25" } })).toThrow(
+      /retrieval\.fallback/,
+    );
+  });
+
+  it("rejects an embedding when BM25 is selected", () => {
+    expect(() =>
+      parseConfig({
+        retrieval: { method: "bm25", embedding: { ollama: "nomic-embed-text" } },
+      }),
+    ).toThrow(/inactive.*bm25/i);
+  });
+
+  it("rejects relative local paths and mixed embedding sources", () => {
+    expect(() =>
+      parseConfig({ retrieval: { method: "semantic", embedding: "./models/bge" } }),
+    ).toThrow(/absolute path/);
+    expect(() =>
+      parseConfig({
+        retrieval: {
+          method: "semantic",
+          embedding: { local: "models/bge" },
+        },
+      }),
+    ).toThrow(/absolute path/);
+    expect(() =>
+      parseConfig({
+        retrieval: {
+          method: "hybrid",
+          embedding: { huggingface: "model/repo", ollama: "model" },
+        },
+      }),
+    ).toThrow(/exactly one source/);
+  });
+
+  it("rejects literal endpoint credentials and invalid apiKeyEnv names", () => {
+    expect(() =>
+      parseConfig({
+        retrieval: {
+          method: "semantic",
+          embedding: {
+            url: "https://secret:literal@example.com/v1/embeddings",
+            model: "embed",
+          },
+        },
+      }),
+    ).toThrow(/credentials/);
+    expect(() =>
+      parseConfig({
+        retrieval: {
+          method: "semantic",
+          embedding: {
+            url: "https://example.com/v1/embeddings",
+            model: "embed",
+            apiKey: "literal-secret",
+          },
+        },
+      }),
+    ).toThrow(/apiKeyEnv/);
+    expect(() =>
+      parseConfig({
+        retrieval: {
+          method: "semantic",
+          embedding: {
+            url: "https://example.com/v1/embeddings",
+            model: "embed",
+            apiKeyEnv: "NOT-AN-ENV-NAME",
+          },
+        },
+      }),
+    ).toThrow(/environment variable name/);
+  });
+
+  it("rejects obvious credential query parameters but permits endpoint options", () => {
+    for (const parameter of ["api_key", "access-token", "authorization", "client_secret"]) {
+      expect(() =>
+        parseConfig({
+          retrieval: {
+            method: "semantic",
+            embedding: {
+              url: `https://example.com/v1/embeddings?${parameter}=literal-secret`,
+              model: "embed",
+            },
+          },
+        }),
+      ).toThrow(/credential query parameter.*apiKeyEnv/);
+    }
+
+    expect(
+      parseConfig({
+        retrieval: {
+          method: "semantic",
+          embedding: {
+            url: "https://example.com/v1/embeddings?api-version=2024-02-01",
+            model: "embed",
+          },
+        },
+      }).retrieval,
+    ).toEqual({
+      method: "semantic",
+      embedding: {
+        url: "https://example.com/v1/embeddings?api-version=2024-02-01",
+        model: "embed",
+      },
+    });
+  });
+});
+
+describe("mergeConfigs retrieval", () => {
+  it("treats each retrieval block atomically and lets the right-most scope win", () => {
+    const inherited: RatelConfig = {
+      mcpServers: {},
+      retrieval: {
+        method: "semantic",
+        embedding: { huggingface: "intfloat/e5-small-v2", download: false },
+      },
+    };
+    const local: RatelConfig = {
+      mcpServers: {},
+      retrieval: { method: "hybrid", embedding: { ollama: "nomic-embed-text" } },
+    };
+
+    expect(mergeConfigs([inherited, local]).retrieval).toEqual(local.retrieval);
+  });
+
+  it("inherits the earlier retrieval block when later scopes omit it", () => {
+    const inherited: RatelConfig = {
+      mcpServers: {},
+      retrieval: { method: "semantic" },
+    };
+    expect(mergeConfigs([inherited, { mcpServers: {} }]).retrieval).toEqual(inherited.retrieval);
+  });
+});
+
 describe("parseConfig skills", () => {
+  it("parses explicit reference and managed-copy entries", () => {
+    const config = parseConfig({
+      skills: {
+        entries: {
+          review: { mode: "reference", path: "../.agents/skills/review", source: "codex" },
+          release: {
+            mode: "copy",
+            source: "claude",
+            copiedFrom: { source: "claude", id: "release" },
+          },
+        },
+      },
+    });
+
+    expect(config.skills?.entries).toEqual({
+      review: { mode: "reference", path: "../.agents/skills/review", source: "codex" },
+      release: {
+        mode: "copy",
+        source: "claude",
+        copiedFrom: { source: "claude", id: "release" },
+      },
+    });
+  });
+
   it("parses an optional skills.dirs array", () => {
     const config = parseConfig({
       mcpServers: {},

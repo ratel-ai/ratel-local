@@ -14,6 +14,10 @@ export default defineConfig({
   },
   server: {
     host: "127.0.0.1",
+    watch: {
+      interval: 100,
+      usePolling: true,
+    },
     proxy: process.env.RATEL_LOCAL_API_TARGET
       ? {
           "/api": {

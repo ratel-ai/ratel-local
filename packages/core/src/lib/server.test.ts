@@ -7,6 +7,7 @@ import {
   ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import {
+  EmbedderError,
   GET_SKILL_CONTENT_ID,
   INVOKE_TOOL_ID,
   registerMcpServer,
@@ -163,7 +164,7 @@ describe("createMcpServer", () => {
 
   it("exposes search_capabilities, invoke_tool, and the deprecated search_tools alias via tools/list", async () => {
     const catalog = new ToolCatalog();
-    catalog.register(localTool("echo", "Echo a message back to the caller.", (a) => a));
+    await catalog.register(localTool("echo", "Echo a message back to the caller.", (a) => a));
 
     const { client, handle } = await buildClientAgainst(catalog);
     const { tools } = await client.listTools();
@@ -178,9 +179,44 @@ describe("createMcpServer", () => {
     await handle.close();
   });
 
+  it("keeps the advertised capability-tool schemas stable in dense mode", async () => {
+    const bm25 = await buildClientAgainst(new ToolCatalog());
+    const semantic = await buildClientAgainst(
+      new ToolCatalog({
+        method: "semantic",
+        embedding: {
+          url: "http://127.0.0.1:9/v1/embeddings",
+          model: "schema-only",
+        },
+      }),
+    );
+    try {
+      const bm25Tools = (await bm25.client.listTools()).tools;
+      const semanticTools = (await semantic.client.listTools()).tools;
+      expect(
+        semanticTools.map(({ name, inputSchema, outputSchema }) => ({
+          name,
+          inputSchema,
+          outputSchema,
+        })),
+      ).toEqual(
+        bm25Tools.map(({ name, inputSchema, outputSchema }) => ({
+          name,
+          inputSchema,
+          outputSchema,
+        })),
+      );
+    } finally {
+      await bm25.client.close();
+      await bm25.handle.close();
+      await semantic.client.close();
+      await semantic.handle.close();
+    }
+  });
+
   it("search_tools (deprecated) still returns the pre-0.2.0 tools-only {groups} shape", async () => {
     const catalog = new ToolCatalog();
-    catalog.register(
+    await catalog.register(
       localTool("wx__weather", "Get the current weather forecast for a city.", () => ({})),
     );
 
@@ -216,10 +252,10 @@ describe("createMcpServer", () => {
 
   it("search_capabilities roundtrips BM25 hits grouped by upstream MCP", async () => {
     const catalog = new ToolCatalog();
-    catalog.register(
+    await catalog.register([
       localTool("wx__weather", "Get the current weather forecast for a city.", () => ({})),
-    );
-    catalog.register(localTool("util__echo", "Echo a message back to the caller.", (a) => a));
+      localTool("util__echo", "Echo a message back to the caller.", (a) => a),
+    ]);
 
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handle = await createMcpServer(catalog, {
@@ -264,7 +300,7 @@ describe("createMcpServer", () => {
 
   it("search_capabilities surfaces the upstream's official `instructions` on each group, separately from any user description", async () => {
     const catalog = new ToolCatalog();
-    catalog.register(
+    await catalog.register(
       localTool("wx__weather", "Get the current weather forecast for a city.", () => ({})),
     );
 
@@ -307,7 +343,7 @@ describe("createMcpServer", () => {
 
   it("invoke_tool runs a locally-registered tool and returns its output as structuredContent", async () => {
     const catalog = new ToolCatalog();
-    catalog.register(
+    await catalog.register(
       localTool("upper", "Uppercase a message.", (a) => ({
         upper: ((a as { msg: string }).msg ?? "").toUpperCase(),
       })),
@@ -345,7 +381,7 @@ describe("createMcpServer", () => {
 
   it("invoke_tool surfaces the gateway's wrapped error when the executor throws", async () => {
     const catalog = new ToolCatalog();
-    catalog.register(
+    await catalog.register(
       localTool("boom", "Always throws.", () => {
         throw new Error("kaboom");
       }),
@@ -366,7 +402,7 @@ describe("createMcpServer", () => {
 
   it("close() tears down the connection so subsequent calls reject", async () => {
     const catalog = new ToolCatalog();
-    catalog.register(localTool("echo", "Echo.", (a) => a));
+    await catalog.register(localTool("echo", "Echo.", (a) => a));
 
     const { client, handle } = await buildClientAgainst(catalog);
     await handle.close();
@@ -511,7 +547,7 @@ describe("createMcpServer", () => {
         this.name = "UnauthorizedError";
       }
     }
-    catalog.register({
+    await catalog.register({
       id: "stripe__charges",
       name: "stripe__charges",
       description: "...",
@@ -596,9 +632,11 @@ describe("createMcpServer", () => {
 });
 
 describe("createMcpServer skills", () => {
-  function skillCatalogWith(...skills: Skill[]): SkillCatalog {
+  async function skillCatalogWith(...skills: Skill[]): Promise<SkillCatalog> {
     const catalog = new SkillCatalog();
-    for (const s of skills) catalog.register(s);
+    if (skills.length > 0) {
+      await catalog.register(skills);
+    }
     return catalog;
   }
 
@@ -616,7 +654,7 @@ describe("createMcpServer skills", () => {
       name: "ratel-test",
       version: "0.0.0",
       transport: serverTransport,
-      skillCatalog: skillCatalogWith(apiDesign),
+      skillCatalog: await skillCatalogWith(apiDesign),
     });
     const client = new Client({ name: "test-client", version: "0.0.0" });
     await client.connect(clientTransport);
@@ -636,7 +674,7 @@ describe("createMcpServer skills", () => {
       name: "ratel-test",
       version: "0.0.0",
       transport: serverTransport,
-      skillCatalog: skillCatalogWith(),
+      skillCatalog: await skillCatalogWith(),
     });
     const client = new Client({ name: "test-client", version: "0.0.0" });
     await client.connect(clientTransport);
@@ -652,7 +690,7 @@ describe("createMcpServer skills", () => {
 
   it("search_capabilities returns a skills bucket alongside the tools bucket", async () => {
     const toolCatalog = new ToolCatalog();
-    toolCatalog.register({
+    await toolCatalog.register({
       id: "vercel__deploy",
       name: "deploy",
       description: "Deploy the current project to Vercel.",
@@ -665,7 +703,7 @@ describe("createMcpServer skills", () => {
       name: "ratel-test",
       version: "0.0.0",
       transport: serverTransport,
-      skillCatalog: skillCatalogWith({
+      skillCatalog: await skillCatalogWith({
         id: "vercel-deploy",
         name: "vercel-deploy",
         description: "How to deploy to Vercel: env vars, preview vs production, rollbacks.",
@@ -691,13 +729,57 @@ describe("createMcpServer skills", () => {
     await handle.close();
   });
 
+  it("returns typed embedding failures as structured MCP errors", async () => {
+    const catalog = new ToolCatalog();
+    const search = vi
+      .spyOn(catalog, "searchAsync")
+      .mockRejectedValue(new EmbedderError("endpoint unavailable", "Inference"));
+    const { client, handle } = await buildClientAgainst(catalog);
+    try {
+      const result = await client.callTool({
+        name: SEARCH_CAPABILITIES_ID,
+        arguments: { query: "weather forecast" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toEqual({
+        error: "retrieval_failed",
+        code: "Inference",
+        message: "endpoint unavailable",
+        isError: true,
+      });
+
+      const listed = await client.listTools();
+      for (const name of [SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID]) {
+        const outputSchema = listed.tools.find((tool) => tool.name === name)?.outputSchema as {
+          type?: string;
+          oneOf?: Array<{ required?: string[] }>;
+        };
+        expect(outputSchema.type).toBe("object");
+        expect(outputSchema.oneOf).toHaveLength(2);
+        expect(outputSchema.oneOf?.[1]?.required).toEqual(["error", "code", "message", "isError"]);
+      }
+
+      const legacyResult = await client.callTool({
+        name: SEARCH_TOOLS_ID,
+        arguments: { query: "weather forecast" },
+      });
+      expect(legacyResult.isError).toBe(true);
+      expect(legacyResult.structuredContent).toEqual(result.structuredContent);
+    } finally {
+      search.mockRestore();
+      await client.close();
+      await handle.close();
+    }
+  });
+
   it("get_skill_content loads the body; instructions mention get_skill_content", async () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handle = await createMcpServer(new ToolCatalog(), {
       name: "ratel-test",
       version: "0.0.0",
       transport: serverTransport,
-      skillCatalog: skillCatalogWith(apiDesign),
+      skillCatalog: await skillCatalogWith(apiDesign),
     });
     const client = new Client({ name: "test-client", version: "0.0.0" });
     await client.connect(clientTransport);

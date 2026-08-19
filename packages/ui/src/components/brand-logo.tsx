@@ -1,29 +1,38 @@
 import { cn } from "@/lib/utils";
 
-export const brandLogoSources = {
-  greenCream: "/brand/ratel-green-cream.png",
-  green: "/brand/ratel-green.png",
-  cream: "/brand/ratel-cream.svg",
-  azureCream: "/brand/ratel-azure-cream.png",
-  orangeCream: "/brand/ratel-orange-cream.png",
-} as const;
-
-export type BrandLogoVariant = keyof typeof brandLogoSources;
+export function RatelBadger({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={className}
+      style={{
+        display: "inline-block",
+        WebkitMaskImage: "url(/brand/ratel-badger.png)",
+        maskImage: "url(/brand/ratel-badger.png)",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+      }}
+    />
+  );
+}
 
 export function BrandLogo({
-  alt = "Ratel",
   className,
-  variant = "greenCream",
+  suffix = "Local",
 }: {
-  alt?: string;
   className?: string;
-  variant?: BrandLogoVariant;
+  suffix?: string;
 }) {
   return (
-    <img
-      alt={alt}
-      className={cn("block h-auto max-w-full object-contain", className)}
-      src={brandLogoSources[variant]}
-    />
+    <span className={cn("inline-flex min-w-0 items-center gap-2.5", className)}>
+      <RatelBadger className="h-5 w-11 shrink-0 bg-brand-green dark:bg-cream" />
+      <span className="whitespace-nowrap font-display text-sm font-semibold tracking-tight text-cream">
+        Ratel <span className="font-normal text-warm-muted">{suffix}</span>
+      </span>
+    </span>
   );
 }

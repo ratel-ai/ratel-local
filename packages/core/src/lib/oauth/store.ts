@@ -18,6 +18,9 @@ export interface UnsupportedOAuthMarker {
 }
 
 export interface OAuthStoreState {
+  resource_fingerprint?: string;
+  /** Last real loopback callback used for this client, including static clients. */
+  redirect_url?: string;
   tokens?: OAuthTokens;
   expires_at?: number;
   client_information?: OAuthClientInformationFull;
@@ -49,7 +52,10 @@ function alsFor(path: string): AsyncLocalStorage<true> {
 }
 
 export class RatelOAuthStore {
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly expectedFingerprint?: string,
+  ) {}
 
   /**
    * Run `fn` while holding an exclusive cross-process lock on the store file.
@@ -79,6 +85,23 @@ export class RatelOAuthStore {
     }
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const state: OAuthStoreState = {};
+    if (typeof parsed.resource_fingerprint === "string") {
+      state.resource_fingerprint = parsed.resource_fingerprint;
+    }
+    if (typeof parsed.redirect_url === "string") {
+      state.redirect_url = parsed.redirect_url;
+    }
+    if (
+      this.expectedFingerprint &&
+      state.resource_fingerprint &&
+      state.resource_fingerprint !== this.expectedFingerprint
+    ) {
+      throw new OAuthFingerprintMismatchError(
+        this.filePath,
+        this.expectedFingerprint,
+        state.resource_fingerprint,
+      );
+    }
     if (parsed.tokens !== undefined) {
       state.tokens = OAuthTokensSchema.parse(parsed.tokens);
     }
@@ -107,6 +130,7 @@ export class RatelOAuthStore {
     await this.withLock(async () => {
       const current = await this.load();
       const next: OAuthStoreState = { ...current, ...partial };
+      if (this.expectedFingerprint) next.resource_fingerprint = this.expectedFingerprint;
       if (partial.tokens !== undefined) {
         const validated = OAuthTokensSchema.parse(partial.tokens);
         next.tokens = validated;
@@ -154,6 +178,25 @@ export class RatelOAuthStore {
     });
   }
 
+  /**
+   * Forget a dynamically registered client and everything bound to it while
+   * preserving resource discovery and credential-isolation metadata.
+   */
+  async clearClientRegistration(): Promise<void> {
+    await this.withLock(async () => {
+      const current = await this.load();
+      const next: OAuthStoreState = { ...current };
+      delete next.client_information;
+      delete next.redirect_url;
+      delete next.tokens;
+      delete next.expires_at;
+      delete next.code_verifier;
+      delete next.state;
+      delete next.unsupported;
+      await this.writeAtomic(next);
+    });
+  }
+
   private async writeAtomic(state: OAuthStoreState): Promise<void> {
     const dir = dirname(this.filePath);
     await mkdir(dir, { recursive: true, mode: DIR_MODE });
@@ -172,6 +215,17 @@ export class RatelOAuthStore {
     await chmod(this.filePath, FILE_MODE).catch(() => {
       // best-effort
     });
+  }
+}
+
+export class OAuthFingerprintMismatchError extends Error {
+  constructor(
+    readonly path: string,
+    readonly expected: string,
+    readonly actual: string,
+  ) {
+    super(`OAuth resource fingerprint mismatch at ${path}`);
+    this.name = "OAuthFingerprintMismatchError";
   }
 }
 

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-tool-usage.mjs\" PreToolUse",
+            "command": "node \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/log-tool-usage.mjs\" PreToolUse",
             "statusMessage": "Logging Ratel tool usage",
             "timeout": 10
           }
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/log-tool-usage.mjs\" PostToolUse",
+            "command": "node \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/log-tool-usage.mjs\" PostToolUse",
             "statusMessage": "Logging Ratel tool usage",
             "timeout": 10
           }

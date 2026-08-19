@@ -1,38 +1,44 @@
+import { dirname, join } from "node:path";
 import type { BackupManifest, RatelConfig, ServerEntry } from "@ratel-ai/ratel-local-core";
 import {
   type AgentHostState,
+  type AgentImportDraft,
   type AgentImportWorkflowState,
   type AgentScope,
   AutomaticAgentHostAdapter,
   advanceAgentImportWorkflow,
   beginAgentImportWorkflow,
-  buildAgentImportPlan,
+  buildAgentAgentImportDraft,
   conflictKey,
-  executePlan,
-  type FileChange,
+  createConfigControlPlane,
+  createMutationEngine,
+  createPreparedChangeCoordinator,
+  createProjectRegistry,
+  createSkillDiscovery,
+  createSkillImportControlPlane,
+  documentRevision,
   getAgentHostRatelConnection,
   getClaudeCodeStatuslineState,
   type ImportConflict,
   type ImportConflictStrategy,
-  type ImportPlan,
   isRatelGatewayEntry,
+  MISSING_DOCUMENT_REVISION,
+  MutationConflictError,
   NamedAgentHostAdapter,
+  type PlannedFileWrite,
   pluginLinkNoOpMessage,
   probeEntryInstructions,
+  projectIdFromCanonicalRoot,
   type ResolvedBin,
   ratelConfigPath,
-  readJson,
+  type SkillImportControlPlane,
   type SupportedAgentHostKind,
+  startBackup,
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core";
 import { ArgError } from "../args.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
-import {
-  activateSkills,
-  defaultSkillManagePaths,
-  type SkillManagePaths,
-  type SkillSource,
-} from "../skills/manage.js";
+import { defaultSkillPaths, type SkillPaths } from "../skills/paths.js";
 import { runLink } from "./link.js";
 import { runStatuslineInstallStep } from "./statusline.js";
 import type { HandlerCtx } from "./types.js";
@@ -50,7 +56,7 @@ export interface ImportFlowOptions {
   agentKind?: SupportedAgentHostKind;
   exists?: (path: string) => Promise<boolean>;
   probe?: ProbeFn;
-  skillPaths?: SkillManagePaths;
+  skillPaths?: SkillPaths;
   now?: () => Date;
 }
 
@@ -66,8 +72,9 @@ interface ConflictResolution {
 }
 
 interface SkillCandidate {
+  candidateId: string;
   id: string;
-  source: SkillSource;
+  source: "claude" | "codex";
 }
 
 interface SkillPreview {
@@ -78,6 +85,11 @@ interface SkillPreview {
 interface SkillImportResult {
   managed: number;
   skipped: Array<{ id: string; reason: string }>;
+}
+
+interface ScopedSkillImportRuntime {
+  control: SkillImportControlPlane | null;
+  preview: SkillPreview;
 }
 
 type ConflictResolutionResult =
@@ -112,13 +124,13 @@ export async function runImport(
     candidates = collectCandidates(agentState);
   }
 
-  const skillPaths = opts.skillPaths ?? defaultSkillManagePaths(ctx.env.homeDir);
-  const skillPreview = await previewSkillCandidates(skillPaths, {
+  const skillPaths = opts.skillPaths ?? defaultSkillPaths(ctx.env.homeDir);
+  const skillRuntime = await createScopedSkillImportRuntime(skillPaths, {
     source: resolveSkillSource(opts.agentKind, agentState),
-    now: opts.now,
   });
+  const skillPreview = skillRuntime.preview;
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
-  const connection =
+  let connection =
     workflowHostKind && agentState
       ? await getAgentHostRatelConnection(workflowHostKind, agentState, ctx)
       : null;
@@ -170,9 +182,10 @@ export async function runImport(
           exists: opts.exists,
         });
         linkCommitted = linkManifest !== null;
-        if (agentState) {
+        if (agentState && workflowHostKind) {
           agentState = await agentHost.read({ env: ctx.env, fs: ctx.fs });
           candidates = collectCandidates(agentState);
+          connection = await getAgentHostRatelConnection(workflowHostKind, agentState, ctx);
         }
       }
       workflow = advanceAgentImportWorkflow(workflow, { type: "link-completed" });
@@ -186,6 +199,9 @@ export async function runImport(
   }
   if (skillPreview.candidates.length > 0 || skillPreview.skipped.length > 0) {
     ctx.prompts.note(renderDetectedSkills(skillPreview, skillPaths), "Detected skills");
+    if (skillPreview.skipped.length > 0) {
+      ctx.log(`warning: ${skippedSkillsMessage(skillPreview.skipped)}`);
+    }
   }
 
   const selection = candidates.length > 0 ? await selectCandidates(ctx, candidates, opts) : [];
@@ -199,7 +215,7 @@ export async function runImport(
     return null;
   }
 
-  let plan: ImportPlan = emptyImportPlan();
+  let plan: AgentImportDraft = emptyAgentImportDraft();
   let bin: ResolvedBin | null = null;
 
   if (agentState && selection.length > 0) {
@@ -211,11 +227,12 @@ export async function runImport(
 
     bin = opts.bin ?? (await resolveBin(ctx, opts));
 
-    const ratelUser = await readJson<RatelConfig>(ctx.fs, ratelUserPath);
-    const ratelProject = ratelProjectPath
-      ? await readJson<RatelConfig>(ctx.fs, ratelProjectPath)
-      : null;
-    const ratelLocal = ratelLocalPath ? await readJson<RatelConfig>(ctx.fs, ratelLocalPath) : null;
+    const ratelUserText = await ctx.fs.read(ratelUserPath);
+    const ratelProjectText = ratelProjectPath ? await ctx.fs.read(ratelProjectPath) : null;
+    const ratelLocalText = ratelLocalPath ? await ctx.fs.read(ratelLocalPath) : null;
+    const ratelUser = ratelUserText ? (JSON.parse(ratelUserText) as RatelConfig) : null;
+    const ratelProject = ratelProjectText ? (JSON.parse(ratelProjectText) as RatelConfig) : null;
+    const ratelLocal = ratelLocalText ? (JSON.parse(ratelLocalText) as RatelConfig) : null;
 
     const planInputs = {
       agentHost,
@@ -223,14 +240,20 @@ export async function runImport(
       ratelUser,
       ratelProject,
       ratelLocal,
+      ratelUserText,
+      ratelProjectText,
+      ratelLocalText,
       bin,
       ratelUserPath,
       ratelProjectPath,
       ratelLocalPath,
       projectRoot: ctx.env.projectRoot,
     };
-    const planOptions = { selection: new Set(selection.map((c) => c.name)) };
-    const initialPlan = await buildAgentImportPlan(planInputs, planOptions);
+    const planOptions = {
+      selection: new Set(selection.map((c) => c.name)),
+      installGateway: connection?.explicit === true,
+    };
+    const initialPlan = await buildAgentAgentImportDraft(planInputs, planOptions);
     const conflictResolution = await resolveConflictStrategy(
       ctx,
       initialPlan,
@@ -242,7 +265,7 @@ export async function runImport(
       return null;
     }
 
-    plan = await buildAgentImportPlan(planInputs, {
+    plan = await buildAgentAgentImportDraft(planInputs, {
       ...planOptions,
       ...conflictResolution.resolution,
     });
@@ -262,10 +285,15 @@ export async function runImport(
     return null;
   }
 
+  const acceptedChanges = [...plan.ratelChanges, ...plan.agentChanges];
+  const preparedChange =
+    acceptedChanges.length > 0 ? await prepareCliAgentWrites(ctx, acceptedChanges) : null;
+
   if (opts.dryRun) {
     for (const c of [...plan.ratelChanges, ...plan.agentChanges]) {
       if (c.kind === "write") ctx.log(`would write ${c.path}`);
     }
+    if (preparedChange) ctx.preparedChanges?.cancel(preparedChange.changeId);
     for (const skill of selectedSkills) {
       ctx.log(`would manage skill ${skill.id} (${skill.source}) as invoke-only`);
     }
@@ -280,22 +308,22 @@ export async function runImport(
       initialValue: true,
     });
     if (ctx.prompts.isCancel(ok) || ok === false) {
+      if (preparedChange) ctx.preparedChanges?.cancel(preparedChange.changeId);
       ctx.prompts.cancel(importCancellationMessage(linkCommitted));
       return null;
     }
   }
 
   let latestManifest: BackupManifest | null = null;
-  if (plan.ratelChanges.length > 0) {
-    latestManifest = await tryExecute(ctx, plan.ratelChanges, "import");
-  }
-  if (plan.agentChanges.length > 0) {
-    latestManifest = await tryExecute(ctx, plan.agentChanges, "import");
+  if (preparedChange) {
+    if (!ctx.preparedChanges) throw new Error("prepared change coordinator is unavailable");
+    latestManifest = (await ctx.preparedChanges.commit(preparedChange.changeId)).backupManifest;
   }
 
   let skillImportResult: SkillImportResult = { managed: 0, skipped: [] };
   if (selectedSkills.length > 0) {
-    skillImportResult = await activateSelectedSkills(ctx, skillPaths, selectedSkills, opts);
+    if (!skillRuntime.control) throw new Error("skill import control plane is unavailable");
+    skillImportResult = await importSelectedSkills(ctx, skillRuntime.control, selectedSkills);
   }
 
   if (workflow?.step === "import") {
@@ -314,6 +342,54 @@ export async function runImport(
   }
   ctx.prompts.outro(renderCompletion(agentState, plan, skillImportResult.managed));
   return latestManifest;
+}
+
+async function prepareCliAgentWrites(ctx: HandlerCtx, changes: readonly PlannedFileWrite[]) {
+  if (!ctx.preparedChanges) throw new Error("prepared change coordinator is unavailable");
+  return ctx.preparedChanges.prepare({
+    kind: "agent.import",
+    operations: changes.map((change) => ({
+      kind: "replace-file" as const,
+      path: change.path,
+      contents: change.after,
+    })),
+    buildPreview: (mutation) => {
+      for (const change of changes) {
+        const expected =
+          change.before === null ? MISSING_DOCUMENT_REVISION : documentRevision(change.before);
+        const actual = mutation.baseRevisions[change.path];
+        if (actual !== expected) {
+          throw new MutationConflictError(
+            "revision_conflict",
+            `document changed while preparing agent import: ${change.path}`,
+            change.path,
+            expected,
+            actual,
+          );
+        }
+      }
+      return {
+        files: changes.map(({ path, before, after }) => ({ path, before, after })),
+      };
+    },
+    captureBackup: async () => {
+      const backup = startBackup(ctx.env, ctx.fs);
+      for (const change of changes) await backup.capture(change.path);
+      return backup.finalize("import");
+    },
+    affectedContexts: [
+      { kind: "global" as const },
+      ...(ctx.env.projectRoot
+        ? [
+            {
+              kind: "project" as const,
+              projectId: projectIdFromCanonicalRoot(ctx.env.projectRoot),
+            },
+          ]
+        : []),
+    ],
+    result: { importedFiles: changes.length },
+  });
 }
 
 async function beginCliImportWorkflow(
@@ -366,7 +442,7 @@ async function selectUnlinkedAgentAction(
 
 async function resolveConflictStrategy(
   ctx: HandlerCtx,
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   opts: ImportFlowOptions,
   agentHostName: string,
 ): Promise<ConflictResolutionResult> {
@@ -404,7 +480,7 @@ async function resolveConflictStrategy(
 
 async function resolveSelectedConflicts(
   ctx: HandlerCtx,
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   conflictStrategy: ImportConflictStrategy,
   agentHostName: string,
 ): Promise<ConflictResolutionResult> {
@@ -491,32 +567,71 @@ function collectCandidates(state: AgentHostState): Candidate[] {
 function resolveSkillSource(
   agentKind: SupportedAgentHostKind | undefined,
   state: AgentHostState | null,
-): SkillSource | undefined {
+): "claude" | "codex" | undefined {
   if (agentKind) return skillSourceForAgentKind(agentKind);
   return skillSourceForAgentKind(state?.host.kind);
 }
 
-function skillSourceForAgentKind(kind: string | undefined): SkillSource | undefined {
+function skillSourceForAgentKind(kind: string | undefined): "claude" | "codex" | undefined {
   if (kind === "claude-code") return "claude";
   if (kind === "codex") return "codex";
   return undefined;
 }
 
-async function previewSkillCandidates(
-  paths: SkillManagePaths,
-  opts: { source?: SkillSource; now?: () => Date },
-): Promise<SkillPreview> {
-  const result = await activateSkills(paths, {
-    dryRun: true,
-    source: opts.source,
-    now: opts.now,
-  });
+async function createScopedSkillImportRuntime(
+  paths: SkillPaths,
+  opts: { source?: "claude" | "codex" },
+): Promise<ScopedSkillImportRuntime> {
+  const homeDir = dirname(dirname(paths.nativeDir));
+  const discovery = createSkillDiscovery({ homeDir });
+  const discovered = await discovery.discover({ kind: "global" });
+  const discoveredCandidates = discovered.candidates
+    .filter(({ source }) => source !== "ratel")
+    .map((candidate) => ({
+      candidateId: candidate.candidateId,
+      id: candidate.id,
+      source: candidate.source === "claude" ? ("claude" as const) : ("codex" as const),
+    }))
+    .filter(({ source }) => opts.source === undefined || source === opts.source);
+  const preparedChanges =
+    discoveredCandidates.length === 0
+      ? null
+      : createPreparedChangeCoordinator({
+          mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
+        });
+  const projectRegistry = createProjectRegistry({ homeDir });
+  const registeredIds = new Set<string>();
+  if (preparedChanges) {
+    const configControlPlane = await createConfigControlPlane({
+      homeDir,
+      projectRegistry,
+      preparedChanges,
+    });
+    const userConfig = await configControlPlane.read({ scope: "user" });
+    for (const id of Object.keys(userConfig.document.skills?.entries ?? {})) {
+      registeredIds.add(id);
+    }
+  }
+  const candidates = discoveredCandidates.filter(({ id }) => !registeredIds.has(id));
+  const skippedRegistrations = [...registeredIds]
+    .filter((id) => discoveredCandidates.some((candidate) => candidate.id === id))
+    .map((id) => ({ id, reason: "already registered in Ratel user scope" }));
   return {
-    candidates: result.managed.map((entry) => ({
-      id: entry.id,
-      source: entry.source ?? "claude",
-    })),
-    skipped: result.skipped,
+    control: preparedChanges
+      ? createSkillImportControlPlane({
+          homeDir,
+          projectRegistry,
+          discovery,
+          preparedChanges,
+        })
+      : null,
+    preview: {
+      candidates,
+      skipped: [
+        ...skippedRegistrations,
+        ...discovered.diagnostics.map(({ path, message }) => ({ id: path, reason: message })),
+      ],
+    },
   };
 }
 
@@ -542,30 +657,29 @@ async function selectSkillCandidates(
   return candidates.filter((skill) => selected.has(skillTagOf(skill)));
 }
 
-async function activateSelectedSkills(
+async function importSelectedSkills(
   ctx: HandlerCtx,
-  paths: SkillManagePaths,
+  control: SkillImportControlPlane,
   skills: SkillCandidate[],
-  opts: ImportFlowOptions,
 ): Promise<SkillImportResult> {
-  const idsBySource = new Map<SkillSource, string[]>();
+  const selected: SkillCandidate[] = [];
+  const seen = new Set<string>();
   for (const skill of skills) {
-    const ids = idsBySource.get(skill.source) ?? [];
-    ids.push(skill.id);
-    idsBySource.set(skill.source, ids);
+    if (seen.has(skill.id)) continue;
+    seen.add(skill.id);
+    selected.push(skill);
   }
-  const skipped: Array<{ id: string; reason: string }> = [];
-  let managed = 0;
-  for (const [source, ids] of idsBySource) {
-    const result = await activateSkills(paths, {
-      ids,
-      source,
-      logger: ctx.log,
-      now: opts.now,
-    });
-    managed += result.managed.length;
-    skipped.push(...result.skipped);
-  }
+  const skipped = skills
+    .filter((skill) => !selected.includes(skill))
+    .map(({ id }) => ({ id, reason: "duplicate skill id; earlier harness copy kept" }));
+  const plan = await control.prepare(
+    selected.map(({ candidateId }) => ({
+      candidateId,
+      targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+    })),
+  );
+  const commit = await control.commit(plan.changeId);
+  const managed = commit.result.imported.length;
   ctx.log(`managing ${managed} skill${managed === 1 ? "" : "s"} as invoke-only`);
   if (skipped.length > 0) {
     ctx.log(`warning: ${skippedSkillsMessage(skipped)}`);
@@ -586,7 +700,7 @@ function skillTagOf(skill: SkillCandidate): string {
   return `${skill.source}:${skill.id}`;
 }
 
-function sourceLabel(source: SkillSource): string {
+function sourceLabel(source: "claude" | "codex"): string {
   return source === "codex" ? "Codex" : "Claude Code";
 }
 
@@ -606,9 +720,9 @@ function renderDetectedAgentSources(state: AgentHostState): string {
   return lines.join("\n");
 }
 
-function renderDetectedSkills(preview: SkillPreview, paths: SkillManagePaths): string {
+function renderDetectedSkills(preview: SkillPreview, paths: SkillPaths): string {
   const lines: string[] = [];
-  const bySource = new Map<SkillSource, SkillCandidate[]>();
+  const bySource = new Map<"claude" | "codex", SkillCandidate[]>();
   for (const skill of preview.candidates) {
     const skills = bySource.get(skill.source) ?? [];
     skills.push(skill);
@@ -713,20 +827,6 @@ function previewInstructions(s: string): string {
   return `${trimmedEnd.slice(0, 119).trimEnd()}…`;
 }
 
-async function tryExecute(
-  ctx: HandlerCtx,
-  changes: readonly FileChange[],
-  action: BackupManifest["action"],
-): Promise<BackupManifest> {
-  try {
-    return await executePlan(changes, { fs: ctx.fs, env: ctx.env, action });
-  } catch (err) {
-    ctx.log(`error during execution: ${(err as Error).message}`);
-    ctx.log(`partial backup may exist under ~/.ratel/backups/.`);
-    throw err;
-  }
-}
-
 async function resolveBin(ctx: HandlerCtx, opts: ImportFlowOptions): Promise<ResolvedBin> {
   return resolveCliRatelBin(ctx, {
     envVar: opts.envVar ?? process.env.RATEL_LOCAL_BIN,
@@ -736,7 +836,7 @@ async function resolveBin(ctx: HandlerCtx, opts: ImportFlowOptions): Promise<Res
   });
 }
 
-function emptyImportPlan(): ImportPlan {
+function emptyAgentImportDraft(): AgentImportDraft {
   return {
     ratelChanges: [],
     agentChanges: [],
@@ -757,7 +857,7 @@ function emptyImportPlan(): ImportPlan {
 }
 
 function renderSummary(
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   agentHostName: string,
   selectedSkills: readonly SkillCandidate[],
 ): string {
@@ -836,7 +936,7 @@ function renderConflictStrategyName(
   return "keep existing Ratel definitions";
 }
 
-function renderDiff(changes: readonly FileChange[]): string {
+function renderDiff(changes: readonly PlannedFileWrite[]): string {
   return changes
     .map((c) => {
       if (c.kind !== "write") return `delete ${c.path}`;
@@ -845,7 +945,7 @@ function renderDiff(changes: readonly FileChange[]): string {
     .join("\n");
 }
 
-function renderImportCommit(plan: ImportPlan, skills: readonly SkillCandidate[]): string {
+function renderImportCommit(plan: AgentImportDraft, skills: readonly SkillCandidate[]): string {
   const sections: string[] = [];
   if (plan.ratelChanges.length > 0) {
     sections.push(`Ratel config\n${renderDiff(plan.ratelChanges)}`);
@@ -865,7 +965,7 @@ function renderSkillStage(skills: readonly SkillCandidate[]): string {
 
 function renderCompletion(
   agentState: AgentHostState | null,
-  plan: ImportPlan,
+  plan: AgentImportDraft,
   managedSkillCount: number,
 ): string {
   const parts: string[] = ["import complete"];

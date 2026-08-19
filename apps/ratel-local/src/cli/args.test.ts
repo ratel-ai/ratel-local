@@ -35,11 +35,73 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it.each([
+    "status",
+    "configure",
+    "reset",
+    "prepare",
+  ] as const)("recognizes retrieval %s", (verb) => {
+    const result = parseArgs(["retrieval", verb, "--scope", "project"]);
+    expect(result).toMatchObject({
+      group: "retrieval",
+      verb,
+      flags: { scope: "project" },
+    });
+  });
+
+  it("rejects an unknown retrieval verb", () => {
+    expect(() => parseArgs(["retrieval", "download"])).toThrow(/unknown retrieval verb: download/);
+  });
+
+  it.each(["list", "add", "remove"] as const)("recognizes project %s", (verb) => {
+    const result = parseArgs(["project", verb, "/repo"]);
+
+    expect(result.group).toBe("project");
+    expect(result.verb).toBe(verb);
+    expect(result.rest).toEqual(["/repo"]);
+  });
+
+  it("parses project-aware skill list view flags", () => {
+    const result = parseArgs(["skill", "list", "--project", "/repo", "--configured"]);
+
+    expect(result.group).toBe("skill");
+    expect(result.verb).toBe("list");
+    expect(result.flags).toEqual({ project: "/repo", configured: true });
+  });
+
+  it.each([
+    "import",
+    "add-scope",
+    "remove-scope",
+    "remove",
+  ] as const)("recognizes skill %s", (verb) => {
+    const result = parseArgs(["skill", verb, "demo", "--scope", "project"]);
+    expect(result).toMatchObject({
+      group: "skill",
+      verb,
+      rest: ["demo"],
+      flags: { scope: "project" },
+    });
+  });
+
   it("recognizes the statusline group and install verbs", () => {
     expect(parseArgs(["statusline"]).group).toBe("statusline");
     expect(parseArgs(["statusline"]).verb).toBeUndefined();
     expect(parseArgs(["statusline", "install", "--yes"]).verb).toBe("install");
     expect(parseArgs(["statusline", "uninstall"]).verb).toBe("uninstall");
+  });
+
+  it.each(["status", "enable", "disable"] as const)("recognizes traces %s", (verb) => {
+    const result = parseArgs(["traces", verb, "--agent", "claude-code", "--agent=codex"]);
+    expect(result).toMatchObject({
+      group: "traces",
+      verb,
+      flags: { agent: ["claude-code", "codex"] },
+    });
+  });
+
+  it("rejects an unknown traces verb", () => {
+    expect(() => parseArgs(["traces", "configure"])).toThrow(/unknown traces verb: configure/);
   });
 
   it.each(["add", "remove", "list", "get", "edit"] as const)("recognizes mcp %s", (verb) => {
@@ -54,6 +116,33 @@ describe("parseArgs — group/verb routing", () => {
     expect(r.verb).toBeUndefined();
   });
 
+  it("recognizes the top-level setup wizard and automation flags", () => {
+    const result = parseArgs(["setup", "--yes", "--port", "7331"]);
+    expect(result.group).toBe("setup");
+    expect(result.flags).toEqual({ yes: true, port: "7331" });
+  });
+
+  it("collects repeatable setup agent flags", () => {
+    const result = parseArgs(["setup", "--agent", "claude-code", "--agent=codex", "--daemon-only"]);
+
+    expect(result.flags).toEqual({
+      agent: ["claude-code", "codex"],
+      "daemon-only": true,
+    });
+  });
+
+  it("recognizes the top-level connect command and project root flag", () => {
+    const result = parseArgs(["connect", "--project-root", "/repo"]);
+    expect(result.group).toBe("connect");
+    expect(result.flags["project-root"]).toBe("/repo");
+  });
+
+  it("recognizes the top-level doctor command", () => {
+    const result = parseArgs(["doctor"]);
+
+    expect(result).toMatchObject({ group: "doctor", verb: undefined });
+  });
+
   it.each(["import", "link"] as const)("does not expose %s as an mcp verb", (verb) => {
     expect(() => parseArgs(["mcp", verb])).toThrow(new RegExp(`unknown mcp verb: ${verb}`));
   });
@@ -62,6 +151,17 @@ describe("parseArgs — group/verb routing", () => {
     const r = parseArgs(["serve"]);
     expect(r.group).toBe("serve");
     expect(r.verb).toBeUndefined();
+  });
+
+  it("recognizes daemon lifecycle verbs", () => {
+    expect(parseArgs(["daemon"]).verb).toBeUndefined();
+    expect(parseArgs(["daemon", "run"]).verb).toBe("run");
+    expect(parseArgs(["daemon", "install"]).verb).toBe("install");
+    expect(parseArgs(["daemon", "uninstall"]).verb).toBe("uninstall");
+    expect(parseArgs(["daemon", "status"]).verb).toBe("status");
+    expect(parseArgs(["daemon", "start"]).verb).toBe("start");
+    expect(parseArgs(["daemon", "stop"]).verb).toBe("stop");
+    expect(parseArgs(["daemon", "restart"]).verb).toBe("restart");
   });
 
   it("recognizes backup list", () => {
@@ -128,6 +228,18 @@ describe("parseArgs — flags and config paths", () => {
     const r = parseArgs(["serve", "--auto-config", "--project-root", "/repo"]);
     expect(r.flags["auto-config"]).toBe(true);
     expect(r.flags["project-root"]).toBe("/repo");
+  });
+
+  it("collects daemon run positionals as config paths after the verb", () => {
+    const r = parseArgs(["daemon", "run", "base.json", "--config", "extra.json"]);
+    expect(r.verb).toBe("run");
+    expect(r.configPaths).toEqual(["base.json", "extra.json"]);
+  });
+
+  it("keeps daemon positional config compatibility when no lifecycle verb is present", () => {
+    const r = parseArgs(["daemon", "base.json"]);
+    expect(r.verb).toBeUndefined();
+    expect(r.configPaths).toEqual(["base.json"]);
   });
 
   it("does not treat positionals as config paths under non-serve commands", () => {

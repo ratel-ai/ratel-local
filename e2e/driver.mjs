@@ -2,8 +2,17 @@
 // Claude Code connects) and drives the gateway through real MCP calls.
 // Asserts the full pull-path surface: tool list, the two reserved buckets
 // (no-starvation), invoke round-trip to the real upstream, and skill dispatch.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createRequire } from "node:module";
+
+// The root workspace intentionally does not own runtime dependencies. Resolve
+// the SDK from the public app workspace that the E2E test is exercising.
+const requireFromApp = createRequire(
+  new URL("../apps/ratel-local/package.json", import.meta.url),
+);
+const { Client } = requireFromApp("@modelcontextprotocol/sdk/client/index.js");
+const { StdioClientTransport } = requireFromApp(
+  "@modelcontextprotocol/sdk/client/stdio.js",
+);
 
 const HOME = process.env.E2E_HOME;
 const BIN = process.env.E2E_BIN;
@@ -28,14 +37,19 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "e2e", version: "0.0.0" });
 await client.connect(transport);
 
-// A1 — the gateway surface includes the designed set plus the deprecated
-// search_tools compatibility shim.
+// A1 — the gateway surface includes four gateway tools (one deprecated) + auth.
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
 check(
-  "A1  surface includes capability tools, auth, and the deprecated search_tools shim",
+  "A1  surface is exactly [auth, get_skill_content, invoke_tool, search_capabilities, search_tools]",
   JSON.stringify(names) ===
-    JSON.stringify(["auth", "get_skill_content", "invoke_tool", "search_capabilities", "search_tools"]),
+    JSON.stringify([
+      "auth",
+      "get_skill_content",
+      "invoke_tool",
+      "search_capabilities",
+      "search_tools",
+    ]),
   JSON.stringify(names),
 );
 

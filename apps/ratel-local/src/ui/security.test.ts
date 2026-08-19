@@ -3,6 +3,7 @@ import {
   constantTimeEqual,
   extractBearer,
   extractTokenFromUrl,
+  InMemoryUiSessionTokens,
   isLoopbackHost,
   newSessionToken,
 } from "./security.js";
@@ -14,6 +15,38 @@ describe("newSessionToken", () => {
   });
   it("returns a distinct token each call", () => {
     expect(newSessionToken()).not.toBe(newSessionToken());
+  });
+});
+
+describe("InMemoryUiSessionTokens", () => {
+  it("issues session tokens that live only in memory", () => {
+    const sessions = new InMemoryUiSessionTokens();
+    const token = sessions.issue();
+    expect(sessions.isValid(token)).toBe(true);
+    expect(sessions.isValid("wrong")).toBe(false);
+    sessions.revoke(token);
+    expect(sessions.isValid(token)).toBe(false);
+  });
+
+  it("expires tokens at the fixed 24-hour boundary without extending on validation", () => {
+    let now = 0;
+    const sessions = new InMemoryUiSessionTokens(["initial"], { now: () => now });
+    expect(sessions.isValid("initial")).toBe(true);
+    now = 24 * 60 * 60 * 1_000 - 1;
+    expect(sessions.isValid("initial")).toBe(true);
+    now += 1;
+    expect(sessions.isValid("initial")).toBe(false);
+  });
+
+  it("counts the initial token and evicts the oldest token at capacity", () => {
+    const sessions = new InMemoryUiSessionTokens(["initial"], { capacity: 2 });
+    const second = sessions.issue();
+    const third = sessions.issue();
+    expect(sessions.isValid("initial")).toBe(false);
+    expect(sessions.isValid(second)).toBe(true);
+    expect(sessions.isValid(third)).toBe(true);
+    sessions.revoke(second);
+    expect(sessions.isValid(second)).toBe(false);
   });
 });
 
