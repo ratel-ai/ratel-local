@@ -9,10 +9,8 @@ import {
   invokeToolTool,
   type JSONSchema7,
   SEARCH_CAPABILITIES_ID,
-  SEARCH_TOOLS_ID,
   type SkillCatalog,
   searchCapabilitiesTool,
-  searchToolsTool,
   type ToolCatalog,
   type UpstreamServerInfo,
 } from "@ratel-ai/sdk";
@@ -69,11 +67,6 @@ export async function createMcpServer(
   for (const tool of [searchCapabilities, invokeToolTool(catalog, { onUnauthorized })]) {
     gateway[tool.name] = tool;
   }
-  // Backward-compat: keep the pre-0.2.0 `search_tools` alias callable for MCP
-  // clients that pinned its name, but omit it from tools/list below so new
-  // clients discover only `search_capabilities`.
-  const legacySearch = withRetrievalErrorSchema(searchToolsTool(catalog, { upstreamServers }));
-  gateway[legacySearch.name] = legacySearch;
   if (skills) {
     const t = getSkillContentTool(skills);
     gateway[t.name] = t;
@@ -84,16 +77,14 @@ export async function createMcpServer(
   }
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: Object.values(gateway)
-      .filter((tool) => tool.name !== SEARCH_TOOLS_ID)
-      .map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema as { [k: string]: unknown; type: "object" },
-        ...(isObjectSchema(tool.outputSchema)
-          ? { outputSchema: tool.outputSchema as { [k: string]: unknown; type: "object" } }
-          : {}),
-      })),
+    tools: Object.values(gateway).map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema as { [k: string]: unknown; type: "object" },
+      ...(isObjectSchema(tool.outputSchema)
+        ? { outputSchema: tool.outputSchema as { [k: string]: unknown; type: "object" } }
+        : {}),
+    })),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -106,10 +97,7 @@ export async function createMcpServer(
     try {
       out = await tool.execute(args);
     } catch (error) {
-      if (
-        !(error instanceof EmbedderError) ||
-        (req.params.name !== SEARCH_CAPABILITIES_ID && req.params.name !== SEARCH_TOOLS_ID)
-      ) {
+      if (!(error instanceof EmbedderError) || req.params.name !== SEARCH_CAPABILITIES_ID) {
         throw error;
       }
       out = {

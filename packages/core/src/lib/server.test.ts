@@ -12,7 +12,6 @@ import {
   INVOKE_TOOL_ID,
   registerMcpServer,
   SEARCH_CAPABILITIES_ID,
-  SEARCH_TOOLS_ID,
   type Skill,
   SkillCatalog,
   ToolCatalog,
@@ -162,7 +161,7 @@ describe("createMcpServer", () => {
     await handle.close();
   });
 
-  it("hides the deprecated search_tools alias from tools/list", async () => {
+  it("exposes only search_capabilities and invoke_tool for capability discovery", async () => {
     const catalog = new ToolCatalog();
     await catalog.register(localTool("echo", "Echo a message back to the caller.", (a) => a));
 
@@ -211,37 +210,15 @@ describe("createMcpServer", () => {
     }
   });
 
-  it("search_tools (deprecated) still returns the pre-0.2.0 tools-only {groups} shape", async () => {
-    const catalog = new ToolCatalog();
-    await catalog.register(
-      localTool("wx__weather", "Get the current weather forecast for a city.", () => ({})),
-    );
+  it("rejects calls to the removed search_tools alias", async () => {
+    const { client, handle } = await buildClientAgainst(new ToolCatalog());
 
-    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-    const handle = await createMcpServer(catalog, {
-      name: "ratel-test",
-      version: "0.0.0",
-      transport: serverTransport,
-      upstreamServers: [{ name: "wx", toolCount: 1 }],
-    });
-    const client = new Client({ name: "test-client", version: "0.0.0" });
-    await client.connect(clientTransport);
-
-    const result = await client.callTool({
-      name: SEARCH_TOOLS_ID,
-      arguments: { query: "weather forecast" },
-    });
-
-    // Old shape: a top-level `groups` array, NOT the two-bucket { tools, skills }.
-    const structured = result.structuredContent as {
-      groups: Array<{ server: { name: string }; hits: Array<{ toolId: string }> }>;
-      tools?: unknown;
-      skills?: unknown;
-    };
-    expect(structured.groups[0].server.name).toBe("wx");
-    expect(structured.groups[0].hits[0].toolId).toBe("wx__weather");
-    expect(structured.tools).toBeUndefined();
-    expect(structured.skills).toBeUndefined();
+    await expect(
+      client.callTool({
+        name: "search_tools",
+        arguments: { query: "weather forecast" },
+      }),
+    ).rejects.toThrow(/unknown gateway tool: search_tools/);
 
     await client.close();
     await handle.close();
@@ -755,13 +732,6 @@ describe("createMcpServer skills", () => {
       expect(outputSchema.type).toBe("object");
       expect(outputSchema.oneOf).toHaveLength(2);
       expect(outputSchema.oneOf?.[1]?.required).toEqual(["error", "code", "message", "isError"]);
-
-      const legacyResult = await client.callTool({
-        name: SEARCH_TOOLS_ID,
-        arguments: { query: "weather forecast" },
-      });
-      expect(legacyResult.isError).toBe(true);
-      expect(legacyResult.structuredContent).toEqual(result.structuredContent);
     } finally {
       search.mockRestore();
       await client.close();

@@ -43,9 +43,7 @@ If no logs exist, say that there is no tool usage data yet and suggest enabling/
 6. Look for:
 
 - high-frequency tools that deserve first-class upstreams, aliases, or better descriptions;
-- repeated `search_capabilities` calls that do not lead to useful `invoke_tool`
-  calls (including legacy clients still calling the deprecated `search_tools`
-  alias);
+- repeated `search_capabilities` calls that do not lead to useful `invoke_tool` calls;
 - failed or denied tool calls that indicate missing auth, missing tools, weak schemas, or bad defaults;
 - direct non-Ratel Local tool usage that should be imported into Ratel;
 - similar tools split across upstreams where a curated choice would reduce noise;

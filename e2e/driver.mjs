@@ -41,7 +41,7 @@ await client.connect(transport);
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
 check(
-  "A1a surface is exactly [auth, get_skill_content, invoke_tool, search_capabilities]",
+  "A1  surface is exactly [auth, get_skill_content, invoke_tool, search_capabilities]",
   JSON.stringify(names) ===
     JSON.stringify([
       "auth",
@@ -50,18 +50,6 @@ check(
       "search_capabilities",
     ]),
   JSON.stringify(names),
-);
-
-// The deprecated alias stays directly callable for clients that pinned its name.
-const legacySearchRes = await client.callTool({
-  name: "search_tools",
-  arguments: { query: "supabase" },
-});
-const legacySearch = JSON.parse(legacySearchRes.content[0].text);
-check(
-  "A1b hidden search_tools alias remains directly callable",
-  Array.isArray(legacySearch.groups) && legacySearch.groups.length > 0,
-  JSON.stringify(legacySearch).slice(0, 140),
 );
 
 // A2 — search returns BOTH buckets; the supabase SKILL survives 4 matching TOOLS.

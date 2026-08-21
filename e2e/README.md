@@ -9,7 +9,7 @@ output schema).
 
 | Part | Layer | What it proves |
 |------|-------|----------------|
-| **A** | Gateway (pull) | `ratel-local serve` discovery exposes `search_capabilities` / `invoke_tool` / `get_skill_content` / `auth`, while the deprecated `search_tools` alias remains directly callable; the two reserved buckets mean a matching **skill is never starved by matching tools**; `invoke_tool` round-trips to a real upstream MCP; `get_skill_content` returns the body and a clean `{ error }` (not a protocol crash) for an unknown id. |
+| **A** | Gateway (pull) | `ratel-local serve` exposes `search_capabilities` / `invoke_tool` / `get_skill_content` / `auth`; the two reserved buckets mean a matching **skill is never starved by matching tools**; `invoke_tool` round-trips to a real upstream MCP; `get_skill_content` returns the body and a clean `{ error }` (not a protocol crash) for an unknown id. |
 | **B** | Lifecycle | `skill activate → list → deactivate` links skills into Ratel without moving their native folders, then reverses the operation non-destructively with an accurate manifest. |
 | **C** | Push | The `UserPromptSubmit` preload hook + **real** project-signal detection: the *same* prompt surfaces the React skill in a React repo and the Django skill in a Django repo, and the clear-winner gate stays **silent** when nothing clearly fits. |
 
@@ -24,7 +24,7 @@ dependencies and build the public app first:
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
-bash e2e/run.sh        # → "20 passed, 0 failed"
+bash e2e/run.sh        # → "19 passed, 0 failed"
 ```
 
 The per-bug regressions are also locked into the normal unit suites
