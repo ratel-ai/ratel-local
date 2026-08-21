@@ -4,6 +4,9 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Removed
+- Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
+
 ## [0.8.2] - 2026-08-19
 
 ### Fixed
