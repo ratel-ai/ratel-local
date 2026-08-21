@@ -162,18 +162,15 @@ describe("createMcpServer", () => {
     await handle.close();
   });
 
-  it("exposes search_capabilities, invoke_tool, and the deprecated search_tools alias via tools/list", async () => {
+  it("hides the deprecated search_tools alias from tools/list", async () => {
     const catalog = new ToolCatalog();
     await catalog.register(localTool("echo", "Echo a message back to the caller.", (a) => a));
 
     const { client, handle } = await buildClientAgainst(catalog);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      [SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID, INVOKE_TOOL_ID].sort(),
+      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID].sort(),
     );
-    // The compat alias is advertised but flagged so new clients prefer search_capabilities.
-    const legacy = tools.find((t) => t.name === SEARCH_TOOLS_ID);
-    expect(legacy?.description).toContain("Deprecated");
 
     await client.close();
     await handle.close();
@@ -648,7 +645,7 @@ describe("createMcpServer skills", () => {
     body: "# API Design\n\nUse nouns for resources.",
   };
 
-  it("registers get_skill_content (4 tools incl. the search_tools alias) when the skill catalog is non-empty", async () => {
+  it("lists get_skill_content when the skill catalog is non-empty", async () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handle = await createMcpServer(new ToolCatalog(), {
       name: "ratel-test",
@@ -661,14 +658,14 @@ describe("createMcpServer skills", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      [GET_SKILL_CONTENT_ID, INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID].sort(),
+      [GET_SKILL_CONTENT_ID, INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID].sort(),
     );
 
     await client.close();
     await handle.close();
   });
 
-  it("omits get_skill_content when the skill catalog is empty (3 tools incl. the search_tools alias)", async () => {
+  it("omits get_skill_content when the skill catalog is empty", async () => {
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
     const handle = await createMcpServer(new ToolCatalog(), {
       name: "ratel-test",
@@ -681,7 +678,7 @@ describe("createMcpServer skills", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID, SEARCH_TOOLS_ID].sort(),
+      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID].sort(),
     );
 
     await client.close();
@@ -750,15 +747,14 @@ describe("createMcpServer skills", () => {
       });
 
       const listed = await client.listTools();
-      for (const name of [SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID]) {
-        const outputSchema = listed.tools.find((tool) => tool.name === name)?.outputSchema as {
-          type?: string;
-          oneOf?: Array<{ required?: string[] }>;
-        };
-        expect(outputSchema.type).toBe("object");
-        expect(outputSchema.oneOf).toHaveLength(2);
-        expect(outputSchema.oneOf?.[1]?.required).toEqual(["error", "code", "message", "isError"]);
-      }
+      const outputSchema = listed.tools.find((tool) => tool.name === SEARCH_CAPABILITIES_ID)
+        ?.outputSchema as {
+        type?: string;
+        oneOf?: Array<{ required?: string[] }>;
+      };
+      expect(outputSchema.type).toBe("object");
+      expect(outputSchema.oneOf).toHaveLength(2);
+      expect(outputSchema.oneOf?.[1]?.required).toEqual(["error", "code", "message", "isError"]);
 
       const legacyResult = await client.callTool({
         name: SEARCH_TOOLS_ID,

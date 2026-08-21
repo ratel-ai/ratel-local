@@ -37,20 +37,31 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: "e2e", version: "0.0.0" });
 await client.connect(transport);
 
-// A1 — the gateway surface includes four gateway tools (one deprecated) + auth.
+// A1 — discovery exposes only the current gateway tools + auth.
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
 check(
-  "A1  surface is exactly [auth, get_skill_content, invoke_tool, search_capabilities, search_tools]",
+  "A1a surface is exactly [auth, get_skill_content, invoke_tool, search_capabilities]",
   JSON.stringify(names) ===
     JSON.stringify([
       "auth",
       "get_skill_content",
       "invoke_tool",
       "search_capabilities",
-      "search_tools",
     ]),
   JSON.stringify(names),
+);
+
+// The deprecated alias stays directly callable for clients that pinned its name.
+const legacySearchRes = await client.callTool({
+  name: "search_tools",
+  arguments: { query: "supabase" },
+});
+const legacySearch = JSON.parse(legacySearchRes.content[0].text);
+check(
+  "A1b hidden search_tools alias remains directly callable",
+  Array.isArray(legacySearch.groups) && legacySearch.groups.length > 0,
+  JSON.stringify(legacySearch).slice(0, 140),
 );
 
 // A2 — search returns BOTH buckets; the supabase SKILL survives 4 matching TOOLS.

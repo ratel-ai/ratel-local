@@ -4,6 +4,9 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+- Hid the deprecated `search_tools` alias from MCP `tools/list` discovery so agents see only `search_capabilities`; direct `tools/call` invocation of `search_tools` remains temporarily supported with its legacy tools-only `{ groups }` result.
+
 ## [0.8.1] - 2026-08-19
 
 ### Fixed

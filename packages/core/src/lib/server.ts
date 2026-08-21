@@ -69,15 +69,11 @@ export async function createMcpServer(
   for (const tool of [searchCapabilities, invokeToolTool(catalog, { onUnauthorized })]) {
     gateway[tool.name] = tool;
   }
-  // Backward-compat: keep advertising the pre-0.2.0 `search_tools` (deprecated
-  // alias, tools-only `{ groups }` result) so MCP clients that pinned its name
-  // don't break on upgrade. New clients should use `search_capabilities` — which
-  // also returns skills — so the description steers them there.
+  // Backward-compat: keep the pre-0.2.0 `search_tools` alias callable for MCP
+  // clients that pinned its name, but omit it from tools/list below so new
+  // clients discover only `search_capabilities`.
   const legacySearch = withRetrievalErrorSchema(searchToolsTool(catalog, { upstreamServers }));
-  gateway[legacySearch.name] = {
-    ...legacySearch,
-    description: `[Deprecated: prefer search_capabilities, which also returns skills.] ${legacySearch.description}`,
-  };
+  gateway[legacySearch.name] = legacySearch;
   if (skills) {
     const t = getSkillContentTool(skills);
     gateway[t.name] = t;
@@ -88,14 +84,16 @@ export async function createMcpServer(
   }
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: Object.values(gateway).map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema as { [k: string]: unknown; type: "object" },
-      ...(isObjectSchema(tool.outputSchema)
-        ? { outputSchema: tool.outputSchema as { [k: string]: unknown; type: "object" } }
-        : {}),
-    })),
+    tools: Object.values(gateway)
+      .filter((tool) => tool.name !== SEARCH_TOOLS_ID)
+      .map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as { [k: string]: unknown; type: "object" },
+        ...(isObjectSchema(tool.outputSchema)
+          ? { outputSchema: tool.outputSchema as { [k: string]: unknown; type: "object" } }
+          : {}),
+      })),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {

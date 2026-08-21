@@ -12,7 +12,7 @@
 # This is a LOCAL/manual check, not a CI job. Prereqs:
 #   pnpm install --frozen-lockfile
 #   pnpm build
-#   bash e2e/run.sh          # → "19 passed, 0 failed"
+#   bash e2e/run.sh          # → "20 passed, 0 failed"
 set -u
 RMCP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$RMCP/apps/ratel-local/dist/bin.js"
@@ -32,7 +32,7 @@ skill_md "$HGW/.ratel/skills" supabase-auth "Set up Supabase authentication: RLS
 skill_md "$HGW/.ratel/skills" frontend-react "React/Next UI component patterns and layout." "dashboard,page,form" "react,next" "BODY-MARKER-FRONTEND"
 printf '{"mcpServers":{"up":{"type":"stdio","command":"node","args":["%s/e2e/upstream.mjs"]}}}' "$RMCP" > "$HGW/config.json"
 E2E_HOME="$HGW" E2E_BIN="$BIN" E2E_CONFIG="$HGW/config.json" node "$RMCP/e2e/driver.mjs"
-[ $? -eq 0 ] && PASS=$((PASS+6)) || FAIL=$((FAIL+1))   # driver prints + returns its own 6 checks
+[ $? -eq 0 ] && PASS=$((PASS+7)) || FAIL=$((FAIL+1))   # driver prints + returns its own 7 checks
 rm -rf "$HGW"
 
 echo ""

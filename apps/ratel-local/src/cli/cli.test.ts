@@ -7,7 +7,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, JsonFs, ProjectRegistry } from "@ratel-ai/ratel-local-core";
 import { AUTH_TOOL_ID, nodeFs } from "@ratel-ai/ratel-local-core";
-import { INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID, SEARCH_TOOLS_ID } from "@ratel-ai/sdk";
+import { INVOKE_TOOL_ID, SEARCH_CAPABILITIES_ID } from "@ratel-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
 
@@ -159,7 +159,7 @@ describe("runCli — serve", () => {
     await client.connect(downstreamClientTransport);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID, AUTH_TOOL_ID, SEARCH_TOOLS_ID].sort(),
+      [SEARCH_CAPABILITIES_ID, INVOKE_TOOL_ID, AUTH_TOOL_ID].sort(),
     );
 
     const search = await client.callTool({
