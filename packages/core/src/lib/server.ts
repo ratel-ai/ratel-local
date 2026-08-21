@@ -41,6 +41,11 @@ export async function createMcpServer(
 ): Promise<McpServerHandle> {
   const { name, version, transport, upstreamServers, runAuthFlow, skillCatalog } = options;
   const hasSkills = skillCatalog !== undefined && skillCatalog.size() > 0;
+  const searchUpstreamServers = upstreamServers?.map((upstream) =>
+    upstream.description !== undefined && upstream.description === upstream.instructions
+      ? { ...upstream, instructions: undefined }
+      : upstream,
+  );
 
   const server = new Server(
     { name, version },
@@ -62,7 +67,7 @@ export async function createMcpServer(
   const gateway: Record<string, ExecutableTool> = {};
   const skills = hasSkills ? skillCatalog : undefined;
   const searchCapabilities = withRetrievalErrorSchema(
-    searchCapabilitiesTool(catalog, skills, { upstreamServers }),
+    searchCapabilitiesTool(catalog, skills, { upstreamServers: searchUpstreamServers }),
   );
   for (const tool of [searchCapabilities, invokeToolTool(catalog, { onUnauthorized })]) {
     gateway[tool.name] = tool;

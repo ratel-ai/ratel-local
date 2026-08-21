@@ -17,6 +17,7 @@ import {
   ToolCatalog,
 } from "@ratel-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
+import { buildGatewayFromConfig } from "./gateway.js";
 import { createMcpServer } from "./server.js";
 import { AUTH_TOOL_ID } from "./tools/auth.js";
 
@@ -27,10 +28,10 @@ interface UpstreamToolSpec {
   handler?: (args: Record<string, unknown>) => unknown;
 }
 
-async function startUpstreamMcp(tools: UpstreamToolSpec[]) {
+async function startUpstreamMcp(tools: UpstreamToolSpec[], instructions?: string) {
   const server = new Server(
     { name: "fake-upstream", version: "0.0.0" },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, ...(instructions ? { instructions } : {}) },
   );
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((t) => ({
@@ -313,6 +314,60 @@ describe("createMcpServer", () => {
 
     await client.close();
     await handle.close();
+  });
+
+  it("search_capabilities omits upstream instructions that exactly duplicate the description", async () => {
+    const repeatedMetadata = "Use this weather server for forecasts and alerts.";
+    const upstream = await startUpstreamMcp(
+      [{ name: "weather", description: "Get the current weather forecast for a city." }],
+      repeatedMetadata,
+    );
+    const gateway = await buildGatewayFromConfig(
+      { mcpServers: { wx: { type: "stdio", command: "noop" } } },
+      { transportFactory: () => upstream.clientTransport },
+    );
+    expect(gateway.upstreamServers[0]).toMatchObject({
+      description: repeatedMetadata,
+      instructions: repeatedMetadata,
+    });
+
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const handle = await createMcpServer(gateway.catalog, {
+      name: "ratel-test",
+      version: "0.0.0",
+      transport: serverTransport,
+      upstreamServers: gateway.upstreamServers,
+    });
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: SEARCH_CAPABILITIES_ID,
+      arguments: { query: "weather forecast" },
+    });
+    const structured = result.structuredContent as {
+      tools: {
+        groups: Array<{
+          server: { name: string; description?: string; instructions?: string };
+        }>;
+      };
+    };
+    expect(structured.tools.groups[0].server).toEqual({
+      name: "wx",
+      description: repeatedMetadata,
+    });
+
+    const content = result.content as Array<{ type: string; text: string }>;
+    const parsed = JSON.parse(content[0].text) as typeof structured;
+    expect(parsed.tools.groups[0].server).toEqual({
+      name: "wx",
+      description: repeatedMetadata,
+    });
+
+    await client.close();
+    await handle.close();
+    await gateway.close();
+    await upstream.server.close();
   });
 
   it("invoke_tool runs a locally-registered tool and returns its output as structuredContent", async () => {

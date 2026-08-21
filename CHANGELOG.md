@@ -7,6 +7,9 @@ All notable changes to this package are documented here. The format is based on 
 ### Removed
 - Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
 
+### Fixed
+- Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
+
 ## [0.8.2] - 2026-08-19
 
 ### Fixed
