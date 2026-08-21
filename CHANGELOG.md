@@ -7,6 +7,12 @@ All notable changes to this package are documented here. The format is based on 
 ### Removed
 - Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
 
+## [0.8.2] - 2026-08-19
+
+### Fixed
+- Made `mcp list` resolve the scoped OAuth credential key and resource fingerprint used by the gateway, so authenticated HTTP/SSE servers are no longer reported as unauthenticated.
+- Made the connector keep initial catalog requests pending until the daemon handshake succeeds or actually fails, instead of switching to the bootstrap-only surface after a hardcoded timeout.
+
 ## [0.8.1] - 2026-08-19
 
 ### Fixed
