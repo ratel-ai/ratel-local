@@ -964,16 +964,21 @@ const LAUNCH_AGENT_FLAG_ENTRY = `    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\n
 const LAUNCH_AGENT_FLAG_ENTRY_RE = new RegExp(
   `\\n    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\\n    <string>[^<]*</string>`,
 );
+const EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE =
+  /\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/;
 const SYSTEMD_FLAG_LINE = `Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=1`;
 const SYSTEMD_FLAG_LINE_RE = new RegExp(`^Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=.*\\n`, "m");
 const SERVICE_SHAPE_ERROR =
   'installed daemon service is not a Ratel Local unit; reinstall with "ratel-local daemon install"';
 
 export function applyCloudTelemetryToLaunchAgentPlist(plist: string, enabled: boolean): string {
-  const stripped = plist.replace(LAUNCH_AGENT_FLAG_ENTRY_RE, "");
-  if (!enabled) {
-    return stripped.replace(/\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/, "");
-  }
+  // Drop the flag entry, then an environment dict it may have left empty. Both
+  // branches below assume the shape `createLaunchAgentPlist` emits: without the
+  // second replace, enabling twice appends a new dict beside the emptied one.
+  const stripped = plist
+    .replace(LAUNCH_AGENT_FLAG_ENTRY_RE, "")
+    .replace(EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE, "");
+  if (!enabled) return stripped;
   const envBlock =
     /(<key>EnvironmentVariables<\/key>\n {2}<dict>\n)([\s\S]*?)(\n {2}<\/dict>)/.exec(stripped);
   if (envBlock?.index !== undefined) {
@@ -1019,8 +1024,10 @@ async function reconfigureInstalledServiceFeatureFlags(
     platform === "linux"
       ? applyCloudTelemetryToSystemdUserService(current, override)
       : applyCloudTelemetryToLaunchAgentPlist(current, override);
-  await ctx.fs.writeAtomic(servicePath, next);
-  if (platform === "linux") await systemctl(opts, ["daemon-reload"]);
+  if (next !== current) {
+    await ctx.fs.writeAtomic(servicePath, next);
+    if (platform === "linux") await systemctl(opts, ["daemon-reload"]);
+  }
   return override;
 }
 
@@ -1035,13 +1042,16 @@ async function verifyCloudTelemetryApplied(
   probe: ProbeDaemon,
   expected: boolean,
 ): Promise<string | undefined> {
-  const observed = (await probe(port)).status?.cloudTelemetry;
+  const wanted = expected ? "enabled" : "disabled";
+  const result = await probe(port);
+  const unconfirmed = (reason: string) =>
+    `[ratel] could not confirm Cloud telemetry is ${wanted}: ${reason}. Check "ratel-local traces status".`;
+  if (!result.ok) return unconfirmed("the daemon did not answer");
+  const observed = result.status?.cloudTelemetry;
   if (observed === expected) return undefined;
-  if (observed === undefined) {
-    return `[ratel] could not confirm Cloud telemetry is ${expected ? "enabled" : "disabled"}: the running daemon does not report it. Check "ratel-local traces status".`;
-  }
+  if (observed === undefined) return unconfirmed("the running daemon does not report it");
   throw new Error(
-    `service was updated but the restarted daemon reports Cloud telemetry ${observed ? "enabled" : "disabled"}, expected ${expected ? "enabled" : "disabled"}; the previous service definition may still be loaded`,
+    `service was updated but the restarted daemon reports Cloud telemetry ${observed ? "enabled" : "disabled"}, expected ${wanted}; the previous service definition may still be loaded. Reinstall with "ratel-local daemon uninstall" then "${CLOUD_TELEMETRY_FEATURE_ENV}=${expected ? "1" : "0"} ratel-local daemon install".`,
   );
 }
 
@@ -1354,8 +1364,12 @@ async function assertDaemonPortAvailable(port: number, probe: ProbeDaemon): Prom
  * still-running daemon untouched — so starting before the old process is gone
  * would silently keep the pre-rewrite definition live.
  */
-async function waitForDaemonStopped(port: number, probe: ProbeDaemon): Promise<void> {
-  const deadline = Date.now() + 5_000;
+export async function waitForDaemonStopped(
+  port: number,
+  probe: ProbeDaemon,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!(await probe(port)).ok) return;
     await new Promise((resolve) => setTimeout(resolve, 150));

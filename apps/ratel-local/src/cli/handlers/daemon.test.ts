@@ -28,6 +28,7 @@ import {
   inspectDaemonService,
   runDaemon,
   SYSTEMD_SERVICE,
+  waitForDaemonStopped,
 } from "./daemon.js";
 import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
@@ -1011,36 +1012,44 @@ describe("runDaemon", () => {
     expect(fs.files.get(paths.plist)).toBe(original);
   });
 
-  it("round-trips Cloud telemetry flag edits against generated service files", () => {
-    const pathEnv = "/opt/node/bin:/usr/bin:/bin";
-    const base = {
-      executablePath: "/opt/bin/ratel-local",
-      homeDir: HOME,
-      port: DEFAULT_DAEMON_PORT,
-      pathEnv,
-    };
-    const disabledPlist = createLaunchAgentPlist({
-      ...base,
-      featureFlags: { cloudTelemetry: false },
-    });
-    const enabledPlist = createLaunchAgentPlist({
-      ...base,
-      featureFlags: { cloudTelemetry: true },
-    });
-    expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, true)).toBe(enabledPlist);
-    expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, false)).toBe(disabledPlist);
+  // Without `pathEnv` the flag is the only environment entry, so enabling has to
+  // create the dict from scratch and disabling has to remove it again. That is
+  // the shape an install performs when PATH is unset in its environment.
+  for (const pathEnv of ["/opt/node/bin:/usr/bin:/bin", undefined]) {
+    it(`round-trips Cloud telemetry flag edits against generated service files (pathEnv: ${pathEnv ? "set" : "unset"})`, () => {
+      const base = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        ...(pathEnv ? { pathEnv } : {}),
+      };
+      const disabledPlist = createLaunchAgentPlist({
+        ...base,
+        featureFlags: { cloudTelemetry: false },
+      });
+      const enabledPlist = createLaunchAgentPlist({
+        ...base,
+        featureFlags: { cloudTelemetry: true },
+      });
+      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, true)).toBe(enabledPlist);
+      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, false)).toBe(disabledPlist);
+      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, true)).toBe(enabledPlist);
+      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, false)).toBe(disabledPlist);
 
-    const disabledUnit = createSystemdUserService({
-      ...base,
-      featureFlags: { cloudTelemetry: false },
+      const disabledUnit = createSystemdUserService({
+        ...base,
+        featureFlags: { cloudTelemetry: false },
+      });
+      const enabledUnit = createSystemdUserService({
+        ...base,
+        featureFlags: { cloudTelemetry: true },
+      });
+      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, true)).toBe(enabledUnit);
+      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, false)).toBe(disabledUnit);
+      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, true)).toBe(enabledUnit);
+      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, false)).toBe(disabledUnit);
     });
-    const enabledUnit = createSystemdUserService({
-      ...base,
-      featureFlags: { cloudTelemetry: true },
-    });
-    expect(applyCloudTelemetryToSystemdUserService(disabledUnit, true)).toBe(enabledUnit);
-    expect(applyCloudTelemetryToSystemdUserService(enabledUnit, false)).toBe(disabledUnit);
-  });
+  }
 
   for (const platform of ["darwin", "linux"] as const) {
     it(`enables Cloud telemetry on ${platform} restart when the flag is explicitly set`, async () => {
@@ -1177,6 +1186,38 @@ describe("runDaemon", () => {
     });
   }
 
+  it("skips the rewrite when the explicit flag already matches the service", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    const original = createSystemdUserService({
+      executablePath: "/opt/bin/ratel-local",
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+      featureFlags: { cloudTelemetry: true },
+    });
+    fs.files.set(paths.systemdService, original);
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    await runDaemon(
+      daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+      makeCtx(fs),
+      { processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } },
+      () => {},
+      {
+        platform: "linux",
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
+          return { stdout: "", stderr: "" };
+        },
+        probe: offlineThenHealthyProbe(),
+        lifecycleProgress: false,
+      },
+    );
+
+    expect(fs.files.get(paths.systemdService)).toBe(original);
+    expect(commands.some((entry) => entry.args.includes("daemon-reload"))).toBe(false);
+  });
+
   it("keeps Linux restart visibly active without rewriting the service", async () => {
     const fs = new MemFs();
     const paths = daemonPaths(HOME);
@@ -1271,6 +1312,33 @@ describe("runDaemon", () => {
         lifecycleProgress: false,
       },
     );
+
+  it("fails when the stopped daemon never releases its port", async () => {
+    // The silent-success bug this guards against: a daemon that keeps answering
+    // still holds the pre-rewrite service definition.
+    await expect(
+      waitForDaemonStopped(DEFAULT_DAEMON_PORT, async () => ({ ok: true }), 300),
+    ).rejects.toThrow(/did not stop; restart cannot apply service changes/);
+  });
+
+  it("notes, but does not fail, a restart whose daemon stops answering", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, installedPlist());
+    const logs: string[] = [];
+    let calls = 0;
+
+    await restartWithProbe(
+      fs,
+      async () => {
+        calls += 1;
+        // Down for the stop check, up for waitForDaemon, gone again by verification.
+        return calls === 2 ? { ok: true } : { ok: false, error: "connection refused" };
+      },
+      logs,
+    );
+
+    expect(logs.some((message) => message.includes("the daemon did not answer"))).toBe(true);
+  });
 
   it("accepts a restart whose daemon reports the requested Cloud telemetry state", async () => {
     const fs = new MemFs();
