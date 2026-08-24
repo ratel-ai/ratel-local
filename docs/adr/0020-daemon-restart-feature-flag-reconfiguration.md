@@ -21,8 +21,8 @@ expectation that
 `RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart` should take effect.
 
 Regenerating the whole service from the invoking shell would also refresh
-install-time `PATH` / `RATEL_DAEMON_INSTALL_PATH`, which ADR-era work preserved
-so npm/npx cannot reorder agent plugin executables.
+install-time `PATH` / `RATEL_DAEMON_INSTALL_PATH`, which ADR 0007 preserved so
+npm/npx cannot reorder agent plugin executables.
 
 ## Decision
 
@@ -61,4 +61,3 @@ remain in force.
   disable telemetry.
 - Install-time PATH isolation is preserved because restart reconfiguration does
   not regenerate the whole unit from the current shell.
-- ADR-0021 is reserved for Cloud credential ownership (week-plan B1).

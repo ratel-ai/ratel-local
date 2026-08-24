@@ -196,9 +196,9 @@ RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
 ratel-local traces status
 ```
 
-Only the exact value `1` enables the feature, and the setting is persisted into
-the installed launchd or systemd service. Omitting the variable leaves an
-installed daemon unchanged. See the [Cloud OTLP relay and native exporter setup
+Only the exact value `1` enables the feature; any other value disables it. The
+setting is persisted into the installed launchd or systemd service, and omitting
+the variable leaves an installed daemon unchanged. See the [Cloud OTLP relay and native exporter setup
 contract](docs/cloud-otlp-relay.md) for privacy levels, precedence, failure
 behavior, and rollback instructions.
 
