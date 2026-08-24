@@ -106,7 +106,9 @@ describe("runTraces", () => {
   it("refuses telemetry mutations while the daemon feature flag is off", async () => {
     const { ctx } = context("enable", { agent: "claude-code", yes: true });
     const request = vi.fn(async () => response({ ...status(), featureEnabled: false }));
-    await expect(runTraces(ctx, { request })).rejects.toThrow(/RATEL_FEATURE_CLOUD_TELEMETRY=1/);
+    await expect(runTraces(ctx, { request })).rejects.toThrow(
+      /RATEL_FEATURE_CLOUD_TELEMETRY=1.*daemon restart/,
+    );
     expect(request).toHaveBeenCalledOnce();
   });
 

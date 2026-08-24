@@ -67,6 +67,7 @@ import {
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import {
   CLOUD_TELEMETRY_FEATURE_ENV,
+  cloudTelemetryOverrideFromEnv,
   type FeatureFlags,
   featureFlagServiceEnvironment,
   featureFlagsFromEnv,
@@ -125,6 +126,8 @@ export interface DaemonStatusBody extends DaemonState {
   activeUserGatewayCount: number;
   activeProjectGatewayCount: number;
   retrievalHealth?: RetrievalHealthStats;
+  /** Absent on daemons older than the restart-reconfiguration support. */
+  cloudTelemetry?: boolean;
 }
 
 interface CommandResult {
@@ -133,6 +136,7 @@ interface CommandResult {
 }
 
 type CommandRunner = (command: string, args: string[]) => Promise<CommandResult>;
+type DaemonStartMode = "start" | "restart";
 type ProbeDaemon = (
   port: number,
 ) => Promise<{ ok: boolean; reachable?: boolean; status?: DaemonStatusBody; error?: string }>;
@@ -252,6 +256,7 @@ export async function runDaemon(
     return {};
   }
   if (verb === "restart") {
+    let restartNote: string | undefined;
     await runDaemonLifecycle(
       ctx,
       opts,
@@ -262,11 +267,20 @@ export async function runDaemon(
       },
       async (spinner) => {
         const lifecycleLog = opts.lifecycleProgress === false ? log : () => {};
+        const applied = await reconfigureInstalledServiceFeatureFlags(ctx, options, opts);
         await stopDaemon(ctx, lifecycleLog, opts);
         spinner?.message("Starting Ratel Local again…");
-        await startDaemon(parsed, ctx, options, lifecycleLog, opts);
+        await startDaemon(parsed, ctx, options, lifecycleLog, opts, "restart");
+        if (applied !== undefined) {
+          restartNote = await verifyCloudTelemetryApplied(
+            await daemonPort(parsed, ctx),
+            opts.probe ?? probeDaemon,
+            applied,
+          );
+        }
       },
     );
+    if (restartNote) log(restartNote);
     return {};
   }
   if (verb === "open") {
@@ -672,6 +686,7 @@ export async function runDaemonServer(
           activeGatewayCount: poolStats.activeGatewayCount,
           activeUserGatewayCount: poolStats.activeUserGatewayCount,
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
+          cloudTelemetry: featureFlags.cloudTelemetry,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
         });
         return true;
@@ -715,7 +730,7 @@ export async function runDaemonServer(
     log(`[ratel] Cloud OTLP log endpoint available at ${state.uiUrl}${OTLP_LOGS_PATH}`);
   } else {
     log(
-      `[ratel] Cloud telemetry disabled; start a foreground daemon with ${CLOUD_TELEMETRY_FEATURE_ENV}=1 or reinstall the background service with that environment`,
+      `[ratel] Cloud telemetry disabled; start a foreground daemon with ${CLOUD_TELEMETRY_FEATURE_ENV}=1 or run ${CLOUD_TELEMETRY_FEATURE_ENV}=1 ratel-local daemon restart`,
     );
   }
   if (featureFlags.cloudTelemetry && activeCloudOptions) {
@@ -945,6 +960,91 @@ WantedBy=default.target
 `;
 }
 
+const LAUNCH_AGENT_FLAG_ENTRY = `    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\n    <string>1</string>`;
+const LAUNCH_AGENT_FLAG_ENTRY_RE = new RegExp(
+  `\\n    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\\n    <string>[^<]*</string>`,
+);
+const SYSTEMD_FLAG_LINE = `Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=1`;
+const SYSTEMD_FLAG_LINE_RE = new RegExp(`^Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=.*\\n`, "m");
+const SERVICE_SHAPE_ERROR =
+  'installed daemon service is not a Ratel Local unit; reinstall with "ratel-local daemon install"';
+
+export function applyCloudTelemetryToLaunchAgentPlist(plist: string, enabled: boolean): string {
+  const stripped = plist.replace(LAUNCH_AGENT_FLAG_ENTRY_RE, "");
+  if (!enabled) {
+    return stripped.replace(/\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/, "");
+  }
+  const envBlock =
+    /(<key>EnvironmentVariables<\/key>\n {2}<dict>\n)([\s\S]*?)(\n {2}<\/dict>)/.exec(stripped);
+  if (envBlock?.index !== undefined) {
+    const inserted = `${envBlock[1]}${envBlock[2]}\n${LAUNCH_AGENT_FLAG_ENTRY}${envBlock[3]}`;
+    return (
+      stripped.slice(0, envBlock.index) +
+      inserted +
+      stripped.slice(envBlock.index + envBlock[0].length)
+    );
+  }
+  if (!stripped.includes("<key>StandardOutPath</key>")) throw new Error(SERVICE_SHAPE_ERROR);
+  return stripped.replace(
+    "  <key>StandardOutPath</key>",
+    `  <key>EnvironmentVariables</key>\n  <dict>\n${LAUNCH_AGENT_FLAG_ENTRY}\n  </dict>\n  <key>StandardOutPath</key>`,
+  );
+}
+
+export function applyCloudTelemetryToSystemdUserService(unit: string, enabled: boolean): string {
+  const stripped = unit.replace(SYSTEMD_FLAG_LINE_RE, "");
+  if (!enabled) return stripped;
+  if (!stripped.includes("Restart=always")) throw new Error(SERVICE_SHAPE_ERROR);
+  return stripped.replace("Restart=always", `${SYSTEMD_FLAG_LINE}\nRestart=always`);
+}
+
+/**
+ * Apply an explicit Cloud telemetry override to the installed service file.
+ * Returns the applied value, or `undefined` when nothing was written — no
+ * override in the environment, or no installed service to rewrite.
+ */
+async function reconfigureInstalledServiceFeatureFlags(
+  ctx: HandlerCtx,
+  options: ServeOptions,
+  opts: DaemonHandlerDeps,
+): Promise<boolean | undefined> {
+  const override = cloudTelemetryOverrideFromEnv(options.processEnv ?? process.env);
+  if (override === undefined) return undefined;
+  const platform = daemonPlatform(opts);
+  const paths = daemonPaths(ctx.env.homeDir);
+  const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
+  const current = await ctx.fs.read(servicePath);
+  if (current === null) return undefined;
+  const next =
+    platform === "linux"
+      ? applyCloudTelemetryToSystemdUserService(current, override)
+      : applyCloudTelemetryToLaunchAgentPlist(current, override);
+  await ctx.fs.writeAtomic(servicePath, next);
+  if (platform === "linux") await systemctl(opts, ["daemon-reload"]);
+  return override;
+}
+
+/**
+ * Confirm the restarted daemon actually runs with the flag we just wrote.
+ * Rewriting the service file is not proof: launchd or systemd may still be
+ * serving the previous definition. Throws on a mismatch; returns a note when
+ * the running daemon is too old to report the flag at all.
+ */
+async function verifyCloudTelemetryApplied(
+  port: number,
+  probe: ProbeDaemon,
+  expected: boolean,
+): Promise<string | undefined> {
+  const observed = (await probe(port)).status?.cloudTelemetry;
+  if (observed === expected) return undefined;
+  if (observed === undefined) {
+    return `[ratel] could not confirm Cloud telemetry is ${expected ? "enabled" : "disabled"}: the running daemon does not report it. Check "ratel-local traces status".`;
+  }
+  throw new Error(
+    `service was updated but the restarted daemon reports Cloud telemetry ${observed ? "enabled" : "disabled"}, expected ${expected ? "enabled" : "disabled"}; the previous service definition may still be loaded`,
+  );
+}
+
 async function installDaemon(
   parsed: ParsedArgs,
   ctx: HandlerCtx,
@@ -1006,10 +1106,11 @@ async function startDaemon(
   options: ServeOptions,
   log: (m: string) => void,
   opts: DaemonHandlerDeps,
+  mode: DaemonStartMode = "start",
 ): Promise<void> {
   const platform = daemonPlatform(opts);
   if (platform === "linux") {
-    await startLinuxDaemon(parsed, ctx, options, log, opts);
+    await startLinuxDaemon(parsed, ctx, options, log, opts, mode);
     return;
   }
   ensureMacos("daemon start", opts);
@@ -1020,8 +1121,11 @@ async function startDaemon(
   const port = await daemonPort(parsed, ctx);
   const probe = opts.probe ?? probeDaemon;
   if ((await probe(port)).ok) {
-    log(`[ratel] daemon already running at http://127.0.0.1:${port}`);
-    return;
+    if (mode === "start") {
+      log(`[ratel] daemon already running at http://127.0.0.1:${port}`);
+      return;
+    }
+    await waitForDaemonStopped(port, probe);
   }
   await bootstrapDaemon(ctx, opts, { ignoreFailure: true });
   await kickstartDaemon(ctx, opts);
@@ -1094,6 +1198,7 @@ async function startLinuxDaemon(
   options: ServeOptions,
   log: (m: string) => void,
   opts: DaemonHandlerDeps,
+  mode: DaemonStartMode = "start",
 ): Promise<void> {
   const paths = daemonPaths(ctx.env.homeDir);
   if (!(await ctx.fs.exists(paths.systemdService))) {
@@ -1102,8 +1207,11 @@ async function startLinuxDaemon(
   const port = await daemonPort(parsed, ctx);
   const probe = opts.probe ?? probeDaemon;
   if ((await probe(port)).ok) {
-    log(`[ratel] daemon already running at http://127.0.0.1:${port}`);
-    return;
+    if (mode === "start") {
+      log(`[ratel] daemon already running at http://127.0.0.1:${port}`);
+      return;
+    }
+    await waitForDaemonStopped(port, probe);
   }
   await systemctl(opts, ["start", SYSTEMD_SERVICE]);
   await waitForDaemon(port, probe, options.serverVersion);
@@ -1238,6 +1346,23 @@ async function assertDaemonPortAvailable(port: number, probe: ProbeDaemon): Prom
       }`,
     );
   }
+}
+
+/**
+ * Wait for a stopped daemon to release its port. `daemon restart` rewrites the
+ * installed service definition before stopping, and `start` hands back a
+ * still-running daemon untouched — so starting before the old process is gone
+ * would silently keep the pre-rewrite definition live.
+ */
+async function waitForDaemonStopped(port: number, probe: ProbeDaemon): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (!(await probe(port)).ok) return;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  throw new Error(
+    `daemon at http://127.0.0.1:${port} did not stop; restart cannot apply service changes`,
+  );
 }
 
 async function waitForDaemon(
