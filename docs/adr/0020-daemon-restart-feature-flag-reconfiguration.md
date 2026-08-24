@@ -30,7 +30,10 @@ so npm/npx cannot reorder agent plugin executables.
   invoking environment and a service file is installed, rewrite only that
   feature-flag environment entry in the existing launchd or systemd unit, then
   perform the normal stop/start. On Linux, run `systemctl --user daemon-reload`
-  after the rewrite.
+  after the rewrite. Wait for the stopped daemon to release its port before
+  starting, then confirm the restarted daemon adopted the change through
+  `cloudTelemetry` on the loopback `/api/daemon/status` route — a non-secret
+  boolean; a daemon too old to report it yields a note, not a failure.
 - If the variable is **absent**, leave the installed service file unchanged and
   only stop/start.
 - Presence is the override signal. Only the exact value `1` enables; any other
@@ -52,7 +55,8 @@ remain in force.
 
 - Operators can enable or disable Cloud telemetry on an installed daemon with
   an explicit env assignment on `daemon restart`, and keep it enabled with a
-  plain restart.
+  plain restart. A restart that cannot stop the old daemon, or whose daemon
+  reports the previous state, fails instead of reporting success.
 - Absent-env restarts preserve prior ADR 0018 semantics and do not silently
   disable telemetry.
 - Install-time PATH isolation is preserved because restart reconfiguration does
