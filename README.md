@@ -184,20 +184,23 @@ ship dark. Enable the daemon-wide feature explicitly before configuring an API
 key or native exporter:
 
 ```bash
-# New installation or interactive foreground setup
+# New installation
 RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local setup
 
-# Existing background service
-ratel-local daemon uninstall
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon install
+# Existing installed daemon
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
+
+# Disable
+RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
 
 ratel-local traces status
 ```
 
-Only the exact value `1` enables the feature. Setup persists the enabled flag in
-new macOS launchd and Linux systemd service definitions. See the [Cloud OTLP
-relay and native exporter setup contract](docs/cloud-otlp-relay.md) for privacy
-levels, precedence, failure behavior, and rollback instructions.
+Only the exact value `1` enables the feature, and the setting is persisted into
+the installed launchd or systemd service. Omitting the variable leaves an
+installed daemon unchanged. See the [Cloud OTLP relay and native exporter setup
+contract](docs/cloud-otlp-relay.md) for privacy levels, precedence, failure
+behavior, and rollback instructions.
 
 ### Verify capability search
 

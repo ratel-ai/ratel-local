@@ -28,16 +28,22 @@ RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon run --no-open --auto-config
 
 When setup installs a macOS launchd or Linux systemd service, it copies the
 enabled flag into that service definition. A later setup run does not rewrite an
-already-current service. Enable an existing service explicitly:
+already-current service. Enable, keep, or disable an existing service by making
+the feature-flag variable present or absent on `daemon restart`:
 
 ```bash
-ratel-local daemon uninstall
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon install
+# Enable — rewrites only the feature-flag environment entry
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
+
+# Keep enabled — variable absent; installed service file is preserved
+ratel-local daemon restart
+
+# Disable
+RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
 ```
 
-To roll back, repeat those commands without the environment assignment.
-Reinstalling the service does not delete Ratel configuration or saved Cloud
-settings.
+`daemon start` does not rewrite the service. Uninstall then install remains a
+valid fallback and does not delete Ratel configuration or saved Cloud settings.
 
 The startup environment is the only feature-flag source. Cloud endpoint and
 credential settings do not override it, so a saved key cannot silently enable

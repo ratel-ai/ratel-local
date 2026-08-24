@@ -181,19 +181,24 @@ editing Claude Code or Codex configuration:
 Cloud telemetry ships off by default. Before offering setup or changing an
 exporter, check `ratel-local traces status`. If the feature is off, explain that
 the user must start a foreground daemon with
-`RATEL_FEATURE_CLOUD_TELEMETRY=1`, or reinstall a background service with that
-environment persisted. Merely exporting the flag before `daemon restart` does
-not rewrite an installed service. Do not treat saved Cloud credentials as an
-enablement signal.
+`RATEL_FEATURE_CLOUD_TELEMETRY=1`, or restart the background service with that
+environment present so the installed service definition is updated. Do not treat
+saved Cloud credentials as an enablement signal. `daemon start` does not rewrite
+an installed service.
 
 ```bash
 # Enable an existing background service
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
+
+# Keep enabled (flag absent)
+ratel-local daemon restart
+
+# Disable
+RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
+
+# Fallback: reinstall with the environment persisted
 ratel-local daemon uninstall
 RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon install
-
-# Roll back by reinstalling without the environment assignment
-ratel-local daemon uninstall
-ratel-local daemon install
 ```
 
 These lifecycle commands preserve Ratel configuration and saved Cloud settings.
