@@ -18,3 +18,13 @@ export function featureFlagsFromEnv(env: NodeJS.ProcessEnv): FeatureFlags {
 export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<string, string> {
   return flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {};
 }
+
+/**
+ * Explicit Cloud telemetry override from the invoking environment.
+ * `undefined` means the variable is absent and installed service state must
+ * be preserved. Any present value is an override: only exact `1` enables.
+ */
+export function cloudTelemetryOverrideFromEnv(env: NodeJS.ProcessEnv): boolean | undefined {
+  if (!Object.hasOwn(env, CLOUD_TELEMETRY_FEATURE_ENV)) return undefined;
+  return env[CLOUD_TELEMETRY_FEATURE_ENV] === "1";
+}
