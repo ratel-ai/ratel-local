@@ -5,9 +5,10 @@ import {
   CloudCatalogUnavailableError,
   cloudCatalogEndpoint,
   createCloudCatalogLoader,
+  DEFAULT_CLOUD_CATALOG_ENDPOINT,
 } from "./catalog.js";
 
-const ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
+const ENDPOINT = DEFAULT_CLOUD_CATALOG_ENDPOINT;
 const VERSION = "6f7f0cee520a24a6edbb6dc7df6b623751cbdf05771e7e7bbe45cc9de943f0a6";
 
 // Shape taken from a real `GET /v1/catalog` against a seeded project; the
@@ -37,7 +38,8 @@ function recordingFetch(...responses: Array<Response | (() => never)>) {
   let index = 0;
   const impl = (async (input: URL | RequestInfo, init?: RequestInit) => {
     calls.push({ url: String(input), headers: new Headers(init?.headers) });
-    const next = responses[Math.min(index++, responses.length - 1)];
+    if (index >= responses.length) throw new Error("no more responses");
+    const next = responses[index++];
     if (typeof next === "function") next();
     return next as Response;
   }) as unknown as typeof fetch;
@@ -59,6 +61,13 @@ describe("cloudCatalogEndpoint", () => {
 });
 
 describe("createCloudCatalogLoader", () => {
+  it("rejects an API key that cannot fit in a header", () => {
+    expect(() => createCloudCatalogLoader({ endpoint: ENDPOINT, apiKey: "" })).toThrow(/header/);
+    expect(() => createCloudCatalogLoader({ endpoint: ENDPOINT, apiKey: "rtl\nkey" })).toThrow(
+      /header/,
+    );
+  });
+
   it("pulls the catalog and maps the wire projection onto engine skills", async () => {
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
     const { snapshot, degraded } = await loader(impl).load();
@@ -72,7 +81,11 @@ describe("createCloudCatalogLoader", () => {
   });
 
   it("revalidates with If-None-Match and reuses the cache on 304", async () => {
-    const { calls, impl } = recordingFetch(jsonResponse(WIRE), new Response(null, { status: 304 }));
+    const { calls, impl } = recordingFetch(
+      jsonResponse(WIRE),
+      new Response(null, { status: 304 }),
+      new Response(null, { status: 304 }),
+    );
     const client = loader(impl);
     const first = await client.load();
     const second = await client.load();
@@ -80,6 +93,10 @@ describe("createCloudCatalogLoader", () => {
     expect(calls[1].headers.get("if-none-match")).toBe(`"${VERSION}"`);
     expect(second.snapshot).toEqual(first.snapshot);
     expect(second.degraded).toBeUndefined();
+
+    first.snapshot.skills.length = 0;
+    const third = await client.load();
+    expect(third.snapshot.skills).toHaveLength(1);
   });
 
   it("ignores fields the schema lets a source add", async () => {
@@ -127,6 +144,28 @@ describe("createCloudCatalogLoader", () => {
     expect((await client.load()).degraded).toMatch(/ECONNREFUSED/);
   });
 
+  it("degrades when the body read fails after headers, and errors with nothing cached", async () => {
+    const hangingBody = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("socket hang up"));
+          },
+        }),
+        { status: 200 },
+      );
+
+    await expect(loader(recordingFetch(hangingBody()).impl).load()).rejects.toThrow(
+      CloudCatalogUnavailableError,
+    );
+
+    const client = loader(recordingFetch(jsonResponse(WIRE), hangingBody()).impl);
+    await client.load();
+    const second = await client.load();
+    expect(second.snapshot.catalogVersion).toBe(VERSION);
+    expect(second.degraded).toMatch(/hang up/);
+  });
+
   it("surfaces an invalid credential even when a snapshot is cached", async () => {
     const { impl } = recordingFetch(jsonResponse(WIRE), jsonResponse({ error: "nope" }, 401));
     const client = loader(impl);
@@ -145,6 +184,15 @@ describe("createCloudCatalogLoader", () => {
     await expect(client.load()).rejects.toThrow(CloudCatalogProtocolError);
   });
 
+  it("rejects a skill missing a required wire field", async () => {
+    const { tags: _tags, ...missingTags } = WIRE.skills[0];
+    await expect(
+      loader(
+        recordingFetch(jsonResponse({ catalogVersion: VERSION, skills: [missingTags] })).impl,
+      ).load(),
+    ).rejects.toThrow(/missing tags/);
+  });
+
   it("rejects malformed payloads", async () => {
     const cases: unknown[] = [
       { skills: [] },
@@ -158,6 +206,26 @@ describe("createCloudCatalogLoader", () => {
         CloudCatalogProtocolError,
       );
     }
+  });
+
+  it("rejects a catalogVersion that is not header-safe", async () => {
+    const badVersion = "v1\r\nX-Injected: 1";
+    await expect(
+      loader(recordingFetch(jsonResponse({ ...WIRE, catalogVersion: badVersion })).impl).load(),
+    ).rejects.toThrow(CloudCatalogProtocolError);
+
+    const goodAgain = { ...WIRE, catalogVersion: `${VERSION}ff` };
+    const { impl } = recordingFetch(
+      jsonResponse(WIRE),
+      jsonResponse({ ...WIRE, catalogVersion: badVersion }),
+      jsonResponse(goodAgain),
+    );
+    const client = loader(impl);
+    await client.load();
+    await expect(client.load()).rejects.toThrow(CloudCatalogProtocolError);
+    const third = await client.load();
+    expect(third.snapshot.catalogVersion).toBe(goodAgain.catalogVersion);
+    expect(third.degraded).toBeUndefined();
   });
 
   it("rejects a 304 that arrives before anything is cached", async () => {

@@ -1,4 +1,5 @@
 import type { Skill } from "@ratel-ai/sdk";
+import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
 export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
@@ -66,6 +67,7 @@ export function cloudCatalogEndpoint(value: string): URL {
  * acquisition revalidates anyway, and a disk cache would add an offline story
  * the vertical slice does not need.
  * ponytail: daemon-lifetime cache; persistent offline cache deferred.
+ * ponytail: concurrent load() can stampede; ceiling = one in-flight promise.
  *
  * A cached snapshot covers *availability* failures only. An invalid credential
  * or a contract violation always surfaces, so a revoked key cannot hide behind
@@ -73,9 +75,7 @@ export function cloudCatalogEndpoint(value: string): URL {
  */
 export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const endpoint = cloudCatalogEndpoint(options.endpoint);
-  if (!options.apiKey.trim() || /[\r\n]/.test(options.apiKey)) {
-    throw new Error("Ratel Cloud API key is required and must fit in an HTTP header");
-  }
+  headerSafeSecret(options.apiKey, "Ratel Cloud API key");
   const fetchUpstream = options.fetch ?? fetch;
   let cached: CloudCatalogSnapshot | undefined;
 
@@ -104,16 +104,28 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
         if (!cached) {
           throw new CloudCatalogProtocolError("304 without a cached catalog");
         }
-        return { snapshot: cached };
+        return { snapshot: handout(cached) };
       }
       if (response.status !== 200) {
         return degradeOrThrow(cached, `HTTP ${response.status}`);
       }
 
-      cached = parseCatalog(await response.text());
-      return { snapshot: cached };
+      let text: string;
+      try {
+        text = await response.text();
+      } catch (error) {
+        return degradeOrThrow(cached, (error as Error).message);
+      }
+      cached = parseCatalog(text);
+      return { snapshot: handout(cached) };
     },
   };
+}
+
+function handout(snapshot: CloudCatalogSnapshot): CloudCatalogSnapshot {
+  // ponytail: shallow copy guards the cached array; skill objects are still shared,
+  // deep-clone only if a consumer starts mutating them in place.
+  return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
 }
 
 function degradeOrThrow(
@@ -121,7 +133,7 @@ function degradeOrThrow(
   reason: string,
 ): CloudCatalogLoadResult {
   if (!cached) throw new CloudCatalogUnavailableError(reason);
-  return { snapshot: cached, degraded: reason };
+  return { snapshot: handout(cached), degraded: reason };
 }
 
 function parseCatalog(text: string): CloudCatalogSnapshot {
@@ -136,14 +148,19 @@ function parseCatalog(text: string): CloudCatalogSnapshot {
   if (typeof catalogVersion !== "string" || catalogVersion === "") {
     throw new CloudCatalogProtocolError("catalogVersion is missing");
   }
+  if (/[\r\n]/.test(catalogVersion)) {
+    throw new CloudCatalogProtocolError("catalogVersion is not header-safe");
+  }
   if (!Array.isArray(skills)) throw new CloudCatalogProtocolError("skills is not an array");
   return { catalogVersion, skills: skills.map(toSkill) };
 }
 
 /**
- * `CatalogSkillWire` mirrors the engine `Skill` field for field, so this
- * validates rather than remaps. Unknown fields are dropped: the schema allows a
- * source to carry extras, and a conforming client ignores them.
+ * The wire projection is frozen and stricter than the SDK `Skill` type: all
+ * seven fields are required on the wire, while the SDK marks `tags`, `tools`,
+ * `metadata`, and `body` optional. A missing field is a genuine contract
+ * violation. Unknown fields are dropped: the schema allows a source to carry
+ * extras, and a conforming client ignores them.
  */
 function toSkill(value: unknown, index: number): Skill {
   if (!isRecord(value)) throw new CloudCatalogProtocolError(`skill ${index} is not an object`);
