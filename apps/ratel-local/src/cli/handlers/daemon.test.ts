@@ -335,7 +335,7 @@ describe("runDaemon", () => {
         ensureToken: async () => "daemon-test-token",
         cloudOtlpFetch: cloudFetch,
         configureRatelTelemetry,
-        cloudTraceSettingsStore: { load: async () => undefined, save },
+        cloudSettingsStore: { load: async () => undefined, save },
       },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
@@ -366,8 +366,9 @@ describe("runDaemon", () => {
         endpoint: "https://cloud.example.test/api/v1/traces",
       });
       expect(save).toHaveBeenCalledWith({
-        endpoint: "https://cloud.example.test/api/v1/traces",
-        apiKey: "saved-cloud-secret",
+        tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+        default: "default",
+        profiles: { default: { apiKey: "saved-cloud-secret" } },
       });
       expect(configureRatelTelemetry).toHaveBeenCalledWith({
         endpoint: new URL("/otlp/v1/traces", daemonUrl).toString(),
@@ -402,10 +403,11 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry,
-        cloudTraceSettingsStore: {
+        cloudSettingsStore: {
           load: async () => ({
-            endpoint: "https://cloud.example.test/api/v1/traces",
-            apiKey: "persisted-cloud-secret",
+            tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+            default: "personal",
+            profiles: { personal: { apiKey: "persisted-cloud-secret" } },
           }),
           save: async () => {},
         },
@@ -438,7 +440,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry,
-        cloudTraceSettingsStore: {
+        cloudSettingsStore: {
           load: async () => {
             throw new Error("settings are malformed");
           },
@@ -448,7 +450,7 @@ describe("runDaemon", () => {
     );
 
     try {
-      expect(logs.join("\n")).toContain("ignored invalid Cloud trace settings");
+      expect(logs.join("\n")).toContain("ignored invalid Cloud settings");
       expect(logs.join("\n")).toContain("settings are malformed");
       expect(configureRatelTelemetry).not.toHaveBeenCalled();
     } finally {
