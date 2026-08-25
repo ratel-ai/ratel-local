@@ -1012,6 +1012,18 @@ describe("runDaemon", () => {
     expect(fs.files.get(paths.plist)).toBe(original);
   });
 
+  it("refuses to enable Cloud telemetry in an unrecognised service file", () => {
+    expect(() => applyCloudTelemetryToLaunchAgentPlist("<plist />", true)).toThrow(
+      /not a Ratel Local unit/,
+    );
+    expect(() => applyCloudTelemetryToSystemdUserService("[Service]\n", true)).toThrow(
+      /not a Ratel Local unit/,
+    );
+    // Disabling stays a no-op there: there is no Ratel route to remove.
+    expect(applyCloudTelemetryToLaunchAgentPlist("<plist />", false)).toBe("<plist />");
+    expect(applyCloudTelemetryToSystemdUserService("[Service]\n", false)).toBe("[Service]\n");
+  });
+
   // Without `pathEnv` the flag is the only environment entry, so enabling has to
   // create the dict from scratch and disabling has to remove it again. That is
   // the shape an install performs when PATH is unset in its environment.
