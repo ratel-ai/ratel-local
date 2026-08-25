@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { secretFreeHttpsUrl } from "./url.js";
 
 export const OTLP_TRACES_PATH = "/otlp/v1/traces";
 export const OTLP_LOGS_PATH = "/otlp/v1/logs";
@@ -198,24 +199,10 @@ function signalForPath(path: string): "traces" | "logs" | undefined {
 }
 
 function parseCloudEndpoint(value: string): URL {
-  let endpoint: URL;
-  try {
-    endpoint = new URL(value);
-  } catch {
-    throw new Error(`Cloud OTLP trace endpoint in ${CLOUD_OTLP_TRACES_ENDPOINT_ENV} is invalid`);
-  }
-  if (
-    endpoint.protocol !== "https:" ||
-    endpoint.username !== "" ||
-    endpoint.password !== "" ||
-    endpoint.search !== "" ||
-    endpoint.hash !== ""
-  ) {
-    throw new Error(
-      `Cloud OTLP trace endpoint in ${CLOUD_OTLP_TRACES_ENDPOINT_ENV} must be a secret-free HTTPS URL`,
-    );
-  }
-  return endpoint;
+  return secretFreeHttpsUrl(
+    value,
+    `Cloud OTLP trace endpoint in ${CLOUD_OTLP_TRACES_ENDPOINT_ENV}`,
+  );
 }
 
 async function readBoundedBody(
