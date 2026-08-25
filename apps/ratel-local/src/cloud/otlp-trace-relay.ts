@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
 export const OTLP_TRACES_PATH = "/otlp/v1/traces";
@@ -52,9 +53,7 @@ export function cloudOtlpTraceRelayOptions(settings: {
   apiKey: string;
 }): CloudOtlpTraceRelayOptions {
   const endpoint = parseCloudEndpoint(settings.endpoint);
-  if (!settings.apiKey.trim() || /[\r\n]/.test(settings.apiKey)) {
-    throw new Error("Ratel Cloud API key is required and must fit in an HTTP header");
-  }
+  headerSafeSecret(settings.apiKey, "Ratel Cloud API key");
   return {
     endpoint,
     logsEndpoint: deriveCloudOtlpLogsEndpoint(endpoint),
