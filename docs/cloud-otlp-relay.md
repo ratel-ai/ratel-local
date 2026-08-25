@@ -38,7 +38,7 @@ RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
 # Keep enabled — variable absent; installed service file is preserved
 ratel-local daemon restart
 
-# Disable
+# Disable — any present value other than `1` removes the persisted flag
 RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
 ```
 
