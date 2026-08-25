@@ -4,6 +4,14 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+- Made `daemon restart` reconfigure the Cloud telemetry feature flag in an
+  installed launchd or systemd service when `RATEL_FEATURE_CLOUD_TELEMETRY` is
+  present in the invoking environment (`=1` enables, any other value disables,
+  absent preserves). Restart now waits for the stopped daemon to release its
+  port, and confirms the restarted daemon adopted the change through the new
+  `cloudTelemetry` field on `/api/daemon/status`.
+
 ### Removed
 - Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
 

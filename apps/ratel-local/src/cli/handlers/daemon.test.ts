@@ -16,6 +16,8 @@ import { CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
+  applyCloudTelemetryToLaunchAgentPlist,
+  applyCloudTelemetryToSystemdUserService,
   createLaunchAgentPlist,
   createSystemdUserService,
   DAEMON_INSTALL_PATH_ENV,
@@ -26,6 +28,7 @@ import {
   inspectDaemonService,
   runDaemon,
   SYSTEMD_SERVICE,
+  waitForDaemonStopped,
 } from "./daemon.js";
 import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
@@ -972,14 +975,12 @@ describe("runDaemon", () => {
   it("keeps restart visibly active with friendly lifecycle copy", async () => {
     const fs = new MemFs();
     const paths = daemonPaths(HOME);
-    fs.files.set(
-      paths.plist,
-      createLaunchAgentPlist({
-        executablePath: "/opt/bin/ratel-local",
-        homeDir: HOME,
-        port: DEFAULT_DAEMON_PORT,
-      }),
-    );
+    const original = createLaunchAgentPlist({
+      executablePath: "/opt/bin/ratel-local",
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+    });
+    fs.files.set(paths.plist, original);
     const progress: string[] = [];
     const logs: string[] = [];
     const ctx = makeCtx(fs);
@@ -992,7 +993,7 @@ describe("runDaemon", () => {
     await runDaemon(
       daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
       ctx,
-      {},
+      { processEnv: {} },
       (message) => logs.push(message),
       {
         platform: "darwin",
@@ -1008,7 +1009,441 @@ describe("runDaemon", () => {
       "stop:Ratel Local is ready",
     ]);
     expect(logs).toEqual([]);
+    expect(fs.files.get(paths.plist)).toBe(original);
   });
+
+  it("refuses to enable Cloud telemetry in an unrecognised service file", () => {
+    expect(() => applyCloudTelemetryToLaunchAgentPlist("<plist />", true)).toThrow(
+      /not a Ratel Local unit/,
+    );
+    expect(() => applyCloudTelemetryToSystemdUserService("[Service]\n", true)).toThrow(
+      /not a Ratel Local unit/,
+    );
+    // Disabling stays a no-op there: there is no Ratel route to remove.
+    expect(applyCloudTelemetryToLaunchAgentPlist("<plist />", false)).toBe("<plist />");
+    expect(applyCloudTelemetryToSystemdUserService("[Service]\n", false)).toBe("[Service]\n");
+  });
+
+  // Without `pathEnv` the flag is the only environment entry, so enabling has to
+  // create the dict from scratch and disabling has to remove it again. That is
+  // the shape an install performs when PATH is unset in its environment.
+  for (const pathEnv of ["/opt/node/bin:/usr/bin:/bin", undefined]) {
+    it(`round-trips Cloud telemetry flag edits against generated service files (pathEnv: ${pathEnv ? "set" : "unset"})`, () => {
+      const base = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        ...(pathEnv ? { pathEnv } : {}),
+      };
+      const disabledPlist = createLaunchAgentPlist({
+        ...base,
+        featureFlags: { cloudTelemetry: false },
+      });
+      const enabledPlist = createLaunchAgentPlist({
+        ...base,
+        featureFlags: { cloudTelemetry: true },
+      });
+      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, true)).toBe(enabledPlist);
+      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, false)).toBe(disabledPlist);
+      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, true)).toBe(enabledPlist);
+      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, false)).toBe(disabledPlist);
+
+      const disabledUnit = createSystemdUserService({
+        ...base,
+        featureFlags: { cloudTelemetry: false },
+      });
+      const enabledUnit = createSystemdUserService({
+        ...base,
+        featureFlags: { cloudTelemetry: true },
+      });
+      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, true)).toBe(enabledUnit);
+      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, false)).toBe(disabledUnit);
+      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, true)).toBe(enabledUnit);
+      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, false)).toBe(disabledUnit);
+    });
+  }
+
+  for (const platform of ["darwin", "linux"] as const) {
+    it(`enables Cloud telemetry on ${platform} restart when the flag is explicitly set`, async () => {
+      const fs = new MemFs();
+      const paths = daemonPaths(HOME);
+      const pathEnv = "/opt/node/bin:/usr/bin:/bin";
+      const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
+      const input = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        pathEnv,
+        featureFlags: { cloudTelemetry: false },
+      };
+      fs.files.set(
+        servicePath,
+        platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input),
+      );
+      const commands: Array<{ command: string; args: string[] }> = [];
+
+      await runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } },
+        () => {},
+        {
+          platform,
+          getUid: () => 501,
+          commandRunner: async (command, args) => {
+            commands.push({ command, args });
+            return { stdout: "", stderr: "" };
+          },
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+      const next = fs.files.get(servicePath) ?? "";
+      expect(next).toContain(CLOUD_TELEMETRY_FEATURE_ENV);
+      expect(next).toContain(pathEnv);
+      if (platform === "linux") {
+        expect(commands).toEqual([
+          { command: "systemctl", args: ["--user", "daemon-reload"] },
+          { command: "systemctl", args: ["--user", "stop", SYSTEMD_SERVICE] },
+          { command: "systemctl", args: ["--user", "start", SYSTEMD_SERVICE] },
+        ]);
+      } else {
+        expect(commands).toEqual([
+          { command: "launchctl", args: ["bootout", "gui/501", paths.plist] },
+          { command: "launchctl", args: ["bootstrap", "gui/501", paths.plist] },
+          { command: "launchctl", args: ["kickstart", "-k", "gui/501/ai.ratel.local.daemon"] },
+        ]);
+      }
+    });
+
+    it(`preserves Cloud telemetry on ${platform} restart when the flag env is absent`, async () => {
+      const fs = new MemFs();
+      const paths = daemonPaths(HOME);
+      const pathEnv = "/opt/node/bin:/usr/bin:/bin";
+      const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
+      const input = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        pathEnv,
+        featureFlags: { cloudTelemetry: true },
+      };
+      const original =
+        platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input);
+      fs.files.set(servicePath, original);
+      const commands: Array<{ command: string; args: string[] }> = [];
+
+      await runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: {} },
+        () => {},
+        {
+          platform,
+          getUid: () => 501,
+          commandRunner: async (command, args) => {
+            commands.push({ command, args });
+            return { stdout: "", stderr: "" };
+          },
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+      expect(fs.files.get(servicePath)).toBe(original);
+      expect(commands.some((entry) => entry.args.includes("daemon-reload"))).toBe(false);
+      if (platform === "linux") {
+        expect(commands).toEqual([
+          { command: "systemctl", args: ["--user", "stop", SYSTEMD_SERVICE] },
+          { command: "systemctl", args: ["--user", "start", SYSTEMD_SERVICE] },
+        ]);
+      }
+    });
+
+    it(`disables Cloud telemetry on ${platform} restart when the flag is explicitly 0`, async () => {
+      const fs = new MemFs();
+      const paths = daemonPaths(HOME);
+      const pathEnv = "/opt/node/bin:/usr/bin:/bin";
+      const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
+      const input = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        pathEnv,
+        featureFlags: { cloudTelemetry: true },
+      };
+      fs.files.set(
+        servicePath,
+        platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input),
+      );
+
+      await runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "0" } },
+        () => {},
+        {
+          platform,
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+      const next = fs.files.get(servicePath) ?? "";
+      expect(next).not.toContain(CLOUD_TELEMETRY_FEATURE_ENV);
+      expect(next).toContain(pathEnv);
+    });
+  }
+
+  it("skips the rewrite when the explicit flag already matches the service", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    const original = createSystemdUserService({
+      executablePath: "/opt/bin/ratel-local",
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+      featureFlags: { cloudTelemetry: true },
+    });
+    fs.files.set(paths.systemdService, original);
+    const commands: Array<{ command: string; args: string[] }> = [];
+
+    await runDaemon(
+      daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+      makeCtx(fs),
+      { processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } },
+      () => {},
+      {
+        platform: "linux",
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
+          return { stdout: "", stderr: "" };
+        },
+        probe: offlineThenHealthyProbe(),
+        lifecycleProgress: false,
+      },
+    );
+
+    expect(fs.files.get(paths.systemdService)).toBe(original);
+    expect(commands.some((entry) => entry.args.includes("daemon-reload"))).toBe(false);
+  });
+
+  it("keeps Linux restart visibly active without rewriting the service", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    const original = createSystemdUserService({
+      executablePath: "/opt/bin/ratel-local",
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+    });
+    fs.files.set(paths.systemdService, original);
+    const progress: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
+    const ctx = makeCtx(fs);
+    ctx.prompts.spinner = () => ({
+      start: (message) => progress.push(`start:${message}`),
+      message: (message) => progress.push(`message:${message}`),
+      stop: (message) => progress.push(`stop:${message}`),
+    });
+
+    await runDaemon(
+      daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+      ctx,
+      { processEnv: {} },
+      () => {},
+      {
+        platform: "linux",
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
+          return { stdout: "", stderr: "" };
+        },
+        probe: offlineThenHealthyProbe(),
+      },
+    );
+
+    expect(progress).toEqual([
+      "start:Restarting Ratel Local…",
+      "message:Starting Ratel Local again…",
+      "stop:Ratel Local is ready",
+    ]);
+    expect(fs.files.get(paths.systemdService)).toBe(original);
+    expect(commands).toEqual([
+      { command: "systemctl", args: ["--user", "stop", SYSTEMD_SERVICE] },
+      { command: "systemctl", args: ["--user", "start", SYSTEMD_SERVICE] },
+    ]);
+  });
+
+  it("does not create a service when restarting with an explicit flag while uninstalled", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+
+    await expect(
+      runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } },
+        () => {},
+        {
+          platform: "darwin",
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          lifecycleProgress: false,
+        },
+      ),
+    ).rejects.toThrow(/not installed/);
+
+    expect(fs.files.has(paths.plist)).toBe(false);
+    expect(fs.files.has(paths.systemdService)).toBe(false);
+  });
+
+  const installedPlist = () =>
+    createLaunchAgentPlist({
+      executablePath: "/opt/bin/ratel-local",
+      homeDir: HOME,
+      port: DEFAULT_DAEMON_PORT,
+      featureFlags: { cloudTelemetry: false },
+    });
+
+  const restartWithProbe = (
+    fs: MemFs,
+    probe: ReturnType<typeof restartStatusProbe>,
+    logs: string[],
+  ) =>
+    runDaemon(
+      daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+      makeCtx(fs),
+      { processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } },
+      (message) => logs.push(message),
+      {
+        platform: "darwin",
+        getUid: () => 501,
+        commandRunner: async () => ({ stdout: "", stderr: "" }),
+        probe,
+        lifecycleProgress: false,
+      },
+    );
+
+  it("fails when the stopped daemon never releases its port", async () => {
+    // The silent-success bug this guards against: a daemon that keeps answering
+    // still holds the pre-rewrite service definition.
+    await expect(
+      waitForDaemonStopped(DEFAULT_DAEMON_PORT, async () => ({ ok: true }), 300),
+    ).rejects.toThrow(/did not stop; restart cannot apply service changes/);
+  });
+
+  it("notes, but does not fail, a restart whose daemon stops answering", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, installedPlist());
+    const logs: string[] = [];
+    let calls = 0;
+
+    await restartWithProbe(
+      fs,
+      async () => {
+        calls += 1;
+        // Down for the stop check, up for waitForDaemon, gone again by verification.
+        return calls === 2 ? { ok: true } : { ok: false, error: "connection refused" };
+      },
+      logs,
+    );
+
+    expect(logs.some((message) => message.includes("the daemon did not answer"))).toBe(true);
+  });
+
+  it("accepts a restart whose daemon reports the requested Cloud telemetry state", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, installedPlist());
+    const logs: string[] = [];
+
+    await restartWithProbe(fs, restartStatusProbe(true), logs);
+
+    expect(logs.some((message) => message.includes("could not confirm"))).toBe(false);
+  });
+
+  it("fails a restart whose daemon still reports the previous Cloud telemetry state", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, installedPlist());
+
+    await expect(restartWithProbe(fs, restartStatusProbe(false), [])).rejects.toThrow(
+      /previous service definition may still be loaded/,
+    );
+  });
+
+  it("notes, but does not fail, a restart whose daemon cannot report the flag", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, installedPlist());
+    const logs: string[] = [];
+
+    await restartWithProbe(fs, restartStatusProbe(undefined), logs);
+
+    expect(logs.some((message) => message.includes("could not confirm Cloud telemetry"))).toBe(
+      true,
+    );
+  });
+
+  for (const platform of ["darwin", "linux"] as const) {
+    it(`waits for the old daemon to release the port before restarting on ${platform}`, async () => {
+      const fs = new MemFs();
+      const paths = daemonPaths(HOME);
+      const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
+      const input = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        featureFlags: { cloudTelemetry: false },
+      };
+      fs.files.set(
+        servicePath,
+        platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input),
+      );
+      const commands: Array<{ command: string; args: string[] }> = [];
+      let probes = 0;
+
+      await runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } },
+        () => {},
+        {
+          platform,
+          getUid: () => 501,
+          commandRunner: async (command, args) => {
+            commands.push({ command, args });
+            return { stdout: "", stderr: "" };
+          },
+          // The stopped daemon keeps answering for two probes before it releases
+          // the port; the restarted one answers afterwards.
+          probe: async (port: number) => {
+            probes += 1;
+            if (probes <= 2) return { ok: true };
+            if (probes === 3) return { ok: false, error: "connection refused" };
+            return { ok: port === DEFAULT_DAEMON_PORT };
+          },
+          lifecycleProgress: false,
+        },
+      );
+
+      // The rewritten service must actually be loaded: an early "already
+      // running" return would skip the bootstrap/start below.
+      expect(probes).toBeGreaterThan(3);
+      expect(fs.files.get(servicePath) ?? "").toContain(CLOUD_TELEMETRY_FEATURE_ENV);
+      if (platform === "linux") {
+        expect(commands).toEqual([
+          { command: "systemctl", args: ["--user", "daemon-reload"] },
+          { command: "systemctl", args: ["--user", "stop", SYSTEMD_SERVICE] },
+          { command: "systemctl", args: ["--user", "start", SYSTEMD_SERVICE] },
+        ]);
+      } else {
+        expect(commands).toEqual([
+          { command: "launchctl", args: ["bootout", "gui/501", paths.plist] },
+          { command: "launchctl", args: ["bootstrap", "gui/501", paths.plist] },
+          { command: "launchctl", args: ["kickstart", "-k", "gui/501/ai.ratel.local.daemon"] },
+        ]);
+      }
+    });
+  }
 
   it("ends the lifecycle state clearly when the daemon cannot start", async () => {
     const fs = new MemFs();
@@ -1290,6 +1725,36 @@ describe("runDaemon", () => {
     expect(logs.join("\n")).toContain("2 upstream server(s), 1 active MCP client(s)");
   });
 });
+
+function restartStatusProbe(cloudTelemetry?: boolean) {
+  let calls = 0;
+  return async (port: number) => {
+    calls += 1;
+    // Stopped for the first probe, then the restarted daemon answers.
+    if (calls === 1) return { ok: false, error: "connection refused" };
+    return {
+      ok: true,
+      status: {
+        service: DAEMON_SERVICE_ID,
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+        pid: 321,
+        port,
+        uiUrl: `http://127.0.0.1:${port}`,
+        mcpUrl: `http://127.0.0.1:${port}/mcp`,
+        startedAt: "2026-08-24T08:00:00.000Z",
+        version: "0.8.2",
+        configMode: "auto" as const,
+        uptimeSeconds: 1,
+        upstreamCount: 0,
+        activeClientCount: 0,
+        activeGatewayCount: 0,
+        activeUserGatewayCount: 0,
+        activeProjectGatewayCount: 0,
+        ...(cloudTelemetry === undefined ? {} : { cloudTelemetry }),
+      },
+    };
+  };
+}
 
 function offlineThenHealthyProbe() {
   let calls = 0;
