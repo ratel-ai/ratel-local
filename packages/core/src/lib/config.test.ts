@@ -507,3 +507,32 @@ describe("mergeConfigs skills", () => {
     expect(merged.skills?.dirs).toEqual(["/one"]);
   });
 });
+
+describe("parseConfig cloud", () => {
+  it("accepts a profile name", () => {
+    expect(parseConfig({ cloud: { profile: "acme" } }).cloud).toEqual({ profile: "acme" });
+  });
+
+  it("rejects a credential, pointing at the profile instead", () => {
+    // Layered config is committable at project scope (ADR-0021).
+    expect(() => parseConfig({ cloud: { apiKey: "rtl_secret" } })).toThrow(
+      /`cloud.apiKey` is not allowed/,
+    );
+  });
+
+  it("rejects unknown keys and empty names", () => {
+    expect(() => parseConfig({ cloud: { profil: "typo" } })).toThrow(/cloud/);
+    expect(() => parseConfig({ cloud: { profile: "" } })).toThrow(/cloud.profile/);
+    expect(() => parseConfig({ cloud: "acme" })).toThrow(/`cloud` must be a JSON object/);
+  });
+});
+
+describe("mergeConfigs cloud", () => {
+  it("lets the nearest scope win and keeps an earlier one when later scopes are silent", () => {
+    const user = { mcpServers: {}, cloud: { profile: "personal" } };
+    const project = { mcpServers: {}, cloud: { profile: "acme" } };
+    expect(mergeConfigs([user, project]).cloud).toEqual({ profile: "acme" });
+    expect(mergeConfigs([user, { mcpServers: {} }]).cloud).toEqual({ profile: "personal" });
+    expect(mergeConfigs([{ mcpServers: {} }]).cloud).toBeUndefined();
+  });
+});
