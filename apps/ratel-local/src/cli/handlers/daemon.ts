@@ -50,7 +50,6 @@ import {
   DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
   legacyCloudSettingsPath,
   MIGRATED_PROFILE_NAME,
-  resolveCloudCredential,
 } from "../../cloud/settings.js";
 import {
   authorizeDaemonRequest,
@@ -377,6 +376,7 @@ export async function runDaemonServer(
     new CloudSettingsStore(
       cloudSettingsPath(ctx.env.homeDir),
       legacyCloudSettingsPath(ctx.env.homeDir),
+      log,
     );
   // The credential belongs to the Cloud project, not to telemetry: it loads
   // whenever any Cloud consumer may need it, and each consumer keeps its own
@@ -387,43 +387,20 @@ export async function runDaemonServer(
   } catch (error) {
     log(`[ratel] ignored invalid Cloud settings: ${(error as Error).message}`);
   }
-  let environmentCloudOptions: CloudOtlpTraceRelayOptions | undefined;
-  try {
-    environmentCloudOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
-  } catch (error) {
-    log(`[ratel] ignored invalid Cloud environment: ${(error as Error).message}`);
-  } finally {
-    delete daemonProcessEnv[CLOUD_API_KEY_ENV];
-  }
-  let persistedCloudOptions: CloudOtlpTraceRelayOptions | undefined;
-  if (!environmentCloudOptions && persistedCloudSettings) {
-    try {
-      const resolved = resolveCloudCredential(persistedCloudSettings, {
-        source: "store default",
-      });
-      // ponytail: one daemon-wide credential from the store default. Per-scope
-      // selection via `cloud.profile` needs a per-acquisition consumer, which
-      // arrives with the catalog loader; see ADR-0021.
-      persistedCloudOptions = cloudOtlpTraceRelayOptions({
-        endpoint: resolved.tracesEndpoint,
-        apiKey: resolved.apiKey,
-      });
-    } catch (error) {
-      log(`[ratel] no Cloud credential resolved: ${(error as Error).message}`);
-    }
-  }
+  const environmentCloudOptions = cloudOptionsFromEnvironment(daemonProcessEnv, log);
+  const persistedCloudOptions = environmentCloudOptions
+    ? undefined
+    : cloudOptionsFromStore(persistedCloudSettings);
   let activeCloudOptions = environmentCloudOptions ?? persistedCloudOptions;
-  const telemetryCloudOptions = () =>
-    featureFlags.cloudTelemetry ? activeCloudOptions : undefined;
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
-    telemetryCloudOptions()
-      ? { ...(activeCloudOptions as CloudOtlpTraceRelayOptions), fetch: opts.cloudOtlpFetch, log }
+    featureFlags.cloudTelemetry && activeCloudOptions
+      ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log }
       : undefined,
   );
   let ratelTelemetry: TelemetryHandle | undefined;
   let daemonPort = port;
   const ensureRatelTelemetry = async () => {
-    if (ratelTelemetry || !telemetryCloudOptions()) return;
+    if (ratelTelemetry || !featureFlags.cloudTelemetry || !activeCloudOptions) return;
     try {
       ratelTelemetry = await (opts.configureRatelTelemetry ?? initializeRatelTelemetry)({
         endpoint: `http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`,
@@ -623,7 +600,7 @@ export async function runDaemonServer(
       featureEnabled: featureFlags.cloudTelemetry,
       status: async () => ({
         featureEnabled: featureFlags.cloudTelemetry,
-        configured: telemetryCloudOptions() !== undefined,
+        configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
         endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
       }),
       save: async ({ endpoint, apiKey }) => {
@@ -648,7 +625,7 @@ export async function runDaemonServer(
         log("[ratel] Ratel Cloud trace export configured");
         return {
           featureEnabled: featureFlags.cloudTelemetry,
-          configured: telemetryCloudOptions() !== undefined,
+          configured: featureFlags.cloudTelemetry,
           endpoint: next.endpoint.toString(),
         };
       },
@@ -660,7 +637,7 @@ export async function runDaemonServer(
             ...(await getAgentTraceStatus(ctx, {
               endpoint: loopbackTraceEndpoint(`http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`),
             })),
-            cloudConfigured: telemetryCloudOptions() !== undefined,
+            cloudConfigured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
             featureEnabled: featureFlags.cloudTelemetry,
           }),
           prepare: ({ action, level, hostKinds, overwrite }) =>
@@ -872,6 +849,37 @@ function scopeBuildInputs(
       ...(scope.kind !== "project" ? { existsSync: () => false } : {}),
     },
   };
+}
+
+/**
+ * The ADR 0013 single-run override. Consumes the key and scrubs it from the
+ * environment either way, so no subprocess can inherit it.
+ */
+function cloudOptionsFromEnvironment(
+  env: NodeJS.ProcessEnv,
+  log: (message: string) => void,
+): CloudOtlpTraceRelayOptions | undefined {
+  try {
+    return cloudOtlpRelayOptionsFromEnv(env);
+  } catch (error) {
+    log(`[ratel] ignored invalid Cloud environment: ${(error as Error).message}`);
+    return undefined;
+  } finally {
+    delete env[CLOUD_API_KEY_ENV];
+  }
+}
+
+/** The credential this daemon uses: the store's default profile. */
+function cloudOptionsFromStore(
+  settings: CloudSettings | undefined,
+): CloudOtlpTraceRelayOptions | undefined {
+  if (!settings?.default) return undefined;
+  const profile = settings.profiles[settings.default];
+  if (!profile) return undefined;
+  return cloudOtlpTraceRelayOptions({
+    endpoint: settings.tracesEndpoint,
+    apiKey: profile.apiKey,
+  });
 }
 
 export function daemonPaths(homeDir: string) {

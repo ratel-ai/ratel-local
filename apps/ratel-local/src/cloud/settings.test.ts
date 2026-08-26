@@ -2,13 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  CloudProfileError,
-  CloudSettingsStore,
-  cloudSettingsPath,
-  legacyCloudSettingsPath,
-  resolveCloudCredential,
-} from "./settings.js";
+import { CloudSettingsStore, cloudSettingsPath, legacyCloudSettingsPath } from "./settings.js";
 
 const ENDPOINT = "https://cloud.example.test/api/v1/traces";
 const roots: string[] = [];
@@ -24,8 +18,8 @@ async function homeWithRatelDir(): Promise<string> {
   return homeDir;
 }
 
-function store(homeDir: string) {
-  return new CloudSettingsStore(cloudSettingsPath(homeDir), legacyCloudSettingsPath(homeDir));
+function store(homeDir: string, log: (message: string) => void = () => {}) {
+  return new CloudSettingsStore(cloudSettingsPath(homeDir), legacyCloudSettingsPath(homeDir), log);
 }
 
 describe("Cloud settings store", () => {
@@ -55,11 +49,15 @@ describe("Cloud settings store", () => {
       { encoding: "utf8", mode: 0o600 },
     );
 
-    expect(await store(homeDir).load()).toEqual({
+    const logs: string[] = [];
+    expect(await store(homeDir, (m) => logs.push(m)).load()).toEqual({
       tracesEndpoint: ENDPOINT,
       default: "default",
       profiles: { default: { apiKey: "rtl_legacy" } },
     });
+    // The operator is told which file was read and that it outlives its use.
+    expect(logs.join("\n")).toContain(legacyCloudSettingsPath(homeDir));
+    expect(logs.join("\n")).toContain("still holds a key");
     // Reading is not migrating: the old file is left exactly as it was.
     expect(JSON.parse(await readFile(legacyCloudSettingsPath(homeDir), "utf8"))).toEqual({
       endpoint: ENDPOINT,
@@ -80,9 +78,12 @@ describe("Cloud settings store", () => {
       profiles: { personal: { apiKey: "rtl_personal" } },
     });
 
-    expect((await store(homeDir).load())?.profiles).toEqual({
+    const logs: string[] = [];
+    expect((await store(homeDir, (m) => logs.push(m)).load())?.profiles).toEqual({
       personal: { apiKey: "rtl_personal" },
     });
+    // Nothing to say when the current store wins.
+    expect(logs).toEqual([]);
   });
 
   it("reports nothing when neither file exists", async () => {
@@ -111,48 +112,5 @@ describe("Cloud settings store", () => {
         profiles: { a: { apiKey: "rtl_a" } },
       }),
     ).rejects.toThrow(/HTTPS/);
-  });
-});
-
-describe("resolveCloudCredential", () => {
-  const settings = {
-    tracesEndpoint: ENDPOINT,
-    default: "personal",
-    profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
-  };
-
-  it("falls back to the store default when nothing selects a profile", () => {
-    expect(resolveCloudCredential(settings, { source: "store default" })).toEqual({
-      apiKey: "rtl_personal",
-      tracesEndpoint: ENDPOINT,
-      profile: "personal",
-      source: "store default",
-    });
-  });
-
-  it("uses the selected profile and keeps its source", () => {
-    const resolved = resolveCloudCredential(settings, {
-      profile: "acme",
-      source: "./.ratel/config.json",
-    });
-    expect(resolved.apiKey).toBe("rtl_acme");
-    expect(resolved.source).toBe("./.ratel/config.json");
-  });
-
-  it("fails on an unknown profile, naming it and where it was asked for", async () => {
-    // Never a quiet fall back to the default: that is how one project's
-    // telemetry reaches another project's Cloud account.
-    expect(() =>
-      resolveCloudCredential(settings, { profile: "ghost", source: "./.ratel/config.json" }),
-    ).toThrow(CloudProfileError);
-    expect(() =>
-      resolveCloudCredential(settings, { profile: "ghost", source: "./.ratel/config.json" }),
-    ).toThrow(/"ghost" \(\.\/\.ratel\/config\.json\).*known profiles: acme, personal/);
-  });
-
-  it("fails when there is no selection and no default", () => {
-    expect(() =>
-      resolveCloudCredential({ tracesEndpoint: ENDPOINT, profiles: {} }, { source: "none" }),
-    ).toThrow(/no Cloud profile is selected/);
   });
 });

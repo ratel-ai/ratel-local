@@ -28,23 +28,6 @@ export interface CloudSettingsStoreLike {
   save(settings: CloudSettings): Promise<void>;
 }
 
-/** A credential resolved for one context, with where the choice came from. */
-export interface ResolvedCloudCredential {
-  apiKey: string;
-  tracesEndpoint: string;
-  /** Profile name, or `undefined` when the environment supplied the key. */
-  profile?: string;
-  /** Human-readable origin of the selection, for `traces status`. */
-  source: string;
-}
-
-export class CloudProfileError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CloudProfileError";
-  }
-}
-
 export function cloudSettingsPath(homeDir: string): string {
   return join(homeDir, ".ratel", "cloud.json");
 }
@@ -59,15 +42,20 @@ export const MIGRATED_PROFILE_NAME = "default";
 export class CloudSettingsStore implements CloudSettingsStoreLike {
   constructor(
     private readonly path: string,
-    private readonly legacyPath?: string,
+    private readonly legacyPath: string,
+    private readonly log: (message: string) => void = () => {},
   ) {}
 
   async load(): Promise<CloudSettings | undefined> {
     const current = await readJsonFile(this.path);
     if (current !== undefined) return validated(parseSettings(current));
-    if (!this.legacyPath) return undefined;
     const legacy = await readJsonFile(this.legacyPath);
-    return legacy === undefined ? undefined : validated(migrateLegacy(legacy));
+    if (legacy === undefined) return undefined;
+    // Leave legacy in place for downgrade; warn it goes stale after save.
+    this.log(
+      `[ratel] read Cloud settings from ${this.legacyPath}; they move to ${this.path} on the next save, after which the old file is unused and still holds a key`,
+    );
+    return validated(migrateLegacy(legacy));
   }
 
   async save(settings: CloudSettings): Promise<void> {
@@ -90,45 +78,12 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
   }
 }
 
-/**
- * Pick the credential for one context. `selection` is the profile a scope asked
- * for and where it asked from; a name the store does not define is an error
- * naming both, never a quiet fall back to the default — that is how one
- * project's telemetry reaches another project's Cloud account.
- */
-export function resolveCloudCredential(
-  settings: CloudSettings,
-  selection: { profile?: string; source: string } = { source: "default" },
-): ResolvedCloudCredential {
-  const name = selection.profile ?? settings.default;
-  if (!name) {
-    throw new CloudProfileError(
-      "no Cloud profile is selected and the store has no default; add one with `ratel-local cloud add <profile>`",
-    );
-  }
-  const profile = settings.profiles[name];
-  if (!profile) {
-    const known = Object.keys(settings.profiles).sort().join(", ") || "none";
-    throw new CloudProfileError(
-      `Cloud profile ${JSON.stringify(name)} (${selection.source}) is not in ${"~/.ratel/cloud.json"}; known profiles: ${known}`,
-    );
-  }
-  return {
-    apiKey: profile.apiKey,
-    tracesEndpoint: settings.tracesEndpoint,
-    profile: name,
-    source: selection.source,
-  };
-}
-
-async function readJsonFile(path: string): Promise<unknown | undefined> {
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+async function readJsonFile(path: string): Promise<unknown> {
+  const raw = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
     throw error;
-  }
+  });
+  if (raw === undefined) return undefined;
   try {
     return JSON.parse(raw);
   } catch {
@@ -172,26 +127,23 @@ function migrateLegacy(value: unknown): CloudSettings {
 }
 
 function validated(settings: CloudSettings): CloudSettings {
-  const profiles: Record<string, CloudProfile> = {};
-  for (const [name, profile] of Object.entries(settings.profiles)) {
-    // Reuse the relay's endpoint and header-safety rules so an unusable pair
-    // cannot reach the store in the first place.
-    const checked = cloudOtlpTraceRelayOptions({
-      endpoint: settings.tracesEndpoint,
-      apiKey: profile.apiKey,
-    });
-    profiles[name] = { apiKey: checked.apiKey };
-  }
-  if (settings.default !== undefined && !profiles[settings.default]) {
+  // Reuse the relay's endpoint and header-safety rules so an unusable pair
+  // cannot reach the store in the first place. Every profile shares the
+  // endpoint, so checking it once alongside the first key normalises both.
+  if (settings.default !== undefined && !settings.profiles[settings.default]) {
     throw new Error(
       `Ratel Cloud default profile ${JSON.stringify(settings.default)} is not defined`,
     );
   }
+  const profiles: Record<string, CloudProfile> = {};
+  let tracesEndpoint = settings.tracesEndpoint;
+  for (const [name, { apiKey }] of Object.entries(settings.profiles)) {
+    const checked = cloudOtlpTraceRelayOptions({ endpoint: tracesEndpoint, apiKey });
+    tracesEndpoint = checked.endpoint.toString();
+    profiles[name] = { apiKey: checked.apiKey };
+  }
   return {
-    tracesEndpoint: cloudOtlpTraceRelayOptions({
-      endpoint: settings.tracesEndpoint,
-      apiKey: "rtl_placeholder",
-    }).endpoint.toString(),
+    tracesEndpoint,
     ...(settings.default !== undefined ? { default: settings.default } : {}),
     profiles,
   };
