@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { CloudSettingsStore, cloudSettingsPath, legacyCloudSettingsPath } from "./settings.js";
+import {
+  CloudSettingsStore,
+  cloudSettingsPath,
+  legacyCloudSettingsPath,
+  resolveCloudCredential,
+} from "./settings.js";
 
 const ENDPOINT = "https://cloud.example.test/api/v1/traces";
 const roots: string[] = [];
@@ -112,5 +117,45 @@ describe("Cloud settings store", () => {
         profiles: { a: { apiKey: "rtl_a" } },
       }),
     ).rejects.toThrow(/HTTPS/);
+  });
+});
+
+describe("resolveCloudCredential", () => {
+  const settings = {
+    tracesEndpoint: ENDPOINT,
+    default: "personal",
+    profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
+  };
+
+  it("falls back to the store default when nothing selects a profile", () => {
+    expect(resolveCloudCredential(settings, { source: "store default" })).toEqual({
+      apiKey: "rtl_personal",
+      tracesEndpoint: ENDPOINT,
+      profile: "personal",
+      source: "store default",
+    });
+  });
+
+  it("uses the named profile and keeps its source", () => {
+    const resolved = resolveCloudCredential(settings, {
+      profile: "acme",
+      source: "RATEL_PROFILE environment",
+    });
+    expect(resolved?.apiKey).toBe("rtl_acme");
+    expect(resolved?.source).toBe("RATEL_PROFILE environment");
+  });
+
+  it("fails on an unknown profile, naming it and where it was asked for", () => {
+    // Never a quiet fall back to the default: that is how one project's
+    // telemetry reaches another project's Cloud account.
+    expect(() =>
+      resolveCloudCredential(settings, { profile: "ghost", source: "./.ratel/config.json" }),
+    ).toThrow(/"ghost" \(\.\/\.ratel\/config\.json\).*known profiles: acme, personal/);
+  });
+
+  it("resolves nothing when the store is empty rather than failing", () => {
+    expect(
+      resolveCloudCredential({ tracesEndpoint: ENDPOINT, profiles: {} }, { source: "none" }),
+    ).toBeUndefined();
   });
 });

@@ -33,16 +33,19 @@ import {
   type TelemetryHandle,
   type TelemetryInitOptions,
 } from "@ratel-ai/telemetry-otlp";
+import { createCloudCatalogLoader } from "../../cloud/catalog.js";
 import {
   CLOUD_API_KEY_ENV,
   type CloudOtlpTraceRelayOptions,
   cloudOtlpRelayOptionsFromEnv,
   cloudOtlpTraceRelayOptions,
   createCloudOtlpTraceRelayController,
+  deriveCloudEndpoint,
   OTLP_LOGS_PATH,
   OTLP_TRACES_PATH,
 } from "../../cloud/otlp-trace-relay.js";
 import {
+  CLOUD_PROFILE_ENV,
   type CloudSettings,
   CloudSettingsStore,
   type CloudSettingsStoreLike,
@@ -50,7 +53,9 @@ import {
   DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
   legacyCloudSettingsPath,
   MIGRATED_PROFILE_NAME,
+  resolveCloudCredential,
 } from "../../cloud/settings.js";
+import { secretFreeHttpsUrl } from "../../cloud/url.js";
 import {
   authorizeDaemonRequest,
   DaemonAccessError,
@@ -166,6 +171,7 @@ interface DaemonHandlerDeps {
   skillRegistrationControlPlane?: SkillRegistrationControlPlane;
   preparedChanges?: PreparedChangeCoordinator;
   cloudOtlpFetch?: typeof fetch;
+  cloudCatalogFetch?: typeof fetch;
   configureRatelTelemetry?: ConfigureRatelTelemetry;
   cloudSettingsStore?: CloudSettingsStoreLike;
   lifecycleProgress?: boolean;
@@ -364,9 +370,6 @@ export async function runDaemonServer(
   const projectAdmissionLock = createProjectAdmissionLock({
     controlDir: join(ctx.env.homeDir, ".ratel"),
   });
-  const snapshotResolver =
-    opts.snapshotResolver ??
-    createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry });
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
   const featureFlags = featureFlagsFromEnv(daemonProcessEnv);
@@ -390,7 +393,7 @@ export async function runDaemonServer(
   const environmentCloudOptions = cloudOptionsFromEnvironment(daemonProcessEnv, log);
   const persistedCloudOptions = environmentCloudOptions
     ? undefined
-    : cloudOptionsFromStore(persistedCloudSettings);
+    : cloudOptionsFromStore(persistedCloudSettings, daemonProcessEnv, log);
   let activeCloudOptions = environmentCloudOptions ?? persistedCloudOptions;
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
     featureFlags.cloudTelemetry && activeCloudOptions
@@ -410,6 +413,21 @@ export async function runDaemonServer(
       log(`[ratel] Ratel runtime telemetry disabled: ${(error as Error).message}`);
     }
   };
+  const cloudCatalog = featureFlags.cloudCatalog
+    ? createCloudCatalogPuller(
+        persistedCloudSettings,
+        activeCloudOptions,
+        log,
+        opts.cloudCatalogFetch,
+      )
+    : undefined;
+  const snapshotResolver =
+    opts.snapshotResolver ??
+    createContextSnapshotResolver({
+      homeDir: ctx.env.homeDir,
+      projectRegistry,
+      ...(cloudCatalog ? { cloudCatalog } : {}),
+    });
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -869,17 +887,71 @@ function cloudOptionsFromEnvironment(
   }
 }
 
-/** The credential this daemon uses: the store's default profile. */
+/**
+ * The credential this daemon uses. `RATEL_PROFILE` selects one by name for a
+ * foreground run; an installed service has one environment, so per-project
+ * selection arrives with the per-scope consumer, not here.
+ */
 function cloudOptionsFromStore(
   settings: CloudSettings | undefined,
+  env: NodeJS.ProcessEnv,
+  log: (message: string) => void,
 ): CloudOtlpTraceRelayOptions | undefined {
-  if (!settings?.default) return undefined;
-  const profile = settings.profiles[settings.default];
-  if (!profile) return undefined;
-  return cloudOtlpTraceRelayOptions({
-    endpoint: settings.tracesEndpoint,
-    apiKey: profile.apiKey,
-  });
+  if (!settings) return undefined;
+  const selected = env[CLOUD_PROFILE_ENV];
+  try {
+    const resolved = resolveCloudCredential(settings, {
+      ...(selected ? { profile: selected } : {}),
+      source: selected ? `${CLOUD_PROFILE_ENV} environment` : "store default",
+    });
+    if (!resolved) return undefined;
+    return cloudOtlpTraceRelayOptions({
+      endpoint: resolved.tracesEndpoint,
+      apiKey: resolved.apiKey,
+    });
+  } catch (error) {
+    log(`[ratel] no Cloud credential resolved: ${(error as Error).message}`);
+    return undefined;
+  }
+}
+
+/**
+ * Pulls the published Cloud catalog for a context. One loader per profile, so a
+ * repeated resolve revalidates with `If-None-Match` instead of refetching.
+ */
+function createCloudCatalogPuller(
+  settings: CloudSettings | undefined,
+  active: CloudOtlpTraceRelayOptions | undefined,
+  log: (message: string) => void,
+  fetchImpl?: typeof fetch,
+) {
+  if (!settings && !active) return undefined;
+  const loaders = new Map<string, ReturnType<typeof createCloudCatalogLoader>>();
+  return async (_context: RuntimeContextRef, profile?: string) => {
+    try {
+      const credential =
+        profile && settings
+          ? resolveCloudCredential(settings, { profile, source: "cloud.profile" })
+          : undefined;
+      const apiKey = credential?.apiKey ?? active?.apiKey;
+      const traces = credential
+        ? secretFreeHttpsUrl(credential.tracesEndpoint, "Ratel Cloud traces endpoint")
+        : active?.endpoint;
+      if (!apiKey || !traces) return undefined;
+      const endpoint = deriveCloudEndpoint(traces, "catalog").toString();
+      const key = `${endpoint}\u0000${apiKey}`;
+      const loader =
+        loaders.get(key) ??
+        createCloudCatalogLoader({ endpoint, apiKey, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+      loaders.set(key, loader);
+      const { snapshot, degraded } = await loader.load();
+      if (degraded) log(`[ratel] serving a cached Cloud catalog: ${degraded}`);
+      return snapshot;
+    } catch (error) {
+      log(`[ratel] Cloud catalog unavailable: ${(error as Error).message}`);
+      return undefined;
+    }
+  };
 }
 
 export function daemonPaths(homeDir: string) {
@@ -919,7 +991,9 @@ export function createLaunchAgentPlist(input: {
   ];
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(
+      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
+    ),
   };
   const environmentXml = Object.entries(serviceEnvironment)
     .map(
@@ -974,7 +1048,9 @@ export function createSystemdUserService(input: {
     .join(" ");
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(
+      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
+    ),
   };
   const environmentLines = Object.entries(serviceEnvironment)
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
