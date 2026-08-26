@@ -197,4 +197,82 @@ describe("ContextSnapshotResolver", () => {
       InvalidContextSnapshotError,
     );
   });
+
+  it("adds Cloud skills, lets a local skill of the same id win, and says which was shadowed", async () => {
+    const { homeDir, projectRoot, project } = await fixture();
+    await mkdir(join(homeDir, ".ratel", "skills", "shared"), { recursive: true });
+    await writeFile(
+      join(homeDir, ".ratel", "skills", "shared", "SKILL.md"),
+      "---\nname: shared\ndescription: the local copy\n---\n\nlocal body\n",
+    );
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      JSON.stringify({ skills: { dirs: [join(homeDir, ".ratel", "skills")] } }),
+    );
+    const registry = createProjectRegistry({ homeDir });
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: registry,
+      cloudCatalog: async () => ({
+        catalogVersion: "v1",
+        skills: [
+          { id: "shared", name: "shared", description: "the published copy", body: "cloud" },
+          { id: "cloud-only", name: "cloud-only", description: "published", body: "cloud" },
+        ],
+      }),
+    });
+
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+    const byId = new Map(snapshot.skills.effectiveSkills.map((skill) => [skill.id, skill]));
+    expect([...byId.keys()].sort()).toEqual(["cloud-only", "shared"]);
+    expect(byId.get("shared")?.description).toBe("the local copy");
+    const shadowed = snapshot.diagnostics.find((d) => d.code === "cloud-skill-shadowed");
+    expect(shadowed?.severity).toBe("warning");
+    expect(shadowed?.message).toContain('"shared"');
+    expect(shadowed?.message).toContain("Remove or rename the local skill");
+    expect(projectRoot).toBeTruthy();
+  });
+
+  it("changes the runtime revision when only the Cloud catalog version changes", async () => {
+    const { homeDir, project } = await fixture();
+    const registry = createProjectRegistry({ homeDir });
+    const resolverFor = (catalogVersion: string) =>
+      createContextSnapshotResolver({
+        homeDir,
+        projectRegistry: registry,
+        cloudCatalog: async () => ({ catalogVersion, skills: [] }),
+      });
+
+    const context = { kind: "project" as const, projectId: project.id };
+    const first = await resolverFor("v1").resolve(context);
+    const same = await resolverFor("v1").resolve(context);
+    const later = await resolverFor("v2").resolve(context);
+
+    expect(same.runtimeRevision).toBe(first.runtimeRevision);
+    expect(later.runtimeRevision).not.toBe(first.runtimeRevision);
+  });
+
+  it("pulls the Cloud catalog once per resolve, not once per read attempt", async () => {
+    const { homeDir, project } = await fixture();
+    const registry = createProjectRegistry({ homeDir });
+    let pulls = 0;
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: registry,
+      cloudCatalog: async () => {
+        pulls += 1;
+        return { catalogVersion: "v1", skills: [] };
+      },
+    });
+
+    await resolver.resolve({ kind: "project", projectId: project.id });
+    expect(pulls).toBe(1);
+  });
+
+  it("resolves without a Cloud catalog at all", async () => {
+    const { project, resolver } = await fixture();
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+    expect(snapshot.skills.effectiveSkills).toEqual([]);
+    expect(snapshot.diagnostics).toEqual([]);
+  });
 });

@@ -424,6 +424,125 @@ describe("runDaemon", () => {
     }
   });
 
+  it("reads the Cloud credential store with Cloud telemetry disabled", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const configureRatelTelemetry = vi.fn();
+    const load = vi.fn(async () => ({
+      tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+      default: "personal",
+      profiles: { personal: { apiKey: "persisted-cloud-secret" } },
+    }));
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      { readConfig: async () => ({ mcpServers: {} }), processEnv: {} },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry,
+        cloudSettingsStore: { load, save: async () => {} },
+      },
+    );
+
+    try {
+      expect(load).toHaveBeenCalled();
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrlFromLogs(logs)), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+      expect(relay.status).toBe(404);
+      expect(configureRatelTelemetry).not.toHaveBeenCalled();
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("selects a stored profile by name through RATEL_PROFILE", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const cloudOtlpFetch = vi.fn(async () => new Response(null, { status: 202 }));
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1", RATEL_PROFILE: "acme" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudOtlpFetch,
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudSettingsStore: {
+          load: async () => ({
+            tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+            default: "personal",
+            profiles: {
+              personal: { apiKey: "wrong-secret" },
+              acme: { apiKey: "acme-secret" },
+            },
+          }),
+          save: async () => {},
+        },
+      },
+    );
+
+    try {
+      await fetch(new URL("/otlp/v1/traces", daemonUrlFromLogs(logs)), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+      const [, init] = cloudOtlpFetch.mock.calls[0] as [URL, RequestInit];
+      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer acme-secret");
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("keeps the daemon up when RATEL_PROFILE names a profile that is not stored", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1", RATEL_PROFILE: "ghost" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudSettingsStore: {
+          load: async () => ({
+            tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+            default: "personal",
+            profiles: { personal: { apiKey: "persisted-cloud-secret" } },
+          }),
+          save: async () => {},
+        },
+      },
+    );
+
+    try {
+      expect(logs.join("\n")).toContain('Cloud profile "ghost" (RATEL_PROFILE environment)');
+      // Unresolved profile: 503, never the default key.
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrlFromLogs(logs)), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+      expect(relay.status).toBe(503);
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("ignores malformed persisted Cloud settings without taking down the daemon", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
