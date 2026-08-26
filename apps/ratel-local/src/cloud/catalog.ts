@@ -1,8 +1,7 @@
+import type { CloudSkillCatalog } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
-
-export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
 
 const TIMEOUT_MS = 10_000;
 
@@ -14,13 +13,9 @@ const WIRE_FIELDS = ["id", "name", "description", "tags", "tools", "metadata", "
  * ETag, echoed back as `If-None-Match` on the next pull, and is the value a
  * gateway generation keys on.
  */
-export interface CloudCatalogSnapshot {
-  catalogVersion: string;
-  skills: Skill[];
-}
 
 export interface CloudCatalogLoadResult {
-  snapshot: CloudCatalogSnapshot;
+  snapshot: CloudSkillCatalog;
   /** Set when the snapshot is a cached one served through an upstream failure. */
   degraded?: string;
 }
@@ -30,33 +25,6 @@ export interface CloudCatalogLoaderOptions {
   apiKey: string;
   /** Injected by tests; the daemon uses the global `fetch`. */
   fetch?: typeof fetch;
-}
-
-export class CloudCatalogAuthError extends Error {
-  constructor(status: number) {
-    super(`Cloud catalog auth failed: HTTP ${status}`);
-    this.name = "CloudCatalogAuthError";
-  }
-}
-
-export class CloudCatalogProtocolError extends Error {
-  constructor(reason: string) {
-    super(`Ratel Cloud returned a malformed catalog: ${reason}`);
-    this.name = "CloudCatalogProtocolError";
-  }
-}
-
-export class CloudCatalogUnavailableError extends Error {
-  constructor(reason: string) {
-    super(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
-    this.name = "CloudCatalogUnavailableError";
-  }
-}
-
-// ponytail: the shared guard rejects a query string, which is right while the
-// loader is global-only; a future `?scope=` pull has to relax it for this caller.
-export function cloudCatalogEndpoint(value: string): URL {
-  return secretFreeHttpsUrl(value, "Ratel Cloud catalog endpoint");
 }
 
 /**
@@ -73,11 +41,16 @@ export function cloudCatalogEndpoint(value: string): URL {
  * or a contract violation always surfaces, so a revoked key cannot hide behind
  * the last good catalog indefinitely.
  */
+const protocolError = (reason: string) =>
+  new Error(`Ratel Cloud returned a malformed catalog: ${reason}`);
+const unavailableError = (reason: string) =>
+  new Error(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
+
 export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
-  const endpoint = cloudCatalogEndpoint(options.endpoint);
+  const endpoint = secretFreeHttpsUrl(options.endpoint, "Ratel Cloud catalog endpoint");
   headerSafeSecret(options.apiKey, "Ratel Cloud API key");
   const fetchUpstream = options.fetch ?? fetch;
-  let cached: CloudCatalogSnapshot | undefined;
+  let cached: CloudSkillCatalog | undefined;
 
   return {
     async load() {
@@ -98,11 +71,11 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
       }
 
       if (response.status === 401 || response.status === 403) {
-        throw new CloudCatalogAuthError(response.status);
+        throw new Error(`Cloud catalog auth failed: HTTP ${response.status}`);
       }
       if (response.status === 304) {
         if (!cached) {
-          throw new CloudCatalogProtocolError("304 without a cached catalog");
+          throw protocolError("304 without a cached catalog");
         }
         return { snapshot: handout(cached) };
       }
@@ -122,36 +95,36 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   };
 }
 
-function handout(snapshot: CloudCatalogSnapshot): CloudCatalogSnapshot {
+function handout(snapshot: CloudSkillCatalog): CloudSkillCatalog {
   // ponytail: shallow copy guards the cached array; skill objects are still shared,
   // deep-clone only if a consumer starts mutating them in place.
   return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
 }
 
 function degradeOrThrow(
-  cached: CloudCatalogSnapshot | undefined,
+  cached: CloudSkillCatalog | undefined,
   reason: string,
 ): CloudCatalogLoadResult {
-  if (!cached) throw new CloudCatalogUnavailableError(reason);
+  if (!cached) throw unavailableError(reason);
   return { snapshot: handout(cached), degraded: reason };
 }
 
-function parseCatalog(text: string): CloudCatalogSnapshot {
+function parseCatalog(text: string): CloudSkillCatalog {
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    throw new CloudCatalogProtocolError("response is not JSON");
+    throw protocolError("response is not JSON");
   }
-  if (!isRecord(body)) throw new CloudCatalogProtocolError("response is not an object");
+  if (!isRecord(body)) throw protocolError("response is not an object");
   const { catalogVersion, skills } = body;
   if (typeof catalogVersion !== "string" || catalogVersion === "") {
-    throw new CloudCatalogProtocolError("catalogVersion is missing");
+    throw protocolError("catalogVersion is missing");
   }
   if (/[\r\n]/.test(catalogVersion)) {
-    throw new CloudCatalogProtocolError("catalogVersion is not header-safe");
+    throw protocolError("catalogVersion is not header-safe");
   }
-  if (!Array.isArray(skills)) throw new CloudCatalogProtocolError("skills is not an array");
+  if (!Array.isArray(skills)) throw protocolError("skills is not an array");
   return { catalogVersion, skills: skills.map(toSkill) };
 }
 
@@ -163,24 +136,24 @@ function parseCatalog(text: string): CloudCatalogSnapshot {
  * extras, and a conforming client ignores them.
  */
 function toSkill(value: unknown, index: number): Skill {
-  if (!isRecord(value)) throw new CloudCatalogProtocolError(`skill ${index} is not an object`);
+  if (!isRecord(value)) throw protocolError(`skill ${index} is not an object`);
   for (const field of WIRE_FIELDS) {
     if (!(field in value)) {
-      throw new CloudCatalogProtocolError(`skill ${index} is missing ${field}`);
+      throw protocolError(`skill ${index} is missing ${field}`);
     }
   }
   const { id, name, description, tags, tools, metadata, body } = value;
   if (typeof id !== "string" || id === "") {
-    throw new CloudCatalogProtocolError(`skill ${index} has an invalid id`);
+    throw protocolError(`skill ${index} has an invalid id`);
   }
   if (typeof name !== "string" || typeof description !== "string" || typeof body !== "string") {
-    throw new CloudCatalogProtocolError(`skill ${id} has an invalid name, description, or body`);
+    throw protocolError(`skill ${id} has an invalid name, description, or body`);
   }
   if (!isStringArray(tags) || !isStringArray(tools)) {
-    throw new CloudCatalogProtocolError(`skill ${id} has invalid tags or tools`);
+    throw protocolError(`skill ${id} has invalid tags or tools`);
   }
   if (!isRecord(metadata) || !Object.values(metadata).every(isStringArray)) {
-    throw new CloudCatalogProtocolError(`skill ${id} has invalid metadata`);
+    throw protocolError(`skill ${id} has invalid metadata`);
   }
   return {
     id,

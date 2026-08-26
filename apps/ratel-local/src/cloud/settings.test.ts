@@ -131,18 +131,15 @@ describe("resolveCloudCredential", () => {
     expect(resolveCloudCredential(settings, { source: "store default" })).toEqual({
       apiKey: "rtl_personal",
       tracesEndpoint: ENDPOINT,
-      profile: "personal",
-      source: "store default",
     });
   });
 
-  it("uses the named profile and keeps its source", () => {
+  it("uses the named profile over the default", () => {
     const resolved = resolveCloudCredential(settings, {
       profile: "acme",
       source: "RATEL_PROFILE environment",
     });
     expect(resolved?.apiKey).toBe("rtl_acme");
-    expect(resolved?.source).toBe("RATEL_PROFILE environment");
   });
 
   it("fails on an unknown profile, naming it and where it was asked for", () => {

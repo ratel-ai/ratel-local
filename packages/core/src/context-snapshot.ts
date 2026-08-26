@@ -128,13 +128,15 @@ export function createContextSnapshotResolver(
   return {
     async resolve(context) {
       // Memoized outside the retry loop so a catalog change cannot spin it.
-      const pulls = new Map<string, Promise<CloudSkillCatalog | undefined>>();
+      let pulled: { profile?: string; catalog: Promise<CloudSkillCatalog | undefined> } | undefined;
       const pullCloudCatalog = (profile?: string) => {
-        const key = profile ?? "";
-        const pending =
-          pulls.get(key) ?? options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined);
-        pulls.set(key, pending);
-        return pending;
+        if (!pulled || pulled.profile !== profile) {
+          pulled = {
+            profile,
+            catalog: options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined),
+          };
+        }
+        return pulled.catalog;
       };
       const projectRoot = await resolveProjectRoot(context, options.projectRegistry);
       const targets = documentTargets(options.homeDir, context, projectRoot);

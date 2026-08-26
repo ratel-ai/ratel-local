@@ -1,18 +1,10 @@
 import { randomUUID } from "node:crypto";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
-export const DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT =
-  "https://cloud.ratel.sh/api/v1/traces";
+export const DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT = "https://cloud.ratel.sh/api/v1/traces";
 
 export const CLOUD_PROFILE_ENV = "RATEL_PROFILE";
 
@@ -34,8 +26,6 @@ export interface CloudSettingsStoreLike {
 export interface ResolvedCloudCredential {
   apiKey: string;
   tracesEndpoint: string;
-  profile: string;
-  source: string;
 }
 
 /** Unknown name is an error, never a silent fall back to `default` (ADR-0021). */
@@ -52,12 +42,7 @@ export function resolveCloudCredential(
       `Cloud profile ${JSON.stringify(name)} (${selection.source}) is not in cloud.json; known profiles: ${known}`,
     );
   }
-  return {
-    apiKey: profile.apiKey,
-    tracesEndpoint: settings.tracesEndpoint,
-    profile: name,
-    source: selection.source,
-  };
+  return { apiKey: profile.apiKey, tracesEndpoint: settings.tracesEndpoint };
 }
 
 export function cloudSettingsPath(homeDir: string): string {
@@ -109,12 +94,10 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
 }
 
 async function readJsonFile(path: string): Promise<unknown> {
-  const raw = await readFile(path, "utf8").catch(
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    },
-  );
+  const raw = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
   if (raw === undefined) return undefined;
   try {
     return JSON.parse(raw);
@@ -130,9 +113,7 @@ function parseSettings(value: unknown): CloudSettings {
   const profiles: Record<string, CloudProfile> = {};
   for (const [name, profile] of Object.entries(value.profiles)) {
     if (!isRecord(profile) || typeof profile.apiKey !== "string") {
-      throw new Error(
-        `Ratel Cloud profile ${JSON.stringify(name)} is malformed`,
-      );
+      throw new Error(`Ratel Cloud profile ${JSON.stringify(name)} is malformed`);
     }
     profiles[name] = { apiKey: profile.apiKey };
   }
@@ -149,11 +130,7 @@ function parseSettings(value: unknown): CloudSettings {
 }
 
 function migrateLegacy(value: unknown): CloudSettings {
-  if (
-    !isRecord(value) ||
-    typeof value.endpoint !== "string" ||
-    typeof value.apiKey !== "string"
-  ) {
+  if (!isRecord(value) || typeof value.endpoint !== "string" || typeof value.apiKey !== "string") {
     throw new Error("Ratel Cloud trace settings are malformed");
   }
   return {
@@ -169,19 +146,15 @@ function validated(settings: CloudSettings): CloudSettings {
       `Ratel Cloud default profile ${JSON.stringify(settings.default)} is not defined`,
     );
   }
-  const profiles: Record<string, CloudProfile> = {};
   for (const [name, { apiKey }] of Object.entries(settings.profiles)) {
-    profiles[name] = {
-      apiKey: headerSafeSecret(apiKey, `Cloud profile ${name} API key`),
-    };
+    headerSafeSecret(apiKey, `Cloud profile ${name} API key`);
   }
   return {
+    ...settings,
     tracesEndpoint: secretFreeHttpsUrl(
       settings.tracesEndpoint,
       "Ratel Cloud traces endpoint",
     ).toString(),
-    ...(settings.default !== undefined ? { default: settings.default } : {}),
-    profiles,
   };
 }
 

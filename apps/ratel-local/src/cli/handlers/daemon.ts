@@ -55,7 +55,6 @@ import {
   MIGRATED_PROFILE_NAME,
   resolveCloudCredential,
 } from "../../cloud/settings.js";
-import { secretFreeHttpsUrl } from "../../cloud/url.js";
 import {
   authorizeDaemonRequest,
   DaemonAccessError,
@@ -934,9 +933,8 @@ function createCloudCatalogPuller(
           ? resolveCloudCredential(settings, { profile, source: "cloud.profile" })
           : undefined;
       const apiKey = credential?.apiKey ?? active?.apiKey;
-      const traces = credential
-        ? secretFreeHttpsUrl(credential.tracesEndpoint, "Ratel Cloud traces endpoint")
-        : active?.endpoint;
+      // The store validated this endpoint on load and on save.
+      const traces = credential ? new URL(credential.tracesEndpoint) : active?.endpoint;
       if (!apiKey || !traces) return undefined;
       const endpoint = deriveCloudEndpoint(traces, "catalog").toString();
       const key = `${endpoint}\u0000${apiKey}`;

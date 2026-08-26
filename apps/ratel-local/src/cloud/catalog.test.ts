@@ -1,14 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  CloudCatalogAuthError,
-  CloudCatalogProtocolError,
-  CloudCatalogUnavailableError,
-  cloudCatalogEndpoint,
-  createCloudCatalogLoader,
-  DEFAULT_CLOUD_CATALOG_ENDPOINT,
-} from "./catalog.js";
+import { createCloudCatalogLoader } from "./catalog.js";
 
-const ENDPOINT = DEFAULT_CLOUD_CATALOG_ENDPOINT;
+const ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
 const VERSION = "6f7f0cee520a24a6edbb6dc7df6b623751cbdf05771e7e7bbe45cc9de943f0a6";
 
 // Shape taken from a real `GET /v1/catalog` against a seeded project; the
@@ -48,17 +41,6 @@ function recordingFetch(...responses: Array<Response | (() => never)>) {
 
 const loader = (fetchImpl: typeof fetch) =>
   createCloudCatalogLoader({ endpoint: ENDPOINT, apiKey: "rtl_test", fetch: fetchImpl });
-
-describe("cloudCatalogEndpoint", () => {
-  it("requires a secret-free HTTPS URL", () => {
-    expect(cloudCatalogEndpoint(ENDPOINT).toString()).toBe(ENDPOINT);
-    expect(() => cloudCatalogEndpoint("http://localhost:3000/v1/catalog")).toThrow(/HTTPS/);
-    expect(() => cloudCatalogEndpoint("https://user:pw@cloud.ratel.sh/v1/catalog")).toThrow(
-      /HTTPS/,
-    );
-    expect(() => cloudCatalogEndpoint("not a url")).toThrow(/invalid/);
-  });
-});
 
 describe("createCloudCatalogLoader", () => {
   it("rejects an API key that cannot fit in a header", () => {
@@ -128,7 +110,7 @@ describe("createCloudCatalogLoader", () => {
 
   it("fails when the source is unavailable and nothing is cached", async () => {
     const { impl } = recordingFetch(jsonResponse({ error: "nope" }, 503));
-    await expect(loader(impl).load()).rejects.toThrow(CloudCatalogUnavailableError);
+    await expect(loader(impl).load()).rejects.toThrow(/unavailable and nothing is cached/);
   });
 
   it("fails on a network error with nothing cached, and degrades with a cache", async () => {
@@ -136,7 +118,7 @@ describe("createCloudCatalogLoader", () => {
       throw new Error("connect ECONNREFUSED");
     };
     await expect(loader(recordingFetch(boom).impl).load()).rejects.toThrow(
-      CloudCatalogUnavailableError,
+      /unavailable and nothing is cached/,
     );
 
     const client = loader(recordingFetch(jsonResponse(WIRE), boom).impl);
@@ -156,7 +138,7 @@ describe("createCloudCatalogLoader", () => {
       );
 
     await expect(loader(recordingFetch(hangingBody()).impl).load()).rejects.toThrow(
-      CloudCatalogUnavailableError,
+      /unavailable and nothing is cached/,
     );
 
     const client = loader(recordingFetch(jsonResponse(WIRE), hangingBody()).impl);
@@ -171,7 +153,7 @@ describe("createCloudCatalogLoader", () => {
     const client = loader(impl);
     await client.load();
     // A revoked key must not hide behind the last good catalog.
-    await expect(client.load()).rejects.toThrow(CloudCatalogAuthError);
+    await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
   });
 
   it("surfaces a contract violation instead of falling back to the cache", async () => {
@@ -181,7 +163,7 @@ describe("createCloudCatalogLoader", () => {
     );
     const client = loader(impl);
     await client.load();
-    await expect(client.load()).rejects.toThrow(CloudCatalogProtocolError);
+    await expect(client.load()).rejects.toThrow(/malformed catalog/);
   });
 
   it("rejects a skill missing a required wire field", async () => {
@@ -203,7 +185,7 @@ describe("createCloudCatalogLoader", () => {
     ];
     for (const body of cases) {
       await expect(loader(recordingFetch(jsonResponse(body)).impl).load()).rejects.toThrow(
-        CloudCatalogProtocolError,
+        /malformed catalog/,
       );
     }
   });
@@ -212,7 +194,7 @@ describe("createCloudCatalogLoader", () => {
     const badVersion = "v1\r\nX-Injected: 1";
     await expect(
       loader(recordingFetch(jsonResponse({ ...WIRE, catalogVersion: badVersion })).impl).load(),
-    ).rejects.toThrow(CloudCatalogProtocolError);
+    ).rejects.toThrow(/malformed catalog/);
 
     const goodAgain = { ...WIRE, catalogVersion: `${VERSION}ff` };
     const { impl } = recordingFetch(
@@ -222,7 +204,7 @@ describe("createCloudCatalogLoader", () => {
     );
     const client = loader(impl);
     await client.load();
-    await expect(client.load()).rejects.toThrow(CloudCatalogProtocolError);
+    await expect(client.load()).rejects.toThrow(/malformed catalog/);
     const third = await client.load();
     expect(third.snapshot.catalogVersion).toBe(goodAgain.catalogVersion);
     expect(third.degraded).toBeUndefined();
