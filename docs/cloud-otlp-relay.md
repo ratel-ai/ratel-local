@@ -59,12 +59,32 @@ Open the daemon UI and select **Settings**. In the **Ratel Cloud** section, ente
 The daemon derives the matching Cloud log route by replacing the exact terminal
 `/traces` path segment with `/logs`. Saving activates both signal relays and
 Ratel runtime trace export immediately. The
-daemon persists the endpoint and key in `~/.ratel/cloud-traces.json`, with the
+daemon persists the endpoint and key in `~/.ratel/cloud.json`, with the
 directory and file restricted to the current user. The authenticated UI API
 returns only the endpoint and whether a key is configured; it never returns
 the saved key. An installed background daemon loads the same file on its next
 start, so no credential environment variables are required after saving; the
-feature flag is still required.
+feature flag is still required for the relay, though the credential itself now
+loads without it.
+
+The store holds named profiles: a shared `tracesEndpoint`, a `default`, and a
+`profiles` map, managed from the CLI:
+
+```bash
+ratel-local cloud add acme     # prompts for the key, stores it under a name
+ratel-local cloud use acme     # selects it for this scope, with a backup
+ratel-local cloud list         # profiles, the default, what resolves here
+```
+
+The first profile stored becomes the default, so a single-project setup never
+selects anything. A project selects one with `cloud.profile` in its layered
+config — a name, never a credential, and therefore safe to commit.
+`RATEL_PROFILE` overrides it for a foreground daemon; an installed service has
+one environment, so per-project selection belongs in the config.
+A pre-existing `~/.ratel/cloud-traces.json` is read as a fallback and used as
+the `default` profile; it is left in place so a downgrade keeps working, and
+goes stale — while still holding a key — once the new store is written. See
+[ADR 0021](adr/0021-cloud-project-credential-ownership.md).
 
 Agent Setup also offers an inline API-key prompt whenever native tracing is
 enabled but Ratel Cloud is not configured. It reuses the daemon's Cloud
@@ -126,10 +146,10 @@ port. It does not replace an unrelated exporter by default. Interactive
 overwrite explains that no backup is retained; automation must use both
 `--overwrite` and `--yes`.
 
-After an interactive enable, the CLI offers to configure Ratel Cloud when it is
-missing. The API key is entered through a masked prompt and saved immediately by
-the daemon. `--yes` remains non-interactive: it does not request a secret and
-prints <https://cloud.ratel.sh/settings> as the next step instead.
+When Ratel Cloud is not configured, `traces enable` points at
+`ratel-local cloud add <profile>` rather than prompting inline. The old prompt
+could only ever store the first credential, so it never reached a second
+project.
 
 `ratel-local setup` offers traces as its final optional interactive step. Plain
 `setup --yes` continues to skip traces. Explicit automation uses:
