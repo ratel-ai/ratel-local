@@ -3,11 +3,13 @@ import {
   CLOUD_PROFILE_ENV,
   type CloudSettings,
   CloudSettingsStore,
+  type CloudSettingsStoreLike,
   cloudSettingsPath,
+  DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
   legacyCloudSettingsPath,
 } from "../../cloud/settings.js";
 import { ArgError } from "../args.js";
-import type { HandlerCtx } from "./types.js";
+import type { CliCloudMutator, HandlerCtx } from "./types.js";
 
 export const CLOUD_USAGE = `usage: ratel-local cloud <verb> [args...]
 
@@ -23,9 +25,11 @@ Keys are stored in ~/.ratel/cloud.json, readable only by you, and never in a
 repository. A project selects one by name, which is safe to commit.`;
 
 export interface CloudHandlerDependencies {
-  store?: { load(): Promise<CloudSettings | undefined>; save(s: CloudSettings): Promise<void> };
-  /** Tells a running daemon to adopt the new key without a restart. */
-  notifyDaemon?: (settings: CloudSettings) => Promise<void>;
+  store?: CloudSettingsStoreLike;
+  /** Writes `cloud.profile` into a scoped config, with a backup. */
+  mutateCloud?: CliCloudMutator;
+  /** Daemon environment, for the profile `RATEL_PROFILE` selects. */
+  processEnv?: NodeJS.ProcessEnv;
 }
 
 export async function runCloud(
@@ -40,23 +44,20 @@ export async function runCloud(
       legacyCloudSettingsPath(ctx.env.homeDir),
     );
   const settings = (await store.load()) ?? {
-    tracesEndpoint: DEFAULT_TRACES_ENDPOINT,
+    tracesEndpoint: DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
     profiles: {},
   };
 
-  if (verb === "add") return add(ctx, store, settings, dependencies);
-  if (verb === "use") return use(ctx, settings);
-  if (verb === "list") return list(ctx, settings);
+  if (verb === "add") return add(ctx, store, settings);
+  if (verb === "use") return use(ctx, settings, dependencies);
+  if (verb === "list") return list(ctx, settings, dependencies.processEnv ?? process.env);
   throw new ArgError(`unknown cloud verb: ${verb}`);
 }
-
-const DEFAULT_TRACES_ENDPOINT = "https://cloud.ratel.sh/api/v1/traces";
 
 async function add(
   ctx: HandlerCtx,
   store: NonNullable<CloudHandlerDependencies["store"]>,
   settings: CloudSettings,
-  dependencies: CloudHandlerDependencies,
 ): Promise<void> {
   const profile = profileArgument(ctx);
   const entered = await ctx.prompts.password({
@@ -77,15 +78,18 @@ async function add(
   };
   await store.save(next);
   ctx.log(`Stored the Ratel Cloud key for "${profile}".`);
-  if (next.default === profile && Object.keys(next.profiles).length === 1) {
+  if (next.default === profile) {
     ctx.log(`"${profile}" is the default profile.`);
   } else {
     ctx.log(`Select it with: ratel-local cloud use ${profile}`);
   }
-  await dependencies.notifyDaemon?.(next);
 }
 
-function use(ctx: HandlerCtx, settings: CloudSettings): void {
+async function use(
+  ctx: HandlerCtx,
+  settings: CloudSettings,
+  dependencies: CloudHandlerDependencies,
+): Promise<void> {
   const profile = profileArgument(ctx);
   if (!settings.profiles[profile]) {
     const known = Object.keys(settings.profiles).sort().join(", ") || "none";
@@ -93,18 +97,20 @@ function use(ctx: HandlerCtx, settings: CloudSettings): void {
       `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel-local cloud add ${profile}`,
     );
   }
+  if (!dependencies.mutateCloud) throw new Error("cloud use requires a config mutator");
   const scope = resolveScope(ctx.argv.flags.scope ?? "project");
-  ctx.log(`Add this to your ${scope} config to select it:`);
-  ctx.log(JSON.stringify({ cloud: { profile } }, null, 2));
+  const { path } = await dependencies.mutateCloud({ scope, profile });
+  ctx.log(`Selected "${profile}" for this ${scope} scope (${path}).`);
+  ctx.log("Reconnect the agent to apply it.");
 }
 
-function list(ctx: HandlerCtx, settings: CloudSettings): void {
+function list(ctx: HandlerCtx, settings: CloudSettings, env: NodeJS.ProcessEnv): void {
   const names = Object.keys(settings.profiles).sort();
   if (names.length === 0) {
     ctx.log("No Cloud profiles stored. Add one with: ratel-local cloud add <profile>");
     return;
   }
-  const selected = process.env[CLOUD_PROFILE_ENV];
+  const selected = env[CLOUD_PROFILE_ENV];
   for (const name of names) {
     const marks = [
       name === settings.default ? "default" : "",

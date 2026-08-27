@@ -29,6 +29,7 @@ import { type AgentPluginInstaller, createRatelAgentPluginInstaller } from "../a
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { daemonLoopbackUrl, requestRunningDaemon, requireDaemonJson } from "./daemon-api.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
+import { CLOUD_USAGE, runCloud } from "./handlers/cloud.js";
 import { CONNECT_USAGE, runConnect } from "./handlers/connect.js";
 import { daemonPaths, runDaemon } from "./handlers/daemon.js";
 import { runDoctor } from "./handlers/doctor.js";
@@ -42,7 +43,12 @@ import { runSetup, SETUP_USAGE } from "./handlers/setup.js";
 import { runSkill, SKILL_USAGE } from "./handlers/skill.js";
 import { runStatusline } from "./handlers/statusline.js";
 import { runTraces, TRACES_USAGE } from "./handlers/traces.js";
-import type { CliServerMutationRequest, CliServerMutator, HandlerCtx } from "./handlers/types.js";
+import type {
+  CliCloudMutator,
+  CliServerMutationRequest,
+  CliServerMutator,
+  HandlerCtx,
+} from "./handlers/types.js";
 import { runUi } from "./handlers/ui.js";
 import { type PromptAdapter, silentPromptAdapter } from "./prompts.js";
 
@@ -77,6 +83,7 @@ Commands:
            or --auto-config to load user/project/local Ratel configs)
   connect  bridge this agent session to the scoped local daemon [--project-root <path>]
   setup    onboard the daemon and supported agents [--agent NAME] [--daemon-only] [--yes]
+  cloud    manage Ratel Cloud profiles (add, use, list)
   traces   manage native Claude Code and Codex trace exporters
   daemon   manage the loopback HTTP daemon and UI (run, install, status, daemon open)
   import   migrate agent MCP configs and native skills into Ratel
@@ -151,6 +158,11 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
 
   if (parsed.group === "setup" && parsed.flags.help === true) {
     log(SETUP_USAGE);
+    return {};
+  }
+
+  if (parsed.group === "cloud" && (parsed.verb === undefined || parsed.flags.help === true)) {
+    log(CLOUD_USAGE);
     return {};
   }
 
@@ -242,6 +254,14 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
       { ...options, serverVersion: options.serverVersion ?? options.cliVersion },
       log,
     );
+  }
+
+  if (parsed.group === "cloud") {
+    const registry = options.projectRegistryFactory
+      ? options.projectRegistryFactory(ctx.env.homeDir)
+      : createProjectRegistry({ homeDir: ctx.env.homeDir });
+    await runCloud(ctx, { mutateCloud: createCliCloudMutator(ctx, registry) });
+    return {};
   }
 
   if (parsed.group === "traces") {
@@ -351,6 +371,46 @@ function commandUsesPreparedChanges(parsed: ParsedArgs): boolean {
   return false;
 }
 
+/** The offline control plane both scoped mutators fall back to. */
+async function configControlPlaneFor(ctx: HandlerCtx, registry: ProjectRegistry) {
+  const preparedChanges =
+    ctx.preparedChanges ??
+    createPreparedChangeCoordinator({
+      mutationEngine: await createMutationEngine({
+        controlDir: join(ctx.env.homeDir, ".ratel"),
+      }),
+    });
+  return createConfigControlPlane({
+    homeDir: ctx.env.homeDir,
+    projectRegistry: registry,
+    preparedChanges,
+    localGitExcludeManager: createLocalGitExcludeManager(),
+  });
+}
+
+function createCliCloudMutator(ctx: HandlerCtx, registry: ProjectRegistry): CliCloudMutator {
+  return async (request) => {
+    const { target, projectRoot } = await cliMutationTarget(ctx, registry, request.scope);
+    const path = ratelConfigPath(request.scope, {
+      homeDir: ctx.env.homeDir,
+      ...(projectRoot ? { projectRoot } : {}),
+    });
+    const projectQuery =
+      target.scope === "user" ? "" : `?projectId=${encodeURIComponent(target.projectId)}`;
+    const response = await requestRunningDaemon(ctx, `/api/cloud-profile${projectQuery}`, {
+      method: "PATCH",
+      body: { target, profile: request.profile },
+    });
+    if (response) {
+      await requireDaemonJson(response, "cloud use");
+      return { path };
+    }
+    const control = await configControlPlaneFor(ctx, registry);
+    await control.mutateCloud({ target, profile: request.profile });
+    return { path };
+  };
+}
+
 function createCliRetrievalMutator(
   ctx: HandlerCtx,
   registry: ProjectRegistry,
@@ -364,19 +424,7 @@ function createCliRetrievalMutator(
     if (await mutateRetrievalThroughRunningDaemon(ctx, request, target)) {
       return { path };
     }
-    const preparedChanges =
-      ctx.preparedChanges ??
-      createPreparedChangeCoordinator({
-        mutationEngine: await createMutationEngine({
-          controlDir: join(ctx.env.homeDir, ".ratel"),
-        }),
-      });
-    const control = await createConfigControlPlane({
-      homeDir: ctx.env.homeDir,
-      projectRegistry: registry,
-      preparedChanges,
-      localGitExcludeManager: createLocalGitExcludeManager(),
-    });
+    const control = await configControlPlaneFor(ctx, registry);
     await control.mutateRetrieval({
       target,
       action: request.action,
