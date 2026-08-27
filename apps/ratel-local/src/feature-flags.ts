@@ -25,6 +25,27 @@ export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<strin
   };
 }
 
+/** Every daemon-wide flag an installed service may carry. */
+export const SERVICE_FEATURE_FLAG_ENVS = [
+  CLOUD_TELEMETRY_FEATURE_ENV,
+  CLOUD_CATALOG_FEATURE_ENV,
+] as const;
+
+/**
+ * The flags an operator named explicitly, by presence in the environment. A
+ * flag left out keeps whatever the installed service already says, so changing
+ * one never disturbs another (ADR-0020, ADR-0021).
+ */
+export function featureFlagOverridesFromEnv(
+  env: NodeJS.ProcessEnv,
+): Readonly<Record<string, boolean>> {
+  const overrides: Record<string, boolean> = {};
+  for (const name of SERVICE_FEATURE_FLAG_ENVS) {
+    if (Object.hasOwn(env, name)) overrides[name] = env[name] === "1";
+  }
+  return overrides;
+}
+
 /**
  * Explicit Cloud telemetry override from the invoking environment.
  * `undefined` means the variable is absent and installed service state must
