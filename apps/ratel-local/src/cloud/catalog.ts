@@ -1,7 +1,7 @@
 import type { CloudSkillCatalog, RuntimeContextRef } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
-import { type CloudSettings, resolveCloudCredential } from "./settings.js";
+import { CLOUD_PROFILE_ENV, type CloudSettings, resolveCloudCredential } from "./settings.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
 const TIMEOUT_MS = 10_000;
@@ -96,28 +96,30 @@ export function cloudCatalogEndpoint(tracesEndpoint: URL): URL {
 }
 
 /**
- * Env credential, then `cloud.profile`, then the store default (ADR-0021).
- * Unknown profile throws so one project cannot silently use another's account.
+ * Resolves in ADR-0021's order. An unknown profile throws rather than falling
+ * back, so one project cannot silently pull another's account.
  */
 export function createCloudCatalogSource(input: {
   settings: CloudSettings | undefined;
   environment: CloudCredential | undefined;
-  fallback: CloudCredential | undefined;
+  environmentProfile: string | undefined;
   log: (message: string) => void;
   fetch?: typeof fetch;
 }) {
   const loaders = new Map<string, ReturnType<typeof createCloudCatalogLoader>>();
-  const resolve = (profile?: string): CloudCredential | undefined => {
+  const resolve = (scopeProfile?: string): CloudCredential | undefined => {
     if (input.environment) return input.environment;
-    if (!profile) return input.fallback;
+    const profile = input.environmentProfile ?? scopeProfile;
+    const source = input.environmentProfile ? CLOUD_PROFILE_ENV : "cloud.profile";
     if (!input.settings) {
+      if (!profile) return undefined;
       throw new Error(
-        `Cloud profile ${JSON.stringify(profile)} (cloud.profile) is selected, but no Cloud credential is stored. Add one with: ratel-local cloud add ${profile}`,
+        `Cloud profile ${JSON.stringify(profile)} (${source}) is selected, but no Cloud credential is stored. Add one with: ratel-local cloud add ${profile}`,
       );
     }
     const credential = resolveCloudCredential(input.settings, {
-      profile,
-      source: "cloud.profile",
+      ...(profile ? { profile } : {}),
+      source: profile ? source : "store default",
     });
     if (!credential) return undefined;
     // Already validated by the store.

@@ -430,7 +430,7 @@ export async function runDaemonServer(
     ? createCloudCatalogSource({
         settings: persistedCloudSettings,
         environment: environmentCloudOptions,
-        fallback: persistedCloudOptions,
+        environmentProfile: daemonProcessEnv[CLOUD_PROFILE_ENV],
         log,
         ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
       })

@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type BackupFs, type JsonFs, ratelConfigPath } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudSettings } from "../../cloud/settings.js";
@@ -41,10 +44,13 @@ function context(
   return { ctx, output };
 }
 
-/** A prompt adapter that answers the masked password question. */
 function answering(answer: string | symbol) {
   const adapter = silentPromptAdapter();
-  return { ...adapter, password: async () => answer };
+  return { ...adapter, password: async () => answer, canPrompt: () => true };
+}
+
+function piped(answer: string | symbol) {
+  return { ...answering(answer), canPrompt: () => false };
 }
 
 function store(initial?: CloudSettings) {
@@ -105,8 +111,19 @@ describe("cloud add", () => {
     expect(target.saved).toEqual([]);
   });
 
-  it("fails loudly when no key can be entered", async () => {
-    const { ctx } = context("add", ["acme"], {}, silentPromptAdapter());
+  it("refuses to run without a terminal, whatever the prompt returns", async () => {
+    // Every shape the adapter can return, including one it never would.
+    for (const answer of [CANCEL_SYMBOL, "", "rtl_piped"]) {
+      const { ctx } = context("add", ["acme"], {}, piped(answer));
+      const target = store(EXISTING);
+
+      await expect(runCloud(ctx, { store: target })).rejects.toThrow(/without a terminal/);
+      expect(target.saved).toEqual([]);
+    }
+  });
+
+  it("fails when a terminal answers with nothing", async () => {
+    const { ctx } = context("add", ["acme"], {}, answering(""));
     const target = store(EXISTING);
 
     await expect(runCloud(ctx, { store: target })).rejects.toThrow(/no API key was entered/);
@@ -114,18 +131,24 @@ describe("cloud add", () => {
   });
 
   it("reports the legacy store migration to the user, not only to the daemon", async () => {
-    const { ctx, output } = context("list", [], {}, silentPromptAdapter());
-    const target = {
-      ...store(EXISTING),
-      load: async () => {
-        ctx.log("read Cloud settings from /home/u/.ratel/cloud-traces.json");
-        return EXISTING;
-      },
-    };
+    // No injected store: the one `runCloud` builds is what carries the logger.
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-cloud-"));
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await writeFile(
+      join(homeDir, ".ratel", "cloud-traces.json"),
+      JSON.stringify({ endpoint: "https://cloud.ratel.sh/api/v1/traces", apiKey: "rtl_legacy" }),
+    );
+    const { ctx, output } = context("list", [], {});
+    ctx.env = { homeDir };
 
-    await runCloud(ctx, { store: target, processEnv: {} });
+    await runCloud(ctx, { processEnv: {} });
 
-    expect(output.join("\n")).toContain("cloud-traces.json");
+    const printed = output.join("\n");
+    expect(printed).toContain(join(homeDir, ".ratel", "cloud-traces.json"));
+    expect(printed).toContain("still holds a key");
+    expect(printed).toContain("Cloud skills here:");
+    expect(printed).not.toContain("rtl_legacy");
+    await rm(homeDir, { recursive: true, force: true });
   });
 
   it("requires a profile name", async () => {

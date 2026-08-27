@@ -237,7 +237,7 @@ const source = (
   createCloudCatalogSource({
     settings: SETTINGS,
     environment: undefined,
-    fallback: { endpoint: TRACES, apiKey: "rtl_personal" },
+    environmentProfile: undefined,
     log: () => {},
     fetch: fetchImpl,
     ...overrides,
@@ -271,6 +271,24 @@ describe("createCloudCatalogSource", () => {
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_env");
   });
 
+  it("lets RATEL_PROFILE outrank the profile a scope names", async () => {
+    // ADR-0021 puts the environment above layered config, as AWS_PROFILE does.
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+
+    await source(impl, { environmentProfile: "personal" })(CONTEXT, "acme");
+
+    expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_personal");
+  });
+
+  it("refuses a RATEL_PROFILE the store does not define", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+
+    await expect(source(impl, { environmentProfile: "nope" })(CONTEXT, "acme")).rejects.toThrow(
+      /"nope" \(RATEL_PROFILE\)/,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   it("falls back to the store default when no scope names a profile", async () => {
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
 
@@ -287,16 +305,11 @@ describe("createCloudCatalogSource", () => {
   });
 
   it("refuses a named profile when nothing is stored at all", async () => {
-    // Never fall through to the environment credential: that would pull one
-    // project's catalog with another project's account and report success.
+    // Falling back here would pull another project's catalog and report success.
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
-    const environment = { endpoint: TRACES, apiKey: "rtl_env" };
 
     await expect(
-      source(impl, { settings: undefined, environment: undefined, fallback: environment })(
-        CONTEXT,
-        "acme",
-      ),
+      source(impl, { settings: undefined, environment: undefined })(CONTEXT, "acme"),
     ).rejects.toThrow(/no Cloud credential is stored/);
     expect(calls).toHaveLength(0);
   });
@@ -314,7 +327,7 @@ describe("createCloudCatalogSource", () => {
   it("returns nothing when no credential resolves", async () => {
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
 
-    const pulled = await source(impl, { settings: undefined, fallback: undefined })(CONTEXT);
+    const pulled = await source(impl, { settings: undefined })(CONTEXT);
 
     expect(pulled).toBeUndefined();
     expect(calls).toHaveLength(0);

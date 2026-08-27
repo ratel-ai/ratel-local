@@ -61,6 +61,13 @@ async function add(
   settings: CloudSettings,
 ): Promise<void> {
   const profile = profileArgument(ctx);
+  // Asked before prompting: the adapter answers EOF with the cancel it also
+  // uses for Ctrl-C, so afterwards a pipe and a deliberate abort look alike.
+  if (!ctx.prompts.canPrompt()) {
+    throw new ArgError(
+      `cannot read a key for "${profile}" without a terminal. Run "ratel-local cloud add ${profile}" from an interactive shell.`,
+    );
+  }
   const entered = await ctx.prompts.password({
     message: `Paste the Ratel Cloud API key for "${profile}"`,
     mask: "•",
@@ -70,13 +77,7 @@ async function add(
     return;
   }
   const apiKey = typeof entered === "string" ? entered.trim() : "";
-  if (!apiKey) {
-    // Without a terminal the masked prompt returns nothing, and a script that
-    // saw a silent exit 0 would believe a key was stored.
-    throw new ArgError(
-      `no API key was entered for "${profile}". Run "ratel-local cloud add" to enter it.`,
-    );
-  }
+  if (!apiKey) throw new ArgError(`no API key was entered for "${profile}".`);
 
   const next: CloudSettings = {
     ...settings,
@@ -137,10 +138,10 @@ async function list(
 
   // The `RATEL_API_KEY` pair outranks all of these, but it lives in the daemon's
   // environment, which this process cannot see.
-  const resolved = scoped
-    ? { profile: scoped.profile, source: `cloud.profile in ${scoped.path}` }
-    : selected
-      ? { profile: selected, source: CLOUD_PROFILE_ENV }
+  const resolved = selected
+    ? { profile: selected, source: CLOUD_PROFILE_ENV }
+    : scoped
+      ? { profile: scoped.profile, source: `cloud.profile in ${scoped.path}` }
       : settings.default
         ? { profile: settings.default, source: "store default" }
         : undefined;
@@ -152,7 +153,7 @@ async function list(
   if (!settings.profiles[resolved.profile]) {
     ctx.log(`  warning: no profile named "${resolved.profile}" is stored, so nothing resolves.`);
   }
-  if (scoped) {
+  if (scoped && !selected) {
     ctx.log('  Traces do not follow cloud.profile; run "ratel-local traces status".');
   }
 }
