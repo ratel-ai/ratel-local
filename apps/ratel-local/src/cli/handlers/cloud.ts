@@ -1,4 +1,9 @@
-import { parseConfig, ratelConfigPath, readJson, resolveScope } from "@ratel-ai/ratel-local-core";
+import {
+  parseConfig,
+  ratelConfigPath,
+  readJson,
+  resolveScope,
+} from "@ratel-ai/ratel-local-core";
 import {
   CLOUD_PROFILE_ENV,
   type CloudSettings,
@@ -42,6 +47,7 @@ export async function runCloud(
     new CloudSettingsStore(
       cloudSettingsPath(ctx.env.homeDir),
       legacyCloudSettingsPath(ctx.env.homeDir),
+      ctx.log,
     );
   const settings = (await store.load()) ?? {
     tracesEndpoint: DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
@@ -50,7 +56,8 @@ export async function runCloud(
 
   if (verb === "add") return add(ctx, store, settings);
   if (verb === "use") return use(ctx, settings, dependencies);
-  if (verb === "list") return list(ctx, settings, dependencies.processEnv ?? process.env);
+  if (verb === "list")
+    return list(ctx, settings, dependencies.processEnv ?? process.env);
   throw new ArgError(`unknown cloud verb: ${verb}`);
 }
 
@@ -64,9 +71,17 @@ async function add(
     message: `Paste the Ratel Cloud API key for "${profile}"`,
     mask: "•",
   });
-  if (ctx.prompts.isCancel(entered) || typeof entered !== "string" || entered.trim() === "") {
+  if (ctx.prompts.isCancel(entered)) {
     ctx.prompts.cancel("no API key was stored");
     return;
+  }
+  const apiKey = typeof entered === "string" ? entered.trim() : "";
+  if (!apiKey) {
+    // Without a terminal the masked prompt returns nothing, and a script that
+    // saw a silent exit 0 would believe a key was stored.
+    throw new ArgError(
+      `no API key was entered for "${profile}". Run "ratel-local cloud add" to enter it.`,
+    );
   }
 
   const next: CloudSettings = {
@@ -74,7 +89,7 @@ async function add(
     // The first profile stored becomes the default, so a single-project setup
     // never has to think about selection at all.
     default: settings.default ?? profile,
-    profiles: { ...settings.profiles, [profile]: { apiKey: entered.trim() } },
+    profiles: { ...settings.profiles, [profile]: { apiKey } },
   };
   await store.save(next);
   ctx.log(`Stored the Ratel Cloud key for "${profile}".`);
@@ -97,7 +112,8 @@ async function use(
       `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel-local cloud add ${profile}`,
     );
   }
-  if (!dependencies.mutateCloud) throw new Error("cloud use requires a config mutator");
+  if (!dependencies.mutateCloud)
+    throw new Error("cloud use requires a config mutator");
   const scope = resolveScope(ctx.argv.flags.scope ?? "project");
   const { path } = await dependencies.mutateCloud({ scope, profile });
   ctx.log(`Selected "${profile}" for this ${scope} scope (${path}).`);
@@ -111,7 +127,9 @@ async function list(
 ): Promise<void> {
   const names = Object.keys(settings.profiles).sort();
   if (names.length === 0) {
-    ctx.log("No Cloud profiles stored. Add one with: ratel-local cloud add <profile>");
+    ctx.log(
+      "No Cloud profiles stored. Add one with: ratel-local cloud add <profile>",
+    );
     return;
   }
   const selected = env[CLOUD_PROFILE_ENV];
@@ -141,10 +159,14 @@ async function list(
   }
   ctx.log(`Cloud skills here: "${resolved.profile}" (${resolved.source})`);
   if (!settings.profiles[resolved.profile]) {
-    ctx.log(`  warning: no profile named "${resolved.profile}" is stored, so nothing resolves.`);
+    ctx.log(
+      `  warning: no profile named "${resolved.profile}" is stored, so nothing resolves.`,
+    );
   }
   if (scoped) {
-    ctx.log('  Traces do not follow cloud.profile; run "ratel-local traces status".');
+    ctx.log(
+      '  Traces do not follow cloud.profile; run "ratel-local traces status".',
+    );
   }
 }
 
@@ -161,7 +183,8 @@ async function scopedProfile(
       continue;
     }
     const document = await readJson<unknown>(ctx.fs, path);
-    const profile = document === null ? undefined : parseConfig(document).cloud?.profile;
+    const profile =
+      document === null ? undefined : parseConfig(document).cloud?.profile;
     if (profile) found.push({ profile, path });
   }
   return found.at(-1);

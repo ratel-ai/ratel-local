@@ -383,7 +383,7 @@ export async function runDaemonServer(
     new CloudSettingsStore(
       cloudSettingsPath(ctx.env.homeDir),
       legacyCloudSettingsPath(ctx.env.homeDir),
-      log,
+      (message) => log(`[ratel] ${message}`),
     );
   // The credential belongs to the Cloud project, not to telemetry: it loads
   // whenever any Cloud consumer may need it, and each consumer keeps its own

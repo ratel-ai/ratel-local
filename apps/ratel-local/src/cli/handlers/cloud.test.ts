@@ -1,7 +1,7 @@
 import { type BackupFs, type JsonFs, ratelConfigPath } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudSettings } from "../../cloud/settings.js";
-import { silentPromptAdapter } from "../prompts.js";
+import { CANCEL_SYMBOL, silentPromptAdapter } from "../prompts.js";
 import { runCloud } from "./cloud.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -96,13 +96,36 @@ describe("cloud add", () => {
     expect(output.join("\n")).toContain("ratel-local cloud use acme");
   });
 
-  it("stores nothing when the prompt is cancelled or empty", async () => {
-    for (const answer of [Symbol.for("clack:cancel"), ""]) {
-      const { ctx } = context("add", ["acme"], {}, answering(answer));
-      const target = store(EXISTING);
-      await runCloud(ctx, { store: target });
-      expect(target.saved).toEqual([]);
-    }
+  it("stores nothing when the prompt is cancelled", async () => {
+    const { ctx } = context("add", ["acme"], {}, answering(CANCEL_SYMBOL));
+    const target = store(EXISTING);
+
+    await runCloud(ctx, { store: target });
+
+    expect(target.saved).toEqual([]);
+  });
+
+  it("fails loudly when no key can be entered", async () => {
+    const { ctx } = context("add", ["acme"], {}, silentPromptAdapter());
+    const target = store(EXISTING);
+
+    await expect(runCloud(ctx, { store: target })).rejects.toThrow(/no API key was entered/);
+    expect(target.saved).toEqual([]);
+  });
+
+  it("reports the legacy store migration to the user, not only to the daemon", async () => {
+    const { ctx, output } = context("list", [], {}, silentPromptAdapter());
+    const target = {
+      ...store(EXISTING),
+      load: async () => {
+        ctx.log("read Cloud settings from /home/u/.ratel/cloud-traces.json");
+        return EXISTING;
+      },
+    };
+
+    await runCloud(ctx, { store: target, processEnv: {} });
+
+    expect(output.join("\n")).toContain("cloud-traces.json");
   });
 
   it("requires a profile name", async () => {

@@ -68,7 +68,7 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
     const legacy = await readJsonFile(this.legacyPath);
     if (legacy === undefined) return undefined;
     this.log(
-      `[ratel] read Cloud settings from ${this.legacyPath}; they move to ${this.path} on the next save, after which the old file is unused and still holds a key`,
+      `read Cloud settings from ${this.legacyPath}; they move to ${this.path} on the next save, after which the old file is unused and still holds a key`,
     );
     return validated(migrateLegacy(legacy));
   }
