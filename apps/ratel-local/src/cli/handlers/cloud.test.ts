@@ -243,6 +243,20 @@ describe("cloud list bindings", () => {
     expect(output.join("\n")).not.toContain("Traces do not follow");
   });
 
+  it("survives a config broken by something else entirely", async () => {
+    const { ctx, output } = context("list", [], {}, silentPromptAdapter(), {
+      [ratelConfigPath("project", { homeDir: "/home/u", projectRoot: "/repo" })]: {
+        retrieval: { method: "bogus" },
+      },
+    });
+
+    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+
+    const printed = output.join("\n");
+    expect(printed).toContain("warning: ignoring /repo/.ratel/config.json");
+    expect(printed).toContain('Cloud skills here: "personal" (store default)');
+  });
+
   it("warns when the selected profile is not stored", async () => {
     const { ctx, output } = context("list", [], {}, silentPromptAdapter(), projectConfig("gone"));
 

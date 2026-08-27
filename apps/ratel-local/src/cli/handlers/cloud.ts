@@ -1,4 +1,10 @@
-import { parseConfig, ratelConfigPath, readJson, resolveScope } from "@ratel-ai/ratel-local-core";
+import {
+  parseConfig,
+  type RatelScope,
+  ratelConfigPath,
+  readJson,
+  resolveScope,
+} from "@ratel-ai/ratel-local-core";
 import {
   CLOUD_PROFILE_ENV,
   type CloudSettings,
@@ -164,17 +170,25 @@ async function scopedProfile(
 ): Promise<{ profile: string; path: string } | undefined> {
   const found: Array<{ profile: string; path: string }> = [];
   for (const scope of ["user", "project", "local"] as const) {
-    let path: string;
+    const path = scopedConfigPath(ctx, scope);
+    if (!path) continue;
     try {
-      path = ratelConfigPath(scope, ctx.env);
-    } catch {
-      continue;
+      const document = await readJson<unknown>(ctx.fs, path);
+      const profile = document === null ? undefined : parseConfig(document).cloud?.profile;
+      if (profile) found.push({ profile, path });
+    } catch (error) {
+      ctx.log(`warning: ignoring ${path}: ${(error as Error).message}`);
     }
-    const document = await readJson<unknown>(ctx.fs, path);
-    const profile = document === null ? undefined : parseConfig(document).cloud?.profile;
-    if (profile) found.push({ profile, path });
   }
   return found.at(-1);
+}
+
+function scopedConfigPath(ctx: HandlerCtx, scope: RatelScope): string | undefined {
+  try {
+    return ratelConfigPath(scope, ctx.env);
+  } catch {
+    return undefined;
+  }
 }
 
 function profileArgument(ctx: HandlerCtx): string {
