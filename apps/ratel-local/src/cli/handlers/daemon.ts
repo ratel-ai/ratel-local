@@ -399,15 +399,18 @@ export async function runDaemonServer(
     ? undefined
     : cloudOptionsFromStore(persistedCloudSettings, daemonProcessEnv, log);
   let activeCloudOptions = environmentCloudOptions ?? persistedCloudOptions;
-  // Only the daemon can report this: it deletes RATEL_API_KEY from its own
-  // environment at startup, and an installed service has none a CLI run can read.
-  const cloudCredentialSource = environmentCloudOptions
+
+  const selectedProfile = daemonProcessEnv[CLOUD_PROFILE_ENV];
+  const storeDefault = persistedCloudSettings?.default;
+  const keyFromEnvironment = environmentCloudOptions
     ? `${CLOUD_API_KEY_ENV} environment`
-    : daemonProcessEnv[CLOUD_PROFILE_ENV]
-      ? `profile "${daemonProcessEnv[CLOUD_PROFILE_ENV]}" (${CLOUD_PROFILE_ENV})`
-      : persistedCloudSettings?.default
-        ? `profile "${persistedCloudSettings.default}" (store default)`
-        : "none";
+    : undefined;
+  const profileFromEnvironment = selectedProfile
+    ? `profile "${selectedProfile}" (${CLOUD_PROFILE_ENV})`
+    : undefined;
+  const profileFromStore = storeDefault ? `profile "${storeDefault}" (store default)` : undefined;
+  let activeCloudSource =
+    keyFromEnvironment ?? profileFromEnvironment ?? profileFromStore ?? "none";
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
     featureFlags.cloudTelemetry && activeCloudOptions
       ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log }
@@ -652,6 +655,7 @@ export async function runDaemonServer(
         };
         await cloudSettingsStore.save(persistedCloudSettings);
         activeCloudOptions = next;
+        activeCloudSource = `profile "${profileName}" (saved in the UI)`;
         cloudOtlpRelay.configure({ ...next, fetch: opts.cloudOtlpFetch, log });
         await ensureRatelTelemetry();
         log("[ratel] Ratel Cloud trace export configured");
@@ -671,7 +675,7 @@ export async function runDaemonServer(
             })),
             cloudConfigured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
             featureEnabled: featureFlags.cloudTelemetry,
-            cloudCredentialSource,
+            cloudCredentialSource: activeCloudSource,
           }),
           prepare: ({ action, level, hostKinds, overwrite }) =>
             prepareAgentTraceChange(ctx, {

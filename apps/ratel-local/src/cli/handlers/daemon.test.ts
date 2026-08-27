@@ -100,6 +100,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         preparedChanges: createTestPreparedChanges(makeCtx(fs, { homeDir }).fs),
+        cloudSettingsStore: { load: async () => undefined, save: async () => {} },
       },
     );
     try {
@@ -115,6 +116,7 @@ describe("runDaemon", () => {
         endpoint: expectedEndpoint,
         cloudConfigured: false,
         featureEnabled: true,
+        cloudCredentialSource: "none",
       });
 
       const prepareResponse = await fetch(new URL("/api/agent-traces/prepare", daemonUrl), {
@@ -135,6 +137,22 @@ describe("runDaemon", () => {
       expect(commitResponse.status).toBe(200);
       expect(fs.files.get(join(homeDir, ".claude", "settings.json"))).toContain(expectedEndpoint);
       expect(fs.files.get(join(homeDir, ".codex", "config.toml"))).toContain(expectedEndpoint);
+
+      // Reported "none" above. A UI save has to move it, or `traces status`
+      // shows a configured relay next to a credential that came from nowhere.
+      await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          endpoint: "https://cloud.example.test/api/v1/traces",
+          apiKey: "saved-cloud-secret",
+        }),
+      });
+      const afterSave = await fetch(new URL("/api/agent-traces", daemonUrl), { headers });
+      expect(await afterSave.json()).toMatchObject({
+        cloudConfigured: true,
+        cloudCredentialSource: 'profile "default" (saved in the UI)',
+      });
     } finally {
       await result.shutdown?.();
       await rm(homeDir, { recursive: true, force: true });
