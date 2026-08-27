@@ -1,11 +1,11 @@
-import type { CloudSkillCatalog } from "@ratel-ai/ratel-local-core";
+import type { CloudSkillCatalog, RuntimeContextRef } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
+import { type CloudSettings, resolveCloudCredential } from "./settings.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
 const TIMEOUT_MS = 10_000;
 
-/** What one pull returned, and whether it came from the cache. */
 export interface CloudCatalogLoadResult {
   snapshot: CloudSkillCatalog;
   /** Set when the snapshot is a cached one served through an upstream failure. */
@@ -31,8 +31,6 @@ const unavailableError = (reason: string) =>
  * Deliberately: the contract serves `Cache-Control: no-cache`, so every
  * acquisition revalidates anyway, and a disk cache would add an offline story
  * the vertical slice does not need.
- * Concurrent `load()` calls each pull: the cache is assigned after the await,
- * so nothing dedupes them. Share one in-flight promise if that ever costs.
  *
  * A cached snapshot covers *availability* failures only. An invalid credential
  * or a contract violation always surfaces, so a revoked key cannot hide behind
@@ -87,9 +85,68 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   };
 }
 
+interface CloudCredential {
+  endpoint: URL;
+  apiKey: string;
+}
+
+/** `/v1/catalog` on the traces origin — not a `/traces` → `/logs` path swap. */
+export function cloudCatalogEndpoint(tracesEndpoint: URL): URL {
+  return new URL("/v1/catalog", tracesEndpoint);
+}
+
+/**
+ * Env credential, then `cloud.profile`, then the store default (ADR-0021).
+ * Unknown profile throws so one project cannot silently use another's account.
+ */
+export function createCloudCatalogSource(input: {
+  settings: CloudSettings | undefined;
+  environment: CloudCredential | undefined;
+  fallback: CloudCredential | undefined;
+  log: (message: string) => void;
+  fetch?: typeof fetch;
+}) {
+  const loaders = new Map<string, ReturnType<typeof createCloudCatalogLoader>>();
+  const resolve = (profile?: string): CloudCredential | undefined => {
+    if (input.environment) return input.environment;
+    if (!profile) return input.fallback;
+    if (!input.settings) {
+      throw new Error(
+        `Cloud profile ${JSON.stringify(profile)} (cloud.profile) is selected, but no Cloud credential is stored. Add one with: ratel-local cloud add ${profile}`,
+      );
+    }
+    const credential = resolveCloudCredential(input.settings, {
+      profile,
+      source: "cloud.profile",
+    });
+    if (!credential) return undefined;
+    // Already validated by the store.
+    return { endpoint: new URL(credential.tracesEndpoint), apiKey: credential.apiKey };
+  };
+
+  return async (
+    _context: RuntimeContextRef,
+    profile?: string,
+  ): Promise<CloudSkillCatalog | undefined> => {
+    const credential = resolve(profile);
+    if (!credential) return undefined;
+    const endpoint = cloudCatalogEndpoint(credential.endpoint).toString();
+    const key = `${endpoint}\u0000${credential.apiKey}`;
+    const loader =
+      loaders.get(key) ??
+      createCloudCatalogLoader({
+        endpoint,
+        apiKey: credential.apiKey,
+        ...(input.fetch ? { fetch: input.fetch } : {}),
+      });
+    loaders.set(key, loader);
+    const { snapshot, degraded } = await loader.load();
+    if (degraded) input.log(`[ratel] serving a cached Cloud catalog: ${degraded}`);
+    return snapshot;
+  };
+}
+
 function handout(snapshot: CloudSkillCatalog): CloudSkillCatalog {
-  // The cache is only replaced on a 200: while the ETag matches, a consumer that
-  // mutated this array would keep an empty catalog for the process lifetime.
   return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
 }
 

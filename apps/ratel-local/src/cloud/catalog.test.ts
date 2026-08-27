@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createCloudCatalogLoader } from "./catalog.js";
+import {
+  cloudCatalogEndpoint,
+  createCloudCatalogLoader,
+  createCloudCatalogSource,
+} from "./catalog.js";
+import type { CloudSettings } from "./settings.js";
 
 const ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
 const VERSION = "6f7f0cee520a24a6edbb6dc7df6b623751cbdf05771e7e7bbe45cc9de943f0a6";
@@ -213,5 +218,105 @@ describe("createCloudCatalogLoader", () => {
   it("rejects a 304 that arrives before anything is cached", async () => {
     const { impl } = recordingFetch(new Response(null, { status: 304 }));
     await expect(loader(impl).load()).rejects.toThrow(/304 without a cached catalog/);
+  });
+});
+
+const TRACES = new URL("https://cloud.ratel.sh/api/v1/traces");
+const CONTEXT = { kind: "global" } as const;
+
+const SETTINGS: CloudSettings = {
+  tracesEndpoint: TRACES.toString(),
+  default: "personal",
+  profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
+};
+
+const source = (
+  fetchImpl: typeof fetch,
+  overrides: Partial<Parameters<typeof createCloudCatalogSource>[0]> = {},
+) =>
+  createCloudCatalogSource({
+    settings: SETTINGS,
+    environment: undefined,
+    fallback: { endpoint: TRACES, apiKey: "rtl_personal" },
+    log: () => {},
+    fetch: fetchImpl,
+    ...overrides,
+  });
+
+describe("createCloudCatalogSource", () => {
+  it("derives the catalog from the origin, not by swapping the trace segment", () => {
+    // `/api/v1/traces` and `/v1/catalog` share only the origin, so a terminal
+    // segment swap would request `/api/v1/catalog`, which does not exist.
+    expect(cloudCatalogEndpoint(TRACES).toString()).toBe("https://cloud.ratel.sh/v1/catalog");
+    expect(cloudCatalogEndpoint(new URL("https://self.hosted/api/v1/traces")).toString()).toBe(
+      "https://self.hosted/v1/catalog",
+    );
+  });
+
+  it("pulls the profile a scope names, over the store default", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+
+    await source(impl)(CONTEXT, "acme");
+
+    expect(calls[0].url).toBe("https://cloud.ratel.sh/v1/catalog");
+    expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_acme");
+  });
+
+  it("lets the environment credential outrank the profile a scope names", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+    const environment = { endpoint: TRACES, apiKey: "rtl_env" };
+
+    await source(impl, { environment })(CONTEXT, "acme");
+
+    expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_env");
+  });
+
+  it("falls back to the store default when no scope names a profile", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+
+    await source(impl)(CONTEXT);
+
+    expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_personal");
+  });
+
+  it("refuses a named profile the store does not define", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+
+    await expect(source(impl)(CONTEXT, "nope")).rejects.toThrow(/"nope" \(cloud\.profile\)/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a named profile when nothing is stored at all", async () => {
+    // Never fall through to the environment credential: that would pull one
+    // project's catalog with another project's account and report success.
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+    const environment = { endpoint: TRACES, apiKey: "rtl_env" };
+
+    await expect(
+      source(impl, { settings: undefined, environment: undefined, fallback: environment })(
+        CONTEXT,
+        "acme",
+      ),
+    ).rejects.toThrow(/no Cloud credential is stored/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps one loader per credential, so a repeated pull revalidates", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE), new Response(null, { status: 304 }));
+    const pull = source(impl);
+
+    await pull(CONTEXT, "acme");
+    await pull(CONTEXT, "acme");
+
+    expect(calls[1].headers.get("if-none-match")).toBe(`"${VERSION}"`);
+  });
+
+  it("returns nothing when no credential resolves", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
+
+    const pulled = await source(impl, { settings: undefined, fallback: undefined })(CONTEXT);
+
+    expect(pulled).toBeUndefined();
+    expect(calls).toHaveLength(0);
   });
 });

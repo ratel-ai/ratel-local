@@ -33,14 +33,13 @@ import {
   type TelemetryHandle,
   type TelemetryInitOptions,
 } from "@ratel-ai/telemetry-otlp";
-import { createCloudCatalogLoader } from "../../cloud/catalog.js";
+import { createCloudCatalogSource } from "../../cloud/catalog.js";
 import {
   CLOUD_API_KEY_ENV,
   type CloudOtlpTraceRelayOptions,
   cloudOtlpRelayOptionsFromEnv,
   cloudOtlpTraceRelayOptions,
   createCloudOtlpTraceRelayController,
-  deriveCloudEndpoint,
   OTLP_LOGS_PATH,
   OTLP_TRACES_PATH,
 } from "../../cloud/otlp-trace-relay.js";
@@ -419,12 +418,13 @@ export async function runDaemonServer(
     }
   };
   const cloudCatalog = featureFlags.cloudCatalog
-    ? createCloudCatalogPuller(
-        persistedCloudSettings,
-        activeCloudOptions,
+    ? createCloudCatalogSource({
+        settings: persistedCloudSettings,
+        environment: environmentCloudOptions,
+        fallback: persistedCloudOptions,
         log,
-        opts.cloudCatalogFetch,
-      )
+        ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
+      })
     : undefined;
   const snapshotResolver =
     opts.snapshotResolver ??
@@ -919,44 +919,6 @@ function cloudOptionsFromStore(
     log(`[ratel] no Cloud credential resolved: ${(error as Error).message}`);
     return undefined;
   }
-}
-
-/**
- * Pulls the published Cloud catalog for a context. One loader per profile, so a
- * repeated resolve revalidates with `If-None-Match` instead of refetching.
- */
-function createCloudCatalogPuller(
-  settings: CloudSettings | undefined,
-  active: CloudOtlpTraceRelayOptions | undefined,
-  log: (message: string) => void,
-  fetchImpl?: typeof fetch,
-) {
-  if (!settings && !active) return undefined;
-  const loaders = new Map<string, ReturnType<typeof createCloudCatalogLoader>>();
-  return async (_context: RuntimeContextRef, profile?: string) => {
-    try {
-      const credential =
-        profile && settings
-          ? resolveCloudCredential(settings, { profile, source: "cloud.profile" })
-          : undefined;
-      const apiKey = credential?.apiKey ?? active?.apiKey;
-      // The store validated this endpoint on load and on save.
-      const traces = credential ? new URL(credential.tracesEndpoint) : active?.endpoint;
-      if (!apiKey || !traces) return undefined;
-      const endpoint = deriveCloudEndpoint(traces, "catalog").toString();
-      const key = `${endpoint}\u0000${apiKey}`;
-      const loader =
-        loaders.get(key) ??
-        createCloudCatalogLoader({ endpoint, apiKey, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
-      loaders.set(key, loader);
-      const { snapshot, degraded } = await loader.load();
-      if (degraded) log(`[ratel] serving a cached Cloud catalog: ${degraded}`);
-      return snapshot;
-    } catch (error) {
-      log(`[ratel] Cloud catalog unavailable: ${(error as Error).message}`);
-      return undefined;
-    }
-  };
 }
 
 export function daemonPaths(homeDir: string) {

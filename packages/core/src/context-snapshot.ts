@@ -80,6 +80,12 @@ export interface ContextSnapshotResolverOptions {
   ) => Promise<CloudSkillCatalog | undefined>;
 }
 
+/** One catalog pull: what it returned, or why it did not. */
+interface CloudCatalogPull {
+  catalog?: CloudSkillCatalog;
+  error?: string;
+}
+
 export interface CloudSkillCatalog {
   catalogVersion: string;
   skills: Skill[];
@@ -127,13 +133,18 @@ export function createContextSnapshotResolver(
   const maxReadAttempts = options.maxReadAttempts ?? 3;
   return {
     async resolve(context) {
-      // Memoized outside the retry loop so a catalog change cannot spin it.
-      let pulled: { profile?: string; catalog: Promise<CloudSkillCatalog | undefined> } | undefined;
+      // Memoized outside the retry loop so a catalog change cannot spin it. The
+      // promise never rejects: an unresolvable profile or an unreachable Cloud
+      // is reported as a diagnostic, not as a failed context resolution.
+      let pulled: { profile?: string; catalog: Promise<CloudCatalogPull> } | undefined;
       const pullCloudCatalog = (profile?: string) => {
         if (!pulled || pulled.profile !== profile) {
           pulled = {
             profile,
-            catalog: options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined),
+            catalog: (options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined)).then(
+              (catalog) => ({ catalog }),
+              (error: Error) => ({ error: error.message }),
+            ),
           };
         }
         return pulled.catalog;
@@ -197,8 +208,17 @@ export function createContextSnapshotResolver(
         const merged = mergeConfigs(documents.map(({ config }) => config));
         const retrieval = merged.retrieval;
         const cloud = await pullCloudCatalog(merged.cloud?.profile);
-        const composed = composeSkills(skills.effectiveSkills, cloud?.skills ?? []);
+        const composed = composeSkills(skills.effectiveSkills, cloud.catalog?.skills ?? []);
         const diagnostics: Diagnostic[] = [
+          ...(cloud.error
+            ? [
+                {
+                  code: "cloud-catalog-unavailable",
+                  severity: "warning" as const,
+                  message: `Cloud skills are not in use: ${cloud.error}`,
+                },
+              ]
+            : []),
           ...composed.shadowed.map((id) => ({
             code: "cloud-skill-shadowed",
             severity: "warning" as const,
@@ -223,7 +243,7 @@ export function createContextSnapshotResolver(
           mcpEntries,
           skills.fingerprint,
           oauthStoreRevisions,
-          cloud?.catalogVersion,
+          cloud.catalog?.catalogVersion,
         );
         const skillWatchInputs = await Promise.all(
           skills.watchInputs.map(async (path): Promise<WatchInput> => {

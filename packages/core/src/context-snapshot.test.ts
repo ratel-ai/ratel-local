@@ -269,6 +269,24 @@ describe("ContextSnapshotResolver", () => {
     expect(pulls).toBe(1);
   });
 
+  it("reports a failed Cloud pull as a warning instead of failing the resolve", async () => {
+    const { homeDir, project } = await fixture();
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+      cloudCatalog: async () => {
+        throw new Error('Cloud profile "acme" (cloud.profile) is not in cloud.json');
+      },
+    });
+
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+
+    const failed = snapshot.diagnostics.find((d) => d.code === "cloud-catalog-unavailable");
+    expect(failed?.severity).toBe("warning");
+    expect(failed?.message).toContain('"acme" (cloud.profile)');
+    expect(snapshot.skills.effectiveSkills).toEqual([]);
+  });
+
   it("resolves without a Cloud catalog at all", async () => {
     const { project, resolver } = await fixture();
     const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
