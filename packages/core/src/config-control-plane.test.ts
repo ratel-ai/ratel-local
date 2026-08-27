@@ -309,4 +309,50 @@ describe("ConfigControlPlane", () => {
     ).rejects.toMatchObject({ statusCode: 409, reason: "revision_conflict" });
     await expect(readFile(excludePath, "utf8")).resolves.toBe("# manual edit\n");
   });
+
+  it("selects a Cloud profile without disturbing unrelated scoped settings", async () => {
+    const configPath = join(homeDir, ".ratel", "config.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          custom: { keep: true },
+          mcpServers: { filesystem: { type: "stdio", command: "node" } },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const control = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+    });
+
+    const commit = await control.mutateCloud({ target: { scope: "user" }, profile: "acme" });
+    expect(commit.result).toMatchObject({ target: { scope: "user" }, profile: "acme" });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      custom: { keep: true },
+      mcpServers: { filesystem: { type: "stdio", command: "node" } },
+      cloud: { profile: "acme" },
+    });
+  });
+
+  it("refuses a selection that carries a key", async () => {
+    await writeFile(join(homeDir, ".ratel", "config.json"), "{}\n");
+    const control = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+    });
+
+    // The document validator is the guard: layered config is committable, so a
+    // credential must never reach it (ADR-0021).
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({ cloud: { apiKey: "rtl_leak" } })}\n`,
+    );
+    await expect(
+      control.mutateCloud({ target: { scope: "user" }, profile: "acme" }),
+    ).rejects.toThrow(/cloud.apiKey` is not allowed/);
+  });
 });
