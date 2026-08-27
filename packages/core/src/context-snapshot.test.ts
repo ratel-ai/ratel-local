@@ -199,7 +199,7 @@ describe("ContextSnapshotResolver", () => {
   });
 
   it("adds Cloud skills, lets a local skill of the same id win, and says which was shadowed", async () => {
-    const { homeDir, projectRoot, project } = await fixture();
+    const { homeDir, project } = await fixture();
     await mkdir(join(homeDir, ".ratel", "skills", "shared"), { recursive: true });
     await writeFile(
       join(homeDir, ".ratel", "skills", "shared", "SKILL.md"),
@@ -230,7 +230,6 @@ describe("ContextSnapshotResolver", () => {
     expect(shadowed?.severity).toBe("warning");
     expect(shadowed?.message).toContain('"shared"');
     expect(shadowed?.message).toContain("Remove or rename the local skill");
-    expect(projectRoot).toBeTruthy();
   });
 
   it("changes the runtime revision when only the Cloud catalog version changes", async () => {
@@ -252,21 +251,27 @@ describe("ContextSnapshotResolver", () => {
     expect(later.runtimeRevision).not.toBe(first.runtimeRevision);
   });
 
-  it("pulls the Cloud catalog once per resolve, not once per read attempt", async () => {
+  it("pulls the Cloud catalog once per resolve, and again on the next one", async () => {
+    // The memo lives inside `resolve`. Hoisting it would make a published
+    // change invisible until the daemon restarted.
     const { homeDir, project } = await fixture();
     const registry = createProjectRegistry({ homeDir });
-    let pulls = 0;
+    const pulls: Array<string | undefined> = [];
     const resolver = createContextSnapshotResolver({
       homeDir,
       projectRegistry: registry,
-      cloudCatalog: async () => {
-        pulls += 1;
-        return { catalogVersion: "v1", skills: [] };
+      cloudCatalog: async (_context, profile) => {
+        pulls.push(profile);
+        return { catalogVersion: `v${pulls.length}`, skills: [] };
       },
     });
 
-    await resolver.resolve({ kind: "project", projectId: project.id });
-    expect(pulls).toBe(1);
+    const context = { kind: "project" as const, projectId: project.id };
+    const first = await resolver.resolve(context);
+    const second = await resolver.resolve(context);
+
+    expect(pulls).toHaveLength(2);
+    expect(second.runtimeRevision).not.toBe(first.runtimeRevision);
   });
 
   it("reports a failed Cloud pull as a warning instead of failing the resolve", async () => {

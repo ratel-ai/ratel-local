@@ -338,19 +338,18 @@ describe("ConfigControlPlane", () => {
     });
   });
 
-  it("refuses a selection that carries a key", async () => {
-    await writeFile(join(homeDir, ".ratel", "config.json"), "{}\n");
+  it("refuses to write a config that already carries a key", async () => {
+    // A mutation cannot carry a credential — the request holds a name — so the
+    // guard that matters is on the document the write would leave behind.
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({ cloud: { apiKey: "rtl_leak" } })}\n`,
+    );
     const control = await createConfigControlPlane({
       homeDir,
       projectRegistry: createProjectRegistry({ homeDir }),
     });
 
-    // The document validator is the guard: layered config is committable, so a
-    // credential must never reach it (ADR-0021).
-    await writeFile(
-      join(homeDir, ".ratel", "config.json"),
-      `${JSON.stringify({ cloud: { apiKey: "rtl_leak" } })}\n`,
-    );
     await expect(
       control.mutateCloud({ target: { scope: "user" }, profile: "acme" }),
     ).rejects.toThrow(/cloud.apiKey` is not allowed/);
