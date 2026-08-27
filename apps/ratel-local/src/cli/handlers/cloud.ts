@@ -1,4 +1,4 @@
-import { resolveScope } from "@ratel-ai/ratel-local-core";
+import { parseConfig, ratelConfigPath, readJson, resolveScope } from "@ratel-ai/ratel-local-core";
 import {
   CLOUD_PROFILE_ENV,
   type CloudSettings,
@@ -104,21 +104,67 @@ async function use(
   ctx.log("Reconnect the agent to apply it.");
 }
 
-function list(ctx: HandlerCtx, settings: CloudSettings, env: NodeJS.ProcessEnv): void {
+async function list(
+  ctx: HandlerCtx,
+  settings: CloudSettings,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
   const names = Object.keys(settings.profiles).sort();
   if (names.length === 0) {
     ctx.log("No Cloud profiles stored. Add one with: ratel-local cloud add <profile>");
     return;
   }
   const selected = env[CLOUD_PROFILE_ENV];
+  const scoped = await scopedProfile(ctx);
   for (const name of names) {
     const marks = [
       name === settings.default ? "default" : "",
       name === selected ? `${CLOUD_PROFILE_ENV}` : "",
+      name === scoped?.profile ? "cloud.profile" : "",
     ].filter(Boolean);
     ctx.log(`${name}${marks.length > 0 ? `  (${marks.join(", ")})` : ""}`);
   }
   ctx.log(`Endpoint: ${settings.tracesEndpoint}`);
+
+  // The `RATEL_API_KEY` pair outranks all of these, but it lives in the daemon's
+  // environment, which this process cannot see.
+  const resolved = scoped
+    ? { profile: scoped.profile, source: `cloud.profile in ${scoped.path}` }
+    : selected
+      ? { profile: selected, source: CLOUD_PROFILE_ENV }
+      : settings.default
+        ? { profile: settings.default, source: "store default" }
+        : undefined;
+  if (!resolved) {
+    ctx.log("Cloud skills here: no profile resolves.");
+    return;
+  }
+  ctx.log(`Cloud skills here: "${resolved.profile}" (${resolved.source})`);
+  if (!settings.profiles[resolved.profile]) {
+    ctx.log(`  warning: no profile named "${resolved.profile}" is stored, so nothing resolves.`);
+  }
+  if (scoped) {
+    ctx.log('  Traces do not follow cloud.profile; run "ratel-local traces status".');
+  }
+}
+
+/** Read per scope rather than merged: `mergeConfigs` keeps the name and loses the file. */
+async function scopedProfile(
+  ctx: HandlerCtx,
+): Promise<{ profile: string; path: string } | undefined> {
+  const found: Array<{ profile: string; path: string }> = [];
+  for (const scope of ["user", "project", "local"] as const) {
+    let path: string;
+    try {
+      path = ratelConfigPath(scope, ctx.env);
+    } catch {
+      continue;
+    }
+    const document = await readJson<unknown>(ctx.fs, path);
+    const profile = document === null ? undefined : parseConfig(document).cloud?.profile;
+    if (profile) found.push({ profile, path });
+  }
+  return found.at(-1);
 }
 
 function profileArgument(ctx: HandlerCtx): string {

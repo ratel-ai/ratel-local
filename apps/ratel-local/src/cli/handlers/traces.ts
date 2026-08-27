@@ -34,6 +34,7 @@ also require RATEL_FEATURE_CLOUD_TELEMETRY=1 on the running daemon.`;
 interface AgentTraceApiStatus extends AgentTraceStatus {
   featureEnabled?: boolean;
   cloudConfigured: boolean;
+  cloudCredentialSource?: string;
 }
 
 const RATEL_CLOUD_SETTINGS_URL = "https://cloud.ratel.sh/settings";
@@ -189,6 +190,7 @@ function renderStatus(ctx: HandlerCtx, status: AgentTraceApiStatus): void {
   }
   ctx.log(`Cloud telemetry feature: ${status.featureEnabled === false ? "disabled" : "enabled"}`);
   ctx.log(`Cloud relay: ${status.cloudConfigured ? "configured" : "not configured"}`);
+  if (status.cloudCredentialSource) ctx.log(`Cloud credential: ${status.cloudCredentialSource}`);
 }
 
 function traceLevel(value: unknown, verb: string): AgentTraceLevel | undefined {

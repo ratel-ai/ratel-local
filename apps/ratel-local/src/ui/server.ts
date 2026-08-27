@@ -123,6 +123,7 @@ export interface CloudTraceSettingsControlPlane {
 export interface AgentTraceExportersStatus extends AgentTraceStatus {
   featureEnabled?: boolean;
   cloudConfigured: boolean;
+  cloudCredentialSource?: string;
 }
 
 export interface AgentTraceExportersControlPlane {

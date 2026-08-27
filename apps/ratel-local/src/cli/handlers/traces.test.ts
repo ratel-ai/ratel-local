@@ -96,6 +96,17 @@ describe("runTraces", () => {
     expect(body.hosts.map((host: { hostKind: string }) => host.hostKind)).toEqual(["codex"]);
   });
 
+  it("names where the daemon's Cloud credential came from", async () => {
+    const { ctx, output } = context("status");
+
+    await runTraces(ctx, {
+      request: async () =>
+        response({ ...status(), cloudCredentialSource: 'profile "acme" (store default)' }),
+    });
+
+    expect(output.join("\n")).toContain('Cloud credential: profile "acme" (store default)');
+  });
+
   it("requires an explicit agent for mutations", async () => {
     const { ctx } = context("enable", { yes: true });
     await expect(runTraces(ctx, { request: async () => response(status()) })).rejects.toThrow(

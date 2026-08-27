@@ -399,6 +399,15 @@ export async function runDaemonServer(
     ? undefined
     : cloudOptionsFromStore(persistedCloudSettings, daemonProcessEnv, log);
   let activeCloudOptions = environmentCloudOptions ?? persistedCloudOptions;
+  // Only the daemon can report this: it deletes RATEL_API_KEY from its own
+  // environment at startup, and an installed service has none a CLI run can read.
+  const cloudCredentialSource = environmentCloudOptions
+    ? `${CLOUD_API_KEY_ENV} environment`
+    : daemonProcessEnv[CLOUD_PROFILE_ENV]
+      ? `profile "${daemonProcessEnv[CLOUD_PROFILE_ENV]}" (${CLOUD_PROFILE_ENV})`
+      : persistedCloudSettings?.default
+        ? `profile "${persistedCloudSettings.default}" (store default)`
+        : "none";
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
     featureFlags.cloudTelemetry && activeCloudOptions
       ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log }
@@ -662,6 +671,7 @@ export async function runDaemonServer(
             })),
             cloudConfigured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
             featureEnabled: featureFlags.cloudTelemetry,
+            cloudCredentialSource,
           }),
           prepare: ({ action, level, hostKinds, overwrite }) =>
             prepareAgentTraceChange(ctx, {

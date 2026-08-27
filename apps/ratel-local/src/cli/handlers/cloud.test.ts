@@ -1,4 +1,4 @@
-import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
+import { type BackupFs, type JsonFs, ratelConfigPath } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudSettings } from "../../cloud/settings.js";
 import { silentPromptAdapter } from "../prompts.js";
@@ -6,8 +6,10 @@ import { runCloud } from "./cloud.js";
 import type { HandlerCtx } from "./types.js";
 
 class MemFs implements BackupFs, JsonFs {
-  async read() {
-    return null;
+  constructor(private readonly documents: Record<string, unknown> = {}) {}
+  async read(path: string) {
+    const document = this.documents[path];
+    return document === undefined ? null : JSON.stringify(document);
   }
   async write() {}
   async writeAtomic() {}
@@ -26,12 +28,13 @@ function context(
   rest: string[] = [],
   flags: Record<string, string | boolean | string[]> = {},
   prompts = silentPromptAdapter(),
+  documents: Record<string, unknown> = {},
 ) {
   const output: string[] = [];
   const ctx: HandlerCtx = {
     argv: { group: "cloud", verb, configPaths: [], rest, extras: [], flags },
-    env: { homeDir: "/home/u" },
-    fs: new MemFs(),
+    env: { homeDir: "/home/u", projectRoot: "/repo" },
+    fs: new MemFs(documents),
     log: (message) => output.push(message),
     prompts,
   };
@@ -155,5 +158,58 @@ describe("cloud list", () => {
     const { ctx, output } = context("list");
     await runCloud(ctx, { store: store(), processEnv: {} });
     expect(output.join("\n")).toContain("ratel-local cloud add <profile>");
+  });
+});
+
+const TWO_PROFILES: CloudSettings = {
+  tracesEndpoint: "https://cloud.ratel.sh/api/v1/traces",
+  default: "personal",
+  profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
+};
+
+const projectConfig = (profile: string) => ({
+  [ratelConfigPath("project", { homeDir: "/home/u", projectRoot: "/repo" })]: {
+    cloud: { profile },
+  },
+});
+
+describe("cloud list bindings", () => {
+  it("names the profile this directory selects and the file that selects it", async () => {
+    const { ctx, output } = context("list", [], {}, silentPromptAdapter(), projectConfig("acme"));
+
+    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+
+    const printed = output.join("\n");
+    expect(printed).toContain("acme  (cloud.profile)");
+    expect(printed).toContain("personal  (default)");
+    expect(printed).toContain(
+      'Cloud skills here: "acme" (cloud.profile in /repo/.ratel/config.json)',
+    );
+    expect(printed).toContain("Traces do not follow cloud.profile");
+  });
+
+  it("falls back to the store default when no scope names a profile", async () => {
+    const { ctx, output } = context("list", [], {});
+
+    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+
+    expect(output.join("\n")).toContain('Cloud skills here: "personal" (store default)');
+    expect(output.join("\n")).not.toContain("Traces do not follow");
+  });
+
+  it("warns when the selected profile is not stored", async () => {
+    const { ctx, output } = context("list", [], {}, silentPromptAdapter(), projectConfig("gone"));
+
+    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+
+    expect(output.join("\n")).toContain('no profile named "gone" is stored');
+  });
+
+  it("reports the RATEL_PROFILE selection when no scope overrides it", async () => {
+    const { ctx, output } = context("list", [], {});
+
+    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: { RATEL_PROFILE: "acme" } });
+
+    expect(output.join("\n")).toContain('Cloud skills here: "acme" (RATEL_PROFILE)');
   });
 });
