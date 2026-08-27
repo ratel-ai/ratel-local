@@ -63,27 +63,26 @@ daemon persists the endpoint and key in `~/.ratel/cloud.json`, with the
 directory and file restricted to the current user. The authenticated UI API
 returns only the endpoint and whether a key is configured; it never returns
 the saved key. An installed background daemon loads the same file on its next
-start, so no credential environment variables are required after saving; the
-feature flag is still required for the relay, though the credential itself now
-loads without it.
+start, so no credential environment variables are required after saving. The
+relay still requires the feature flag; the credential loads without it.
 
-The store holds named profiles: a shared `tracesEndpoint`, a `default`, and a
-`profiles` map, managed from the CLI:
+The store holds named profiles, managed from the CLI:
 
 ```bash
-ratel-local cloud add acme     # prompts for the key, stores it under a name
-ratel-local cloud use acme     # selects it for this scope, with a backup
+ratel-local cloud add <profile-name>     # prompts for the key, stores it under a name
+ratel-local cloud use <profile-name>     # selects it for this scope, with a backup
 ratel-local cloud list         # profiles, the default, what resolves here
 ```
 
 The first profile stored becomes the default, so a single-project setup never
-selects anything. A project selects one with `cloud.profile` in its layered
-config — a name, never a credential, and therefore safe to commit.
-`RATEL_PROFILE` overrides it for a foreground daemon; an installed service has
-one environment, so per-project selection belongs in the config.
-A pre-existing `~/.ratel/cloud-traces.json` is read as a fallback and used as
-the `default` profile; it is left in place so a downgrade keeps working, and
-goes stale — while still holding a key — once the new store is written. See
+selects anything. A project selects another with `cloud.profile` in its layered
+config: a name, never a credential, and therefore safe to commit.
+`RATEL_PROFILE` overrides it for a foreground daemon.
+
+A pre-existing `~/.ratel/cloud-traces.json` becomes the `default` profile and
+stays in place, so a downgrade keeps working. Once the new store is written it
+stops being read while still holding a key — delete it when the downgrade path
+no longer matters. See
 [ADR 0021](adr/0021-cloud-project-credential-ownership.md).
 
 Agent Setup also offers an inline API-key prompt whenever native tracing is
@@ -147,9 +146,7 @@ overwrite explains that no backup is retained; automation must use both
 `--overwrite` and `--yes`.
 
 When Ratel Cloud is not configured, `traces enable` points at
-`ratel-local cloud add <profile>` rather than prompting inline. The old prompt
-could only ever store the first credential, so it never reached a second
-project.
+`ratel-local cloud add <profile>` instead of prompting inline.
 
 `ratel-local setup` offers traces as its final optional interactive step. Plain
 `setup --yes` continues to skip traces. Explicit automation uses:

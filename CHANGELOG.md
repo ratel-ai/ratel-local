@@ -6,31 +6,30 @@ All notable changes to this package are documented here. The format is based on 
 
 ### Added
 
-- Added `ratel-local cloud add|use|list` for Ratel Cloud credentials. `cloud add` stores a key under a profile name in
-  `~/.ratel/cloud.json` (user only, `0600`), the first one stored becoming the default; `cloud use` writes `cloud.profile`
-  into a scoped config through the usual mutation path, so it is backed up and validated like any other config change;
-  `cloud list` shows the profiles, the default, and which one resolves here.
-- Added `cloud.profile` to layered configuration: a profile name, never a credential, so a project-scope file stays
-  committable. `cloud.apiKey` is rejected, alongside the guard that already refuses `apiKey` on embedding sources.
-- Added the `RATEL_FEATURE_CLOUD_CATALOG` feature flag, off by default and independent of Cloud telemetry. With it on and a
-  credential stored, a project's published Cloud skills join the resolved skill set, so `search_capabilities`,
-  `get_skill_content` and the UI see them. A local skill of the same id wins, and every shadowed Cloud skill is reported as a
-  warning naming it. The catalog version takes part in the gateway generation identity, so a change in Cloud builds a new
-  generation instead of reusing a stale one.
+- Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
+  `~/.ratel/cloud.json`, the first one becoming the default; `use` selects one for a scope; `list` shows what is stored and
+  what resolves here.
+- Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
+  `cloud.apiKey` is rejected.
+- Added the `RATEL_FEATURE_CLOUD_CATALOG` feature flag, off by default and independent of Cloud telemetry. A project's
+  published Cloud skills join the resolved skill set, where a local skill of the same id wins and each shadowed one is
+  reported; a catalog change builds a new gateway generation instead of reusing a stale one.
 
 ### Changed
 
-- Moved the Cloud credential out of the telemetry feature branch: it now loads whenever a Cloud consumer may need it,
-  while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`. The store moved from `~/.ratel/cloud-traces.json` to `~/.ratel/cloud.json` and holds named profiles (`tracesEndpoint`, `default`, `profiles`); `RATEL_PROFILE` selects one. An existing `cloud-traces.json` is read as the `default` profile and left untouched, so a downgrade keeps working.
+- Moved the Cloud credential out of the telemetry feature branch: it now loads whenever a Cloud consumer needs it, while
+  `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`. The store moved from
+  `~/.ratel/cloud-traces.json` to `~/.ratel/cloud.json` and holds named profiles, selected by `RATEL_PROFILE` or
+  `cloud.profile`. An existing `cloud-traces.json` becomes the `default` profile and is left in place, so a downgrade keeps
+  working.
 - Made `daemon restart` reconfigure daemon feature flags in an installed launchd or systemd service. Every flag present in the
-  invoking environment is applied (`=1` enables, any other value disables); a flag left out keeps whatever the service already
-  says, so changing one never disturbs another. Restart now waits for the stopped daemon to release its port, and confirms the
-  restarted daemon adopted the change through the `cloudTelemetry` and `cloudCatalog` fields on `/api/daemon/status`.
+  invoking environment is applied (`=1` enables, any other value disables) and a flag left out is untouched, so changing one
+  never disturbs another. Restart waits for the port to be released and verifies the result on `/api/daemon/status`.
 
 ### Removed
 
-- Removed the inline Ratel Cloud API-key prompt from `traces enable`. It fired only when no credential existed at all, so a
-  second project's key could never be entered through it; storing a key is now `ratel-local cloud add`.
+- Removed the inline Ratel Cloud API-key prompt from `traces enable`: it fired only when no credential existed at all, so a
+  second project's key could never be entered through it. Use `ratel-local cloud add`.
 - Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
 
 ### Fixed
