@@ -172,7 +172,7 @@ describe("createCloudCatalogLoader", () => {
       loader(
         recordingFetch(jsonResponse({ catalogVersion: VERSION, skills: [missingTags] })).impl,
       ).load(),
-    ).rejects.toThrow(/missing tags/);
+    ).rejects.toThrow(/invalid tags or tools/);
   });
 
   it("rejects malformed payloads", async () => {

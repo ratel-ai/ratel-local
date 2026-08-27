@@ -5,15 +5,7 @@ import { secretFreeHttpsUrl } from "./url.js";
 
 const TIMEOUT_MS = 10_000;
 
-/** The wire projection `protocol/v1` serves: exactly these seven fields. */
-const WIRE_FIELDS = ["id", "name", "description", "tags", "tools", "metadata", "body"] as const;
-
-/**
- * One pull of the published Cloud catalog. `catalogVersion` is the source's
- * ETag, echoed back as `If-None-Match` on the next pull, and is the value a
- * gateway generation keys on.
- */
-
+/** What one pull returned, and whether it came from the cache. */
 export interface CloudCatalogLoadResult {
   snapshot: CloudSkillCatalog;
   /** Set when the snapshot is a cached one served through an upstream failure. */
@@ -27,6 +19,11 @@ export interface CloudCatalogLoaderOptions {
   fetch?: typeof fetch;
 }
 
+const protocolError = (reason: string) =>
+  new Error(`Ratel Cloud returned a malformed catalog: ${reason}`);
+const unavailableError = (reason: string) =>
+  new Error(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
+
 /**
  * Conditional-GET client for the `protocol/v1` catalog pull.
  *
@@ -34,18 +31,13 @@ export interface CloudCatalogLoaderOptions {
  * Deliberately: the contract serves `Cache-Control: no-cache`, so every
  * acquisition revalidates anyway, and a disk cache would add an offline story
  * the vertical slice does not need.
- * ponytail: daemon-lifetime cache; persistent offline cache deferred.
- * ponytail: concurrent load() can stampede; ceiling = one in-flight promise.
+ * Concurrent `load()` calls each pull: the cache is assigned after the await,
+ * so nothing dedupes them. Share one in-flight promise if that ever costs.
  *
  * A cached snapshot covers *availability* failures only. An invalid credential
  * or a contract violation always surfaces, so a revoked key cannot hide behind
  * the last good catalog indefinitely.
  */
-const protocolError = (reason: string) =>
-  new Error(`Ratel Cloud returned a malformed catalog: ${reason}`);
-const unavailableError = (reason: string) =>
-  new Error(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
-
 export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const endpoint = secretFreeHttpsUrl(options.endpoint, "Ratel Cloud catalog endpoint");
   headerSafeSecret(options.apiKey, "Ratel Cloud API key");
@@ -96,8 +88,8 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
 }
 
 function handout(snapshot: CloudSkillCatalog): CloudSkillCatalog {
-  // ponytail: shallow copy guards the cached array; skill objects are still shared,
-  // deep-clone only if a consumer starts mutating them in place.
+  // The cache is only replaced on a 200: while the ETag matches, a consumer that
+  // mutated this array would keep an empty catalog for the process lifetime.
   return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
 }
 
@@ -137,11 +129,6 @@ function parseCatalog(text: string): CloudSkillCatalog {
  */
 function toSkill(value: unknown, index: number): Skill {
   if (!isRecord(value)) throw protocolError(`skill ${index} is not an object`);
-  for (const field of WIRE_FIELDS) {
-    if (!(field in value)) {
-      throw protocolError(`skill ${index} is missing ${field}`);
-    }
-  }
   const { id, name, description, tags, tools, metadata, body } = value;
   if (typeof id !== "string" || id === "") {
     throw protocolError(`skill ${index} has an invalid id`);
