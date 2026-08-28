@@ -273,7 +273,7 @@ export async function runDaemon(
       ctx,
       opts,
       {
-        start: "Restarting Ratel Local…",
+        start: "Restarting Ratel Local",
         success: "Ratel Local is ready",
         failure: "Ratel Local couldn't restart",
       },
@@ -281,7 +281,7 @@ export async function runDaemon(
         const lifecycleLog = opts.lifecycleProgress === false ? log : () => {};
         const applied = await reconfigureInstalledServiceFeatureFlags(ctx, options, opts);
         await stopDaemon(ctx, lifecycleLog, opts);
-        spinner?.message("Starting Ratel Local again…");
+        spinner?.message("Starting Ratel Local again");
         await startDaemon(parsed, ctx, options, lifecycleLog, opts, "restart");
         if (applied !== undefined) {
           restartNote = await verifyFeatureFlagsApplied(

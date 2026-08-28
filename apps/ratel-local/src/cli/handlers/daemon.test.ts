@@ -1354,8 +1354,8 @@ describe("runDaemon", () => {
     );
 
     expect(progress).toEqual([
-      "start:Restarting Ratel Local…",
-      "message:Starting Ratel Local again…",
+      "start:Restarting Ratel Local",
+      "message:Starting Ratel Local again",
       "stop:Ratel Local is ready",
     ]);
     expect(logs).toEqual([]);
@@ -1563,8 +1563,8 @@ describe("runDaemon", () => {
     );
 
     expect(progress).toEqual([
-      "start:Restarting Ratel Local…",
-      "message:Starting Ratel Local again…",
+      "start:Restarting Ratel Local",
+      "message:Starting Ratel Local again",
       "stop:Ratel Local is ready",
     ]);
     expect(fs.files.get(paths.systemdService)).toBe(original);
