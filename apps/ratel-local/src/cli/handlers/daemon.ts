@@ -422,6 +422,18 @@ export async function runDaemonServer(
     await ensureRatelTelemetry();
     return true;
   };
+  const readCloudStore = () =>
+    cloudSettingsStore.load().catch((error: Error) => {
+      log(`[ratel] ignored invalid Cloud settings: ${error.message}`);
+      return persistedCloudSettings;
+    });
+  /** One answer about the relay, whichever route asks. */
+  const cloudTraceStatus = (fallbackEndpoint = DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT) => ({
+    featureEnabled: featureFlags.cloudTelemetry,
+    configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
+    credentialStored: environmentCloudOptions === undefined,
+    endpoint: activeCloudOptions?.endpoint.toString() ?? fallbackEndpoint,
+  });
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
     featureFlags.cloudTelemetry && activeCloudOptions
       ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log }
@@ -647,35 +659,19 @@ export async function runDaemonServer(
     preparedChanges,
     cloudTraceSettings: {
       featureEnabled: featureFlags.cloudTelemetry,
-      status: async () => ({
-        featureEnabled: featureFlags.cloudTelemetry,
-        configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
-        credentialStored: environmentCloudOptions === undefined,
-        endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
-      }),
+      status: async () => cloudTraceStatus(),
       reload: async () => {
-        const stored = await cloudSettingsStore.load().catch((error: Error) => {
-          log(`[ratel] ignored invalid Cloud settings: ${error.message}`);
-          return persistedCloudSettings;
-        });
-        const adopted = await adoptCloudSettings(stored, cloudSourceFor(stored));
-        if (adopted) log("[ratel] Ratel Cloud credential reloaded");
-        return {
-          featureEnabled: featureFlags.cloudTelemetry,
-          configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
-          endpoint:
-            activeCloudOptions?.endpoint.toString() ?? cloudEndpoints(stored).traces.toString(),
-          credentialStored: environmentCloudOptions === undefined,
-        };
+        const stored = await readCloudStore();
+        if (await adoptCloudSettings(stored, cloudSourceFor(stored))) {
+          log("[ratel] Ratel Cloud credential reloaded");
+        }
+        return cloudTraceStatus(cloudEndpoints(stored).traces.toString());
       },
       save: async ({ endpoint, apiKey }) => {
         // `cloud add` writes the store directly, so the boot snapshot goes stale
         // as soon as a profile is added. Rebuilding the file from it would drop
         // that profile and its key.
-        const onDisk = await cloudSettingsStore.load().catch((error: Error) => {
-          log(`[ratel] ignored invalid Cloud settings: ${error.message}`);
-          return persistedCloudSettings;
-        });
+        const onDisk = await readCloudStore();
         // The profile this daemon resolves, in the order the relay resolves it, so
         // the single-credential UI never edits a profile other than the active one.
         const profileName = selectedProfile ?? onDisk?.default ?? MIGRATED_PROFILE_NAME;
@@ -697,26 +693,12 @@ export async function runDaemonServer(
           default: onDisk?.default ?? profileName,
           profiles: { ...onDisk?.profiles, [profileName]: { apiKey: retainedApiKey } },
         };
-        const nextEndpoints = cloudEndpoints(nextSettings);
-        const next = cloudOtlpTraceRelayOptions({
-          endpoint: nextEndpoints.traces.toString(),
-          logsEndpoint: nextEndpoints.logs,
-          apiKey: retainedApiKey,
-        });
         // Published only once it is on disk: the catalog reads this per pull, so
         // a failed write must not hand it a credential nothing stored.
         await cloudSettingsStore.save(nextSettings);
-        persistedCloudSettings = nextSettings;
-        activeCloudOptions = next;
-        activeCloudSource = `profile "${profileName}" (saved in the UI)`;
-        cloudOtlpRelay.configure({ ...next, fetch: opts.cloudOtlpFetch, log });
-        await ensureRatelTelemetry();
+        await adoptCloudSettings(nextSettings, `profile "${profileName}" (saved in the UI)`);
         log("[ratel] Ratel Cloud trace export configured");
-        return {
-          featureEnabled: featureFlags.cloudTelemetry,
-          configured: featureFlags.cloudTelemetry,
-          endpoint: next.endpoint.toString(),
-        };
+        return cloudTraceStatus(cloudEndpoints(nextSettings).traces.toString());
       },
     },
     agentTraceExporters: preparedChanges
@@ -973,16 +955,16 @@ function cloudOptionsFromStore(
   if (!settings) return undefined;
   const selected = env[CLOUD_PROFILE_ENV];
   try {
-    const resolved = resolveCloudCredential(settings, {
+    const apiKey = resolveCloudCredential(settings, {
       ...(selected ? { profile: selected } : {}),
       source: selected ? `${CLOUD_PROFILE_ENV} environment` : "store default",
     });
-    if (!resolved) return undefined;
+    if (!apiKey) return undefined;
     const endpoints = cloudEndpoints(settings);
     return cloudOtlpTraceRelayOptions({
       endpoint: endpoints.traces.toString(),
       logsEndpoint: endpoints.logs,
-      apiKey: resolved.apiKey,
+      apiKey,
     });
   } catch (error) {
     log(`[ratel] no Cloud credential resolved: ${(error as Error).message}`);

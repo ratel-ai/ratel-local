@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isPlainObject } from "@ratel-ai/ratel-local-core";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
@@ -61,15 +62,11 @@ export interface CloudSettingsStoreLike {
   save(settings: CloudSettings): Promise<void>;
 }
 
-export interface ResolvedCloudCredential {
-  apiKey: string;
-}
-
 /** Unknown name is an error, never a silent fall back to `default` (ADR-0021). */
 export function resolveCloudCredential(
   settings: CloudSettings,
   selection: { profile?: string; source: string },
-): ResolvedCloudCredential | undefined {
+): string | undefined {
   const name = selection.profile ?? settings.default;
   if (!name) return undefined;
   const profile = settings.profiles[name];
@@ -79,7 +76,7 @@ export function resolveCloudCredential(
       `Cloud profile ${JSON.stringify(name)} (${selection.source}) is not in cloud.json; known profiles: ${known}`,
     );
   }
-  return { apiKey: profile.apiKey };
+  return profile.apiKey;
 }
 
 export function cloudSettingsPath(homeDir: string): string {
@@ -144,12 +141,12 @@ async function readJsonFile(path: string): Promise<unknown> {
 }
 
 function parseSettings(value: unknown): CloudSettings {
-  if (!isRecord(value) || !isRecord(value.profiles)) {
+  if (!isPlainObject(value) || !isPlainObject(value.profiles)) {
     throw new Error("Ratel Cloud settings are malformed");
   }
   const profiles: Record<string, CloudProfile> = {};
   for (const [name, profile] of Object.entries(value.profiles)) {
-    if (!isRecord(profile) || typeof profile.apiKey !== "string") {
+    if (!isPlainObject(profile) || typeof profile.apiKey !== "string") {
       throw new Error(`Ratel Cloud profile ${JSON.stringify(name)} is malformed`);
     }
     profiles[name] = { apiKey: profile.apiKey };
@@ -169,7 +166,11 @@ function parseSettings(value: unknown): CloudSettings {
 }
 
 function migrateLegacy(value: unknown): CloudSettings {
-  if (!isRecord(value) || typeof value.endpoint !== "string" || typeof value.apiKey !== "string") {
+  if (
+    !isPlainObject(value) ||
+    typeof value.endpoint !== "string" ||
+    typeof value.apiKey !== "string"
+  ) {
     throw new Error("Ratel Cloud trace settings are malformed");
   }
   return {
@@ -200,8 +201,4 @@ function validated(settings: CloudSettings): CloudSettings {
     checked.baseUrl = secretFreeHttpsUrl(checked.baseUrl, "Ratel Cloud baseUrl").origin;
   }
   return checked;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

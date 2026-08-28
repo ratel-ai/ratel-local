@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
+  isPlainObject,
   type JsonFs,
   parseConfig,
   type RatelScope,
@@ -89,10 +90,15 @@ export async function inventoryCloudSettings(input: {
   });
 
   const legacyHoldsKey = await legacyApiKey(legacyPath);
-  diagnostics.push(...(await exposedSecrets(path, dirname(path))));
-  if (legacyHoldsKey) diagnostics.push(...(await exposedSecrets(legacyPath)));
+  diagnostics.push(
+    ...(await exposedSecrets([
+      [path, 0o600],
+      [dirname(path), 0o700],
+      ...(legacyHoldsKey ? ([[legacyPath, 0o600]] as const) : []),
+    ])),
+  );
 
-  if (legacyHoldsKey && (await exists(path))) {
+  if (legacyHoldsKey && (await modeOf(path)) !== undefined) {
     diagnostics.push({
       code: "cloud_settings_legacy_present",
       severity: "warning",
@@ -156,10 +162,10 @@ function splitDeployment(settings: CloudSettings | undefined): CloudDiagnostic[]
 }
 
 /** A stored key that other users can read is a leaked key. */
-async function exposedSecrets(path: string, directory?: string): Promise<CloudDiagnostic[]> {
+async function exposedSecrets(
+  targets: ReadonlyArray<readonly [string, number]>,
+): Promise<CloudDiagnostic[]> {
   const diagnostics: CloudDiagnostic[] = [];
-  const targets: Array<readonly [string, number]> = [[path, 0o600]];
-  if (directory) targets.push([directory, 0o700]);
   for (const [target, expected] of targets) {
     const mode = await modeOf(target);
     if (mode === undefined || (mode & 0o077) === 0) continue;
@@ -181,20 +187,11 @@ async function modeOf(path: string): Promise<number | undefined> {
   }
 }
 
-async function exists(path: string): Promise<boolean> {
-  return (await modeOf(path)) !== undefined;
-}
-
 /** The warning claims a key is still there, so look rather than assume. */
 async function legacyApiKey(path: string): Promise<boolean> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-    return (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      typeof (parsed as { apiKey?: unknown }).apiKey === "string" &&
-      (parsed as { apiKey: string }).apiKey !== ""
-    );
+    return isPlainObject(parsed) && typeof parsed.apiKey === "string" && parsed.apiKey !== "";
   } catch {
     return false;
   }

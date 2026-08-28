@@ -131,9 +131,7 @@ describe("resolveCloudCredential", () => {
   };
 
   it("falls back to the store default when nothing selects a profile", () => {
-    expect(resolveCloudCredential(settings, { source: "store default" })).toEqual({
-      apiKey: "rtl_personal",
-    });
+    expect(resolveCloudCredential(settings, { source: "store default" })).toBe("rtl_personal");
   });
 
   it("puts every signal on the configured deployment, and only what is overridden elsewhere", () => {
@@ -161,7 +159,7 @@ describe("resolveCloudCredential", () => {
       profile: "acme",
       source: "RATEL_PROFILE environment",
     });
-    expect(resolved?.apiKey).toBe("rtl_acme");
+    expect(resolved).toBe("rtl_acme");
   });
 
   it("fails on an unknown profile, naming it and where it was asked for", () => {

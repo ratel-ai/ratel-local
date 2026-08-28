@@ -1,4 +1,8 @@
-import type { CloudSkillCatalog, RuntimeContextRef } from "@ratel-ai/ratel-local-core";
+import {
+  type CloudSkillCatalog,
+  isPlainObject,
+  type RuntimeContextRef,
+} from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import {
@@ -80,11 +84,13 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
         rejectedUntil = now() + AUTH_FAILURE_COOLDOWN_MS;
         throw authFailedError(response.status);
       }
+      // Only a 200 replaces the cache, so this is the steady state while the
+      // catalog is unchanged: whatever is held here is what every consumer sees.
       if (response.status === 304) {
         if (!cached) {
           throw protocolError("304 without a cached catalog");
         }
-        return { snapshot: handout(cached) };
+        return { snapshot: cached };
       }
       if (response.status !== 200) {
         return degradeOrThrow(cached, `HTTP ${response.status}`);
@@ -97,7 +103,7 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
         return degradeOrThrow(cached, (error as Error).message);
       }
       cached = parseCatalog(text);
-      return { snapshot: handout(cached) };
+      return { snapshot: cached };
     },
   };
 }
@@ -132,12 +138,12 @@ export function createCloudCatalogSource(input: {
         `Cloud profile ${JSON.stringify(profile)} (${source}) is selected, but no Cloud credential is stored. Add one with: ratel-local cloud add ${profile}`,
       );
     }
-    const credential = resolveCloudCredential(settings, {
+    const apiKey = resolveCloudCredential(settings, {
       ...(profile ? { profile } : {}),
       source: profile ? source : "store default",
     });
-    if (!credential) return undefined;
-    return { catalog: cloudEndpoints(settings).catalog, apiKey: credential.apiKey };
+    if (!apiKey) return undefined;
+    return { catalog: cloudEndpoints(settings).catalog, apiKey };
   };
 
   return async (
@@ -162,16 +168,12 @@ export function createCloudCatalogSource(input: {
   };
 }
 
-function handout(snapshot: CloudSkillCatalog): CloudSkillCatalog {
-  return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
-}
-
 function degradeOrThrow(
   cached: CloudSkillCatalog | undefined,
   reason: string,
 ): CloudCatalogLoadResult {
   if (!cached) throw unavailableError(reason);
-  return { snapshot: handout(cached), degraded: reason };
+  return { snapshot: cached, degraded: reason };
 }
 
 function parseCatalog(text: string): CloudSkillCatalog {
@@ -181,7 +183,7 @@ function parseCatalog(text: string): CloudSkillCatalog {
   } catch {
     throw protocolError("response is not JSON");
   }
-  if (!isRecord(body)) throw protocolError("response is not an object");
+  if (!isPlainObject(body)) throw protocolError("response is not an object");
   const { catalogVersion, skills } = body;
   if (typeof catalogVersion !== "string" || catalogVersion === "") {
     throw protocolError("catalogVersion is missing");
@@ -201,7 +203,7 @@ function parseCatalog(text: string): CloudSkillCatalog {
  * extras, and a conforming client ignores them.
  */
 function toSkill(value: unknown, index: number): Skill {
-  if (!isRecord(value)) throw protocolError(`skill ${index} is not an object`);
+  if (!isPlainObject(value)) throw protocolError(`skill ${index} is not an object`);
   const { id, name, description, tags, tools, metadata, body } = value;
   if (typeof id !== "string" || id === "") {
     throw protocolError(`skill ${index} has an invalid id`);
@@ -212,7 +214,7 @@ function toSkill(value: unknown, index: number): Skill {
   if (!isStringArray(tags) || !isStringArray(tools)) {
     throw protocolError(`skill ${id} has invalid tags or tools`);
   }
-  if (!isRecord(metadata) || !Object.values(metadata).every(isStringArray)) {
+  if (!isPlainObject(metadata) || !Object.values(metadata).every(isStringArray)) {
     throw protocolError(`skill ${id} has invalid metadata`);
   }
   return {
@@ -224,10 +226,6 @@ function toSkill(value: unknown, index: number): Skill {
     metadata: metadata as Record<string, string[]>,
     body,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {

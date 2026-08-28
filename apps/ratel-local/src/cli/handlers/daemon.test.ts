@@ -749,6 +749,7 @@ describe("runDaemon", () => {
       expect(await saved.json()).toEqual({
         featureEnabled: true,
         configured: true,
+        credentialStored: true,
         endpoint: "https://cloud.example.test/api/v1/traces",
       });
       expect(save).toHaveBeenCalledWith({

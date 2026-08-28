@@ -133,21 +133,17 @@ export function createContextSnapshotResolver(
   const maxReadAttempts = options.maxReadAttempts ?? 3;
   return {
     async resolve(context) {
-      // Memoized outside the retry loop so a catalog change cannot spin it. The
-      // promise never rejects: an unresolvable profile or an unreachable Cloud
-      // is reported as a diagnostic, not as a failed context resolution.
-      let pulled: { profile?: string; catalog: Promise<CloudCatalogPull> } | undefined;
+      // One pull per resolve, and per resolve only: hoisting this would keep a
+      // published change invisible until the daemon restarted. The promise never
+      // rejects — an unresolvable profile or an unreachable Cloud is a
+      // diagnostic, not a failed context resolution.
+      let pulled: Promise<CloudCatalogPull> | undefined;
       const pullCloudCatalog = (profile?: string) => {
-        if (!pulled || pulled.profile !== profile) {
-          pulled = {
-            profile,
-            catalog: (options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined)).then(
-              (catalog) => ({ catalog }),
-              (error: Error) => ({ error: error.message }),
-            ),
-          };
-        }
-        return pulled.catalog;
+        pulled ??= (options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined)).then(
+          (catalog) => ({ catalog }),
+          (error: Error) => ({ error: error.message }),
+        );
+        return pulled;
       };
       const projectRoot = await resolveProjectRoot(context, options.projectRegistry);
       const targets = documentTargets(options.homeDir, context, projectRoot);

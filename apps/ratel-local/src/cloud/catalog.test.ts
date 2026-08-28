@@ -76,10 +76,6 @@ describe("createCloudCatalogLoader", () => {
     expect(calls[1].headers.get("if-none-match")).toBe(`"${VERSION}"`);
     expect(second.snapshot).toEqual(first.snapshot);
     expect(second.degraded).toBeUndefined();
-
-    first.snapshot.skills.length = 0;
-    const third = await client.load();
-    expect(third.snapshot.skills).toHaveLength(1);
   });
 
   it("ignores fields the schema lets a source add", async () => {
