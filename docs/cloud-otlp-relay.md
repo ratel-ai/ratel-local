@@ -77,7 +77,11 @@ ratel-local cloud list         # profiles, the default, what resolves here
 The first profile stored becomes the default, so a single-project setup never
 selects anything. A project selects another with `cloud.profile` in its layered
 config: a name, never a credential, and therefore safe to commit.
-`RATEL_PROFILE` overrides it for a foreground daemon.
+
+That selection reaches the catalog only. An agent's trace exporter is configured
+once per machine, so the relay uses one account for every project: the one
+`RATEL_API_KEY` supplies, else `RATEL_PROFILE`, else the store default.
+`traces status` names it.
 
 A pre-existing `~/.ratel/cloud-traces.json` becomes the `default` profile and
 stays in place, so a downgrade keeps working. Once the new store is written it
