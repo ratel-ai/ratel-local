@@ -658,12 +658,15 @@ export async function runDaemonServer(
           );
         }
         const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
-        persistedCloudSettings = {
+        const nextSettings: CloudSettings = {
           tracesEndpoint: next.endpoint.toString(),
           default: onDisk?.default ?? profileName,
           profiles: { ...onDisk?.profiles, [profileName]: { apiKey: next.apiKey } },
         };
-        await cloudSettingsStore.save(persistedCloudSettings);
+        // Published only once it is on disk: the catalog reads this per pull, so
+        // a failed write must not hand it a credential nothing stored.
+        await cloudSettingsStore.save(nextSettings);
+        persistedCloudSettings = nextSettings;
         activeCloudOptions = next;
         activeCloudSource = `profile "${profileName}" (saved in the UI)`;
         cloudOtlpRelay.configure({ ...next, fetch: opts.cloudOtlpFetch, log });
