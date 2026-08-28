@@ -54,11 +54,11 @@ there is readable by every project it serves.
   failure this design exists to prevent, so `doctor` also reports it from the
   files alone, before anything reaches Cloud.
 
-- **The endpoint belongs to the deployment, not the profile:** one
-  `tracesEndpoint` at the root of the store. Logs derive from it by swapping the
-  terminal path segment. The catalog cannot — traces are served under
-  `/api/v1/traces` and the catalog under `/v1/catalog`, so the two share an
-  origin and nothing else — and derives from the origin.
+- **The deployment belongs to the store, the paths to the protocol.** `baseUrl`
+  names the deployment; the signal paths are constants. A signal that must sit
+  elsewhere takes its own full endpoint, and `doctor` warns when the three stop
+  sharing an origin: forgetting one while moving deployment looks identical to
+  aiming one somewhere on purpose.
 
 - **ADR 0013's rules stand**, now protecting two consumers: the key is consumed
   into memory at startup, `RATEL_API_KEY` is deleted from the daemon environment
@@ -79,7 +79,9 @@ of the store would sit inside a repository.
 ```jsonc
 // ~/.ratel/cloud.json — secrets, user-level, 0600. Never inside a repository.
 {
-  "tracesEndpoint": "https://cloud.ratel.sh/api/v1/traces", // optional; this is the default
+  // All optional. Without them every signal sits on https://cloud.ratel.sh.
+  "baseUrl": "https://staging.ratel.sh",
+  "catalogEndpoint": "https://scratch.example.test/api/v1/catalog",
   "default": "personal",
   "profiles": {
     "personal": { "apiKey": "rtl_…" },

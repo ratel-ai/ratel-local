@@ -56,15 +56,18 @@ Open the daemon UI and select **Settings**. In the **Ratel Cloud** section, ente
 - Trace endpoint: `https://cloud.ratel.sh/api/v1/traces`
 - API key: your `rtl_...` credential
 
-The daemon derives the matching Cloud log route by replacing the exact terminal
-`/traces` path segment with `/logs`. Saving activates both signal relays and
-Ratel runtime trace export immediately. The
-daemon persists the endpoint and key in `~/.ratel/cloud.json`, with the
+Saving activates both signal relays and Ratel runtime trace export immediately.
+The daemon persists the endpoint and key in `~/.ratel/cloud.json`, with the
 directory and file restricted to the current user. The authenticated UI API
 returns only the endpoint and whether a key is configured; it never returns
 the saved key. An installed background daemon loads the same file on its next
 start, so no credential environment variables are required after saving. The
 relay still requires the feature flag; the credential loads without it.
+
+Every signal sits on `https://cloud.ratel.sh` unless `cloud.json` says otherwise.
+`baseUrl` moves traces, logs and the catalog together; `tracesEndpoint`,
+`logsEndpoint` and `catalogEndpoint` move one at a time. `cloud list` prints the
+three in effect, and `doctor` warns when they stop sharing an origin.
 
 The store holds named profiles, managed from the CLI:
 

@@ -26,6 +26,9 @@ All notable changes to this package are documented here. The format is based on 
   selects the relay's account; `cloud.profile` selects a project's skills and does not move telemetry, since an agent's trace
   exporter is configured once per machine. An existing `cloud-traces.json` becomes the `default` profile and is left in
   place, so a downgrade keeps working.
+- Made every Ratel Cloud endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`.
+  `tracesEndpoint`, `logsEndpoint` and `catalogEndpoint` each override one signal. `cloud list` shows the three in effect,
+  and `doctor` warns when they stop sharing an origin.
 - Made `traces status` name where the daemon's Cloud credential came from, so a wrong account is seen rather than inferred.
 - Made `daemon restart` reconfigure daemon feature flags in an installed launchd or systemd service. Every flag present in the
   invoking environment is applied (`=1` enables, any other value disables) and a flag left out is untouched, so changing one
