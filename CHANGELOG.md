@@ -8,15 +8,16 @@ All notable changes to this package are documented here. The format is based on 
 
 - Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
   `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills
-  come from; `list` shows what is stored and which profile resolves here.
+  come from; `list` shows what is stored and which profile resolves here. A running daemon adopts a stored key without a
+  restart.
 - Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
   `cloud.apiKey` is rejected.
 - Added the `RATEL_FEATURE_CLOUD_CATALOG` feature flag, off by default and independent of Cloud telemetry. A project's
   published Cloud skills join the resolved skill set, where a local skill of the same id wins; a catalog change builds a new
   gateway generation instead of reusing a stale one.
 - Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
-  unreadable store, a stored key other users can read, a scope too broken to say which profile it selects, and a superseded
-  `cloud-traces.json` still holding a key.
+  unreadable store, a stored key other users can read, a scope too broken to say which profile it selects, a superseded
+  `cloud-traces.json` still holding a key, and signals split across deployments.
 
 ### Changed
 
@@ -27,9 +28,9 @@ All notable changes to this package are documented here. The format is based on 
   exporter is configured once per machine. An existing `cloud-traces.json` becomes the `default` profile and is left in
   place, so a downgrade keeps working.
 - Made every Ratel Cloud endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`.
-  `tracesEndpoint`, `logsEndpoint` and `catalogEndpoint` each override one signal. `cloud list` shows the three in effect,
-  and `doctor` warns when they stop sharing an origin. A `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path no longer
-  moves the log route with it; set the endpoints in `cloud.json` for that.
+  `tracesEndpoint`, `logsEndpoint` and `catalogEndpoint` each override one signal, and `cloud list` shows the three in
+  effect. A `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path no longer moves the log route with it; set the
+  endpoints in `cloud.json` for that.
 - Made `traces status` name where the daemon's Cloud credential came from, so a wrong account is seen rather than inferred.
 - Made `daemon restart` reconfigure daemon feature flags in an installed launchd or systemd service. Every flag present in the
   invoking environment is applied (`=1` enables, any other value disables) and a flag left out is untouched, so changing one
