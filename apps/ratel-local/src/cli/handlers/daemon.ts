@@ -642,12 +642,13 @@ export async function runDaemonServer(
         const retainedApiKey = apiKey?.trim() ? apiKey : activeCloudOptions?.apiKey;
         if (!retainedApiKey) throw new Error("Ratel Cloud API key is required");
         const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
-        // Writes the profile this daemon resolves to, so the single-credential
-        // UI keeps working unchanged against a profile store.
-        const profileName = persistedCloudSettings?.default ?? MIGRATED_PROFILE_NAME;
+        // The profile this daemon resolves, in the order the relay resolves it, so
+        // the single-credential UI never edits a profile other than the active one.
+        const profileName =
+          selectedProfile ?? persistedCloudSettings?.default ?? MIGRATED_PROFILE_NAME;
         persistedCloudSettings = {
           tracesEndpoint: next.endpoint.toString(),
-          default: profileName,
+          default: persistedCloudSettings?.default ?? profileName,
           profiles: {
             ...persistedCloudSettings?.profiles,
             [profileName]: { apiKey: next.apiKey },

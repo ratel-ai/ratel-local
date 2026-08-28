@@ -11,6 +11,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
+import { CLOUD_PROFILE_ENV } from "../../cloud/settings.js";
 import { connectorHeaders } from "../../daemon/access.js";
 import { CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
@@ -327,6 +328,56 @@ describe("runDaemon", () => {
       expect(configureRatelTelemetry).not.toHaveBeenCalled();
       expect(cloudFetch).not.toHaveBeenCalled();
       expect(daemonProcessEnv).not.toHaveProperty("RATEL_API_KEY");
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("saves a UI key into the profile the daemon resolved, not the store default", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const save = vi.fn(async () => {});
+    const stored = {
+      tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+      default: "personal",
+      profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
+    };
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1", [CLOUD_PROFILE_ENV]: "acme" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudSettingsStore: { load: async () => stored, save },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: "https://cloud.example.test/api/v1/traces",
+          apiKey: "rtl_rotated",
+        }),
+      });
+
+      expect(saved.status).toBe(200);
+      // The relay is using "acme"; writing "personal" would edit an account this
+      // daemon is not using and report success.
+      expect(save.mock.calls[0]?.[0]).toMatchObject({
+        default: "personal",
+        profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_rotated" } },
+      });
     } finally {
       await result.shutdown?.();
     }
