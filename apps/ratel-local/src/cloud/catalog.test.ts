@@ -273,10 +273,14 @@ describe("createCloudCatalogSource", () => {
 
   it("lets the environment credential outrank the profile a scope names", async () => {
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
-    const environment = { endpoint: TRACES, apiKey: "rtl_env" };
+    const environment = {
+      catalog: new URL("https://cloud.ratel.sh/api/v1/catalog"),
+      apiKey: "rtl_env",
+    };
 
     await source(impl, { environment })(CONTEXT, "acme");
 
+    expect(calls[0].url).toBe("https://cloud.ratel.sh/api/v1/catalog");
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_env");
   });
 
@@ -286,6 +290,7 @@ describe("createCloudCatalogSource", () => {
 
     await source(impl, { environmentProfile: "personal" })(CONTEXT, "acme");
 
+    expect(calls[0].url).toBe("https://cloud.ratel.sh/api/v1/catalog");
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_personal");
   });
 
@@ -303,6 +308,7 @@ describe("createCloudCatalogSource", () => {
 
     await source(impl)(CONTEXT);
 
+    expect(calls[0].url).toBe("https://cloud.ratel.sh/api/v1/catalog");
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_personal");
   });
 

@@ -334,6 +334,58 @@ describe("runDaemon", () => {
     }
   });
 
+  it("keeps every signal on the deployment a UI save names", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const save = vi.fn(async (_settings: CloudSettings) => {});
+    const cloudFetch = vi.fn(
+      async (_input: URL | RequestInfo, _init?: RequestInit) =>
+        new Response(Buffer.from([0x00]), { status: 200 }),
+    );
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudOtlpFetch: cloudFetch,
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudSettingsStore: { load: async () => undefined, save },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: "https://staging.example.test/api/v1/traces",
+          apiKey: "rtl_staging",
+        }),
+      });
+
+      await fetch(new URL("/otlp/v1/logs", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+
+      expect(String(cloudFetch.mock.calls[0]?.[0])).toBe(
+        "https://staging.example.test/api/v1/logs",
+      );
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("refuses to persist a key the environment supplied", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
@@ -594,7 +646,7 @@ describe("runDaemon", () => {
         endpoint: "https://cloud.example.test/api/v1/traces",
       });
       expect(save).toHaveBeenCalledWith({
-        tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+        baseUrl: "https://cloud.example.test",
         default: "default",
         profiles: { default: { apiKey: "saved-cloud-secret" } },
       });

@@ -103,7 +103,8 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
 }
 
 interface CloudCredential {
-  endpoint: URL;
+  /** Not `endpoint`: a traces URL must not type-check here. */
+  catalog: URL;
   apiKey: string;
 }
 
@@ -136,7 +137,7 @@ export function createCloudCatalogSource(input: {
       source: profile ? source : "store default",
     });
     if (!credential) return undefined;
-    return { endpoint: cloudEndpoints(settings).catalog, apiKey: credential.apiKey };
+    return { catalog: cloudEndpoints(settings).catalog, apiKey: credential.apiKey };
   };
 
   return async (
@@ -145,7 +146,7 @@ export function createCloudCatalogSource(input: {
   ): Promise<CloudSkillCatalog | undefined> => {
     const credential = resolve(profile);
     if (!credential) return undefined;
-    const endpoint = credential.endpoint.toString();
+    const endpoint = credential.catalog.toString();
     const key = `${endpoint}\u0000${credential.apiKey}`;
     const loader =
       loaders.get(key) ??

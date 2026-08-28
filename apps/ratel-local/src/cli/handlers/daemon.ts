@@ -44,11 +44,13 @@ import {
   OTLP_TRACES_PATH,
 } from "../../cloud/otlp-trace-relay.js";
 import {
+  CLOUD_CATALOG_PATH,
   CLOUD_PROFILE_ENV,
   type CloudSettings,
   CloudSettingsStore,
   type CloudSettingsStoreLike,
   cloudEndpoints,
+  cloudSettingsForTracesEndpoint,
   cloudSettingsPath,
   DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
   legacyCloudSettingsPath,
@@ -410,8 +412,9 @@ export async function runDaemonServer(
     ? `profile "${selectedProfile}" (${CLOUD_PROFILE_ENV})`
     : undefined;
   const profileFromStore = storeDefault ? `profile "${storeDefault}" (store default)` : undefined;
-  let activeCloudSource =
-    keyFromEnvironment ?? profileFromEnvironment ?? profileFromStore ?? "none";
+  let activeCloudSource = !activeCloudOptions
+    ? "none"
+    : (keyFromEnvironment ?? profileFromEnvironment ?? profileFromStore ?? "none");
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
     featureFlags.cloudTelemetry && activeCloudOptions
       ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log }
@@ -433,7 +436,10 @@ export async function runDaemonServer(
   const cloudCatalog = featureFlags.cloudCatalog
     ? createCloudCatalogSource({
         settings: () => persistedCloudSettings,
-        environment: environmentCloudOptions,
+        environment: environmentCloudOptions && {
+          catalog: new URL(CLOUD_CATALOG_PATH, environmentCloudOptions.endpoint),
+          apiKey: environmentCloudOptions.apiKey,
+        },
         environmentProfile: daemonProcessEnv[CLOUD_PROFILE_ENV],
         log,
         ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
@@ -658,9 +664,11 @@ export async function runDaemonServer(
               : "Ratel Cloud API key is required",
           );
         }
+        const { baseUrl, tracesEndpoint } = cloudSettingsForTracesEndpoint(endpoint);
         const nextSettings: CloudSettings = {
           ...onDisk,
-          tracesEndpoint: endpoint,
+          baseUrl,
+          tracesEndpoint,
           default: onDisk?.default ?? profileName,
           profiles: { ...onDisk?.profiles, [profileName]: { apiKey: retainedApiKey } },
         };

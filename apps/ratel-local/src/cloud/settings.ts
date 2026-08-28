@@ -29,6 +29,16 @@ export interface CloudSettings {
   profiles: Record<string, CloudProfile>;
 }
 
+export function cloudSettingsForTracesEndpoint(
+  endpoint: string,
+): Pick<CloudSettings, "baseUrl" | "tracesEndpoint"> {
+  const url = new URL(endpoint);
+  return {
+    baseUrl: url.origin,
+    ...(url.pathname === CLOUD_TRACES_PATH ? {} : { tracesEndpoint: url.toString() }),
+  };
+}
+
 export interface CloudEndpoints {
   traces: URL;
   logs: URL;
@@ -162,12 +172,8 @@ function migrateLegacy(value: unknown): CloudSettings {
   if (!isRecord(value) || typeof value.endpoint !== "string" || typeof value.apiKey !== "string") {
     throw new Error("Ratel Cloud trace settings are malformed");
   }
-  // The old file held one full traces URL. Its origin is the deployment; keep the
-  // URL itself only when its path is not the one the protocol defines.
-  const legacy = new URL(value.endpoint);
   return {
-    baseUrl: legacy.origin,
-    ...(legacy.pathname === CLOUD_TRACES_PATH ? {} : { tracesEndpoint: legacy.toString() }),
+    ...cloudSettingsForTracesEndpoint(value.endpoint),
     default: MIGRATED_PROFILE_NAME,
     profiles: { [MIGRATED_PROFILE_NAME]: { apiKey: value.apiKey } },
   };
