@@ -177,11 +177,37 @@ immutable gateway generation. See the [retrieval configuration and preflight
 guide](docs/retrieval.md) for local, Hugging Face, Ollama, and
 OpenAI-compatible embedding sources plus privacy and memory guidance.
 
+### Connect a Ratel Cloud account
+
+Cloud credentials are stored as named profiles in `~/.ratel/cloud.json`,
+readable only by you and never inside a repository:
+
+```bash
+ratel-local cloud add personal   # masked prompt for the key; needs a terminal
+ratel-local cloud list           # stored profiles, and which one applies here
+```
+
+Create a key at <https://cloud.ratel.sh/settings>. The first profile you store
+becomes the default, so a single account needs nothing further. To take one
+project's skills from a different account:
+
+```bash
+ratel-local cloud use acme --scope project
+```
+
+That writes `cloud.profile` into the project config `.ratel/config.json`,
+the file stores a profile name (never a key), so it stays safe to commit
+and your team inherits the binding by cloning. Reconnect the agent afterwards.
+
+Traces do not follow it: an agent's exporter is configured once per machine, so
+the relay uses one account for everything. `ratel-local traces status` names it,
+and `RATEL_PROFILE` changes it for the whole daemon.
+
 ### Experimental Cloud telemetry
 
 Native Claude Code and Codex telemetry relay plus Ratel runtime trace export
-ship dark. Enable the daemon-wide feature explicitly before configuring an API
-key or native exporter:
+ship dark. Enable the daemon-wide feature explicitly before configuring a
+native exporter:
 
 ```bash
 # New installation
@@ -196,11 +222,26 @@ RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
 ratel-local traces status
 ```
 
-Only the exact value `1` enables the feature; any other value disables it. The
-setting is persisted into the installed launchd or systemd service, and omitting
-the variable leaves an installed daemon unchanged. See the [Cloud OTLP relay and native exporter setup
+Only the exact value `1` enables a daemon feature flag; any other value disables
+it. Flags are persisted into the installed launchd or systemd service, and a
+flag you leave out of the environment keeps whatever the service already says.
+See the [Cloud OTLP relay and native exporter setup
 contract](docs/cloud-otlp-relay.md) for privacy levels, precedence, failure
 behavior, and rollback instructions.
+
+### Experimental Cloud skill catalog
+
+Skills published to your Ratel Cloud project can join the local catalog, so
+`search_capabilities` reaches them like any local skill. This needs a stored
+profile and its own flag, independent of telemetry:
+
+```bash
+RATEL_FEATURE_CLOUD_CATALOG=1 ratel-local daemon restart
+```
+
+A local skill with the same id always wins, and the Cloud skill it hides is
+dropped. Publishing happens in Ratel Cloud; a change there reaches the agent
+when it reconnects.
 
 ### Verify capability search
 
