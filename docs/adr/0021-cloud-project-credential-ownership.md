@@ -12,7 +12,7 @@ ADR 0013 gave the Cloud credential one consumer, the OTLP relay, and ADR 0018
 gated every Cloud surface on `RATEL_FEATURE_CLOUD_TELEMETRY`.
 
 There is now a second consumer: the `protocol/v1` catalog loader pulls a
-project's published skills from `GET /v1/catalog` with the same Bearer
+project's published skills from `GET /api/v1/catalog` with the same Bearer
 credential. It cannot reach one, because the credential loads only inside the
 telemetry branch — a product feature would depend on an observability flag.
 

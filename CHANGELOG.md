@@ -28,7 +28,8 @@ All notable changes to this package are documented here. The format is based on 
   place, so a downgrade keeps working.
 - Made every Ratel Cloud endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`.
   `tracesEndpoint`, `logsEndpoint` and `catalogEndpoint` each override one signal. `cloud list` shows the three in effect,
-  and `doctor` warns when they stop sharing an origin.
+  and `doctor` warns when they stop sharing an origin. A `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path no longer
+  moves the log route with it; set the endpoints in `cloud.json` for that.
 - Made `traces status` name where the daemon's Cloud credential came from, so a wrong account is seen rather than inferred.
 - Made `daemon restart` reconfigure daemon feature flags in an installed launchd or systemd service. Every flag present in the
   invoking environment is applied (`=1` enables, any other value disables) and a flag left out is untouched, so changing one
@@ -43,8 +44,8 @@ All notable changes to this package are documented here. The format is based on 
 ### Fixed
 
 - Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud.json`. When a daemon was started with that
-  variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. Settings now
-  requires one.
+  variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
+  keeps the stored key and refuses the save when there is none to keep.
 - Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
 
 ## [0.8.2] - 2026-08-19
