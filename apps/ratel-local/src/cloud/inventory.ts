@@ -89,6 +89,7 @@ export async function inventoryCloudSettings(input: {
   });
 
   diagnostics.push(...(await exposedSecrets(path)));
+  if (await legacyApiKey(legacyPath)) diagnostics.push(...(await exposedSecrets(legacyPath)));
 
   if ((await legacyApiKey(legacyPath)) && (await exists(path))) {
     diagnostics.push({

@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inventoryCloudSettings } from "./inventory.js";
 
 // A plain store names no endpoint: the deployment is the default one.
+const TRACES = "https://cloud.ratel.sh/api/v1/traces";
+
 const STORE = {
   default: "personal",
   profiles: { personal: { apiKey: "rtl_personal" } },
@@ -93,6 +95,16 @@ describe("inventoryCloudSettings", () => {
   it("says nothing when one baseUrl carries every signal", async () => {
     await writeStore({ ...STORE, baseUrl: "https://staging.ratel.sh" });
     expect(await codes()).toEqual([]);
+  });
+
+  it("reports a legacy store other users can read, before any migration", async () => {
+    const legacy = join(homeDir, ".ratel", "cloud-traces.json");
+    await writeFile(legacy, JSON.stringify({ endpoint: TRACES, apiKey: "rtl_legacy" }));
+    await chmod(legacy, 0o644);
+
+    const diagnostics = await inventoryCloudSettings({ env: { homeDir, projectRoot }, fs: nodeFs });
+
+    expect(diagnostics.map(({ code }) => code)).toContain("cloud_settings_permissions");
   });
 
   it("reports the legacy store left beside the new one", async () => {
