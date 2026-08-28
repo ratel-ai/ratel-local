@@ -5,6 +5,8 @@ import { CLOUD_PROFILE_ENV, type CloudSettings, resolveCloudCredential } from ".
 import { secretFreeHttpsUrl } from "./url.js";
 
 const TIMEOUT_MS = 10_000;
+/** How long a rejected key is taken at its word. A rotation builds a new loader. */
+const AUTH_FAILURE_COOLDOWN_MS = 60_000;
 
 export interface CloudCatalogLoadResult {
   snapshot: CloudSkillCatalog;
@@ -17,10 +19,14 @@ export interface CloudCatalogLoaderOptions {
   apiKey: string;
   /** Injected by tests; the daemon uses the global `fetch`. */
   fetch?: typeof fetch;
+  /** Injected by tests; the daemon uses the wall clock. */
+  now?: () => number;
 }
 
 const protocolError = (reason: string) =>
   new Error(`Ratel Cloud returned a malformed catalog: ${reason}`);
+const authFailedError = (status?: number) =>
+  new Error(`Cloud catalog auth failed${status === undefined ? "" : `: HTTP ${status}`}`);
 const unavailableError = (reason: string) =>
   new Error(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
 
@@ -40,10 +46,15 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const endpoint = secretFreeHttpsUrl(options.endpoint, "Ratel Cloud catalog endpoint");
   headerSafeSecret(options.apiKey, "Ratel Cloud API key");
   const fetchUpstream = options.fetch ?? fetch;
+  const now = options.now ?? Date.now;
   let cached: CloudSkillCatalog | undefined;
+  let rejectedUntil = 0;
 
   return {
     async load() {
+      // A revoked key fails identically every time, and every context resolve
+      // asks again. Hold the answer rather than ask Cloud on a loop.
+      if (now() < rejectedUntil) throw authFailedError();
       let response: Response;
       try {
         response = await fetchUpstream(endpoint, {
@@ -61,7 +72,8 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
       }
 
       if (response.status === 401 || response.status === 403) {
-        throw new Error(`Cloud catalog auth failed: HTTP ${response.status}`);
+        rejectedUntil = now() + AUTH_FAILURE_COOLDOWN_MS;
+        throw authFailedError(response.status);
       }
       if (response.status === 304) {
         if (!cached) {

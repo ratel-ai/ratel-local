@@ -161,6 +161,28 @@ describe("createCloudCatalogLoader", () => {
     await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
   });
 
+  it("holds a rejected key rather than asking Cloud on every resolve", async () => {
+    const { calls, impl } = recordingFetch(
+      jsonResponse({ error: "nope" }, 401),
+      jsonResponse(WIRE),
+    );
+    let clock = 0;
+    const client = createCloudCatalogLoader({
+      endpoint: ENDPOINT,
+      apiKey: "rtl_revoked",
+      fetch: impl,
+      now: () => clock,
+    });
+
+    await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
+    await expect(client.load()).rejects.toThrow(/auth failed/);
+    expect(calls).toHaveLength(1);
+
+    clock = 60_001;
+    await client.load();
+    expect(calls).toHaveLength(2);
+  });
+
   it("surfaces a contract violation instead of falling back to the cache", async () => {
     const { impl } = recordingFetch(
       jsonResponse(WIRE),
