@@ -7,21 +7,25 @@ All notable changes to this package are documented here. The format is based on 
 ### Added
 
 - Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
-  `~/.ratel/cloud.json`, the first one becoming the default; `use` selects one for a scope; `list` shows what is stored and
-  what resolves here.
+  `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills
+  come from; `list` shows what is stored and which profile resolves here.
 - Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
   `cloud.apiKey` is rejected.
 - Added the `RATEL_FEATURE_CLOUD_CATALOG` feature flag, off by default and independent of Cloud telemetry. A project's
-  published Cloud skills join the resolved skill set, where a local skill of the same id wins and each shadowed one is
-  reported; a catalog change builds a new gateway generation instead of reusing a stale one.
+  published Cloud skills join the resolved skill set, where a local skill of the same id wins; a catalog change builds a new
+  gateway generation instead of reusing a stale one.
+- Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
+  unreadable store, a stored key other users can read, and a superseded `cloud-traces.json` still holding one.
 
 ### Changed
 
 - Moved the Cloud credential out of the telemetry feature branch: it now loads whenever a Cloud consumer needs it, while
   `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`. The store moved from
-  `~/.ratel/cloud-traces.json` to `~/.ratel/cloud.json` and holds named profiles, selected by `RATEL_PROFILE` or
-  `cloud.profile`. An existing `cloud-traces.json` becomes the `default` profile and is left in place, so a downgrade keeps
-  working.
+  `~/.ratel/cloud-traces.json` to `~/.ratel/cloud.json` and holds named profiles. `RATEL_PROFILE` or the store default
+  selects the relay's account; `cloud.profile` selects a project's skills and does not move telemetry, since an agent's trace
+  exporter is configured once per machine. An existing `cloud-traces.json` becomes the `default` profile and is left in
+  place, so a downgrade keeps working.
+- Made `traces status` name where the daemon's Cloud credential came from, so a wrong account is seen rather than inferred.
 - Made `daemon restart` reconfigure daemon feature flags in an installed launchd or systemd service. Every flag present in the
   invoking environment is applied (`=1` enables, any other value disables) and a flag left out is untouched, so changing one
   never disturbs another. Restart waits for the port to be released and verifies the result on `/api/daemon/status`.
@@ -34,6 +38,9 @@ All notable changes to this package are documented here. The format is based on 
 
 ### Fixed
 
+- Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud.json`. When a daemon was started with that
+  variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. Settings now
+  requires one.
 - Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
 
 ## [0.8.2] - 2026-08-19
