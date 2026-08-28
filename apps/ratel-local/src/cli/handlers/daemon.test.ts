@@ -380,6 +380,57 @@ describe("runDaemon", () => {
     }
   });
 
+  it("keeps a profile added by the CLI while the daemon was running", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const save = vi.fn(async () => {});
+    const endpoint = "https://cloud.example.test/api/v1/traces";
+    // `cloud add` writes the store behind the daemon's back, so the second read
+    // returns a profile the boot snapshot never had.
+    const reads = [
+      { tracesEndpoint: endpoint, default: "personal", profiles: { personal: { apiKey: "p" } } },
+      {
+        tracesEndpoint: endpoint,
+        default: "personal",
+        profiles: { personal: { apiKey: "p" }, acme: { apiKey: "a" } },
+      },
+    ];
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudSettingsStore: { load: async () => reads.shift() ?? reads[0], save },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ endpoint, apiKey: "rotated" }),
+      });
+
+      expect(saved.status).toBe(200);
+      expect(Object.keys(save.mock.calls[0]?.[0]?.profiles ?? {}).sort()).toEqual([
+        "acme",
+        "personal",
+      ]);
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("saves a UI key into the profile the daemon resolved, not the store default", async () => {
     const fs = new MemFs();
     const logs: string[] = [];

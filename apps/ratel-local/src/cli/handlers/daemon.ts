@@ -640,14 +640,16 @@ export async function runDaemonServer(
         endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
       }),
       save: async ({ endpoint, apiKey }) => {
+        // `cloud add` writes the store directly, so the boot snapshot goes stale
+        // as soon as a profile is added. Rebuilding the file from it would drop
+        // that profile and its key.
+        const onDisk = await cloudSettingsStore.load().catch(() => persistedCloudSettings);
         // The profile this daemon resolves, in the order the relay resolves it, so
         // the single-credential UI never edits a profile other than the active one.
-        const profileName =
-          selectedProfile ?? persistedCloudSettings?.default ?? MIGRATED_PROFILE_NAME;
+        const profileName = selectedProfile ?? onDisk?.default ?? MIGRATED_PROFILE_NAME;
         // Retained from the store, never from memory: an unchanged key field must
         // not promote a `RATEL_API_KEY` override onto disk (ADR-0013).
-        const retainedApiKey =
-          apiKey?.trim() || persistedCloudSettings?.profiles[profileName]?.apiKey;
+        const retainedApiKey = apiKey?.trim() || onDisk?.profiles[profileName]?.apiKey;
         if (!retainedApiKey) {
           throw new Error(
             environmentCloudOptions
@@ -658,11 +660,8 @@ export async function runDaemonServer(
         const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
         persistedCloudSettings = {
           tracesEndpoint: next.endpoint.toString(),
-          default: persistedCloudSettings?.default ?? profileName,
-          profiles: {
-            ...persistedCloudSettings?.profiles,
-            [profileName]: { apiKey: next.apiKey },
-          },
+          default: onDisk?.default ?? profileName,
+          profiles: { ...onDisk?.profiles, [profileName]: { apiKey: next.apiKey } },
         };
         await cloudSettingsStore.save(persistedCloudSettings);
         activeCloudOptions = next;
