@@ -65,6 +65,16 @@ describe("inventoryCloudSettings", () => {
     expect(exposed?.action).toContain("chmod 600");
   });
 
+  it("stays quiet about a legacy store with no key left in it", async () => {
+    await writeStore(STORE);
+    await writeFile(
+      join(homeDir, ".ratel", "cloud-traces.json"),
+      JSON.stringify({ endpoint: STORE.tracesEndpoint, apiKey: "" }),
+      { mode: 0o600 },
+    );
+    expect(await codes()).toEqual([]);
+  });
+
   it("reports the legacy store left beside the new one", async () => {
     await writeStore(STORE);
     await writeFile(

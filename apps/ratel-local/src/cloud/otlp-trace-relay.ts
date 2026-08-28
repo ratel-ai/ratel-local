@@ -62,16 +62,12 @@ export function cloudOtlpTraceRelayOptions(settings: {
 }
 
 export function deriveCloudOtlpLogsEndpoint(traceEndpoint: URL): URL {
-  return deriveCloudEndpoint(traceEndpoint, "logs");
-}
-
-export function deriveCloudEndpoint(traceEndpoint: URL, segment: string): URL {
   const match = /\/traces(\/?)$/.exec(traceEndpoint.pathname);
   if (!match) {
     throw new Error("Ratel Cloud OTLP trace endpoint path must end with /traces");
   }
   const derived = new URL(traceEndpoint);
-  derived.pathname = `${traceEndpoint.pathname.slice(0, match.index)}/${segment}${match[1]}`;
+  derived.pathname = `${traceEndpoint.pathname.slice(0, match.index)}/logs${match[1]}`;
   return derived;
 }
 

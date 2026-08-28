@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   type JsonFs,
@@ -84,8 +84,7 @@ export async function inventoryCloudSettings(input: {
 
   diagnostics.push(...(await exposedSecrets(path)));
 
-  const legacyPresent = await exists(legacyPath);
-  if (legacyPresent && (await exists(path))) {
+  if ((await legacyApiKey(legacyPath)) && (await exists(path))) {
     diagnostics.push({
       code: "cloud_settings_legacy_present",
       severity: "warning",
@@ -154,4 +153,19 @@ async function modeOf(path: string): Promise<number | undefined> {
 
 async function exists(path: string): Promise<boolean> {
   return (await modeOf(path)) !== undefined;
+}
+
+/** The warning claims a key is still there, so look rather than assume. */
+async function legacyApiKey(path: string): Promise<boolean> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { apiKey?: unknown }).apiKey === "string" &&
+      (parsed as { apiKey: string }).apiKey !== ""
+    );
+  } catch {
+    return false;
+  }
 }
