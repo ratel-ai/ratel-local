@@ -15,7 +15,8 @@ All notable changes to this package are documented here. The format is based on 
   published Cloud skills join the resolved skill set, where a local skill of the same id wins; a catalog change builds a new
   gateway generation instead of reusing a stale one.
 - Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
-  unreadable store, a stored key other users can read, and a superseded `cloud-traces.json` still holding one.
+  unreadable store, a stored key other users can read, a scope too broken to say which profile it selects, and a superseded
+  `cloud-traces.json` still holding a key.
 
 ### Changed
 

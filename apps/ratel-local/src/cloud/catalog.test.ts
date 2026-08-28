@@ -235,7 +235,7 @@ const source = (
   overrides: Partial<Parameters<typeof createCloudCatalogSource>[0]> = {},
 ) =>
   createCloudCatalogSource({
-    settings: SETTINGS,
+    settings: () => SETTINGS,
     environment: undefined,
     environmentProfile: undefined,
     log: () => {},
@@ -309,7 +309,7 @@ describe("createCloudCatalogSource", () => {
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
 
     await expect(
-      source(impl, { settings: undefined, environment: undefined })(CONTEXT, "acme"),
+      source(impl, { settings: () => undefined, environment: undefined })(CONTEXT, "acme"),
     ).rejects.toThrow(/no Cloud credential is stored/);
     expect(calls).toHaveLength(0);
   });
@@ -324,10 +324,27 @@ describe("createCloudCatalogSource", () => {
     expect(calls[1].headers.get("if-none-match")).toBe(`"${VERSION}"`);
   });
 
+  it("picks up a key rotated while the daemon runs", async () => {
+    // The store is replaced on a UI save; a source holding the boot copy would
+    // keep pulling with the old key until restart.
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE), jsonResponse(WIRE));
+    let stored = SETTINGS;
+    const pull = source(impl, { settings: () => stored });
+
+    await pull(CONTEXT, "acme");
+    stored = { ...SETTINGS, profiles: { ...SETTINGS.profiles, acme: { apiKey: "rtl_rotated" } } };
+    await pull(CONTEXT, "acme");
+
+    expect(calls.map((call) => call.headers.get("authorization"))).toEqual([
+      "Bearer rtl_acme",
+      "Bearer rtl_rotated",
+    ]);
+  });
+
   it("returns nothing when no credential resolves", async () => {
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
 
-    const pulled = await source(impl, { settings: undefined })(CONTEXT);
+    const pulled = await source(impl, { settings: () => undefined })(CONTEXT);
 
     expect(pulled).toBeUndefined();
     expect(calls).toHaveLength(0);

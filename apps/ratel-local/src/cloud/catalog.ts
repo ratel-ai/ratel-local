@@ -100,7 +100,8 @@ export function cloudCatalogEndpoint(tracesEndpoint: URL): URL {
  * back, so one project cannot silently pull another's account.
  */
 export function createCloudCatalogSource(input: {
-  settings: CloudSettings | undefined;
+  /** Read per pull: a UI save replaces the store while the daemon runs. */
+  settings: () => CloudSettings | undefined;
   environment: CloudCredential | undefined;
   environmentProfile: string | undefined;
   log: (message: string) => void;
@@ -109,15 +110,16 @@ export function createCloudCatalogSource(input: {
   const loaders = new Map<string, ReturnType<typeof createCloudCatalogLoader>>();
   const resolve = (scopeProfile?: string): CloudCredential | undefined => {
     if (input.environment) return input.environment;
+    const settings = input.settings();
     const profile = input.environmentProfile ?? scopeProfile;
     const source = input.environmentProfile ? CLOUD_PROFILE_ENV : "cloud.profile";
-    if (!input.settings) {
+    if (!settings) {
       if (!profile) return undefined;
       throw new Error(
         `Cloud profile ${JSON.stringify(profile)} (${source}) is selected, but no Cloud credential is stored. Add one with: ratel-local cloud add ${profile}`,
       );
     }
-    const credential = resolveCloudCredential(input.settings, {
+    const credential = resolveCloudCredential(settings, {
       ...(profile ? { profile } : {}),
       source: profile ? source : "store default",
     });

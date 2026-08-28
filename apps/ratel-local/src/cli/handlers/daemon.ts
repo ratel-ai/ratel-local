@@ -431,7 +431,7 @@ export async function runDaemonServer(
   };
   const cloudCatalog = featureFlags.cloudCatalog
     ? createCloudCatalogSource({
-        settings: persistedCloudSettings,
+        settings: () => persistedCloudSettings,
         environment: environmentCloudOptions,
         environmentProfile: daemonProcessEnv[CLOUD_PROFILE_ENV],
         log,
