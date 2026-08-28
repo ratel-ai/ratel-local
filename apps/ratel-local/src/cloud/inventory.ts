@@ -7,7 +7,13 @@ import {
   ratelConfigPath,
   readJson,
 } from "@ratel-ai/ratel-local-core";
-import { CloudSettingsStore, cloudSettingsPath, legacyCloudSettingsPath } from "./settings.js";
+import {
+  type CloudSettings,
+  CloudSettingsStore,
+  cloudEndpoints,
+  cloudSettingsPath,
+  legacyCloudSettingsPath,
+} from "./settings.js";
 
 const SCOPES: readonly RatelScope[] = ["user", "project", "local"];
 
@@ -93,6 +99,8 @@ export async function inventoryCloudSettings(input: {
     });
   }
 
+  diagnostics.push(...splitDeployment(settings));
+
   const scopes = await scanCloudProfileScopes(input);
   for (const scope of scopes.unreadable) {
     diagnostics.push({
@@ -122,6 +130,27 @@ export async function inventoryCloudSettings(input: {
     });
   }
   return diagnostics;
+}
+
+/**
+ * Overriding one signal is a deliberate escape hatch; forgetting one while moving
+ * deployment is not, and the two look identical from the outside.
+ */
+function splitDeployment(settings: CloudSettings | undefined): CloudDiagnostic[] {
+  const origins = Object.entries(cloudEndpoints(settings)).map(
+    ([signal, url]) => [signal, url.origin] as const,
+  );
+  if (new Set(origins.map(([, origin]) => origin)).size < 2) return [];
+  return [
+    {
+      code: "cloud_endpoints_split",
+      severity: "warning",
+      message: `Cloud signals are split across deployments: ${origins
+        .map(([signal, origin]) => `${signal} on ${origin}`)
+        .join(", ")}`,
+      action: "set `baseUrl` and drop the per-signal endpoints, unless the split is deliberate",
+    },
+  ];
 }
 
 /** A stored key that other users can read is a leaked key. */

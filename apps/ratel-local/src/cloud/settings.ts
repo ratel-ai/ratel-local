@@ -4,7 +4,13 @@ import { dirname, join } from "node:path";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
-export const DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT = "https://cloud.ratel.sh/api/v1/traces";
+/** The deployment every install talks to unless `baseUrl` says otherwise. */
+export const DEFAULT_CLOUD_BASE_URL = "https://cloud.ratel.sh";
+/** Paths are the protocol, not a setting: only the deployment they sit on varies. */
+export const CLOUD_TRACES_PATH = "/api/v1/traces";
+export const CLOUD_LOGS_PATH = "/api/v1/logs";
+export const CLOUD_CATALOG_PATH = "/api/v1/catalog";
+export const DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT = `${DEFAULT_CLOUD_BASE_URL}${CLOUD_TRACES_PATH}`;
 
 export const CLOUD_PROFILE_ENV = "RATEL_PROFILE";
 
@@ -13,9 +19,31 @@ export interface CloudProfile {
 }
 
 export interface CloudSettings {
-  tracesEndpoint: string;
+  /** The deployment. Origin only; a path prefix needs the three explicit endpoints. */
+  baseUrl?: string;
+  /** Full per-signal overrides, for a prefix or one signal aimed elsewhere. */
+  tracesEndpoint?: string;
+  logsEndpoint?: string;
+  catalogEndpoint?: string;
   default?: string;
   profiles: Record<string, CloudProfile>;
+}
+
+export interface CloudEndpoints {
+  traces: URL;
+  logs: URL;
+  catalog: URL;
+}
+
+/** Each signal: its own override, else the deployment's path. One rule, no derivation. */
+export function cloudEndpoints(settings?: CloudSettings): CloudEndpoints {
+  const base = settings?.baseUrl ?? DEFAULT_CLOUD_BASE_URL;
+  const on = (path: string) => new URL(path, base);
+  return {
+    traces: settings?.tracesEndpoint ? new URL(settings.tracesEndpoint) : on(CLOUD_TRACES_PATH),
+    logs: settings?.logsEndpoint ? new URL(settings.logsEndpoint) : on(CLOUD_LOGS_PATH),
+    catalog: settings?.catalogEndpoint ? new URL(settings.catalogEndpoint) : on(CLOUD_CATALOG_PATH),
+  };
 }
 
 export interface CloudSettingsStoreLike {
@@ -25,7 +53,6 @@ export interface CloudSettingsStoreLike {
 
 export interface ResolvedCloudCredential {
   apiKey: string;
-  tracesEndpoint: string;
 }
 
 /** Unknown name is an error, never a silent fall back to `default` (ADR-0021). */
@@ -42,7 +69,7 @@ export function resolveCloudCredential(
       `Cloud profile ${JSON.stringify(name)} (${selection.source}) is not in cloud.json; known profiles: ${known}`,
     );
   }
-  return { apiKey: profile.apiKey, tracesEndpoint: settings.tracesEndpoint };
+  return { apiKey: profile.apiKey };
 }
 
 export function cloudSettingsPath(homeDir: string): string {
@@ -117,11 +144,13 @@ function parseSettings(value: unknown): CloudSettings {
     }
     profiles[name] = { apiKey: profile.apiKey };
   }
+  const url = (key: "baseUrl" | "tracesEndpoint" | "logsEndpoint" | "catalogEndpoint") =>
+    typeof value[key] === "string" && value[key] !== "" ? { [key]: value[key] } : {};
   return {
-    tracesEndpoint:
-      typeof value.tracesEndpoint === "string" && value.tracesEndpoint !== ""
-        ? value.tracesEndpoint
-        : DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
+    ...url("baseUrl"),
+    ...url("tracesEndpoint"),
+    ...url("logsEndpoint"),
+    ...url("catalogEndpoint"),
     ...(typeof value.default === "string" && value.default !== ""
       ? { default: value.default }
       : {}),
@@ -133,8 +162,12 @@ function migrateLegacy(value: unknown): CloudSettings {
   if (!isRecord(value) || typeof value.endpoint !== "string" || typeof value.apiKey !== "string") {
     throw new Error("Ratel Cloud trace settings are malformed");
   }
+  // The old file held one full traces URL. Its origin is the deployment; keep the
+  // URL itself only when its path is not the one the protocol defines.
+  const legacy = new URL(value.endpoint);
   return {
-    tracesEndpoint: value.endpoint,
+    baseUrl: legacy.origin,
+    ...(legacy.pathname === CLOUD_TRACES_PATH ? {} : { tracesEndpoint: legacy.toString() }),
     default: MIGRATED_PROFILE_NAME,
     profiles: { [MIGRATED_PROFILE_NAME]: { apiKey: value.apiKey } },
   };
@@ -149,13 +182,18 @@ function validated(settings: CloudSettings): CloudSettings {
   for (const [name, { apiKey }] of Object.entries(settings.profiles)) {
     headerSafeSecret(apiKey, `Cloud profile ${name} API key`);
   }
-  return {
-    ...settings,
-    tracesEndpoint: secretFreeHttpsUrl(
-      settings.tracesEndpoint,
-      "Ratel Cloud traces endpoint",
-    ).toString(),
-  };
+  const checked = { ...settings };
+  for (const key of ["tracesEndpoint", "logsEndpoint", "catalogEndpoint"] as const) {
+    const value = checked[key];
+    if (value !== undefined)
+      checked[key] = secretFreeHttpsUrl(value, `Ratel Cloud ${key}`).toString();
+  }
+  // Stored as an origin because that is all of it the paths are joined to: a
+  // prefix written here would be dropped at use, so it is dropped on the way in.
+  if (checked.baseUrl !== undefined) {
+    checked.baseUrl = secretFreeHttpsUrl(checked.baseUrl, "Ratel Cloud baseUrl").origin;
+  }
+  return checked;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

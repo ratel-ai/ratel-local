@@ -1,12 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  cloudCatalogEndpoint,
-  createCloudCatalogLoader,
-  createCloudCatalogSource,
-} from "./catalog.js";
+import { createCloudCatalogLoader, createCloudCatalogSource } from "./catalog.js";
 import type { CloudSettings } from "./settings.js";
 
-const ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
+const ENDPOINT = "https://cloud.ratel.sh/api/v1/catalog";
 const VERSION = "6f7f0cee520a24a6edbb6dc7df6b623751cbdf05771e7e7bbe45cc9de943f0a6";
 
 // Shape taken from a real `GET /v1/catalog` against a seeded project; the
@@ -266,21 +262,12 @@ const source = (
   });
 
 describe("createCloudCatalogSource", () => {
-  it("derives the catalog from the origin, not by swapping the trace segment", () => {
-    // `/api/v1/traces` and `/v1/catalog` share only the origin, so a terminal
-    // segment swap would request `/api/v1/catalog`, which does not exist.
-    expect(cloudCatalogEndpoint(TRACES).toString()).toBe("https://cloud.ratel.sh/v1/catalog");
-    expect(cloudCatalogEndpoint(new URL("https://self.hosted/api/v1/traces")).toString()).toBe(
-      "https://self.hosted/v1/catalog",
-    );
-  });
-
   it("pulls the profile a scope names, over the store default", async () => {
     const { calls, impl } = recordingFetch(jsonResponse(WIRE));
 
     await source(impl)(CONTEXT, "acme");
 
-    expect(calls[0].url).toBe("https://cloud.ratel.sh/v1/catalog");
+    expect(calls[0].url).toBe("https://cloud.ratel.sh/api/v1/catalog");
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_acme");
   });
 

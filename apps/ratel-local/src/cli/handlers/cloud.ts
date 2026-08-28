@@ -5,8 +5,8 @@ import {
   type CloudSettings,
   CloudSettingsStore,
   type CloudSettingsStoreLike,
+  cloudEndpoints,
   cloudSettingsPath,
-  DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
   legacyCloudSettingsPath,
 } from "../../cloud/settings.js";
 import { ArgError } from "../args.js";
@@ -45,10 +45,7 @@ export async function runCloud(
       legacyCloudSettingsPath(ctx.env.homeDir),
       ctx.log,
     );
-  const settings = (await store.load()) ?? {
-    tracesEndpoint: DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
-    profiles: {},
-  };
+  const settings = (await store.load()) ?? { profiles: {} };
 
   if (verb === "add") return add(ctx, store, settings);
   if (verb === "use") return use(ctx, settings, dependencies);
@@ -139,7 +136,11 @@ async function list(
     ].filter(Boolean);
     ctx.log(`${name}${marks.length > 0 ? `  (${marks.join(", ")})` : ""}`);
   }
-  ctx.log(`Endpoint: ${settings.tracesEndpoint}`);
+  for (const [signal, url] of Object.entries(cloudEndpoints(settings))) {
+    const overridden = settings[`${signal}Endpoint` as keyof CloudSettings] !== undefined;
+    const source = overridden ? `${signal}Endpoint` : settings.baseUrl ? "baseUrl" : "default";
+    ctx.log(`${signal.padEnd(8)}${url.toString().padEnd(46)}${source}`);
+  }
 
   // The `RATEL_API_KEY` pair outranks all of these, but it lives in the daemon's
   // environment, which this process cannot see.

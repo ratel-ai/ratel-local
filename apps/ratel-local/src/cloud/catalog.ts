@@ -1,7 +1,12 @@
 import type { CloudSkillCatalog, RuntimeContextRef } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
-import { CLOUD_PROFILE_ENV, type CloudSettings, resolveCloudCredential } from "./settings.js";
+import {
+  CLOUD_PROFILE_ENV,
+  type CloudSettings,
+  cloudEndpoints,
+  resolveCloudCredential,
+} from "./settings.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
 const TIMEOUT_MS = 10_000;
@@ -102,11 +107,6 @@ interface CloudCredential {
   apiKey: string;
 }
 
-/** `/v1/catalog` on the traces origin — not a `/traces` → `/logs` path swap. */
-export function cloudCatalogEndpoint(tracesEndpoint: URL): URL {
-  return new URL("/v1/catalog", tracesEndpoint);
-}
-
 /**
  * Resolves in ADR-0021's order. An unknown profile throws rather than falling
  * back, so one project cannot silently pull another's account.
@@ -136,8 +136,7 @@ export function createCloudCatalogSource(input: {
       source: profile ? source : "store default",
     });
     if (!credential) return undefined;
-    // Already validated by the store.
-    return { endpoint: new URL(credential.tracesEndpoint), apiKey: credential.apiKey };
+    return { endpoint: cloudEndpoints(settings).catalog, apiKey: credential.apiKey };
   };
 
   return async (
@@ -146,7 +145,7 @@ export function createCloudCatalogSource(input: {
   ): Promise<CloudSkillCatalog | undefined> => {
     const credential = resolve(profile);
     if (!credential) return undefined;
-    const endpoint = cloudCatalogEndpoint(credential.endpoint).toString();
+    const endpoint = credential.endpoint.toString();
     const key = `${endpoint}\u0000${credential.apiKey}`;
     const loader =
       loaders.get(key) ??

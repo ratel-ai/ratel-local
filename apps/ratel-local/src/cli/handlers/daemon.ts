@@ -48,6 +48,7 @@ import {
   type CloudSettings,
   CloudSettingsStore,
   type CloudSettingsStoreLike,
+  cloudEndpoints,
   cloudSettingsPath,
   DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
   legacyCloudSettingsPath,
@@ -657,12 +658,18 @@ export async function runDaemonServer(
               : "Ratel Cloud API key is required",
           );
         }
-        const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
         const nextSettings: CloudSettings = {
-          tracesEndpoint: next.endpoint.toString(),
+          ...onDisk,
+          tracesEndpoint: endpoint,
           default: onDisk?.default ?? profileName,
-          profiles: { ...onDisk?.profiles, [profileName]: { apiKey: next.apiKey } },
+          profiles: { ...onDisk?.profiles, [profileName]: { apiKey: retainedApiKey } },
         };
+        const nextEndpoints = cloudEndpoints(nextSettings);
+        const next = cloudOtlpTraceRelayOptions({
+          endpoint: nextEndpoints.traces.toString(),
+          logsEndpoint: nextEndpoints.logs,
+          apiKey: retainedApiKey,
+        });
         // Published only once it is on disk: the catalog reads this per pull, so
         // a failed write must not hand it a credential nothing stored.
         await cloudSettingsStore.save(nextSettings);
@@ -938,8 +945,10 @@ function cloudOptionsFromStore(
       source: selected ? `${CLOUD_PROFILE_ENV} environment` : "store default",
     });
     if (!resolved) return undefined;
+    const endpoints = cloudEndpoints(settings);
     return cloudOtlpTraceRelayOptions({
-      endpoint: resolved.tracesEndpoint,
+      endpoint: endpoints.traces.toString(),
+      logsEndpoint: endpoints.logs,
       apiKey: resolved.apiKey,
     });
   } catch (error) {

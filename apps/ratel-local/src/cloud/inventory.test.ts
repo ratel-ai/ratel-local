@@ -5,8 +5,8 @@ import { nodeFs, ratelConfigPath } from "@ratel-ai/ratel-local-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inventoryCloudSettings } from "./inventory.js";
 
+// A plain store names no endpoint: the deployment is the default one.
 const STORE = {
-  tracesEndpoint: "https://cloud.ratel.sh/api/v1/traces",
   default: "personal",
   profiles: { personal: { apiKey: "rtl_personal" } },
 };
@@ -72,6 +72,26 @@ describe("inventoryCloudSettings", () => {
       JSON.stringify({ endpoint: STORE.tracesEndpoint, apiKey: "" }),
       { mode: 0o600 },
     );
+    expect(await codes()).toEqual([]);
+  });
+
+  it("reports signals left on different deployments", async () => {
+    await writeStore({
+      ...STORE,
+      baseUrl: "https://staging.ratel.sh",
+      catalogEndpoint: "https://cloud.ratel.sh/api/v1/catalog",
+    });
+
+    const diagnostics = await inventoryCloudSettings({ env: { homeDir, projectRoot }, fs: nodeFs });
+
+    const split = diagnostics.find(({ code }) => code === "cloud_endpoints_split");
+    expect(split?.severity).toBe("warning");
+    expect(split?.message).toContain("traces on https://staging.ratel.sh");
+    expect(split?.message).toContain("catalog on https://cloud.ratel.sh");
+  });
+
+  it("says nothing when one baseUrl carries every signal", async () => {
+    await writeStore({ ...STORE, baseUrl: "https://staging.ratel.sh" });
     expect(await codes()).toEqual([]);
   });
 

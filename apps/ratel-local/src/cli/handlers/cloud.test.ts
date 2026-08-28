@@ -65,7 +65,6 @@ function store(initial?: CloudSettings) {
 }
 
 const EXISTING: CloudSettings = {
-  tracesEndpoint: "https://cloud.ratel.sh/api/v1/traces",
   default: "personal",
   profiles: { personal: { apiKey: "rtl_personal" } },
 };
@@ -77,12 +76,9 @@ describe("cloud add", () => {
 
     await runCloud(ctx, { store: target });
 
+    // Nothing about endpoints: a first credential does not pin a deployment.
     expect(target.saved).toEqual([
-      {
-        tracesEndpoint: "https://cloud.ratel.sh/api/v1/traces",
-        default: "personal",
-        profiles: { personal: { apiKey: "rtl_new" } },
-      },
+      { default: "personal", profiles: { personal: { apiKey: "rtl_new" } } },
     ]);
     // A single-project setup never has to think about selection.
     expect(output.join("\n")).toContain('"personal" is the default profile');
@@ -212,7 +208,6 @@ describe("cloud list", () => {
 });
 
 const TWO_PROFILES: CloudSettings = {
-  tracesEndpoint: "https://cloud.ratel.sh/api/v1/traces",
   default: "personal",
   profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
 };
@@ -259,6 +254,25 @@ describe("cloud list bindings", () => {
     const printed = output.join("\n");
     expect(printed).toContain("warning: ignoring /repo/.ratel/config.json");
     expect(printed).toContain('Cloud skills here: "personal" (store default)');
+  });
+
+  it("shows each endpoint with where it came from", async () => {
+    const { ctx, output } = context("list", [], {});
+
+    await runCloud(ctx, {
+      store: store({
+        ...TWO_PROFILES,
+        baseUrl: "https://staging.ratel.sh",
+        catalogEndpoint: "https://scratch.example.test/api/v1/catalog",
+      }),
+      processEnv: {},
+    });
+
+    const printed = output.join("\n");
+    expect(printed).toMatch(/traces\s+https:\/\/staging\.ratel\.sh\/api\/v1\/traces\s+baseUrl/);
+    expect(printed).toMatch(
+      /catalog\s+https:\/\/scratch\.example\.test\/api\/v1\/catalog\s+catalogEndpoint/,
+    );
   });
 
   it("warns when the selected profile is not stored", async () => {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   CloudSettingsStore,
+  cloudEndpoints,
   cloudSettingsPath,
   legacyCloudSettingsPath,
   resolveCloudCredential,
@@ -55,8 +56,10 @@ describe("Cloud settings store", () => {
     );
 
     const logs: string[] = [];
+    // The old file's origin becomes the deployment; its path is the standard one,
+    // so nothing needs to be carried over as an override.
     expect(await store(homeDir, (m) => logs.push(m)).load()).toEqual({
-      tracesEndpoint: ENDPOINT,
+      baseUrl: "https://cloud.example.test",
       default: "default",
       profiles: { default: { apiKey: "rtl_legacy" } },
     });
@@ -130,8 +133,27 @@ describe("resolveCloudCredential", () => {
   it("falls back to the store default when nothing selects a profile", () => {
     expect(resolveCloudCredential(settings, { source: "store default" })).toEqual({
       apiKey: "rtl_personal",
-      tracesEndpoint: ENDPOINT,
     });
+  });
+
+  it("puts every signal on the configured deployment, and only what is overridden elsewhere", () => {
+    expect(cloudEndpoints().catalog.toString()).toBe("https://cloud.ratel.sh/api/v1/catalog");
+
+    const staging = cloudEndpoints({ baseUrl: "https://staging.ratel.sh", profiles: {} });
+    expect([staging.traces, staging.logs, staging.catalog].map(String)).toEqual([
+      "https://staging.ratel.sh/api/v1/traces",
+      "https://staging.ratel.sh/api/v1/logs",
+      "https://staging.ratel.sh/api/v1/catalog",
+    ]);
+
+    // One signal aimed elsewhere moves alone; the rest stay on the deployment.
+    const mixed = cloudEndpoints({
+      baseUrl: "https://staging.ratel.sh",
+      catalogEndpoint: "https://scratch.example.test/api/v1/catalog",
+      profiles: {},
+    });
+    expect(mixed.catalog.toString()).toBe("https://scratch.example.test/api/v1/catalog");
+    expect(mixed.traces.toString()).toBe("https://staging.ratel.sh/api/v1/traces");
   });
 
   it("uses the named profile over the default", () => {
