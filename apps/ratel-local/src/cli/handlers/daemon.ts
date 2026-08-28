@@ -636,16 +636,26 @@ export async function runDaemonServer(
       status: async () => ({
         featureEnabled: featureFlags.cloudTelemetry,
         configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
+        credentialStored: environmentCloudOptions === undefined,
         endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
       }),
       save: async ({ endpoint, apiKey }) => {
-        const retainedApiKey = apiKey?.trim() ? apiKey : activeCloudOptions?.apiKey;
-        if (!retainedApiKey) throw new Error("Ratel Cloud API key is required");
-        const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
         // The profile this daemon resolves, in the order the relay resolves it, so
         // the single-credential UI never edits a profile other than the active one.
         const profileName =
           selectedProfile ?? persistedCloudSettings?.default ?? MIGRATED_PROFILE_NAME;
+        // Retained from the store, never from memory: an unchanged key field must
+        // not promote a `RATEL_API_KEY` override onto disk (ADR-0013).
+        const retainedApiKey =
+          apiKey?.trim() || persistedCloudSettings?.profiles[profileName]?.apiKey;
+        if (!retainedApiKey) {
+          throw new Error(
+            environmentCloudOptions
+              ? `this daemon uses a Ratel Cloud key from ${CLOUD_API_KEY_ENV}, which is not stored; enter a key to store one`
+              : "Ratel Cloud API key is required",
+          );
+        }
+        const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
         persistedCloudSettings = {
           tracesEndpoint: next.endpoint.toString(),
           default: persistedCloudSettings?.default ?? profileName,

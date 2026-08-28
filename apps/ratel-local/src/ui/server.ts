@@ -112,6 +112,8 @@ export interface CloudTraceSettingsStatus {
   featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
+  /** False when the active key came from the environment, so Settings cannot keep it. */
+  credentialStored?: boolean;
 }
 
 export interface CloudTraceSettingsControlPlane {

@@ -333,6 +333,53 @@ describe("runDaemon", () => {
     }
   });
 
+  it("refuses to persist a key the environment supplied", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const save = vi.fn(async () => {});
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: {
+          [CLOUD_TELEMETRY_FEATURE_ENV]: "1",
+          RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/api/v1/traces",
+          RATEL_API_KEY: "rtl_from_environment",
+        },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudSettingsStore: { load: async () => undefined, save },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+      const status = await fetch(new URL("/api/cloud-traces", daemonUrl), { headers });
+      expect(await status.json()).toMatchObject({ configured: true, credentialStored: false });
+
+      // Saving the endpoint alone used to write RATEL_API_KEY to disk (ADR-0013).
+      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ endpoint: "https://cloud.example.test/api/v1/traces" }),
+      });
+
+      expect(saved.status).toBeGreaterThanOrEqual(400);
+      expect(save).not.toHaveBeenCalled();
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("saves a UI key into the profile the daemon resolved, not the store default", async () => {
     const fs = new MemFs();
     const logs: string[] = [];

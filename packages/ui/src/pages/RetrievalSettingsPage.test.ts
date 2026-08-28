@@ -59,6 +59,20 @@ describe("retrieval settings model", () => {
     ).toEqual({ endpoint: "https://cloud.ratel.sh/api/v1/traces" });
   });
 
+  it("requires a key when the configured one came from the environment", () => {
+    // Retaining it would ask the daemon to write a single-run override to disk.
+    expect(() =>
+      cloudTraceSettingsPatch(
+        {
+          configured: true,
+          credentialStored: false,
+          endpoint: "https://cloud.ratel.sh/api/v1/traces",
+        },
+        "",
+      ),
+    ).toThrow(/API key is required/);
+  });
+
   it("maps the inherited BM25 default to a model-free draft", () => {
     expect(retrievalDraftFromConfig(undefined)).toEqual({
       method: "bm25",
