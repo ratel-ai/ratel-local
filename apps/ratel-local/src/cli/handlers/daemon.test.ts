@@ -473,7 +473,11 @@ describe("runDaemon", () => {
       });
 
       expect(reloaded.status).toBe(200);
-      expect(await reloaded.json()).toMatchObject({ configured: true });
+      // Same answer as `status()`: two routes must not disagree about the relay.
+      const status = await (
+        await fetch(new URL("/api/cloud-traces", daemonUrl), { headers })
+      ).json();
+      expect(await reloaded.json()).toEqual(status);
     } finally {
       await result.shutdown?.();
     }
@@ -511,6 +515,15 @@ describe("runDaemon", () => {
 
       const status = await fetch(new URL("/api/cloud-traces", daemonUrl), { headers });
       expect(await status.json()).toMatchObject({ configured: true, credentialStored: false });
+
+      // Both routes answer about the same relay, which here holds the env key.
+      const reloaded = await fetch(new URL("/api/cloud-traces/reload", daemonUrl), {
+        method: "POST",
+        headers,
+      });
+      expect(await reloaded.json()).toMatchObject({
+        endpoint: "https://cloud.example.test/api/v1/traces",
+      });
 
       // Saving the endpoint alone used to write RATEL_API_KEY to disk (ADR-0013).
       const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {

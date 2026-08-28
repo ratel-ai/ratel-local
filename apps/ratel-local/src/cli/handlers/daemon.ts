@@ -663,7 +663,8 @@ export async function runDaemonServer(
         return {
           featureEnabled: featureFlags.cloudTelemetry,
           configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
-          endpoint: cloudEndpoints(stored).traces.toString(),
+          endpoint:
+            activeCloudOptions?.endpoint.toString() ?? cloudEndpoints(stored).traces.toString(),
           credentialStored: environmentCloudOptions === undefined,
         };
       },

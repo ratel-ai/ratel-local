@@ -266,7 +266,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
         const response = await requestRunningDaemon(ctx, "/api/cloud-traces/reload", {
           method: "POST",
         });
-        return response?.ok === true;
+        if (response === null) return "no-daemon";
+        return response.ok ? "reloaded" : "failed";
       },
     });
     return {};

@@ -31,8 +31,8 @@ export interface CloudHandlerDependencies {
   mutateCloud?: CliCloudMutator;
   /** Daemon environment, for the profile `RATEL_PROFILE` selects. */
   processEnv?: NodeJS.ProcessEnv;
-  /** true if a running daemon re-read the store. */
-  reloadDaemon?: () => Promise<boolean>;
+  /** Tells a running daemon to re-read the store this key was just written to. */
+  reloadDaemon?: () => Promise<"reloaded" | "no-daemon" | "failed">;
 }
 
 export async function runCloud(
@@ -89,8 +89,11 @@ async function add(
   };
   await store.save(next);
   ctx.log(`Stored the Ratel Cloud key for "${profile}".`);
-  const reloaded = await dependencies.reloadDaemon?.();
-  if (reloaded === false) ctx.log("Restart the daemon to use it: ratel-local daemon restart");
+  // A daemon that is not running reads the store at its next start, so only a
+  // live one that refused the reload leaves something to say.
+  if ((await dependencies.reloadDaemon?.()) === "failed") {
+    ctx.log("Restart the daemon to use it: ratel-local daemon restart");
+  }
   if (next.default === profile) {
     ctx.log(`"${profile}" is the default profile.`);
   } else {
