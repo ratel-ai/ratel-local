@@ -88,10 +88,11 @@ export async function inventoryCloudSettings(input: {
     return undefined;
   });
 
-  diagnostics.push(...(await exposedSecrets(path)));
-  if (await legacyApiKey(legacyPath)) diagnostics.push(...(await exposedSecrets(legacyPath)));
+  const legacyHoldsKey = await legacyApiKey(legacyPath);
+  diagnostics.push(...(await exposedSecrets(path, dirname(path))));
+  if (legacyHoldsKey) diagnostics.push(...(await exposedSecrets(legacyPath)));
 
-  if ((await legacyApiKey(legacyPath)) && (await exists(path))) {
+  if (legacyHoldsKey && (await exists(path))) {
     diagnostics.push({
       code: "cloud_settings_legacy_present",
       severity: "warning",
@@ -155,12 +156,11 @@ function splitDeployment(settings: CloudSettings | undefined): CloudDiagnostic[]
 }
 
 /** A stored key that other users can read is a leaked key. */
-async function exposedSecrets(path: string): Promise<CloudDiagnostic[]> {
+async function exposedSecrets(path: string, directory?: string): Promise<CloudDiagnostic[]> {
   const diagnostics: CloudDiagnostic[] = [];
-  for (const [target, expected] of [
-    [path, 0o600],
-    [dirname(path), 0o700],
-  ] as const) {
+  const targets: Array<readonly [string, number]> = [[path, 0o600]];
+  if (directory) targets.push([directory, 0o700]);
+  for (const [target, expected] of targets) {
     const mode = await modeOf(target);
     if (mode === undefined || (mode & 0o077) === 0) continue;
     diagnostics.push({
