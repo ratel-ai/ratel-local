@@ -404,17 +404,24 @@ export async function runDaemonServer(
   let activeCloudOptions = environmentCloudOptions ?? persistedCloudOptions;
 
   const selectedProfile = daemonProcessEnv[CLOUD_PROFILE_ENV];
-  const storeDefault = persistedCloudSettings?.default;
-  const keyFromEnvironment = environmentCloudOptions
-    ? `${CLOUD_API_KEY_ENV} environment`
-    : undefined;
-  const profileFromEnvironment = selectedProfile
-    ? `profile "${selectedProfile}" (${CLOUD_PROFILE_ENV})`
-    : undefined;
-  const profileFromStore = storeDefault ? `profile "${storeDefault}" (store default)` : undefined;
-  let activeCloudSource = !activeCloudOptions
-    ? "none"
-    : (keyFromEnvironment ?? profileFromEnvironment ?? profileFromStore ?? "none");
+  const cloudSourceFor = (settings: CloudSettings | undefined): string => {
+    if (environmentCloudOptions) return `${CLOUD_API_KEY_ENV} environment`;
+    if (selectedProfile) return `profile "${selectedProfile}" (${CLOUD_PROFILE_ENV})`;
+    if (settings?.default) return `profile "${settings.default}" (store default)`;
+    return "none";
+  };
+  let activeCloudSource = activeCloudOptions ? cloudSourceFor(persistedCloudSettings) : "none";
+  const adoptCloudSettings = async (settings: CloudSettings | undefined, source: string) => {
+    persistedCloudSettings = settings;
+    const resolved =
+      environmentCloudOptions ?? cloudOptionsFromStore(settings, daemonProcessEnv, log);
+    if (!resolved) return false;
+    activeCloudOptions = resolved;
+    activeCloudSource = source;
+    cloudOtlpRelay.configure({ ...resolved, fetch: opts.cloudOtlpFetch, log });
+    await ensureRatelTelemetry();
+    return true;
+  };
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
     featureFlags.cloudTelemetry && activeCloudOptions
       ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log }
@@ -435,7 +442,7 @@ export async function runDaemonServer(
   };
   const cloudCatalog = featureFlags.cloudCatalog
     ? createCloudCatalogSource({
-        settings: () => persistedCloudSettings,
+        settings: () => cloudSettingsStore.load(),
         environment: environmentCloudOptions && {
           catalog: new URL(CLOUD_CATALOG_PATH, environmentCloudOptions.endpoint),
           apiKey: environmentCloudOptions.apiKey,
@@ -646,11 +653,28 @@ export async function runDaemonServer(
         credentialStored: environmentCloudOptions === undefined,
         endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
       }),
+      reload: async () => {
+        const stored = await cloudSettingsStore.load().catch((error: Error) => {
+          log(`[ratel] ignored invalid Cloud settings: ${error.message}`);
+          return persistedCloudSettings;
+        });
+        const adopted = await adoptCloudSettings(stored, cloudSourceFor(stored));
+        if (adopted) log("[ratel] Ratel Cloud credential reloaded");
+        return {
+          featureEnabled: featureFlags.cloudTelemetry,
+          configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
+          endpoint: cloudEndpoints(stored).traces.toString(),
+          credentialStored: environmentCloudOptions === undefined,
+        };
+      },
       save: async ({ endpoint, apiKey }) => {
         // `cloud add` writes the store directly, so the boot snapshot goes stale
         // as soon as a profile is added. Rebuilding the file from it would drop
         // that profile and its key.
-        const onDisk = await cloudSettingsStore.load().catch(() => persistedCloudSettings);
+        const onDisk = await cloudSettingsStore.load().catch((error: Error) => {
+          log(`[ratel] ignored invalid Cloud settings: ${error.message}`);
+          return persistedCloudSettings;
+        });
         // The profile this daemon resolves, in the order the relay resolves it, so
         // the single-credential UI never edits a profile other than the active one.
         const profileName = selectedProfile ?? onDisk?.default ?? MIGRATED_PROFILE_NAME;

@@ -98,6 +98,18 @@ describe("cloud add", () => {
     expect(output.join("\n")).toContain("ratel-local cloud use acme");
   });
 
+  it("tells a running daemon to re-read the store, and says so when there is none", async () => {
+    const reloadDaemon = vi.fn(async () => true);
+    const { ctx, output } = context("add", ["acme"], {}, answering("rtl_acme"));
+    await runCloud(ctx, { store: store(EXISTING), reloadDaemon });
+    expect(reloadDaemon).toHaveBeenCalledOnce();
+    expect(output.join("\n")).not.toContain("daemon restart");
+
+    const offline = context("add", ["acme"], {}, answering("rtl_acme"));
+    await runCloud(offline.ctx, { store: store(EXISTING), reloadDaemon: async () => false });
+    expect(offline.output.join("\n")).toContain("ratel-local daemon restart");
+  });
+
   it("stores nothing when the prompt is cancelled", async () => {
     const { ctx } = context("add", ["acme"], {}, answering(CANCEL_SYMBOL));
     const target = store(EXISTING);

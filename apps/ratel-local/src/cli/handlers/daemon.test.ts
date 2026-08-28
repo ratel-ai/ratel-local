@@ -386,6 +386,99 @@ describe("runDaemon", () => {
     }
   });
 
+  it("pulls the catalog with a profile stored after it booted", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    let stored: CloudSettings | undefined;
+    const pulls: string[] = [];
+    const cloudCatalogFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      pulls.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        processEnv: {
+          [CLOUD_TELEMETRY_FEATURE_ENV]: "1",
+          [CLOUD_CATALOG_FEATURE_ENV]: "1",
+        },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudCatalogFetch,
+        cloudSettingsStore: { load: async () => stored, save: async () => {} },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const headers = { Authorization: `Bearer ${token}` };
+
+      stored = {
+        baseUrl: "https://cloud.example.test",
+        default: "personal",
+        profiles: { personal: { apiKey: "rtl_added" } },
+      };
+      expect((await fetch(new URL("/api/config", daemonUrl), { headers })).status).toBe(200);
+
+      expect(pulls).toEqual(["Bearer rtl_added"]);
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("adopts a key written to the store while it was running", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    let stored: CloudSettings | undefined;
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudSettingsStore: { load: async () => stored, save: async () => {} },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const before = await fetch(new URL("/api/cloud-traces", daemonUrl), { headers });
+      expect(await before.json()).toMatchObject({ configured: false });
+
+      stored = {
+        baseUrl: "https://cloud.example.test",
+        default: "personal",
+        profiles: { personal: { apiKey: "rtl_added" } },
+      };
+      const reloaded = await fetch(new URL("/api/cloud-traces/reload", daemonUrl), {
+        method: "POST",
+        headers,
+      });
+
+      expect(reloaded.status).toBe(200);
+      expect(await reloaded.json()).toMatchObject({ configured: true });
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("refuses to persist a key the environment supplied", async () => {
     const fs = new MemFs();
     const logs: string[] = [];

@@ -31,6 +31,8 @@ export interface CloudHandlerDependencies {
   mutateCloud?: CliCloudMutator;
   /** Daemon environment, for the profile `RATEL_PROFILE` selects. */
   processEnv?: NodeJS.ProcessEnv;
+  /** true if a running daemon re-read the store. */
+  reloadDaemon?: () => Promise<boolean>;
 }
 
 export async function runCloud(
@@ -47,7 +49,7 @@ export async function runCloud(
     );
   const settings = (await store.load()) ?? { profiles: {} };
 
-  if (verb === "add") return add(ctx, store, settings);
+  if (verb === "add") return add(ctx, store, settings, dependencies);
   if (verb === "use") return use(ctx, settings, dependencies);
   if (verb === "list") return list(ctx, settings, dependencies.processEnv ?? process.env);
   throw new ArgError(`unknown cloud verb: ${verb}`);
@@ -57,6 +59,7 @@ async function add(
   ctx: HandlerCtx,
   store: NonNullable<CloudHandlerDependencies["store"]>,
   settings: CloudSettings,
+  dependencies: CloudHandlerDependencies,
 ): Promise<void> {
   const profile = profileArgument(ctx);
   // Asked before prompting: the adapter answers EOF with the cancel it also
@@ -86,6 +89,8 @@ async function add(
   };
   await store.save(next);
   ctx.log(`Stored the Ratel Cloud key for "${profile}".`);
+  const reloaded = await dependencies.reloadDaemon?.();
+  if (reloaded === false) ctx.log("Restart the daemon to use it: ratel-local daemon restart");
   if (next.default === profile) {
     ctx.log(`"${profile}" is the default profile.`);
   } else {
