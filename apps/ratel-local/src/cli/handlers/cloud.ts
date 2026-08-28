@@ -1,10 +1,5 @@
-import {
-  parseConfig,
-  type RatelScope,
-  ratelConfigPath,
-  readJson,
-  resolveScope,
-} from "@ratel-ai/ratel-local-core";
+import { resolveScope } from "@ratel-ai/ratel-local-core";
+import { scanCloudProfileScopes } from "../../cloud/inventory.js";
 import {
   CLOUD_PROFILE_ENV,
   type CloudSettings,
@@ -131,7 +126,11 @@ async function list(
     return;
   }
   const selected = env[CLOUD_PROFILE_ENV];
-  const scoped = await scopedProfile(ctx);
+  const scopes = await scanCloudProfileScopes(ctx);
+  for (const scope of scopes.unreadable) {
+    ctx.log(`warning: ignoring ${scope.path}: ${scope.message}`);
+  }
+  const scoped = scopes.selected;
   for (const name of names) {
     const marks = [
       name === settings.default ? "default" : "",
@@ -161,33 +160,6 @@ async function list(
   }
   if (scoped && !selected) {
     ctx.log('  Traces do not follow cloud.profile; run "ratel-local traces status".');
-  }
-}
-
-/** Read per scope rather than merged: `mergeConfigs` keeps the name and loses the file. */
-async function scopedProfile(
-  ctx: HandlerCtx,
-): Promise<{ profile: string; path: string } | undefined> {
-  const found: Array<{ profile: string; path: string }> = [];
-  for (const scope of ["user", "project", "local"] as const) {
-    const path = scopedConfigPath(ctx, scope);
-    if (!path) continue;
-    try {
-      const document = await readJson<unknown>(ctx.fs, path);
-      const profile = document === null ? undefined : parseConfig(document).cloud?.profile;
-      if (profile) found.push({ profile, path });
-    } catch (error) {
-      ctx.log(`warning: ignoring ${path}: ${(error as Error).message}`);
-    }
-  }
-  return found.at(-1);
-}
-
-function scopedConfigPath(ctx: HandlerCtx, scope: RatelScope): string | undefined {
-  try {
-    return ratelConfigPath(scope, ctx.env);
-  } catch {
-    return undefined;
   }
 }
 
