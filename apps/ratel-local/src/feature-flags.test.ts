@@ -16,8 +16,10 @@ describe("feature flags", () => {
   });
 
   it("persists only enabled flags into daemon service environments", () => {
-    expect(featureFlagServiceEnvironment({ cloudTelemetry: false })).toEqual({});
-    expect(featureFlagServiceEnvironment({ cloudTelemetry: true })).toEqual({
+    expect(featureFlagServiceEnvironment({ cloudTelemetry: false, cloudCatalog: false })).toEqual(
+      {},
+    );
+    expect(featureFlagServiceEnvironment({ cloudTelemetry: true, cloudCatalog: false })).toEqual({
       [CLOUD_TELEMETRY_FEATURE_ENV]: "1",
     });
   });

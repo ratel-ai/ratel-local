@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CloudSettings } from "../../cloud/settings.js";
 import { CANCEL_SYMBOL, silentPromptAdapter } from "../prompts.js";
 import { runCloud } from "./cloud.js";
-import type { HandlerCtx } from "./types.js";
+import type { CliCloudMutationRequest, HandlerCtx } from "./types.js";
 
 class MemFs implements BackupFs, JsonFs {
   constructor(private readonly documents: Record<string, unknown> = {}) {}
@@ -159,7 +159,9 @@ describe("cloud add", () => {
 
 describe("cloud use", () => {
   it("writes the selection through the config mutator", async () => {
-    const mutateCloud = vi.fn(async () => ({ path: "/repo/.ratel/config.json" }));
+    const mutateCloud = vi.fn(async (_request: CliCloudMutationRequest) => ({
+      path: "/repo/.ratel/config.json",
+    }));
     const { ctx, output } = context("use", ["personal"], { scope: "project" });
 
     await runCloud(ctx, { store: store(EXISTING), mutateCloud });
@@ -169,7 +171,9 @@ describe("cloud use", () => {
   });
 
   it("defaults to project scope", async () => {
-    const mutateCloud = vi.fn(async () => ({ path: "/repo/.ratel/config.json" }));
+    const mutateCloud = vi.fn(async (_request: CliCloudMutationRequest) => ({
+      path: "/repo/.ratel/config.json",
+    }));
     const { ctx } = context("use", ["personal"]);
     await runCloud(ctx, { store: store(EXISTING), mutateCloud });
     expect(mutateCloud.mock.calls[0]?.[0]).toMatchObject({ scope: "project" });

@@ -11,9 +11,9 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
-import { CLOUD_PROFILE_ENV } from "../../cloud/settings.js";
+import { CLOUD_PROFILE_ENV, type CloudSettings } from "../../cloud/settings.js";
 import { connectorHeaders } from "../../daemon/access.js";
-import { CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
+import { CLOUD_CATALOG_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
@@ -336,7 +336,7 @@ describe("runDaemon", () => {
   it("refuses to persist a key the environment supplied", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async () => {});
+    const save = vi.fn(async (_settings: CloudSettings) => {});
     const result = await runDaemon(
       daemonArgs(),
       makeCtx(fs),
@@ -383,11 +383,11 @@ describe("runDaemon", () => {
   it("keeps a profile added by the CLI while the daemon was running", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async () => {});
+    const save = vi.fn(async (_settings: CloudSettings) => {});
     const endpoint = "https://cloud.example.test/api/v1/traces";
     // `cloud add` writes the store behind the daemon's back, so the second read
     // returns a profile the boot snapshot never had.
-    const reads = [
+    const reads: CloudSettings[] = [
       { tracesEndpoint: endpoint, default: "personal", profiles: { personal: { apiKey: "p" } } },
       {
         tracesEndpoint: endpoint,
@@ -431,10 +431,72 @@ describe("runDaemon", () => {
     }
   });
 
+  it("does not hand the catalog a credential a failed write never stored", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const endpoint = "https://cloud.example.test/api/v1/traces";
+    const stored = {
+      tracesEndpoint: endpoint,
+      default: "personal",
+      profiles: { personal: { apiKey: "rtl_original" } },
+    };
+    const pulls: string[] = [];
+    const cloudCatalogFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      pulls.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        processEnv: {
+          [CLOUD_TELEMETRY_FEATURE_ENV]: "1",
+          [CLOUD_CATALOG_FEATURE_ENV]: "1",
+        },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudCatalogFetch,
+        cloudSettingsStore: {
+          load: async () => stored,
+          save: async () => {
+            throw new Error("ENOSPC");
+          },
+        },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ endpoint, apiKey: "rtl_rotated" }),
+      });
+      expect(saved.status).toBeGreaterThanOrEqual(400);
+
+      // Forces a context resolve, which is the only surface that reads the
+      // settings the save would have published.
+      const config = await fetch(new URL("/api/config", daemonUrl), { headers });
+      expect(config.status).toBe(200);
+      expect(pulls).not.toContain("Bearer rtl_rotated");
+      expect(pulls.at(-1)).toBe("Bearer rtl_original");
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("saves a UI key into the profile the daemon resolved, not the store default", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async () => {});
+    const save = vi.fn(async (_settings: CloudSettings) => {});
     const stored = {
       tracesEndpoint: "https://cloud.example.test/api/v1/traces",
       default: "personal",
@@ -484,7 +546,7 @@ describe("runDaemon", () => {
   it("activates and persists Cloud trace settings from the running daemon UI", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async () => {});
+    const save = vi.fn(async (_settings: CloudSettings) => {});
     const configureRatelTelemetry = vi.fn(async () => ({ shutdown: async () => {} }));
     const cloudFetch = vi.fn(async () => new Response(Buffer.from([0x00]), { status: 200 }));
     const result = await runDaemon(
@@ -628,7 +690,9 @@ describe("runDaemon", () => {
   it("selects a stored profile by name through RATEL_PROFILE", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const cloudOtlpFetch = vi.fn(async () => new Response(null, { status: 202 }));
+    const cloudOtlpFetch = vi.fn(
+      async (_input: URL | RequestInfo, _init?: RequestInit) => new Response(null, { status: 202 }),
+    );
     const result = await runDaemon(
       daemonArgs(),
       makeCtx(fs),
@@ -662,8 +726,8 @@ describe("runDaemon", () => {
         headers: { "Content-Type": "application/x-protobuf" },
         body: Buffer.from([0x0a, 0x00]),
       });
-      const [, init] = cloudOtlpFetch.mock.calls[0] as [URL, RequestInit];
-      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer acme-secret");
+      const init = cloudOtlpFetch.mock.calls[0]?.[1];
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer acme-secret");
     } finally {
       await result.shutdown?.();
     }
@@ -1210,7 +1274,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
 
     expect(plist).toContain("<key>EnvironmentVariables</key>");
@@ -1309,7 +1373,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: false },
+        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1362,7 +1426,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true },
+        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
       };
       const original =
         platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input);
@@ -1406,7 +1470,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true },
+        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1440,7 +1504,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
     fs.files.set(paths.systemdService, original);
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -1538,7 +1602,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: false },
+      featureFlags: { cloudTelemetry: false, cloudCatalog: false },
     });
 
   const restartWithProbe = (
@@ -1627,7 +1691,7 @@ describe("runDaemon", () => {
         executablePath: "/opt/bin/ratel-local",
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
-        featureFlags: { cloudTelemetry: false },
+        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1824,7 +1888,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
 
     expect(service).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");
