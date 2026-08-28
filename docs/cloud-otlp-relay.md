@@ -89,10 +89,12 @@ stops being read while still holding a key — delete it when the downgrade path
 no longer matters. See
 [ADR 0021](adr/0021-cloud-project-credential-ownership.md).
 
-Agent Setup also offers an inline API-key prompt whenever native tracing is
-enabled but Ratel Cloud is not configured. It reuses the daemon's Cloud
-endpoint, so only the API key is requested. Create a key at
-<https://cloud.ratel.sh/settings> if needed.
+Agent Setup, in the daemon UI, also offers an inline API-key prompt whenever
+native tracing is enabled but Ratel Cloud is not configured. It reuses the
+daemon's Cloud endpoint, so only the API key is requested. Create a key at
+<https://cloud.ratel.sh/settings> if needed. That prompt fires on one global
+boolean and writes the profile the daemon resolved, so it can store a first
+credential but never a second one: use `cloud add` for those.
 
 For a one-run override, start the daemon with both values:
 
@@ -149,8 +151,9 @@ port. It does not replace an unrelated exporter by default. Interactive
 overwrite explains that no backup is retained; automation must use both
 `--overwrite` and `--yes`.
 
-When Ratel Cloud is not configured, `traces enable` points at
-`ratel-local cloud add <profile>` instead of prompting inline.
+When Ratel Cloud is not configured, the `traces enable` command points at
+`ratel-local cloud add <profile>` instead of prompting inline, for the reason
+above.
 
 `ratel-local setup` offers traces as its final optional interactive step. Plain
 `setup --yes` continues to skip traces. Explicit automation uses:
