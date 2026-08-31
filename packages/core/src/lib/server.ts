@@ -1,6 +1,11 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import {
+  CallToolRequestSchema,
+  ErrorCode,
+  ListToolsRequestSchema,
+  McpError,
+} from "@modelcontextprotocol/sdk/types.js";
 import {
   EmbedderError,
   type ExecutableTool,
@@ -98,6 +103,7 @@ export async function createMcpServer(
       throw new Error(`unknown gateway tool: ${req.params.name}`);
     }
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+    assertRequiredArguments(req.params.name, tool.inputSchema, args);
     let out: unknown;
     try {
       out = await tool.execute(args);
@@ -125,6 +131,30 @@ export async function createMcpServer(
       await server.sendToolListChanged();
     },
   };
+}
+
+/**
+ * The low-level `Server` handler does not validate against `inputSchema` the way
+ * `McpServer.registerTool` would, so a missing required field reached the tool and
+ * failed deeper down — for `invoke_tool`, inside the upstream, whose complaint then
+ * named its own fields instead of the one actually missing. Received keys are listed
+ * because the usual cause is a misspelled one.
+ */
+function assertRequiredArguments(
+  toolName: string,
+  schema: unknown,
+  args: Record<string, unknown>,
+): void {
+  if (!isPlainObject(schema) || !Array.isArray(schema.required)) return;
+  const missing = schema.required.filter((key) => typeof key === "string" && !(key in args));
+  if (missing.length === 0) return;
+  const received = Object.keys(args);
+  throw new McpError(
+    ErrorCode.InvalidParams,
+    `${toolName}: missing required argument(s): ${missing.join(", ")} (received: ${
+      received.length > 0 ? received.join(", ") : "no arguments"
+    })`,
+  );
 }
 
 const RETRIEVAL_ERROR_SCHEMA: JSONSchema7 = {
