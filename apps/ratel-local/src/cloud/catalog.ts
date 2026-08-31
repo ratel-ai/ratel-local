@@ -59,12 +59,13 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const now = options.now ?? Date.now;
   let cached: CloudSkillCatalog | undefined;
   let rejectedUntil = 0;
+  let rejectedStatus: number | undefined;
 
   return {
     async load() {
       // A revoked key fails identically every time, and every context resolve
       // asks again. Hold the answer rather than ask Cloud on a loop.
-      if (now() < rejectedUntil) throw authFailedError();
+      if (now() < rejectedUntil) throw authFailedError(rejectedStatus);
       let response: Response;
       try {
         response = await fetchUpstream(endpoint, {
@@ -83,6 +84,7 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
 
       if (response.status === 401 || response.status === 403) {
         rejectedUntil = now() + AUTH_FAILURE_COOLDOWN_MS;
+        rejectedStatus = response.status;
         throw authFailedError(response.status);
       }
       // Only a 200 replaces the cache, so this is the steady state while the

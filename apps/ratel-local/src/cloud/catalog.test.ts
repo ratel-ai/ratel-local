@@ -167,7 +167,7 @@ describe("createCloudCatalogLoader", () => {
     });
 
     await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
-    await expect(client.load()).rejects.toThrow(/auth failed/);
+    await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
     expect(calls).toHaveLength(1);
 
     clock = 60_001;
