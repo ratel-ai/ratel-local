@@ -214,11 +214,13 @@ describe("ContextSnapshotResolver", () => {
       homeDir,
       projectRegistry: registry,
       cloudCatalog: async () => ({
-        catalogVersion: "v1",
-        skills: [
-          { id: "shared", name: "shared", description: "the published copy", body: "cloud" },
-          { id: "cloud-only", name: "cloud-only", description: "published", body: "cloud" },
-        ],
+        catalog: {
+          catalogVersion: "v1",
+          skills: [
+            { id: "shared", name: "shared", description: "the published copy", body: "cloud" },
+            { id: "cloud-only", name: "cloud-only", description: "published", body: "cloud" },
+          ],
+        },
       }),
     });
 
@@ -239,7 +241,7 @@ describe("ContextSnapshotResolver", () => {
       createContextSnapshotResolver({
         homeDir,
         projectRegistry: registry,
-        cloudCatalog: async () => ({ catalogVersion, skills: [] }),
+        cloudCatalog: async () => ({ catalog: { catalogVersion, skills: [] } }),
       });
 
     const context = { kind: "project" as const, projectId: project.id };
@@ -262,7 +264,7 @@ describe("ContextSnapshotResolver", () => {
       projectRegistry: registry,
       cloudCatalog: async (_context, profile) => {
         pulls.push(profile);
-        return { catalogVersion: `v${pulls.length}`, skills: [] };
+        return { catalog: { catalogVersion: `v${pulls.length}`, skills: [] } };
       },
     });
 
@@ -290,6 +292,28 @@ describe("ContextSnapshotResolver", () => {
     expect(failed?.severity).toBe("warning");
     expect(failed?.message).toContain('"acme" (cloud.profile)');
     expect(snapshot.skills.effectiveSkills).toEqual([]);
+  });
+
+  it("warns when the catalog served is a cached one, so a stale catalog is not silent", async () => {
+    const { homeDir, project } = await fixture();
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+      cloudCatalog: async () => ({
+        catalog: { catalogVersion: "v1", skills: [] },
+        degraded: "The operation was aborted due to timeout",
+      }),
+    });
+
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+
+    const stale = snapshot.diagnostics.find((d) => d.code === "cloud-catalog-degraded");
+    expect(stale?.severity).toBe("warning");
+    expect(stale?.message).toContain("aborted due to timeout");
+    // Degraded is not unavailable: the cached catalog is still in use.
+    expect(
+      snapshot.diagnostics.find((d) => d.code === "cloud-catalog-unavailable"),
+    ).toBeUndefined();
   });
 
   it("resolves without a Cloud catalog at all", async () => {

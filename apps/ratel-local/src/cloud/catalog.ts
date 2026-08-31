@@ -1,4 +1,5 @@
 import {
+  type CloudCatalogPullResult,
   type CloudSkillCatalog,
   isPlainObject,
   type RuntimeContextRef,
@@ -149,7 +150,7 @@ export function createCloudCatalogSource(input: {
   return async (
     _context: RuntimeContextRef,
     profile?: string,
-  ): Promise<CloudSkillCatalog | undefined> => {
+  ): Promise<CloudCatalogPullResult | undefined> => {
     const credential = await resolve(profile);
     if (!credential) return undefined;
     const endpoint = credential.catalog.toString();
@@ -164,7 +165,7 @@ export function createCloudCatalogSource(input: {
     loaders.set(key, loader);
     const { snapshot, degraded } = await loader.load();
     if (degraded) input.log(`[ratel] serving a cached Cloud catalog: ${degraded}`);
-    return snapshot;
+    return { catalog: snapshot, ...(degraded ? { degraded } : {}) };
   };
 }
 

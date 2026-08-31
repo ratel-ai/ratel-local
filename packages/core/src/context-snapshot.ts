@@ -77,13 +77,19 @@ export interface ContextSnapshotResolverOptions {
   cloudCatalog?: (
     context: RuntimeContextRef,
     profile?: string,
-  ) => Promise<CloudSkillCatalog | undefined>;
+  ) => Promise<CloudCatalogPullResult | undefined>;
+}
+
+export interface CloudCatalogPullResult {
+  catalog: CloudSkillCatalog;
+  degraded?: string;
 }
 
 /** One catalog pull: what it returned, or why it did not. */
 interface CloudCatalogPull {
   catalog?: CloudSkillCatalog;
   error?: string;
+  degraded?: string;
 }
 
 export interface CloudSkillCatalog {
@@ -133,14 +139,10 @@ export function createContextSnapshotResolver(
   const maxReadAttempts = options.maxReadAttempts ?? 3;
   return {
     async resolve(context) {
-      // One pull per resolve, and per resolve only: hoisting this would keep a
-      // published change invisible until the daemon restarted. The promise never
-      // rejects — an unresolvable profile or an unreachable Cloud is a
-      // diagnostic, not a failed context resolution.
       let pulled: Promise<CloudCatalogPull> | undefined;
       const pullCloudCatalog = (profile?: string) => {
         pulled ??= (options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined)).then(
-          (catalog) => ({ catalog }),
+          (result) => (result ? { catalog: result.catalog, degraded: result.degraded } : {}),
           (error: Error) => ({ error: error.message }),
         );
         return pulled;
@@ -212,6 +214,15 @@ export function createContextSnapshotResolver(
                   code: "cloud-catalog-unavailable",
                   severity: "warning" as const,
                   message: `Cloud skills are not in use: ${cloud.error}`,
+                },
+              ]
+            : []),
+          ...(cloud.degraded
+            ? [
+                {
+                  code: "cloud-catalog-degraded",
+                  severity: "warning" as const,
+                  message: `Cloud skills may be out of date: the last cached catalog is being served because ${cloud.degraded}.`,
                 },
               ]
             : []),
