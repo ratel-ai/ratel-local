@@ -202,6 +202,33 @@ the variable leaves an installed daemon unchanged. See the [Cloud OTLP relay and
 contract](docs/cloud-otlp-relay.md) for privacy levels, precedence, failure
 behavior, and rollback instructions.
 
+### Experimental Cloud skill catalog
+
+A project's skills published to Ratel Cloud can join the locally resolved skill
+set, served through the same gateway and the same capability search as local
+ones. Off by default:
+
+```bash
+# New installation
+RATEL_FEATURE_CLOUD_CATALOG=1 ratel-local setup
+
+# Existing installed daemon
+RATEL_FEATURE_CLOUD_CATALOG=1 ratel-local daemon restart
+
+# Disable
+RATEL_FEATURE_CLOUD_CATALOG=0 ratel-local daemon restart
+```
+
+The flag follows same flag semantics as Cloud telemetry above, and the two are independent.
+
+The catalog reuses the credential the trace relay stores in
+`~/.ratel/cloud-traces.json`, read on every pull, so a rotated key applies
+without a restart.
+
+A local skill with the same id wins, and the shadowed Cloud one is reported as a
+warning in the daemon UI. An unreachable or stale catalog is a warning too, never
+a failed context resolve.
+
 ### Verify capability search
 
 Ask the agent to call Ratel Local explicitly:
