@@ -6,6 +6,7 @@ import { secretFreeHttpsUrl } from "./url.js";
 export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/api/v1/catalog";
 
 const TIMEOUT_MS = 10_000;
+const AUTH_FAILURE_COOLDOWN_MS = 60_000;
 
 /** The wire projection `protocol/v1` serves: exactly these seven fields. */
 const WIRE_FIELDS = ["id", "name", "description", "tags", "tools", "metadata", "body"] as const;
@@ -31,6 +32,8 @@ export interface CloudCatalogLoaderOptions {
   apiKey: string;
   /** Injected by tests; the daemon uses the global `fetch`. */
   fetch?: typeof fetch;
+  /** Injected by tests; the daemon uses the wall clock. */
+  now?: () => number;
 }
 
 export class CloudCatalogAuthError extends Error {
@@ -78,10 +81,15 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const endpoint = cloudCatalogEndpoint(options.endpoint);
   headerSafeSecret(options.apiKey, "Ratel Cloud API key");
   const fetchUpstream = options.fetch ?? fetch;
+  const now = options.now ?? Date.now;
   let cached: CloudCatalogSnapshot | undefined;
+  let rejected: { until: number; status: number } | undefined;
 
   return {
     async load() {
+      // A revoked key fails identically every time, and every context resolve
+      // asks again. Hold the answer rather than ask Cloud on a loop.
+      if (rejected && now() < rejected.until) throw new CloudCatalogAuthError(rejected.status);
       let response: Response;
       try {
         response = await fetchUpstream(endpoint, {
@@ -99,6 +107,7 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
       }
 
       if (response.status === 401 || response.status === 403) {
+        rejected = { until: now() + AUTH_FAILURE_COOLDOWN_MS, status: response.status };
         throw new CloudCatalogAuthError(response.status);
       }
       if (response.status === 304) {
