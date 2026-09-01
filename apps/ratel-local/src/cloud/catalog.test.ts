@@ -5,13 +5,14 @@ import {
   CloudCatalogUnavailableError,
   cloudCatalogEndpoint,
   createCloudCatalogLoader,
+  createCloudCatalogSource,
   DEFAULT_CLOUD_CATALOG_ENDPOINT,
 } from "./catalog.js";
 
 const ENDPOINT = DEFAULT_CLOUD_CATALOG_ENDPOINT;
 const VERSION = "6f7f0cee520a24a6edbb6dc7df6b623751cbdf05771e7e7bbe45cc9de943f0a6";
 
-// Shape taken from a real `GET /v1/catalog` against a seeded project; the
+// Shape taken from a real `GET /api/v1/catalog` against a seeded project; the
 // bodies are truncated because the loader treats them as opaque strings.
 const WIRE = {
   catalogVersion: VERSION,
@@ -231,5 +232,63 @@ describe("createCloudCatalogLoader", () => {
   it("rejects a 304 that arrives before anything is cached", async () => {
     const { impl } = recordingFetch(new Response(null, { status: 304 }));
     await expect(loader(impl).load()).rejects.toThrow(/304 without a cached catalog/);
+  });
+});
+
+describe("createCloudCatalogSource", () => {
+  const source = (
+    apiKey: () => Promise<string | undefined>,
+    fetchImpl: typeof fetch,
+    log: (message: string) => void = () => {},
+  ) => createCloudCatalogSource({ apiKey, endpoint: ENDPOINT, log, fetch: fetchImpl });
+
+  it("pulls nothing, and asks Cloud nothing, when no credential is configured", async () => {
+    const { calls, impl } = recordingFetch();
+
+    expect(await source(async () => undefined, impl)()).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps one loader across pulls, so the second revalidates instead of re-downloading", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE), new Response(null, { status: 304 }));
+    const pull = source(async () => "rtl_one", impl);
+
+    expect((await pull())?.catalog.catalogVersion).toBe(VERSION);
+    expect((await pull())?.catalog.catalogVersion).toBe(VERSION);
+    expect(calls[1]?.headers.get("If-None-Match")).toBe(`"${VERSION}"`);
+  });
+
+  it("picks up a key rotated while the daemon runs", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE), jsonResponse(WIRE));
+    let apiKey = "rtl_one";
+    const pull = source(async () => apiKey, impl);
+
+    await pull();
+    apiKey = "rtl_two";
+    await pull();
+
+    expect(calls.map(({ headers }) => headers.get("Authorization"))).toEqual([
+      "Bearer rtl_one",
+      "Bearer rtl_two",
+    ]);
+    // The rotated key gets its own loader, so it revalidates nothing it never fetched.
+    expect(calls[1]?.headers.get("If-None-Match")).toBeNull();
+  });
+
+  it("marks a cached catalog as degraded and says so in the daemon log", async () => {
+    const { impl } = recordingFetch(jsonResponse(WIRE), jsonResponse({}, 500));
+    const logs: string[] = [];
+    const pull = source(
+      async () => "rtl_one",
+      impl,
+      (message) => logs.push(message),
+    );
+
+    await pull();
+    const stale = await pull();
+
+    expect(stale?.degraded).toBe("HTTP 500");
+    expect(stale?.catalog.catalogVersion).toBe(VERSION);
+    expect(logs.some((message) => message.includes("HTTP 500"))).toBe(true);
   });
 });

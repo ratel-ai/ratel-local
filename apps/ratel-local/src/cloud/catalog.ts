@@ -1,8 +1,9 @@
+import type { CloudCatalogPullResult } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
-export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
+export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/api/v1/catalog";
 
 const TIMEOUT_MS = 10_000;
 
@@ -119,6 +120,43 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
       cached = parseCatalog(text);
       return { snapshot: handout(cached) };
     },
+  };
+}
+
+/**
+ * The catalog pull the context resolver injects. The credential is read per
+ * pull rather than captured at boot, so a key rotated while the daemon runs is
+ * picked up on the next context resolve instead of at the next restart.
+ *
+ * One loader is kept, rebuilt when the credential changes, because the loader
+ * owns the conditional-GET cache: a new one per pull would re-download the
+ * catalog every time.
+ */
+export function createCloudCatalogSource(input: {
+  apiKey: () => Promise<string | undefined>;
+  endpoint?: string;
+  log: (message: string) => void;
+  fetch?: typeof fetch;
+}) {
+  let current: { apiKey: string; loader: ReturnType<typeof createCloudCatalogLoader> } | undefined;
+  const endpoint = input.endpoint ?? DEFAULT_CLOUD_CATALOG_ENDPOINT;
+
+  return async (): Promise<CloudCatalogPullResult | undefined> => {
+    const apiKey = await input.apiKey();
+    if (!apiKey) return undefined;
+    if (current?.apiKey !== apiKey) {
+      current = {
+        apiKey,
+        loader: createCloudCatalogLoader({
+          endpoint,
+          apiKey,
+          ...(input.fetch ? { fetch: input.fetch } : {}),
+        }),
+      };
+    }
+    const { snapshot, degraded } = await current.loader.load();
+    if (degraded) input.log(`[ratel] serving a cached Cloud catalog: ${degraded}`);
+    return { catalog: snapshot, ...(degraded ? { degraded } : {}) };
   };
 }
 
