@@ -64,11 +64,16 @@ import {
   type ResolvedGatewaySnapshot,
   type RetrievalHealthStats,
 } from "../../daemon/scoped-gateway-pool.js";
+import {
+  applyFeatureFlagsToLaunchAgentPlist,
+  applyFeatureFlagsToSystemdUserService,
+} from "../../daemon/service-file.js";
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import {
+  CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
-  cloudTelemetryOverrideFromEnv,
   type FeatureFlags,
+  featureFlagOverridesFromEnv,
   featureFlagServiceEnvironment,
   featureFlagsFromEnv,
 } from "../../feature-flags.js";
@@ -128,6 +133,7 @@ export interface DaemonStatusBody extends DaemonState {
   retrievalHealth?: RetrievalHealthStats;
   /** Absent on daemons older than the restart-reconfiguration support. */
   cloudTelemetry?: boolean;
+  cloudCatalog?: boolean;
 }
 
 interface CommandResult {
@@ -272,7 +278,7 @@ export async function runDaemon(
         spinner?.message("Starting Ratel Local again…");
         await startDaemon(parsed, ctx, options, lifecycleLog, opts, "restart");
         if (applied !== undefined) {
-          restartNote = await verifyCloudTelemetryApplied(
+          restartNote = await verifyFeatureFlagsApplied(
             await daemonPort(parsed, ctx),
             opts.probe ?? probeDaemon,
             applied,
@@ -687,6 +693,7 @@ export async function runDaemonServer(
           activeUserGatewayCount: poolStats.activeUserGatewayCount,
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
           cloudTelemetry: featureFlags.cloudTelemetry,
+          cloudCatalog: featureFlags.cloudCatalog,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
         });
         return true;
@@ -882,7 +889,9 @@ export function createLaunchAgentPlist(input: {
   ];
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(
+      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
+    ),
   };
   const environmentXml = Object.entries(serviceEnvironment)
     .map(
@@ -937,7 +946,9 @@ export function createSystemdUserService(input: {
     .join(" ");
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(
+      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
+    ),
   };
   const environmentLines = Object.entries(serviceEnvironment)
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
@@ -960,49 +971,6 @@ WantedBy=default.target
 `;
 }
 
-const LAUNCH_AGENT_FLAG_ENTRY = `    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\n    <string>1</string>`;
-const LAUNCH_AGENT_FLAG_ENTRY_RE = new RegExp(
-  `\\n    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\\n    <string>[^<]*</string>`,
-);
-const EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE =
-  /\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/;
-const SYSTEMD_FLAG_LINE = `Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=1`;
-const SYSTEMD_FLAG_LINE_RE = new RegExp(`^Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=.*\\n`, "m");
-const SERVICE_SHAPE_ERROR =
-  'installed daemon service is not a Ratel Local unit; reinstall with "ratel-local daemon install"';
-
-export function applyCloudTelemetryToLaunchAgentPlist(plist: string, enabled: boolean): string {
-  // Drop the flag entry, then an environment dict it may have left empty. Both
-  // branches below assume the shape `createLaunchAgentPlist` emits: without the
-  // second replace, enabling twice appends a new dict beside the emptied one.
-  const stripped = plist
-    .replace(LAUNCH_AGENT_FLAG_ENTRY_RE, "")
-    .replace(EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE, "");
-  if (!enabled) return stripped;
-  const envBlock =
-    /(<key>EnvironmentVariables<\/key>\n {2}<dict>\n)([\s\S]*?)(\n {2}<\/dict>)/.exec(stripped);
-  if (envBlock?.index !== undefined) {
-    const inserted = `${envBlock[1]}${envBlock[2]}\n${LAUNCH_AGENT_FLAG_ENTRY}${envBlock[3]}`;
-    return (
-      stripped.slice(0, envBlock.index) +
-      inserted +
-      stripped.slice(envBlock.index + envBlock[0].length)
-    );
-  }
-  if (!stripped.includes("<key>StandardOutPath</key>")) throw new Error(SERVICE_SHAPE_ERROR);
-  return stripped.replace(
-    "  <key>StandardOutPath</key>",
-    `  <key>EnvironmentVariables</key>\n  <dict>\n${LAUNCH_AGENT_FLAG_ENTRY}\n  </dict>\n  <key>StandardOutPath</key>`,
-  );
-}
-
-export function applyCloudTelemetryToSystemdUserService(unit: string, enabled: boolean): string {
-  const stripped = unit.replace(SYSTEMD_FLAG_LINE_RE, "");
-  if (!enabled) return stripped;
-  if (!stripped.includes("Restart=always")) throw new Error(SERVICE_SHAPE_ERROR);
-  return stripped.replace("Restart=always", `${SYSTEMD_FLAG_LINE}\nRestart=always`);
-}
-
 /**
  * Apply an explicit Cloud telemetry override to the installed service file.
  * Returns the applied value, or `undefined` when nothing was written — no
@@ -1012,9 +980,9 @@ async function reconfigureInstalledServiceFeatureFlags(
   ctx: HandlerCtx,
   options: ServeOptions,
   opts: DaemonHandlerDeps,
-): Promise<boolean | undefined> {
-  const override = cloudTelemetryOverrideFromEnv(options.processEnv ?? process.env);
-  if (override === undefined) return undefined;
+): Promise<Readonly<Record<string, boolean>> | undefined> {
+  const overrides = featureFlagOverridesFromEnv(options.processEnv ?? process.env);
+  if (Object.keys(overrides).length === 0) return undefined;
   const platform = daemonPlatform(opts);
   const paths = daemonPaths(ctx.env.homeDir);
   const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
@@ -1022,13 +990,13 @@ async function reconfigureInstalledServiceFeatureFlags(
   if (current === null) return undefined;
   const next =
     platform === "linux"
-      ? applyCloudTelemetryToSystemdUserService(current, override)
-      : applyCloudTelemetryToLaunchAgentPlist(current, override);
+      ? applyFeatureFlagsToSystemdUserService(current, overrides)
+      : applyFeatureFlagsToLaunchAgentPlist(current, overrides);
   if (next !== current) {
     await ctx.fs.writeAtomic(servicePath, next);
     if (platform === "linux") await systemctl(opts, ["daemon-reload"]);
   }
-  return override;
+  return overrides;
 }
 
 /**
@@ -1037,22 +1005,36 @@ async function reconfigureInstalledServiceFeatureFlags(
  * serving the previous definition. Throws on a mismatch; returns a note when
  * the running daemon is too old to report the flag at all.
  */
-async function verifyCloudTelemetryApplied(
+/** Which status field reports each flag a service file can carry. */
+const FLAG_STATUS_FIELD: Record<string, keyof DaemonStatusBody> = {
+  [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
+  [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
+};
+
+async function verifyFeatureFlagsApplied(
   port: number,
   probe: ProbeDaemon,
-  expected: boolean,
+  expected: Readonly<Record<string, boolean>>,
 ): Promise<string | undefined> {
-  const wanted = expected ? "enabled" : "disabled";
   const result = await probe(port);
   const unconfirmed = (reason: string) =>
-    `[ratel] could not confirm Cloud telemetry is ${wanted}: ${reason}. Check "ratel-local traces status".`;
+    `[ratel] could not confirm the requested feature flags: ${reason}. Check "ratel-local traces status".`;
   if (!result.ok) return unconfirmed("the daemon did not answer");
-  const observed = result.status?.cloudTelemetry;
-  if (observed === expected) return undefined;
-  if (observed === undefined) return unconfirmed("the running daemon does not report it");
-  throw new Error(
-    `service was updated but the restarted daemon reports Cloud telemetry ${observed ? "enabled" : "disabled"}, expected ${wanted}; the previous service definition may still be loaded. Reinstall with "ratel-local daemon uninstall" then "${CLOUD_TELEMETRY_FEATURE_ENV}=${expected ? "1" : "0"} ratel-local daemon install".`,
-  );
+  const unreported: string[] = [];
+  for (const [name, want] of Object.entries(expected)) {
+    const observed = result.status?.[FLAG_STATUS_FIELD[name] as keyof DaemonStatusBody];
+    if (observed === want) continue;
+    if (observed === undefined) {
+      unreported.push(name);
+      continue;
+    }
+    throw new Error(
+      `service was updated but the restarted daemon reports ${name} ${observed ? "enabled" : "disabled"}, expected ${want ? "enabled" : "disabled"}; the previous service definition may still be loaded. Reinstall with "ratel-local daemon uninstall" then "${name}=${want ? "1" : "0"} ratel-local daemon install".`,
+    );
+  }
+  return unreported.length > 0
+    ? unconfirmed(`the running daemon does not report ${unreported.join(", ")}`)
+    : undefined;
 }
 
 async function installDaemon(

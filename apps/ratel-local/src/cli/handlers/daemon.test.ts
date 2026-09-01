@@ -16,8 +16,6 @@ import { CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
-  applyCloudTelemetryToLaunchAgentPlist,
-  applyCloudTelemetryToSystemdUserService,
   createLaunchAgentPlist,
   createSystemdUserService,
   DAEMON_INSTALL_PATH_ENV,
@@ -924,7 +922,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
 
     expect(plist).toContain("<key>EnvironmentVariables</key>");
@@ -1012,57 +1010,6 @@ describe("runDaemon", () => {
     expect(fs.files.get(paths.plist)).toBe(original);
   });
 
-  it("refuses to enable Cloud telemetry in an unrecognised service file", () => {
-    expect(() => applyCloudTelemetryToLaunchAgentPlist("<plist />", true)).toThrow(
-      /not a Ratel Local unit/,
-    );
-    expect(() => applyCloudTelemetryToSystemdUserService("[Service]\n", true)).toThrow(
-      /not a Ratel Local unit/,
-    );
-    // Disabling stays a no-op there: there is no Ratel route to remove.
-    expect(applyCloudTelemetryToLaunchAgentPlist("<plist />", false)).toBe("<plist />");
-    expect(applyCloudTelemetryToSystemdUserService("[Service]\n", false)).toBe("[Service]\n");
-  });
-
-  // Without `pathEnv` the flag is the only environment entry, so enabling has to
-  // create the dict from scratch and disabling has to remove it again. That is
-  // the shape an install performs when PATH is unset in its environment.
-  for (const pathEnv of ["/opt/node/bin:/usr/bin:/bin", undefined]) {
-    it(`round-trips Cloud telemetry flag edits against generated service files (pathEnv: ${pathEnv ? "set" : "unset"})`, () => {
-      const base = {
-        executablePath: "/opt/bin/ratel-local",
-        homeDir: HOME,
-        port: DEFAULT_DAEMON_PORT,
-        ...(pathEnv ? { pathEnv } : {}),
-      };
-      const disabledPlist = createLaunchAgentPlist({
-        ...base,
-        featureFlags: { cloudTelemetry: false },
-      });
-      const enabledPlist = createLaunchAgentPlist({
-        ...base,
-        featureFlags: { cloudTelemetry: true },
-      });
-      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, true)).toBe(enabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, false)).toBe(disabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, true)).toBe(enabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, false)).toBe(disabledPlist);
-
-      const disabledUnit = createSystemdUserService({
-        ...base,
-        featureFlags: { cloudTelemetry: false },
-      });
-      const enabledUnit = createSystemdUserService({
-        ...base,
-        featureFlags: { cloudTelemetry: true },
-      });
-      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, true)).toBe(enabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, false)).toBe(disabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, true)).toBe(enabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, false)).toBe(disabledUnit);
-    });
-  }
-
   for (const platform of ["darwin", "linux"] as const) {
     it(`enables Cloud telemetry on ${platform} restart when the flag is explicitly set`, async () => {
       const fs = new MemFs();
@@ -1074,7 +1021,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: false },
+        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1127,7 +1074,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true },
+        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
       };
       const original =
         platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input);
@@ -1171,7 +1118,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true },
+        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1205,7 +1152,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
     fs.files.set(paths.systemdService, original);
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -1303,7 +1250,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: false },
+      featureFlags: { cloudTelemetry: false, cloudCatalog: false },
     });
 
   const restartWithProbe = (
@@ -1378,9 +1325,9 @@ describe("runDaemon", () => {
 
     await restartWithProbe(fs, restartStatusProbe(undefined), logs);
 
-    expect(logs.some((message) => message.includes("could not confirm Cloud telemetry"))).toBe(
-      true,
-    );
+    expect(
+      logs.some((message) => message.includes("could not confirm the requested feature flags")),
+    ).toBe(true);
   });
 
   for (const platform of ["darwin", "linux"] as const) {
@@ -1392,7 +1339,7 @@ describe("runDaemon", () => {
         executablePath: "/opt/bin/ratel-local",
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
-        featureFlags: { cloudTelemetry: false },
+        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1589,7 +1536,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
 
     expect(service).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");
