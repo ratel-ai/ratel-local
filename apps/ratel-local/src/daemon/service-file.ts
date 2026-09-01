@@ -1,11 +1,4 @@
-/**
- * Feature-flag reconciliation inside an installed launchd or systemd service.
- *
- * `daemon restart` rewrites only the flag entries an operator named explicitly
- * (ADR-0020), never the whole unit: regenerating it from the invoking shell
- * would refresh install-time `PATH` and `RATEL_DAEMON_INSTALL_PATH`, which are
- * preserved so npm/npx cannot reorder agent plugin executables.
- */
+import type { ServiceFeatureFlagOverrides } from "../feature-flags.js";
 
 const EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE =
   /\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/;
@@ -15,18 +8,16 @@ const LAUNCH_AGENT_ENV_BLOCK_RE =
 export const SERVICE_SHAPE_ERROR =
   'installed daemon service is not a Ratel Local unit; reinstall with "ratel-local daemon install"';
 
-/** The flags an operator asked to change, by environment variable name. */
-export type ServiceFeatureFlagOverrides = Readonly<Record<string, boolean>>;
-
-const launchAgentEntry = (name: string) => `    <key>${name}</key>\n    <string>1</string>`;
-const launchAgentEntryRe = (name: string) =>
-  new RegExp(`\\n    <key>${name}</key>\\n    <string>[^<]*</string>`);
-const systemdLine = (name: string) => `Environment=${name}=1`;
-const systemdLineRe = (name: string) => new RegExp(`^Environment=${name}=.*\\n`, "m");
-
 /**
- * Apply overrides to a launchd plist. Only the named flags move: a flag absent
- * from `overrides` keeps whatever the installed service already says.
+ * Rewrite named feature-flag entries in an installed launchd plist without
+ * regenerating the unit. Regenerating would refresh install-time `PATH` and
+ * `RATEL_DAEMON_INSTALL_PATH`, which ADR-0020 preserves so npm/npx cannot
+ * reorder agent plugin executables.
+ * ponytail: string surgery on the generated unit; a plist parser only if we
+ * start editing fields we did not emit.
+ *
+ * Enabled entries go in the `EnvironmentVariables` dict `createLaunchAgentPlist`
+ * emits, immediately above `StandardOutPath`. An unrecognised shape throws.
  */
 export function applyFeatureFlagsToLaunchAgentPlist(
   plist: string,
@@ -55,7 +46,10 @@ export function applyFeatureFlagsToLaunchAgentPlist(
   return next;
 }
 
-/** The systemd twin: `Environment=` lines immediately above `Restart=always`. */
+/**
+ * The same rewrite for a systemd user unit. `Environment=` lines sit
+ * immediately above `Restart=always`, matching `createSystemdUserService`.
+ */
 export function applyFeatureFlagsToSystemdUserService(
   unit: string,
   overrides: ServiceFeatureFlagOverrides,
@@ -68,4 +62,20 @@ export function applyFeatureFlagsToSystemdUserService(
     next = next.replace("Restart=always", `${systemdLine(name)}\nRestart=always`);
   }
   return next;
+}
+
+function launchAgentEntry(name: string): string {
+  return `    <key>${name}</key>\n    <string>1</string>`;
+}
+
+function launchAgentEntryRe(name: string): RegExp {
+  return new RegExp(`\\n    <key>${name}</key>\\n    <string>[^<]*</string>`);
+}
+
+function systemdLine(name: string): string {
+  return `Environment=${name}=1`;
+}
+
+function systemdLineRe(name: string): RegExp {
+  return new RegExp(`^Environment=${name}=.*\\n`, "m");
 }
