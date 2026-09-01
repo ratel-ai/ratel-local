@@ -10,11 +10,12 @@ pnpm dev:ui
 
 That command:
 
-- starts `ratel-local ui --no-open` on `127.0.0.1`;
+- asks the daemon for a UI session with `ratel-local ui --no-open`;
 - starts Vite on `127.0.0.1`;
-- chooses alternate free ports when the defaults are busy;
 - wires Vite's `/api` proxy through `RATEL_LOCAL_API_TARGET`;
-- prints the Vite URL with the API session token already attached.
+- prints and opens the Vite URL with the API session token already attached.
+
+Start the daemon with `ratel-local setup` if it is not running.
 
 Optional port overrides:
 
