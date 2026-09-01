@@ -33,6 +33,7 @@ import {
   type TelemetryHandle,
   type TelemetryInitOptions,
 } from "@ratel-ai/telemetry-otlp";
+import { createCloudCatalogSource } from "../../cloud/catalog.js";
 import {
   CLOUD_API_KEY_ENV,
   type CloudOtlpTraceRelayOptions,
@@ -76,6 +77,8 @@ import {
   featureFlagOverridesFromEnv,
   featureFlagServiceEnvironment,
   featureFlagsFromEnv,
+  SERVICE_FEATURE_FLAG_ENVS,
+  type ServiceFeatureFlagOverrides,
 } from "../../feature-flags.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
@@ -170,6 +173,7 @@ interface DaemonHandlerDeps {
   skillRegistrationControlPlane?: SkillRegistrationControlPlane;
   preparedChanges?: PreparedChangeCoordinator;
   cloudOtlpFetch?: typeof fetch;
+  cloudCatalogFetch?: typeof fetch;
   configureRatelTelemetry?: ConfigureRatelTelemetry;
   cloudTraceSettingsStore?: CloudTraceSettingsStoreLike;
   lifecycleProgress?: boolean;
@@ -368,9 +372,6 @@ export async function runDaemonServer(
   const projectAdmissionLock = createProjectAdmissionLock({
     controlDir: join(ctx.env.homeDir, ".ratel"),
   });
-  const snapshotResolver =
-    opts.snapshotResolver ??
-    createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry });
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
   const featureFlags = featureFlagsFromEnv(daemonProcessEnv);
@@ -386,6 +387,12 @@ export async function runDaemonServer(
       log(`[ratel] ignored invalid Cloud trace settings: ${(error as Error).message}`);
     }
   }
+  // Catalog pulls after the strip below; hold the env credential so they still
+  // see it. Subprocesses must not inherit `RATEL_API_KEY`.
+  const environmentApiKey =
+    featureFlags.cloudTelemetry || featureFlags.cloudCatalog
+      ? daemonProcessEnv[CLOUD_API_KEY_ENV]
+      : undefined;
   let environmentCloudOptions: CloudOtlpTraceRelayOptions | undefined;
   try {
     if (featureFlags.cloudTelemetry) {
@@ -418,6 +425,20 @@ export async function runDaemonServer(
       log(`[ratel] Ratel runtime telemetry disabled: ${(error as Error).message}`);
     }
   };
+  const cloudCatalog = featureFlags.cloudCatalog
+    ? createCloudCatalogSource({
+        apiKey: async () => environmentApiKey ?? (await cloudTraceSettingsStore.load())?.apiKey,
+        log,
+        ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
+      })
+    : undefined;
+  const snapshotResolver =
+    opts.snapshotResolver ??
+    createContextSnapshotResolver({
+      homeDir: ctx.env.homeDir,
+      projectRegistry,
+      ...(cloudCatalog ? { cloudCatalog } : {}),
+    });
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -972,15 +993,15 @@ WantedBy=default.target
 }
 
 /**
- * Apply an explicit Cloud telemetry override to the installed service file.
- * Returns the applied value, or `undefined` when nothing was written — no
+ * Apply explicit feature-flag overrides to the installed service file.
+ * Returns the applied overrides, or `undefined` when nothing was named — no
  * override in the environment, or no installed service to rewrite.
  */
 async function reconfigureInstalledServiceFeatureFlags(
   ctx: HandlerCtx,
   options: ServeOptions,
   opts: DaemonHandlerDeps,
-): Promise<Readonly<Record<string, boolean>> | undefined> {
+): Promise<ServiceFeatureFlagOverrides | undefined> {
   const overrides = featureFlagOverridesFromEnv(options.processEnv ?? process.env);
   if (Object.keys(overrides).length === 0) return undefined;
   const platform = daemonPlatform(opts);
@@ -999,30 +1020,32 @@ async function reconfigureInstalledServiceFeatureFlags(
   return overrides;
 }
 
-/**
- * Confirm the restarted daemon actually runs with the flag we just wrote.
- * Rewriting the service file is not proof: launchd or systemd may still be
- * serving the previous definition. Throws on a mismatch; returns a note when
- * the running daemon is too old to report the flag at all.
- */
 /** Which status field reports each flag a service file can carry. */
-const FLAG_STATUS_FIELD: Record<string, keyof DaemonStatusBody> = {
+const FLAG_STATUS_FIELD = {
   [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
   [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
-};
+} as const;
 
+/**
+ * Confirm the restarted daemon actually runs with the flags we just wrote.
+ * Rewriting the service file is not proof: launchd or systemd may still be
+ * serving the previous definition. Throws on a mismatch; returns a note when
+ * the running daemon is too old to report them at all.
+ */
 async function verifyFeatureFlagsApplied(
   port: number,
   probe: ProbeDaemon,
-  expected: Readonly<Record<string, boolean>>,
+  expected: ServiceFeatureFlagOverrides,
 ): Promise<string | undefined> {
   const result = await probe(port);
   const unconfirmed = (reason: string) =>
     `[ratel] could not confirm the requested feature flags: ${reason}. Check "ratel-local traces status".`;
   if (!result.ok) return unconfirmed("the daemon did not answer");
   const unreported: string[] = [];
-  for (const [name, want] of Object.entries(expected)) {
-    const observed = result.status?.[FLAG_STATUS_FIELD[name] as keyof DaemonStatusBody];
+  for (const name of SERVICE_FEATURE_FLAG_ENVS) {
+    if (!Object.hasOwn(expected, name)) continue;
+    const want = expected[name];
+    const observed = result.status?.[FLAG_STATUS_FIELD[name]];
     if (observed === want) continue;
     if (observed === undefined) {
       unreported.push(name);

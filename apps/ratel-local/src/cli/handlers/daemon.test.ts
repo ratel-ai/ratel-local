@@ -12,7 +12,7 @@ import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core"
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import { connectorHeaders } from "../../daemon/access.js";
-import { CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
+import { CLOUD_CATALOG_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
@@ -309,6 +309,54 @@ describe("runDaemon", () => {
       expect(configureRatelTelemetry).not.toHaveBeenCalled();
       expect(cloudFetch).not.toHaveBeenCalled();
       expect(daemonProcessEnv).not.toHaveProperty("RATEL_API_KEY");
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("pulls the Cloud catalog with the environment credential while the relay stays off", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const catalogFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 }),
+    );
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_CATALOG_FEATURE_ENV]: "1", RATEL_API_KEY: "rtl_env" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudCatalogFetch: catalogFetch,
+        cloudTraceSettingsStore: { load: async () => undefined, save: async () => {} },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+
+      expect(config.status).toBe(200);
+      expect(catalogFetch).toHaveBeenCalled();
+      // The credential reached the catalog without enabling telemetry: the relay
+      // route stays absent and the settings endpoint still reports it unconfigured.
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+      expect(relay.status).toBe(404);
+      const status = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+      expect(await status.json()).toMatchObject({ featureEnabled: false, configured: false });
     } finally {
       await result.shutdown?.();
     }
