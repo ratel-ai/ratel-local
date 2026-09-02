@@ -1,6 +1,6 @@
 # Ratel Local UI
 
-Local UI development uses the real `ratel-local ui` API server and Vite for the React app.
+Local UI development attaches to the running daemon and uses Vite for the React app.
 
 From the workspace root:
 
@@ -17,11 +17,13 @@ That command:
 
 Start the daemon with `ratel-local setup` if it is not running.
 
-Optional port overrides:
+Optional overrides:
 
 ```bash
-RATEL_LOCAL_UI_API_PORT=5731 RATEL_LOCAL_UI_VITE_PORT=5173 pnpm dev:ui
+RATEL_LOCAL_UI_VITE_PORT=5173 pnpm dev:ui
 ```
+
+Set `RATEL_LOCAL_UI_OPEN=0` to skip opening the browser.
 
 Use the printed `Vite UI` URL. It has the `?t=...` token that the app sends as the
 `Authorization: Bearer ...` header for API requests.
