@@ -56,20 +56,48 @@ Open the daemon UI and select **Settings**. In the **Ratel Cloud** section, ente
 - Trace endpoint: `https://cloud.ratel.sh/api/v1/traces`
 - API key: your `rtl_...` credential
 
-The daemon derives the matching Cloud log route by replacing the exact terminal
-`/traces` path segment with `/logs`. Saving activates both signal relays and
-Ratel runtime trace export immediately. The
-daemon persists the endpoint and key in `~/.ratel/cloud-traces.json`, with the
+Saving activates both signal relays and Ratel runtime trace export immediately.
+The daemon persists the endpoint and key in `~/.ratel/cloud.json`, with the
 directory and file restricted to the current user. The authenticated UI API
 returns only the endpoint and whether a key is configured; it never returns
 the saved key. An installed background daemon loads the same file on its next
-start, so no credential environment variables are required after saving; the
-feature flag is still required.
+start, so no credential environment variables are required after saving. The
+relay still requires the feature flag; the credential loads without it.
 
-Agent Setup also offers an inline API-key prompt whenever native tracing is
-enabled but Ratel Cloud is not configured. It reuses the daemon's Cloud
-endpoint, so only the API key is requested. Create a key at
-<https://cloud.ratel.sh/settings> if needed.
+Every signal sits on `https://cloud.ratel.sh` unless `cloud.json` says otherwise.
+`baseUrl` moves traces, logs and the catalog together; `tracesEndpoint`,
+`logsEndpoint` and `catalogEndpoint` move one at a time. `cloud list` prints the
+three in effect, and `doctor` warns when they stop sharing an origin.
+
+The store holds named profiles, managed from the CLI:
+
+```bash
+ratel-local cloud add <profile-name>     # prompts for the key, stores it under a name
+ratel-local cloud use <profile-name>     # selects it for this scope, with a backup
+ratel-local cloud list         # profiles, the default, what resolves here
+```
+
+The first profile stored becomes the default, so a single-project setup never
+selects anything. A project selects another with `cloud.profile` in its layered
+config: a name, never a credential, and therefore safe to commit.
+
+That selection reaches the catalog only. An agent's trace exporter is configured
+once per machine, so the relay uses one account for every project: the one
+`RATEL_API_KEY` supplies, else `RATEL_PROFILE`, else the store default.
+`traces status` names it.
+
+A pre-existing `~/.ratel/cloud-traces.json` becomes the `default` profile and
+stays in place, so a downgrade keeps working. Once the new store is written it
+stops being read while still holding a key — delete it when the downgrade path
+no longer matters. See
+[ADR 0021](adr/0021-cloud-project-credential-ownership.md).
+
+Agent Setup, in the daemon UI, also offers an inline API-key prompt whenever
+native tracing is enabled but Ratel Cloud is not configured. It reuses the
+daemon's Cloud endpoint, so only the API key is requested. Create a key at
+<https://cloud.ratel.sh/settings> if needed. That prompt fires on one global
+boolean and writes the profile the daemon resolved, so it can store a first
+credential but never a second one: use `cloud add` for those.
 
 For a one-run override, start the daemon with both values:
 
@@ -126,10 +154,9 @@ port. It does not replace an unrelated exporter by default. Interactive
 overwrite explains that no backup is retained; automation must use both
 `--overwrite` and `--yes`.
 
-After an interactive enable, the CLI offers to configure Ratel Cloud when it is
-missing. The API key is entered through a masked prompt and saved immediately by
-the daemon. `--yes` remains non-interactive: it does not request a secret and
-prints <https://cloud.ratel.sh/settings> as the next step instead.
+When Ratel Cloud is not configured, the `traces enable` command points at
+`ratel-local cloud add <profile>` instead of prompting inline, for the reason
+above.
 
 `ratel-local setup` offers traces as its final optional interactive step. Plain
 `setup --yes` continues to skip traces. Explicit automation uses:

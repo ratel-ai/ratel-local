@@ -12,6 +12,7 @@ import {
   type ResolvedContextSnapshot,
   type RuntimeContextRef,
 } from "@ratel-ai/ratel-local-core";
+import { inventoryCloudSettings } from "../../cloud/inventory.js";
 import type { HandlerCtx } from "./types.js";
 
 export class DoctorFailure extends Error {
@@ -145,6 +146,13 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
       },
       `project:${project.id}`,
       `context_project: resolved project ${project.id} (${project.canonicalRoot})`,
+    );
+  }
+
+  for (const diagnostic of await inventoryCloudSettings({ env: ctx.env, fs: ctx.fs })) {
+    if (diagnostic.severity === "error") issueCount += 1;
+    ctx.log(
+      `[${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}. Action: ${diagnostic.action}`,
     );
   }
 

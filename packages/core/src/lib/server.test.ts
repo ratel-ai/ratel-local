@@ -408,6 +408,24 @@ describe("createMcpServer", () => {
     await handle.close();
   });
 
+  it("rejects a call that omits a required argument instead of letting the upstream complain", async () => {
+    // `arguments` instead of `args` used to reach the upstream, which answered
+    // "Required at input_file" — its own field, not the one actually missing.
+    const catalog = new ToolCatalog();
+    await catalog.register(localTool("echo", "Echoes.", (a) => a));
+    const { client, handle } = await buildClientAgainst(catalog);
+
+    await expect(
+      client.callTool({
+        name: INVOKE_TOOL_ID,
+        arguments: { toolId: "echo", arguments: { input_file: "/tmp/x.mp4" } },
+      }),
+    ).rejects.toThrow(/missing required argument\(s\): args \(received: toolId, arguments\)/);
+
+    await client.close();
+    await handle.close();
+  });
+
   it("invoke_tool surfaces the gateway's wrapped error when the executor throws", async () => {
     const catalog = new ToolCatalog();
     await catalog.register(

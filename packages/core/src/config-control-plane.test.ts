@@ -309,4 +309,49 @@ describe("ConfigControlPlane", () => {
     ).rejects.toMatchObject({ statusCode: 409, reason: "revision_conflict" });
     await expect(readFile(excludePath, "utf8")).resolves.toBe("# manual edit\n");
   });
+
+  it("selects a Cloud profile without disturbing unrelated scoped settings", async () => {
+    const configPath = join(homeDir, ".ratel", "config.json");
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          custom: { keep: true },
+          mcpServers: { filesystem: { type: "stdio", command: "node" } },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const control = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+    });
+
+    const commit = await control.mutateCloud({ target: { scope: "user" }, profile: "acme" });
+    expect(commit.result).toMatchObject({ target: { scope: "user" }, profile: "acme" });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      custom: { keep: true },
+      mcpServers: { filesystem: { type: "stdio", command: "node" } },
+      cloud: { profile: "acme" },
+    });
+  });
+
+  it("refuses to write a config that already carries a key", async () => {
+    // A mutation cannot carry a credential — the request holds a name — so the
+    // guard that matters is on the document the write would leave behind.
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({ cloud: { apiKey: "rtl_leak" } })}\n`,
+    );
+    const control = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+    });
+
+    await expect(
+      control.mutateCloud({ target: { scope: "user" }, profile: "acme" }),
+    ).rejects.toThrow(/cloud.apiKey` is not allowed/);
+  });
 });

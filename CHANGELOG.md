@@ -4,29 +4,62 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
+  `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills
+  come from; `list` shows what is stored and which profile resolves here. A running daemon adopts a stored key without a
+  restart.
+- Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
+  `cloud.apiKey` is rejected.
+- Added the `RATEL_FEATURE_CLOUD_CATALOG` feature flag, off by default and independent of Cloud telemetry. A project's
+  published Cloud skills join the resolved skill set, where a local skill of the same id wins; a catalog change builds a new
+  gateway generation instead of reusing a stale one.
+- Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
+  unreadable store, a stored key other users can read, a scope too broken to say which profile it selects, a superseded
+  `cloud-traces.json` still holding a key, and signals split across deployments.
+
 ### Changed
-- Made `daemon restart` reconfigure the Cloud telemetry feature flag in an
-  installed launchd or systemd service when `RATEL_FEATURE_CLOUD_TELEMETRY` is
-  present in the invoking environment (`=1` enables, any other value disables,
-  absent preserves). Restart now waits for the stopped daemon to release its
-  port, and confirms the restarted daemon adopted the change through the new
-  `cloudTelemetry` field on `/api/daemon/status`.
+
+- Moved the Cloud credential out of the telemetry feature branch: it now loads whenever a Cloud consumer needs it, while
+  `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`. The store moved from
+  `~/.ratel/cloud-traces.json` to `~/.ratel/cloud.json` and holds named profiles. `RATEL_PROFILE` or the store default
+  selects the relay's account; `cloud.profile` selects a project's skills and does not move telemetry, since an agent's trace
+  exporter is configured once per machine. An existing `cloud-traces.json` becomes the `default` profile and is left in
+  place, so a downgrade keeps working.
+- Made every Ratel Cloud endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`.
+  `tracesEndpoint`, `logsEndpoint` and `catalogEndpoint` each override one signal, and `cloud list` shows the three in
+  effect. A `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path no longer moves the log route with it; set the
+  endpoints in `cloud.json` for that.
+- Made `traces status` name where the daemon's Cloud credential came from, so a wrong account is seen rather than inferred.
+- Made `daemon restart` reconfigure daemon feature flags in an installed launchd or systemd service. Every flag present in the
+  invoking environment is applied (`=1` enables, any other value disables) and a flag left out is untouched, so changing one
+  never disturbs another. Restart waits for the port to be released and verifies the result on `/api/daemon/status`.
 
 ### Removed
+
+- Removed the inline Ratel Cloud API-key prompt from `traces enable`: it fired only when no credential existed at all, so a
+  second project's key could never be entered through it. Use `ratel-local cloud add`.
 - Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
 
 ### Fixed
+
+- Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud.json`. When a daemon was started with that
+  variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
+  keeps the stored key and refuses the save when there is none to keep.
 - Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
 
 ## [0.8.2] - 2026-08-19
 
 ### Fixed
+
 - Made `mcp list` resolve the scoped OAuth credential key and resource fingerprint used by the gateway, so authenticated HTTP/SSE servers are no longer reported as unauthenticated.
 - Made the connector keep initial catalog requests pending until the daemon handshake succeeds or actually fails, instead of switching to the bootstrap-only surface after a hardcoded timeout.
 
 ## [0.8.1] - 2026-08-19
 
 ### Fixed
+
 - Made connector recovery probe daemon health before taking lifecycle action, attach to an already-running daemon without restarting it, and return the recovery tool result before asking hosts to refresh their tool catalog.
 - Made `daemon start` idempotent on macOS and Linux so a healthy daemon and its active MCP sessions are preserved; explicit `daemon restart` retains restart semantics.
 - Added bounded automatic connector reattachment behind the off-by-default `RATEL_FEATURE_CONNECTOR_RECOVERY=1` rollout flag.
@@ -36,6 +69,7 @@ All notable changes to this package are documented here. The format is based on 
 ## [0.8.0] - 2026-08-14
 
 ### Added
+
 - Added one persistent per-user daemon with a lightweight project-scoped `connect` bridge, canonical project registration, isolated user/project/local configuration, reusable generation-safe gateways, loopback authentication, and live client and gateway status in the UI.
 - Added the idempotent `ratel-local setup` wizard for daemon installation, version replacement, plugin-first Claude Code and Codex linking, and separately previewed MCP/skill import. Scoped control-plane mutations are revision checked, recoverable, and backed up where restoration is supported.
 - Added a daemon-owned OTLP log relay for native Claude Code and Codex events, deriving the Cloud `/logs` endpoint from the saved trace endpoint and preserving protobuf payloads unchanged. Host-aware levels now offer Claude Redacted, Tool details, and Full content, and Codex Redacted traces, Tool activity, and Prompt content. Existing `traces enable` and setup automation remain on the safest Redacted level; every content-bearing CLI and Agent Setup change requires explicit privacy confirmation.
@@ -46,6 +80,7 @@ All notable changes to this package are documented here. The format is based on 
 - Added `ratel-local retrieval status|configure|reset|prepare` and Settings-page retrieval controls, with transactional scoped writes, model/source preflight, explicit cache, memory, multilingual, privacy, trace, and reconnect guidance, and packed-package smoke CI for five native targets.
 
 ### Changed
+
 - Renamed the Retrieval page to Settings and grouped Ratel Cloud and retrieval configuration there.
 - The bundled plugin now runs `ratel-local connect` against the persistent daemon. After upgrading from the stable 0.5 line, run `ratel-local setup` once to install or replace the service and reconcile selected agent plugins; existing Ratel configuration remains in place.
 - Simplified retrieval settings to one save flow with human-readable labels and copy. Cached dense models verify behind Save, while missing models require explicit download confirmation before settings are committed.
@@ -53,6 +88,7 @@ All notable changes to this package are documented here. The format is based on 
 - Stable plugin installation follows the repository's default `main` branch. Immutable tag pinning and marketplace reconciliation remain isolated to explicitly versioned prerelease packages.
 
 ### Fixed
+
 - Kept connector discovery and invocation on the live daemon catalog while the initial daemon attachment is still in flight, and handled stale bootstrap calls locally instead of forwarding them as unknown gateway tools.
 - Resolved passive tool-usage hook paths from either the Codex or Claude Code plugin-root environment so both hosts can run the shared hooks.
 - Forced every managed Claude telemetry level, including Redacted, to disable raw API body capture; file-backed raw capture is reported as custom sensitive content instead of Redacted.
@@ -66,17 +102,20 @@ All notable changes to this package are documented here. The format is based on 
 ## [0.6.0-rc.1] - 2026-07-31
 
 ### Changed
+
 - Replaced the legacy symlink-based skill manager with scoped reference/copy registrations. Global native imports automatically mark the host skill manual-only, while project/local registrations never edit repository-owned skill metadata.
 - The daemon safely migrates verified legacy skill links to user-scoped references on startup; `ratel-local doctor --fix` provides the same recoverable migration explicitly. Ambiguous or externally changed entries are left untouched with diagnostics.
 - Removed the deprecated `skill activate` and `skill deactivate` compatibility commands.
 
 ### Fixed
+
 - Preserved the setup-time PATH separately in macOS launchd and Linux systemd daemon services so npm/npx cannot reorder agent plugin executables ahead of the user's working installation. Agent command startup failures now report the command and PATH source used.
 - Skill imports can now keep the first deterministic harness copy when Claude Code and Codex expose the same skill ID, report later copies as skipped duplicates, and skip existing user registrations so repeated imports are no-ops.
 
 ## [0.6.0-rc.0] - 2026-07-24
 
 ### Added
+
 - Added a versioned canonical-root project registry, project-aware HTTP/CLI/UI flows, URL-scoped daemon pages, connector v2 metadata, and an active-client read model.
 - Added a single provenance-preserving MCP/skill snapshot resolver, scoped OAuth stores, deterministic runtime revisions, and generational gateways that keep existing sessions on their acquired revision.
 - Added recoverable scoped mutations with cross-process locking, CAS previews, journals, rollback/recovery, opaque skill discovery candidates, owned-copy markers, and safe local Git excludes.
@@ -86,6 +125,7 @@ All notable changes to this package are documented here. The format is based on 
 - Expanded `ratel-local setup` into complete onboarding: after making the daemon ready it detects Claude Code and Codex, connects selected agents through the existing plugin-first link flow, and separately offers the transactional MCP/skill import preview. Repeatable `--agent`, `--agent auto`, and `--daemon-only` support explicit automation; plain `--yes` remains daemon-only and never imports native configuration.
 
 ### Changed
+
 - Prerelease `link` and setup flows now pin the single Ratel marketplace to the immutable tag matching the package version for both Codex and Claude Code, reconcile existing plugin installs onto that channel, and attempt to restore the stable plugin when an RC switch fails.
 - New agent links use `ratel-local connect`; `serve --config` remains as the legacy explicit-config runtime.
 - Skills now support explicit user/project/local reference or copy registrations. `skill activate` and `skill deactivate` remain deprecated user-scope compatibility wrappers.
@@ -94,6 +134,7 @@ All notable changes to this package are documented here. The format is based on 
 - Rebuilt the browser UI around the persistent daemon with global and project-scoped routes, dedicated project and MCP-client views, and a cloud-aligned visual system across tools, skills, and agent setup.
 
 ### Fixed
+
 - Hardened the daemon and UI control plane with loopback-only authenticated requests, validated installed-service identity, safe canonical project admission, and serialized project-root mutations.
 - Routed OAuth through live daemon gateways, preserving results across bulk authentication while keeping scoped stores isolated.
 - Restored the legacy skill lifecycle aliases and tightened automated setup argument validation so existing workflows fail clearly instead of being silently misinterpreted.
@@ -101,30 +142,36 @@ All notable changes to this package are documented here. The format is based on 
 ## [0.5.0] - 2026-07-24
 
 ### Changed
+
 - Made the Ratel Local plugin the preferred link path in both CLI and UI flows so Codex and Claude Code receive the bundled agent skills; when plugin installation fails, linking reports the failure and applies the reviewed, backed-up explicit MCP gateway fallback.
 - Made Claude Code and Codex linking plugin-aware: enabled `ratel-local` plugins now count as host-level Ratel connections in CLI/UI import and link flows, avoiding a second explicit gateway; linking re-enables a disabled Codex plugin MCP server; explicit-plus-plugin duplicates are detected without silently deleting user configuration.
 - Strengthened the MCP server instructions so agents search Ratel capabilities before answering substantive requests or concluding that a workflow is unavailable, while exempting casual conversation and pure writing or reasoning.
 - Renamed Ratel MCP to Ratel Local: the repository moved from `ratel-ai/ratel-mcp` to `ratel-ai/ratel-local`, the npm package changed from `@ratel-ai/mcp-server` to `@ratel-ai/ratel-local`, and the CLI changed from `ratel-mcp` to `ratel-local`. This is a breaking package/CLI rename: reinstall the new package and rename `$RATEL_MCP_BIN` to `$RATEL_LOCAL_BIN`. Existing agent gateway entries named `ratel-mcp` remain recognized during import/link migration, while rewritten entries use `ratel-local`.
 
 ### Fixed
+
 - Added Agent Setup actions to fix duplicate plugin-plus-MCP installations and promote MCP-only installations to the plugin for both Claude Code and Codex. Plugin promotion removes the explicit fallback only after installation succeeds, and cleanup preserves unrelated MCP entries.
 
 ## [0.4.0] - 2026-06-30
 
 ### Changed
+
 - **`ratel-mcp mcp link` and `ratel-mcp mcp import` now install the Claude Code statusline automatically** once they finish wiring up Claude Code, instead of requiring a separate `ratel-mcp statusline install` step. A pre-existing non-Ratel statusline is left untouched (reported as a note, not an error).
 
 ## [0.3.1] - 2026-06-18
 
 ### Changed
+
 - **Skills page (`ratel-mcp ui`) now emphasizes only Ratel-managed skills.** When no skills are managed it shows an empty state with an "Import skills" action instead of listing Claude Code / Codex skills inline. External skills are brought in through a dedicated, paginated import dialog, each row badged by source. The bulk "Manage all" button is replaced by "Import skills"; "Unmanage all", per-skill "Stop managing", and the "New skill" form are unchanged.
 
 ### Added
+
 - **Skill import in Agent Setup (`ratel-mcp ui`).** Each agent gets a per-agent "Import skills" flow alongside the existing MCP import/link, plus an "N skills not managed by Ratel" hint on its card and detail page, mirroring the native-tools hint.
 
 ## [0.3.0] - 2026-06-17
 
 ### Added
+
 - **Skills, served through the gateway.** When a skill catalog is configured, `createMcpServer` / `buildGatewayFromConfig` expose `get_skill_content` alongside `search_capabilities` + `invoke_tool`, and `search_capabilities` returns a `skills` bucket beside `tools`.
 - `ratel-mcp skill` CLI: `activate` / `deactivate` move skills between an agent's folder and the Ratel-managed `~/.ratel/skills` so the gateway serves them; `list` shows managed skills; `suggest` ranks skills for a prompt.
 - Prompt-aware preload hook: `skill preload-hook` is a Claude Code `UserPromptSubmit` entrypoint that ranks skills against the prompt (lexical match, project-stack tie-break, clear-winner gate) and nudges the agent toward the best skill; `skill install-hook` / `uninstall-hook` register it in `settings.json` (`--scope user|project`).
@@ -137,6 +184,7 @@ All notable changes to this package are documented here. The format is based on 
 - UI assets and navigation for agent links, including Claude Code and Codex branding.
 
 ### Changed
+
 - Consume `@ratel-ai/sdk@^0.2.0`: the new discovery tool is `search_capabilities` (returns a `tools` and a `skills` bucket), and the skill model folds author `triggers` into the indexed `tags` and `stacks` into non-indexed `metadata` (ratel ADR-0012).
 - Reworked agent import/link internals around supported agent host adapters instead of Claude-only handling.
 - Made CLI and README import/link language agent-neutral where the flow now supports multiple agents.
@@ -144,25 +192,31 @@ All notable changes to this package are documented here. The format is based on 
 - UI routes now expose preview/apply workflows for importing agent MCP servers into Ratel and linking agents back to the Ratel gateway.
 
 ### Removed
+
 - Removed the old backup undo command.
 
 ### Fixed
+
 - A skill's `SKILL.md` is rewritten in place on edit: frontmatter keys Ratel doesn't manage (`allowed-tools`, `model`, custom keys, comments) are preserved, the write is atomic, and `description` / `tags` containing quotes or backslashes round-trip without accumulating escape characters (the loader now decodes escaped scalars).
 - Agent rewrites consistently install the `ratel-mcp` gateway command.
 
 ### Backward compatibility
+
 - The gateway still advertises the deprecated `search_tools` (its pre-0.2.0 tools-only `{ groups }` result) alongside `search_capabilities`, so MCP clients that reference `search_tools` by name keep working unchanged. Its description flags it as deprecated; prefer `search_capabilities`.
 
 ## [0.2.0] - 2026-05-12
 
 ### Added
+
 - `ratel-mcp` CLI bin shipped alongside the library. Subcommands: `serve`, `mcp add` / `remove` / `list` / `get` / `edit` / `import` / `link` / `auth`, `backup list`. Run via `npx @ratel-ai/mcp-server <verb>` or a global `pnpm add -g`.
 - Source split: `src/lib/` (library) + `src/cli/` (CLI) + `src/index.ts` (library entrypoint) + `src/bin.ts` (CLI entrypoint).
 
 ### Changed
+
 - Package now hosted in [`ratel-ai/ratel-mcp`](https://github.com/ratel-ai/ratel-local); previously shipped from the `ratel-ai/ratel` monorepo as one of several workspace packages. Library API surface is unchanged.
 - The Claude Code rewrite (`mcp import` / `link`) plants `command: "ratel-mcp"` (was `"ratel"` when this lived inside `@ratel-ai/cli`).
 - Bin-locator env var renamed `$RATEL_BIN` → `$RATEL_MCP_BIN`.
 
 ### Note
+
 - Extracted from [`ratel-ai/ratel@v0.1.5`](https://github.com/ratel-ai/ratel/tree/v0.1.5). `@ratel-ai/cli` in the source repo still depends on `@ratel-ai/mcp-server@^0.1.5` (library-only, pre-CLI) until its own follow-up refactor lands.

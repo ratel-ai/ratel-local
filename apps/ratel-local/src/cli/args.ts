@@ -8,6 +8,7 @@ export type Group =
   | "import"
   | "link"
   | "setup"
+  | "cloud"
   | "traces"
   | "statusline"
   | "serve"
@@ -61,6 +62,8 @@ const PROJECT_VERBS: ReadonlySet<string> = new Set(["list", "add", "remove"]);
 const STATUSLINE_VERBS: ReadonlySet<string> = new Set(["install", "uninstall"]);
 
 const TRACES_VERBS: ReadonlySet<string> = new Set(["status", "enable", "disable"]);
+
+const CLOUD_VERBS: ReadonlySet<string> = new Set(["add", "use", "list"]);
 
 const DAEMON_VERBS: ReadonlySet<string> = new Set([
   "run",
@@ -211,6 +214,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const candidate = argv[1];
       if (!STATUSLINE_VERBS.has(candidate)) {
         throw new ArgError(`unknown statusline verb: ${candidate}`);
+      }
+      verb = candidate;
+      i = 2;
+    }
+  } else if (first === "cloud") {
+    group = "cloud";
+    i = 1;
+    if (argv.length > 1 && !argv[1].startsWith("-")) {
+      const candidate = argv[1];
+      if (!CLOUD_VERBS.has(candidate)) {
+        throw new ArgError(`unknown cloud verb: ${candidate}`);
       }
       verb = candidate;
       i = 2;

@@ -3,10 +3,8 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cloudOtlpRelayOptionsFromEnv,
-  cloudOtlpTraceRelayOptions,
   createCloudOtlpTraceRelay,
   createCloudOtlpTraceRelayController,
-  deriveCloudOtlpLogsEndpoint,
   OTLP_LOGS_PATH,
   OTLP_PROTOBUF_CONTENT_TYPE,
   OTLP_TRACES_PATH,
@@ -48,30 +46,9 @@ describe("Cloud OTLP trace relay configuration", () => {
       }),
     ).toMatchObject({
       endpoint: new URL(CLOUD_ENDPOINT),
-      logsEndpoint: new URL("https://cloud.example.test/otlp/v1/logs"),
+      logsEndpoint: new URL("https://cloud.example.test/api/v1/logs"),
       apiKey: CLOUD_SECRET,
     });
-  });
-
-  it("derives the logs endpoint only from an exact terminal traces path segment", () => {
-    expect(
-      deriveCloudOtlpLogsEndpoint(new URL("https://cloud.example.test/api/v1/traces")),
-    ).toEqual(new URL("https://cloud.example.test/api/v1/logs"));
-    expect(
-      deriveCloudOtlpLogsEndpoint(new URL("https://cloud.example.test/tenant/traces/")),
-    ).toEqual(new URL("https://cloud.example.test/tenant/logs/"));
-    expect(() =>
-      cloudOtlpTraceRelayOptions({
-        endpoint: "https://cloud.example.test/api/v1/trace-ingest",
-        apiKey: CLOUD_SECRET,
-      }),
-    ).toThrow(/end.*traces/i);
-    expect(() =>
-      cloudOtlpTraceRelayOptions({
-        endpoint: "https://cloud.example.test/api/v1/traces-extra",
-        apiKey: CLOUD_SECRET,
-      }),
-    ).toThrow(/end.*traces/i);
   });
 
   it("requires a secret-free HTTPS Cloud endpoint", () => {
@@ -167,9 +144,7 @@ describe("Cloud OTLP/HTTP trace relay", () => {
 
     expect(response.status).toBe(200);
     expect(fetchUpstream).toHaveBeenCalledOnce();
-    expect(String(fetchUpstream.mock.calls[0]?.[0])).toBe(
-      "https://cloud.example.test/otlp/v1/logs",
-    );
+    expect(String(fetchUpstream.mock.calls[0]?.[0])).toBe("https://cloud.example.test/api/v1/logs");
   });
 
   it("handles only the exact trace route and rejects unsupported methods", async () => {
@@ -282,6 +257,7 @@ interface SpinRelayOptions {
 async function spinRelay(options: SpinRelayOptions = {}): Promise<URL> {
   const relay = createCloudOtlpTraceRelay({
     endpoint: new URL(CLOUD_ENDPOINT),
+    logsEndpoint: new URL("https://cloud.example.test/api/v1/logs"),
     apiKey: CLOUD_SECRET,
     fetch: options.fetch ?? (async () => new Response(null, { status: 200 })),
     log: options.log,

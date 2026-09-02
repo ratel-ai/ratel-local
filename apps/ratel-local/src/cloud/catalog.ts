@@ -1,26 +1,25 @@
+import {
+  type CloudCatalogPullResult,
+  type CloudSkillCatalog,
+  isPlainObject,
+  type RuntimeContextRef,
+} from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
+import {
+  CLOUD_PROFILE_ENV,
+  type CloudSettings,
+  cloudEndpoints,
+  resolveCloudCredential,
+} from "./settings.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
-export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
-
 const TIMEOUT_MS = 10_000;
-
-/** The wire projection `protocol/v1` serves: exactly these seven fields. */
-const WIRE_FIELDS = ["id", "name", "description", "tags", "tools", "metadata", "body"] as const;
-
-/**
- * One pull of the published Cloud catalog. `catalogVersion` is the source's
- * ETag, echoed back as `If-None-Match` on the next pull, and is the value a
- * gateway generation keys on.
- */
-export interface CloudCatalogSnapshot {
-  catalogVersion: string;
-  skills: Skill[];
-}
+/** How long a rejected key is taken at its word. A rotation builds a new loader. */
+const AUTH_FAILURE_COOLDOWN_MS = 60_000;
 
 export interface CloudCatalogLoadResult {
-  snapshot: CloudCatalogSnapshot;
+  snapshot: CloudSkillCatalog;
   /** Set when the snapshot is a cached one served through an upstream failure. */
   degraded?: string;
 }
@@ -30,34 +29,16 @@ export interface CloudCatalogLoaderOptions {
   apiKey: string;
   /** Injected by tests; the daemon uses the global `fetch`. */
   fetch?: typeof fetch;
+  /** Injected by tests; the daemon uses the wall clock. */
+  now?: () => number;
 }
 
-export class CloudCatalogAuthError extends Error {
-  constructor(status: number) {
-    super(`Cloud catalog auth failed: HTTP ${status}`);
-    this.name = "CloudCatalogAuthError";
-  }
-}
-
-export class CloudCatalogProtocolError extends Error {
-  constructor(reason: string) {
-    super(`Ratel Cloud returned a malformed catalog: ${reason}`);
-    this.name = "CloudCatalogProtocolError";
-  }
-}
-
-export class CloudCatalogUnavailableError extends Error {
-  constructor(reason: string) {
-    super(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
-    this.name = "CloudCatalogUnavailableError";
-  }
-}
-
-// ponytail: the shared guard rejects a query string, which is right while the
-// loader is global-only; a future `?scope=` pull has to relax it for this caller.
-export function cloudCatalogEndpoint(value: string): URL {
-  return secretFreeHttpsUrl(value, "Ratel Cloud catalog endpoint");
-}
+const protocolError = (reason: string) =>
+  new Error(`Ratel Cloud returned a malformed catalog: ${reason}`);
+const authFailedError = (status?: number) =>
+  new Error(`Cloud catalog auth failed${status === undefined ? "" : `: HTTP ${status}`}`);
+const unavailableError = (reason: string) =>
+  new Error(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
 
 /**
  * Conditional-GET client for the `protocol/v1` catalog pull.
@@ -66,21 +47,25 @@ export function cloudCatalogEndpoint(value: string): URL {
  * Deliberately: the contract serves `Cache-Control: no-cache`, so every
  * acquisition revalidates anyway, and a disk cache would add an offline story
  * the vertical slice does not need.
- * ponytail: daemon-lifetime cache; persistent offline cache deferred.
- * ponytail: concurrent load() can stampede; ceiling = one in-flight promise.
  *
  * A cached snapshot covers *availability* failures only. An invalid credential
  * or a contract violation always surfaces, so a revoked key cannot hide behind
  * the last good catalog indefinitely.
  */
 export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
-  const endpoint = cloudCatalogEndpoint(options.endpoint);
+  const endpoint = secretFreeHttpsUrl(options.endpoint, "Ratel Cloud catalog endpoint");
   headerSafeSecret(options.apiKey, "Ratel Cloud API key");
   const fetchUpstream = options.fetch ?? fetch;
-  let cached: CloudCatalogSnapshot | undefined;
+  const now = options.now ?? Date.now;
+  let cached: CloudSkillCatalog | undefined;
+  let rejectedUntil = 0;
+  let rejectedStatus: number | undefined;
 
   return {
     async load() {
+      // A revoked key fails identically every time, and every context resolve
+      // asks again. Hold the answer rather than ask Cloud on a loop.
+      if (now() < rejectedUntil) throw authFailedError(rejectedStatus);
       let response: Response;
       try {
         response = await fetchUpstream(endpoint, {
@@ -98,13 +83,17 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
       }
 
       if (response.status === 401 || response.status === 403) {
-        throw new CloudCatalogAuthError(response.status);
+        rejectedUntil = now() + AUTH_FAILURE_COOLDOWN_MS;
+        rejectedStatus = response.status;
+        throw authFailedError(response.status);
       }
+      // Only a 200 replaces the cache, so this is the steady state while the
+      // catalog is unchanged: whatever is held here is what every consumer sees.
       if (response.status === 304) {
         if (!cached) {
-          throw new CloudCatalogProtocolError("304 without a cached catalog");
+          throw protocolError("304 without a cached catalog");
         }
-        return { snapshot: handout(cached) };
+        return { snapshot: cached };
       }
       if (response.status !== 200) {
         return degradeOrThrow(cached, `HTTP ${response.status}`);
@@ -117,41 +106,95 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
         return degradeOrThrow(cached, (error as Error).message);
       }
       cached = parseCatalog(text);
-      return { snapshot: handout(cached) };
+      return { snapshot: cached };
     },
   };
 }
 
-function handout(snapshot: CloudCatalogSnapshot): CloudCatalogSnapshot {
-  // ponytail: shallow copy guards the cached array; skill objects are still shared,
-  // deep-clone only if a consumer starts mutating them in place.
-  return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
+interface CloudCredential {
+  /** Not `endpoint`: a traces URL must not type-check here. */
+  catalog: URL;
+  apiKey: string;
+}
+
+/**
+ * Resolves in ADR-0021's order. An unknown profile throws rather than falling
+ * back, so one project cannot silently pull another's account.
+ */
+export function createCloudCatalogSource(input: {
+  /** From disk each pull, not the boot snapshot. */
+  settings: () => Promise<CloudSettings | undefined>;
+  environment: CloudCredential | undefined;
+  environmentProfile: string | undefined;
+  log: (message: string) => void;
+  fetch?: typeof fetch;
+}) {
+  const loaders = new Map<string, ReturnType<typeof createCloudCatalogLoader>>();
+  const resolve = async (scopeProfile?: string): Promise<CloudCredential | undefined> => {
+    if (input.environment) return input.environment;
+    const settings = await input.settings();
+    const profile = input.environmentProfile ?? scopeProfile;
+    const source = input.environmentProfile ? CLOUD_PROFILE_ENV : "cloud.profile";
+    if (!settings) {
+      if (!profile) return undefined;
+      throw new Error(
+        `Cloud profile ${JSON.stringify(profile)} (${source}) is selected, but no Cloud credential is stored. Add one with: ratel-local cloud add ${profile}`,
+      );
+    }
+    const apiKey = resolveCloudCredential(settings, {
+      ...(profile ? { profile } : {}),
+      source: profile ? source : "store default",
+    });
+    if (!apiKey) return undefined;
+    return { catalog: cloudEndpoints(settings).catalog, apiKey };
+  };
+
+  return async (
+    _context: RuntimeContextRef,
+    profile?: string,
+  ): Promise<CloudCatalogPullResult | undefined> => {
+    const credential = await resolve(profile);
+    if (!credential) return undefined;
+    const endpoint = credential.catalog.toString();
+    const key = `${endpoint}\u0000${credential.apiKey}`;
+    const loader =
+      loaders.get(key) ??
+      createCloudCatalogLoader({
+        endpoint,
+        apiKey: credential.apiKey,
+        ...(input.fetch ? { fetch: input.fetch } : {}),
+      });
+    loaders.set(key, loader);
+    const { snapshot, degraded } = await loader.load();
+    if (degraded) input.log(`[ratel] serving a cached Cloud catalog: ${degraded}`);
+    return { catalog: snapshot, ...(degraded ? { degraded } : {}) };
+  };
 }
 
 function degradeOrThrow(
-  cached: CloudCatalogSnapshot | undefined,
+  cached: CloudSkillCatalog | undefined,
   reason: string,
 ): CloudCatalogLoadResult {
-  if (!cached) throw new CloudCatalogUnavailableError(reason);
-  return { snapshot: handout(cached), degraded: reason };
+  if (!cached) throw unavailableError(reason);
+  return { snapshot: cached, degraded: reason };
 }
 
-function parseCatalog(text: string): CloudCatalogSnapshot {
+function parseCatalog(text: string): CloudSkillCatalog {
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    throw new CloudCatalogProtocolError("response is not JSON");
+    throw protocolError("response is not JSON");
   }
-  if (!isRecord(body)) throw new CloudCatalogProtocolError("response is not an object");
+  if (!isPlainObject(body)) throw protocolError("response is not an object");
   const { catalogVersion, skills } = body;
   if (typeof catalogVersion !== "string" || catalogVersion === "") {
-    throw new CloudCatalogProtocolError("catalogVersion is missing");
+    throw protocolError("catalogVersion is missing");
   }
   if (/[\r\n]/.test(catalogVersion)) {
-    throw new CloudCatalogProtocolError("catalogVersion is not header-safe");
+    throw protocolError("catalogVersion is not header-safe");
   }
-  if (!Array.isArray(skills)) throw new CloudCatalogProtocolError("skills is not an array");
+  if (!Array.isArray(skills)) throw protocolError("skills is not an array");
   return { catalogVersion, skills: skills.map(toSkill) };
 }
 
@@ -163,24 +206,19 @@ function parseCatalog(text: string): CloudCatalogSnapshot {
  * extras, and a conforming client ignores them.
  */
 function toSkill(value: unknown, index: number): Skill {
-  if (!isRecord(value)) throw new CloudCatalogProtocolError(`skill ${index} is not an object`);
-  for (const field of WIRE_FIELDS) {
-    if (!(field in value)) {
-      throw new CloudCatalogProtocolError(`skill ${index} is missing ${field}`);
-    }
-  }
+  if (!isPlainObject(value)) throw protocolError(`skill ${index} is not an object`);
   const { id, name, description, tags, tools, metadata, body } = value;
   if (typeof id !== "string" || id === "") {
-    throw new CloudCatalogProtocolError(`skill ${index} has an invalid id`);
+    throw protocolError(`skill ${index} has an invalid id`);
   }
   if (typeof name !== "string" || typeof description !== "string" || typeof body !== "string") {
-    throw new CloudCatalogProtocolError(`skill ${id} has an invalid name, description, or body`);
+    throw protocolError(`skill ${id} has an invalid name, description, or body`);
   }
   if (!isStringArray(tags) || !isStringArray(tools)) {
-    throw new CloudCatalogProtocolError(`skill ${id} has invalid tags or tools`);
+    throw protocolError(`skill ${id} has invalid tags or tools`);
   }
-  if (!isRecord(metadata) || !Object.values(metadata).every(isStringArray)) {
-    throw new CloudCatalogProtocolError(`skill ${id} has invalid metadata`);
+  if (!isPlainObject(metadata) || !Object.values(metadata).every(isStringArray)) {
+    throw protocolError(`skill ${id} has invalid metadata`);
   }
   return {
     id,
@@ -191,10 +229,6 @@ function toSkill(value: unknown, index: number): Skill {
     metadata: metadata as Record<string, string[]>,
     body,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {

@@ -33,3 +33,10 @@ export interface CliServerMutationRequest {
 }
 
 export type CliServerMutator = (request: CliServerMutationRequest) => Promise<{ path: string }>;
+
+export interface CliCloudMutationRequest {
+  scope: RatelScope;
+  profile: string;
+}
+
+export type CliCloudMutator = (request: CliCloudMutationRequest) => Promise<{ path: string }>;

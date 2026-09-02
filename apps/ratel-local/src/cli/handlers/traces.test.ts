@@ -96,6 +96,17 @@ describe("runTraces", () => {
     expect(body.hosts.map((host: { hostKind: string }) => host.hostKind)).toEqual(["codex"]);
   });
 
+  it("names where the daemon's Cloud credential came from", async () => {
+    const { ctx, output } = context("status");
+
+    await runTraces(ctx, {
+      request: async () =>
+        response({ ...status(), cloudCredentialSource: 'profile "acme" (store default)' }),
+    });
+
+    expect(output.join("\n")).toContain('Cloud credential: profile "acme" (store default)');
+  });
+
   it("requires an explicit agent for mutations", async () => {
     const { ctx } = context("enable", { yes: true });
     await expect(runTraces(ctx, { request: async () => response(status()) })).rejects.toThrow(
@@ -110,6 +121,22 @@ describe("runTraces", () => {
       /RATEL_FEATURE_CLOUD_TELEMETRY=1.*daemon restart/,
     );
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("points at `cloud add` when Cloud is not configured yet", async () => {
+    // The inline prompt used to live here. It could only ever store the first
+    // credential, so storing one is now its own command.
+    const { ctx, output } = context("enable", { agent: ["claude-code"], yes: true });
+    await runTraces(ctx, {
+      request: async (path) => {
+        if (path === "/api/agent-traces") return response({ ...status(), cloudConfigured: false });
+        if (path === "/api/agent-traces/prepare") {
+          return response({ changeId: "trace-1", kind: "agent-traces.enable", preview: {} });
+        }
+        return response({ result: { action: "enable", hosts: status().hosts } });
+      },
+    });
+    expect(output.join("\n")).toContain("ratel-local cloud add <profile>");
   });
 
   it("prepares and commits a secret-free enable", async () => {
@@ -143,7 +170,7 @@ describe("runTraces", () => {
       },
       { path: "/api/changes/trace-1/commit", body: undefined },
     ]);
-    expect(output.join("\n")).toContain("Ratel Cloud tracing is not configured");
+    expect(output.join("\n")).toContain("Ratel Cloud is not configured");
     expect(output.join("\n")).toContain("https://cloud.ratel.sh/settings");
   });
 
@@ -260,79 +287,6 @@ describe("runTraces", () => {
     await expect(runTraces(ctx, { request: async () => response(body) })).rejects.toThrow(
       /--overwrite.*--yes/,
     );
-  });
-
-  it("offers masked Ratel Cloud API key setup after an interactive enable", async () => {
-    const secret = "rtl_secret_canary";
-    const notes: string[] = [];
-    const confirm = vi.fn(async () => true);
-    const password = vi.fn(async () => secret);
-    const prompts: PromptAdapter = {
-      ...silentPromptAdapter(),
-      note: (message) => notes.push(message),
-      confirm,
-      password,
-    };
-    const { ctx, output } = context("enable", { agent: "claude-code" }, prompts);
-    const calls: Array<{ path: string; method?: string; body?: unknown }> = [];
-
-    await runTraces(ctx, {
-      request: async (path, init) => {
-        calls.push({ path, method: init?.method, body: init?.body });
-        if (path === "/api/agent-traces") return response(status());
-        if (path === "/api/agent-traces/prepare") return response({ changeId: "trace-1" });
-        if (path === "/api/changes/trace-1/commit") {
-          return response({
-            result: { action: "enable", hosts: [status("configured").hosts[0]] },
-          });
-        }
-        if (path === "/api/cloud-traces" && init?.method === "PATCH") {
-          return response({ configured: true, endpoint: "https://cloud.ratel.sh/api/v1/traces" });
-        }
-        if (path === "/api/cloud-traces") {
-          return response({ configured: false, endpoint: "https://cloud.ratel.sh/api/v1/traces" });
-        }
-        throw new Error(`unexpected request: ${path}`);
-      },
-    });
-
-    expect(confirm).toHaveBeenCalledTimes(2);
-    expect(password).toHaveBeenCalledOnce();
-    expect(notes.join("\n")).toContain("https://cloud.ratel.sh/settings");
-    expect(calls).toContainEqual({
-      path: "/api/cloud-traces",
-      method: "PATCH",
-      body: { endpoint: "https://cloud.ratel.sh/api/v1/traces", apiKey: secret },
-    });
-    expect(output.join("\n")).toContain("Ratel Cloud tracing configured");
-    expect(output.join("\n")).not.toContain(secret);
-  });
-
-  it("leaves Cloud tracing unconfigured when interactive setup is declined", async () => {
-    let confirmation = 0;
-    const notes: string[] = [];
-    const prompts: PromptAdapter = {
-      ...silentPromptAdapter(),
-      note: (message) => notes.push(message),
-      async confirm() {
-        confirmation += 1;
-        return confirmation === 1;
-      },
-    };
-    const { ctx } = context("enable", { agent: "claude-code" }, prompts);
-    const paths: string[] = [];
-    await runTraces(ctx, {
-      request: async (path) => {
-        paths.push(path);
-        if (path === "/api/agent-traces") return response(status());
-        if (path === "/api/agent-traces/prepare") return response({ changeId: "trace-1" });
-        return response({
-          result: { action: "enable", hosts: [status("configured").hosts[0]] },
-        });
-      },
-    });
-    expect(paths).not.toContain("/api/cloud-traces");
-    expect(notes.join("\n")).toContain("https://cloud.ratel.sh/settings");
   });
 
   it("requires overwrite plus yes for non-interactive conflicts", async () => {

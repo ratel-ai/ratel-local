@@ -33,6 +33,8 @@ export interface PromptAdapter {
   spinner(): SpinnerHandle;
   isCancel(value: unknown): boolean;
   cancel(message?: string): void;
+  /** False when stdin is a pipe, a file, or CI. */
+  canPrompt(): boolean;
 }
 
 export function defaultPromptAdapter(): PromptAdapter {
@@ -48,6 +50,7 @@ export function defaultPromptAdapter(): PromptAdapter {
     spinner: () => clack.spinner(),
     isCancel: clack.isCancel,
     cancel: clack.cancel,
+    canPrompt: () => process.stdin.isTTY === true,
   };
 }
 
@@ -76,5 +79,6 @@ export function silentPromptAdapter(): PromptAdapter {
       return value === CANCEL_SYMBOL;
     },
     cancel() {},
+    canPrompt: () => false,
   };
 }

@@ -91,6 +91,7 @@ export interface CloudTraceSettingsStatus {
   featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
+  credentialStored?: boolean;
 }
 
 interface RetrievalWriteVariables {
@@ -215,7 +216,11 @@ function CloudTraceSettingsSection() {
     },
     successMessage: "Saved Ratel Cloud trace settings",
   });
-  const apiKeyConfigured = cloudQuery.data?.configured ?? false;
+  // This section knows one credential; the store holds named profiles, and the
+  // list that replaces it will drop `configured` for a profile list. Until then
+  // it has to say when the active key is one Settings cannot keep.
+  const credentialStored = cloudQuery.data?.credentialStored ?? true;
+  const apiKeyConfigured = (cloudQuery.data?.configured ?? false) && credentialStored;
   const showApiKeyInput = !apiKeyConfigured || editingApiKey;
 
   if (!cloudTraceSettingsVisible(cloudQuery.data)) return null;
@@ -253,7 +258,9 @@ function CloudTraceSettingsSection() {
               />
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground">
-                  The key is stored by the local daemon and is never returned to this page.
+                  {credentialStored
+                    ? "The key is stored by the local daemon and is never returned to this page."
+                    : "This daemon is using a key from RATEL_API_KEY, which is not stored. Enter one to store it."}
                 </p>
                 {apiKeyConfigured ? (
                   <Button
@@ -864,7 +871,7 @@ export function cloudTraceSettingsPatch(
   apiKey: string,
 ): { endpoint: string; apiKey?: string } {
   const trimmedApiKey = apiKey.trim();
-  if (!status.configured && !trimmedApiKey) {
+  if (!trimmedApiKey && (!status.configured || status.credentialStored === false)) {
     throw new Error("Ratel Cloud API key is required");
   }
   return {

@@ -112,17 +112,21 @@ export interface CloudTraceSettingsStatus {
   featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
+  /** False when the active key came from the environment, so Settings cannot keep it. */
+  credentialStored?: boolean;
 }
 
 export interface CloudTraceSettingsControlPlane {
   featureEnabled?: boolean;
   status(): Promise<CloudTraceSettingsStatus>;
   save(input: { endpoint: string; apiKey?: string }): Promise<CloudTraceSettingsStatus>;
+  reload(): Promise<CloudTraceSettingsStatus>;
 }
 
 export interface AgentTraceExportersStatus extends AgentTraceStatus {
   featureEnabled?: boolean;
   cloudConfigured: boolean;
+  cloudCredentialSource?: string;
 }
 
 export interface AgentTraceExportersControlPlane {
@@ -238,6 +242,15 @@ async function handleRequest(
   }
 
   try {
+    if (path === "/api/cloud-traces/reload" && opts.cloudTraceSettings) {
+      if (req.method !== "POST") {
+        writeJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      writeJson(res, 200, await opts.cloudTraceSettings.reload());
+      return;
+    }
+
     if (path === "/api/cloud-traces" && opts.cloudTraceSettings) {
       if (req.method === "GET") {
         writeJson(res, 200, await opts.cloudTraceSettings.status());
@@ -449,6 +462,30 @@ async function route(
   if (method === "GET" && path === "/api/config") {
     return getConfigWithSnapshot(ctx, runtimeContext, snapshotResolver);
   }
+  if (method === "PATCH" && path === "/api/cloud-profile") {
+    if (!configControlPlane) return null;
+    const body = await readJsonBody(req);
+    const target = parseRatelScopeRef(body.target);
+    const expectedRevision = optionalDocumentRevision(body.expectedRevision);
+    const profile = requiredBodyString(body.profile, "profile");
+    const commit = await configControlPlane.mutateCloud({
+      target,
+      profile,
+      ...(expectedRevision ? { expectedRevision } : {}),
+    });
+    return {
+      status: 200,
+      body: {
+        target,
+        profile,
+        transactionId: commit.transactionId,
+        changedPaths: commit.changedPaths,
+        revisions: commit.revisions,
+        reconnectRequired: true,
+      },
+    };
+  }
+
   if ((method === "PATCH" || method === "DELETE") && path === "/api/retrieval") {
     if (!configControlPlane) return null;
     const body = await readJsonBody(req);

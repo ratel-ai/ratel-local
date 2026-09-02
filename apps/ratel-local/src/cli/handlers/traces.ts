@@ -34,12 +34,7 @@ also require RATEL_FEATURE_CLOUD_TELEMETRY=1 on the running daemon.`;
 interface AgentTraceApiStatus extends AgentTraceStatus {
   featureEnabled?: boolean;
   cloudConfigured: boolean;
-}
-
-interface CloudTraceSettingsStatus {
-  featureEnabled?: boolean;
-  configured: boolean;
-  endpoint: string;
+  cloudCredentialSource?: string;
 }
 
 const RATEL_CLOUD_SETTINGS_URL = "https://cloud.ratel.sh/settings";
@@ -171,63 +166,10 @@ export async function runTraces(
     for (const warning of host.warnings) ctx.log(`warning: ${warning}`);
   }
   if (!status.cloudConfigured && verb === "enable") {
-    await offerCloudTraceSetup(ctx, request, yes);
-  }
-}
-
-async function offerCloudTraceSetup(
-  ctx: HandlerCtx,
-  request: DaemonApiRequest,
-  nonInteractive: boolean,
-): Promise<void> {
-  if (nonInteractive) {
     ctx.log(
-      `Ratel Cloud tracing is not configured. Add an API key in Agent Setup or visit ${RATEL_CLOUD_SETTINGS_URL}.`,
+      `Ratel Cloud is not configured. Store a key with "ratel-local cloud add <profile>"; create one at ${RATEL_CLOUD_SETTINGS_URL}.`,
     );
-    return;
   }
-
-  ctx.prompts.note(
-    `If you don't have an API key, create one at ${RATEL_CLOUD_SETTINGS_URL}.`,
-    "Ratel Cloud tracing",
-  );
-  const addKey = await ctx.prompts.confirm({
-    message: "Ratel Cloud tracing is not configured. Would you like to add an API key?",
-    initialValue: true,
-  });
-  if (ctx.prompts.isCancel(addKey) || addKey === false) return;
-
-  const entered = await ctx.prompts.password({
-    message: "Paste your Ratel Cloud API key",
-    mask: "•",
-  });
-  if (ctx.prompts.isCancel(entered) || typeof entered !== "string" || entered.trim() === "") {
-    ctx.prompts.note(
-      `No API key was saved. You can configure one later in Agent Setup or at ${RATEL_CLOUD_SETTINGS_URL}.`,
-      "Cloud setup skipped",
-    );
-    return;
-  }
-
-  const statusResponse = await request("/api/cloud-traces");
-  if (!statusResponse) throw daemonRequiredError();
-  const cloud = await requireDaemonJson<CloudTraceSettingsStatus>(
-    statusResponse,
-    "read Ratel Cloud trace settings",
-  );
-  if (typeof cloud.endpoint !== "string" || cloud.endpoint.trim() === "") {
-    throw new Error("the daemon returned an invalid Ratel Cloud trace endpoint");
-  }
-  const saveResponse = await request("/api/cloud-traces", {
-    method: "PATCH",
-    body: { endpoint: cloud.endpoint, apiKey: entered.trim() },
-  });
-  if (!saveResponse) throw daemonRequiredError();
-  await requireDaemonJson<CloudTraceSettingsStatus>(
-    saveResponse,
-    "save Ratel Cloud trace settings",
-  );
-  ctx.log("Ratel Cloud tracing configured.");
 }
 
 async function readStatus(request: DaemonApiRequest): Promise<AgentTraceApiStatus> {
@@ -248,6 +190,7 @@ function renderStatus(ctx: HandlerCtx, status: AgentTraceApiStatus): void {
   }
   ctx.log(`Cloud telemetry feature: ${status.featureEnabled === false ? "disabled" : "enabled"}`);
   ctx.log(`Cloud relay: ${status.cloudConfigured ? "configured" : "not configured"}`);
+  if (status.cloudCredentialSource) ctx.log(`Cloud credential: ${status.cloudCredentialSource}`);
 }
 
 function traceLevel(value: unknown, verb: string): AgentTraceLevel | undefined {
