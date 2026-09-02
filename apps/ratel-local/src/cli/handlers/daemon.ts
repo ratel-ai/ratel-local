@@ -56,6 +56,7 @@ import {
   ensureDaemonToken,
   readDaemonToken,
 } from "../../daemon/access.js";
+import { AdaptiveRankingStore } from "../../daemon/adaptive-ranking-store.js";
 import { InMemoryMcpClientRegistry } from "../../daemon/client-registry.js";
 import { createMcpHttpRoute } from "../../daemon/mcp-http.js";
 import { ReconciledGatewayPool } from "../../daemon/reconciled-gateway-pool.js";
@@ -66,6 +67,8 @@ import {
 } from "../../daemon/scoped-gateway-pool.js";
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import {
+  ADAPTIVE_RANKING_FEATURE_ENV,
+  adaptiveRankingOverrideFromEnv,
   CLOUD_TELEMETRY_FEATURE_ENV,
   cloudTelemetryOverrideFromEnv,
   type FeatureFlags,
@@ -368,6 +371,9 @@ export async function runDaemonServer(
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
   const featureFlags = featureFlagsFromEnv(daemonProcessEnv);
+  const adaptiveRankingStore = featureFlags.adaptiveRanking
+    ? new AdaptiveRankingStore({ homeDir: ctx.env.homeDir, logger: log })
+    : undefined;
   const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
   const cloudTraceSettingsStore =
     opts.cloudTraceSettingsStore ??
@@ -414,6 +420,11 @@ export async function runDaemonServer(
   };
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
+    const adaptiveRankingGraph = await adaptiveRankingStore?.graphFor(
+      scope.kind === "project"
+        ? { kind: "project", projectId: scope.projectId }
+        : { kind: "global" },
+    );
     if (scope.resolvedContext) {
       return buildGatewayFromConfig(
         { mcpServers: {} },
@@ -425,10 +436,12 @@ export async function runDaemonServer(
           ...(scope.resolvedContext.retrieval
             ? { retrieval: scope.resolvedContext.retrieval }
             : {}),
+          ...(adaptiveRankingGraph ? { adaptiveRankingGraph } : {}),
         },
       );
     }
     const scoped = scopeBuildInputs(parsed, ctx, options, scope);
+    if (adaptiveRankingGraph) scoped.options.adaptiveRankingGraph = adaptiveRankingGraph;
     return (await buildConfiguredGateway(scoped.parsed, scoped.options, log)).gateway;
   }, log);
   const useResolvedControlPlane =
@@ -751,7 +764,11 @@ export async function runDaemonServer(
         await ui.shutdown();
         await gatewayPool.shutdown();
       } finally {
-        await ratelTelemetry?.shutdown();
+        try {
+          await adaptiveRankingStore?.shutdown();
+        } finally {
+          await ratelTelemetry?.shutdown();
+        }
       }
     },
   };
@@ -882,7 +899,9 @@ export function createLaunchAgentPlist(input: {
   ];
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(
+      input.featureFlags ?? { cloudTelemetry: false, adaptiveRanking: false },
+    ),
   };
   const environmentXml = Object.entries(serviceEnvironment)
     .map(
@@ -937,7 +956,9 @@ export function createSystemdUserService(input: {
     .join(" ");
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(
+      input.featureFlags ?? { cloudTelemetry: false, adaptiveRanking: false },
+    ),
   };
   const environmentLines = Object.entries(serviceEnvironment)
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
@@ -1003,32 +1024,75 @@ export function applyCloudTelemetryToSystemdUserService(unit: string, enabled: b
   return stripped.replace("Restart=always", `${SYSTEMD_FLAG_LINE}\nRestart=always`);
 }
 
+function applyAdaptiveRankingToLaunchAgentPlist(plist: string, enabled: boolean): string {
+  const entry = `    <key>${ADAPTIVE_RANKING_FEATURE_ENV}</key>\n    <string>1</string>`;
+  const entryPattern = new RegExp(
+    `\\n    <key>${ADAPTIVE_RANKING_FEATURE_ENV}</key>\\n    <string>[^<]*</string>`,
+  );
+  const stripped = plist.replace(entryPattern, "").replace(EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE, "");
+  if (!enabled) return stripped;
+  const envBlock =
+    /(<key>EnvironmentVariables<\/key>\n {2}<dict>\n)([\s\S]*?)(\n {2}<\/dict>)/.exec(stripped);
+  if (envBlock?.index !== undefined) {
+    const inserted = `${envBlock[1]}${envBlock[2]}\n${entry}${envBlock[3]}`;
+    return (
+      stripped.slice(0, envBlock.index) +
+      inserted +
+      stripped.slice(envBlock.index + envBlock[0].length)
+    );
+  }
+  if (!stripped.includes("<key>StandardOutPath</key>")) throw new Error(SERVICE_SHAPE_ERROR);
+  return stripped.replace(
+    "  <key>StandardOutPath</key>",
+    `  <key>EnvironmentVariables</key>\n  <dict>\n${entry}\n  </dict>\n  <key>StandardOutPath</key>`,
+  );
+}
+
+function applyAdaptiveRankingToSystemdUserService(unit: string, enabled: boolean): string {
+  const line = `Environment=${ADAPTIVE_RANKING_FEATURE_ENV}=1`;
+  const linePattern = new RegExp(`^Environment=${ADAPTIVE_RANKING_FEATURE_ENV}=.*\\n`, "m");
+  const stripped = unit.replace(linePattern, "");
+  if (!enabled) return stripped;
+  if (!stripped.includes("Restart=always")) throw new Error(SERVICE_SHAPE_ERROR);
+  return stripped.replace("Restart=always", `${line}\nRestart=always`);
+}
+
 /**
- * Apply an explicit Cloud telemetry override to the installed service file.
- * Returns the applied value, or `undefined` when nothing was written — no
- * override in the environment, or no installed service to rewrite.
+ * Apply explicit feature-flag overrides to the installed service file.
+ * Returns the Cloud override for its post-restart verification, when present.
  */
 async function reconfigureInstalledServiceFeatureFlags(
   ctx: HandlerCtx,
   options: ServeOptions,
   opts: DaemonHandlerDeps,
 ): Promise<boolean | undefined> {
-  const override = cloudTelemetryOverrideFromEnv(options.processEnv ?? process.env);
-  if (override === undefined) return undefined;
+  const env = options.processEnv ?? process.env;
+  const cloudOverride = cloudTelemetryOverrideFromEnv(env);
+  const adaptiveOverride = adaptiveRankingOverrideFromEnv(env);
+  if (cloudOverride === undefined && adaptiveOverride === undefined) return undefined;
   const platform = daemonPlatform(opts);
   const paths = daemonPaths(ctx.env.homeDir);
   const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
   const current = await ctx.fs.read(servicePath);
   if (current === null) return undefined;
-  const next =
-    platform === "linux"
-      ? applyCloudTelemetryToSystemdUserService(current, override)
-      : applyCloudTelemetryToLaunchAgentPlist(current, override);
+  let next = current;
+  if (cloudOverride !== undefined) {
+    next =
+      platform === "linux"
+        ? applyCloudTelemetryToSystemdUserService(next, cloudOverride)
+        : applyCloudTelemetryToLaunchAgentPlist(next, cloudOverride);
+  }
+  if (adaptiveOverride !== undefined) {
+    next =
+      platform === "linux"
+        ? applyAdaptiveRankingToSystemdUserService(next, adaptiveOverride)
+        : applyAdaptiveRankingToLaunchAgentPlist(next, adaptiveOverride);
+  }
   if (next !== current) {
     await ctx.fs.writeAtomic(servicePath, next);
     if (platform === "linux") await systemctl(opts, ["daemon-reload"]);
   }
-  return override;
+  return cloudOverride;
 }
 
 /**

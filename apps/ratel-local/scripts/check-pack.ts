@@ -9,7 +9,7 @@ const packageJson = await readJson<{
   version?: unknown;
   dependencies?: Record<string, unknown>;
 }>(resolve(appRoot, "package.json"));
-const requiredRatelSdkVersion = "0.9.1";
+const requiredRatelSdkVersion = "0.12.0";
 const ratelSdkVersion = packageJson.dependencies?.["@ratel-ai/sdk"];
 if (ratelSdkVersion !== requiredRatelSdkVersion) {
   throw new Error(`@ratel-ai/sdk must be pinned exactly to ${requiredRatelSdkVersion}`);

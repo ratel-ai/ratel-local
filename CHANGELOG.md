@@ -4,7 +4,14 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+- Added experimental online adaptive ranking behind
+  `RATEL_FEATURE_ADAPTIVE_RANKING=1`. The daemon shares one SDK intent graph
+  between tool and skill catalogs per global/project context, restores it at
+  startup, and persists changed revisions atomically with private permissions.
+
 ### Changed
+- Upgraded and pinned `@ratel-ai/sdk` to `0.12.0` for adaptive-ranking support.
 - Made `daemon restart` reconfigure the Cloud telemetry feature flag in an
   installed launchd or systemd service when `RATEL_FEATURE_CLOUD_TELEMETRY` is
   present in the invoking environment (`=1` enables, any other value disables,

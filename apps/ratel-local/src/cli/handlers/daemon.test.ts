@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,9 +10,10 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
+import { IntentGraph } from "@ratel-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { connectorHeaders } from "../../daemon/access.js";
-import { CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
+import { ADAPTIVE_RANKING_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
@@ -665,6 +666,67 @@ describe("runDaemon", () => {
     }
   });
 
+  it("learns online and persists the global intent graph when adaptive ranking is enabled", async () => {
+    const fs = new MemFs();
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-adaptive-ranking-"));
+    const logs: string[] = [];
+    const upstream = new Server(
+      { name: "adaptive", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    upstream.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [
+        {
+          name: "build_status",
+          description: "Inspect the current build status",
+          inputSchema: { type: "object" },
+        },
+      ],
+    }));
+    upstream.setRequestHandler(CallToolRequestSchema, async () => ({ content: [] }));
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    await upstream.connect(serverTransport);
+
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs, { homeDir }),
+      {
+        readConfig: async () => ({
+          mcpServers: { adaptive: { type: "stdio", command: "noop" } },
+        }),
+        processEnv: { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" },
+        transportFactory: () => clientTransport,
+      },
+      (message) => logs.push(message),
+      { open: () => {}, ensureToken: async () => "daemon-test-token" },
+    );
+    const client = new Client({ name: "adaptive-test", version: "1.0.0" });
+
+    try {
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL("/mcp", daemonUrlFromLogs(logs)), {
+          requestInit: { headers: connectorHeaders("daemon-test-token") },
+        }),
+      );
+      await client.callTool({
+        name: "search_capabilities",
+        arguments: { query: "is the build passing" },
+      });
+      await client.callTool({
+        name: "invoke_tool",
+        arguments: { toolId: "adaptive__build_status", args: {} },
+      });
+    } finally {
+      await client.close();
+      await result.shutdown?.();
+      await upstream.close();
+    }
+
+    const graphPath = join(homeDir, ".ratel", "adaptive-ranking", "global.json");
+    expect(IntentGraph.fromJson(await readFile(graphPath, "utf8")).rev).toBeGreaterThan(0);
+    await rm(homeDir, { recursive: true, force: true });
+  });
+
   it("isolates project config chains while sharing one daemon", async () => {
     const fs = new MemFs();
     const temp = await mkdtemp(join(tmpdir(), "ratel-daemon-scopes-"));
@@ -1064,6 +1126,38 @@ describe("runDaemon", () => {
   }
 
   for (const platform of ["darwin", "linux"] as const) {
+    it(`enables adaptive ranking on ${platform} restart when the flag is explicitly set`, async () => {
+      const fs = new MemFs();
+      const paths = daemonPaths(HOME);
+      const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
+      const input = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        featureFlags: { cloudTelemetry: false, adaptiveRanking: false },
+      };
+      fs.files.set(
+        servicePath,
+        platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input),
+      );
+
+      await runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } },
+        () => {},
+        {
+          platform,
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+      expect(fs.files.get(servicePath)).toContain(ADAPTIVE_RANKING_FEATURE_ENV);
+    });
+
     it(`enables Cloud telemetry on ${platform} restart when the flag is explicitly set`, async () => {
       const fs = new MemFs();
       const paths = daemonPaths(HOME);

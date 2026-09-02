@@ -42,8 +42,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@ratel-ai/sdk':
-        specifier: 0.9.1
-        version: 0.9.1(zod@4.4.3)
+        specifier: 0.12.0
+        version: 0.12.0(zod@4.4.3)
       '@ratel-ai/telemetry':
         specifier: 0.1.2
         version: 0.1.2
@@ -73,8 +73,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@ratel-ai/sdk':
-        specifier: 0.9.1
-        version: 0.9.1(zod@4.4.3)
+        specifier: 0.12.0
+        version: 0.12.0(zod@4.4.3)
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -1216,40 +1216,40 @@ packages:
       '@types/react':
         optional: true
 
-  '@ratel-ai/sdk-darwin-arm64@0.9.1':
-    resolution: {integrity: sha512-98+1Ji72iOAhbEi2c/fSOaQb1+OWA26Aw3JKpnMtTX6ESw0fIDyxFcYLS42OH6n4JDrofgpPs5ltT7R5pR2P3A==}
+  '@ratel-ai/sdk-darwin-arm64@0.12.0':
+    resolution: {integrity: sha512-j9v5qITeYXAFG8IG1idTmvS62gk1TrLZ4WfiqK/ATByHpv01mpnic2EU23c6+NokF7pz7IaTFHzkTGGdpJ0Eow==}
     engines: {node: '>=20.0.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@ratel-ai/sdk-darwin-x64@0.9.1':
-    resolution: {integrity: sha512-TfiCYFPTLk/vMCGa1vWn8gNzmszS1rkYmJRaFPVlqnX1zFgHFc63pPPU2wND8L38XQ8EZbvegxLcs1EBgjiD6g==}
+  '@ratel-ai/sdk-darwin-x64@0.12.0':
+    resolution: {integrity: sha512-Z4IEe95t3CZPeGEIfp368BIx64mQfZzou+ARk6S20BQJ47vh+vHmO+eUX8IH4fxyROprfCGDOcfA1YNufClmUA==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@ratel-ai/sdk-linux-arm64-gnu@0.9.1':
-    resolution: {integrity: sha512-bwLga0IB9RWIFn/lNpuLWqjclxk8h6SzMi1/B2rTaatF7+iJaOYOx8x2IIqb8HAVOnFVR0YOg3+C33gRjU268A==}
+  '@ratel-ai/sdk-linux-arm64-gnu@0.12.0':
+    resolution: {integrity: sha512-ZP9FXA2+ijfT4Vj7KpKRMzQiauNPDn/jtX3M0VLrv3vgkABax8kPjj7GzfvS0X9mbLZ1Uahgs4uWDyECWIww9Q==}
     engines: {node: '>=20.0.0'}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@ratel-ai/sdk-linux-x64-gnu@0.9.1':
-    resolution: {integrity: sha512-o4Jm0FKT9+PVlADNynWbGtiv/oBDKStvH46t7awJ2ismmE63ZXB1aqdjibXAc8zdYUk+/JkinKr6P87Mi69ZTA==}
+  '@ratel-ai/sdk-linux-x64-gnu@0.12.0':
+    resolution: {integrity: sha512-TUwfHpE5kcwarDlwmqfY7ZKFvfYDBXPYDfJugxnfWcvYRMtFkSf/G3rjFogolJBiru4A5UmiMGBeRiVg9YZCmw==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@ratel-ai/sdk-win32-x64-msvc@0.9.1':
-    resolution: {integrity: sha512-08Skl6PcI2JESN8cITouyLhfs/otb8RqUKL/7JrdpVBTCugIBacXNliPUEPchPfPSdUIhpGu9Joy1IBXHZuWFQ==}
+  '@ratel-ai/sdk-win32-x64-msvc@0.12.0':
+    resolution: {integrity: sha512-PaBvt7aPCK/IfyejKDLKfKLYCc9kUNi/LcgQyuS1iq14TKGw/pdkZPB2gY2bJSBR/m0okSIqW6jwYvbGrK2aPg==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [win32]
 
-  '@ratel-ai/sdk@0.9.1':
-    resolution: {integrity: sha512-GD1yDVz6AN5pw/3EtrV/2rE+yjWCiz23LvOJm9M2UfgpiWcmURRpJpBekwaKIxDnHQAg8KGQu6RdNluUKdr4lQ==}
+  '@ratel-ai/sdk@0.12.0':
+    resolution: {integrity: sha512-7gapjM5oMpS5JEYstQMBltidT2eIDILHjLYQnkbvjVz9rdlRBh1uva5IyyBW/+6KEioiTBzgH5gIpQUsvkw03g==}
     engines: {node: '>=20.6.0'}
 
   '@ratel-ai/telemetry-otlp@0.1.1':
@@ -1262,8 +1262,8 @@ packages:
     resolution: {integrity: sha512-8P/2E9U74dbjB1WRT5H2K8KDHoRMxDEl77sv53kGKeQCvSxO0WbtnvHLkYXjUDm83zm3p45ww80Jym+g+xsJ7A==}
     engines: {node: '>=20.6.0'}
 
-  '@ratel-ai/telemetry@0.3.1':
-    resolution: {integrity: sha512-FjIDGx3Ul35kzHI4KCILCiB95vKSLFz27r5b9TsKuTceXkMbdgGqcOoiuqfO85XY1I/opyzy6JqZe1xCjtUHBg==}
+  '@ratel-ai/telemetry@0.5.0':
+    resolution: {integrity: sha512-eeUlzPAf/hxAaaRXfcTjDKO/z9L8yiioBbnBTaVWD08088EXsWI7MINPMx3HIAS2/njiKTlGKEqYD1G+J8wCKw==}
     engines: {node: '>=20.6.0'}
 
   '@reduxjs/toolkit@2.12.0':
@@ -1964,6 +1964,11 @@ packages:
 
   caniuse-lite@1.0.30001793:
     resolution: {integrity: sha512-iwSsYWaCOoh26cV8NwNRViHlrfUvYsHDfRVcbtmw0Kg6PJIZZXwMkj1442FYLBGkeUf1juAsU3DTfxW579mrPA==}
+
+  canonicalize@4.0.0:
+    resolution: {integrity: sha512-FEdXzwWs+N3rZqEqpqleiY9M1A6IAf9oo1zHFABnLW9FcJ/jzsu+G/Ks3Hq3FglmPKe80GeGBw8ZXLEnwPB0vQ==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
@@ -4876,34 +4881,35 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.15
 
-  '@ratel-ai/sdk-darwin-arm64@0.9.1':
+  '@ratel-ai/sdk-darwin-arm64@0.12.0':
     optional: true
 
-  '@ratel-ai/sdk-darwin-x64@0.9.1':
+  '@ratel-ai/sdk-darwin-x64@0.12.0':
     optional: true
 
-  '@ratel-ai/sdk-linux-arm64-gnu@0.9.1':
+  '@ratel-ai/sdk-linux-arm64-gnu@0.12.0':
     optional: true
 
-  '@ratel-ai/sdk-linux-x64-gnu@0.9.1':
+  '@ratel-ai/sdk-linux-x64-gnu@0.12.0':
     optional: true
 
-  '@ratel-ai/sdk-win32-x64-msvc@0.9.1':
+  '@ratel-ai/sdk-win32-x64-msvc@0.12.0':
     optional: true
 
-  '@ratel-ai/sdk@0.9.1(zod@4.4.3)':
+  '@ratel-ai/sdk@0.12.0(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/api-logs': 0.220.0
-      '@ratel-ai/telemetry': 0.3.1
+      '@ratel-ai/telemetry': 0.5.0
       '@types/json-schema': 7.0.15
+      canonicalize: 4.0.0
     optionalDependencies:
-      '@ratel-ai/sdk-darwin-arm64': 0.9.1
-      '@ratel-ai/sdk-darwin-x64': 0.9.1
-      '@ratel-ai/sdk-linux-arm64-gnu': 0.9.1
-      '@ratel-ai/sdk-linux-x64-gnu': 0.9.1
-      '@ratel-ai/sdk-win32-x64-msvc': 0.9.1
+      '@ratel-ai/sdk-darwin-arm64': 0.12.0
+      '@ratel-ai/sdk-darwin-x64': 0.12.0
+      '@ratel-ai/sdk-linux-arm64-gnu': 0.12.0
+      '@ratel-ai/sdk-linux-x64-gnu': 0.12.0
+      '@ratel-ai/sdk-win32-x64-msvc': 0.12.0
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
@@ -4921,7 +4927,7 @@ snapshots:
 
   '@ratel-ai/telemetry@0.1.2': {}
 
-  '@ratel-ai/telemetry@0.3.1': {}
+  '@ratel-ai/telemetry@0.5.0': {}
 
   '@reduxjs/toolkit@2.12.0(react-redux@9.3.0(@types/react@19.2.15)(react@19.2.6)(redux@5.0.1))(react@19.2.6)':
     dependencies:
@@ -5470,6 +5476,8 @@ snapshots:
   callsites@3.1.0: {}
 
   caniuse-lite@1.0.30001793: {}
+
+  canonicalize@4.0.0: {}
 
   ccount@2.0.1: {}
 

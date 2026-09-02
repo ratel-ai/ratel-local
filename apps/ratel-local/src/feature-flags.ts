@@ -1,7 +1,9 @@
 export const CLOUD_TELEMETRY_FEATURE_ENV = "RATEL_FEATURE_CLOUD_TELEMETRY";
+export const ADAPTIVE_RANKING_FEATURE_ENV = "RATEL_FEATURE_ADAPTIVE_RANKING";
 
 export interface FeatureFlags {
   cloudTelemetry: boolean;
+  adaptiveRanking: boolean;
 }
 
 /**
@@ -11,12 +13,16 @@ export interface FeatureFlags {
 export function featureFlagsFromEnv(env: NodeJS.ProcessEnv): FeatureFlags {
   return {
     cloudTelemetry: env[CLOUD_TELEMETRY_FEATURE_ENV] === "1",
+    adaptiveRanking: env[ADAPTIVE_RANKING_FEATURE_ENV] === "1",
   };
 }
 
 /** Environment entries that an installed daemon service must retain. */
 export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<string, string> {
-  return flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {};
+  return {
+    ...(flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {}),
+    ...(flags.adaptiveRanking ? { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } : {}),
+  };
 }
 
 /**
@@ -27,4 +33,10 @@ export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<strin
 export function cloudTelemetryOverrideFromEnv(env: NodeJS.ProcessEnv): boolean | undefined {
   if (!Object.hasOwn(env, CLOUD_TELEMETRY_FEATURE_ENV)) return undefined;
   return env[CLOUD_TELEMETRY_FEATURE_ENV] === "1";
+}
+
+/** Explicit adaptive-ranking override from the invoking environment. */
+export function adaptiveRankingOverrideFromEnv(env: NodeJS.ProcessEnv): boolean | undefined {
+  if (!Object.hasOwn(env, ADAPTIVE_RANKING_FEATURE_ENV)) return undefined;
+  return env[ADAPTIVE_RANKING_FEATURE_ENV] === "1";
 }
