@@ -8,6 +8,8 @@ const LAUNCH_AGENT_ENV_BLOCK_RE =
 export const SERVICE_SHAPE_ERROR =
   'installed daemon service is not a Ratel Local unit; reinstall with "ratel-local daemon install"';
 
+// Rewrite the installed unit rather than regenerate it: regenerating refreshes
+// install-time PATH, which ADR-0020 preserves so npx can't reorder plugin binaries.
 export function applyFeatureFlagsToLaunchAgentPlist(
   plist: string,
   overrides: ServiceFeatureFlagOverrides,

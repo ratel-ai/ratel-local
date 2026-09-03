@@ -482,20 +482,19 @@ function digestRuntimeRevision(
     runtimeCwd,
     oauthFingerprint: oauthKey.fingerprint,
   }));
-  return (
-    createHash("sha256")
-      .update(`ratel-runtime-v${CONTEXT_SNAPSHOT_RESOLVER_VERSION}\0`)
-      .update(stableStringify(normalizedDocuments))
-      .update("\0")
-      .update(stableStringify(runtimeMcpEntries))
-      .update("\0")
-      .update(skillFingerprint)
-      .update("\0")
-      .update(stableStringify(oauthStoreRevisions))
-      .update("\0")
-      .update(cloudCatalogVersion ?? "")
-      .digest("base64url") as RuntimeRevision
-  );
+  return createHash("sha256")
+    .update(`ratel-runtime-v${CONTEXT_SNAPSHOT_RESOLVER_VERSION}\0`)
+    .update(stableStringify(normalizedDocuments))
+    .update("\0")
+    .update(stableStringify(runtimeMcpEntries))
+    .update("\0")
+    .update(skillFingerprint)
+    .update("\0")
+    .update(stableStringify(oauthStoreRevisions))
+    .update("\0")
+    // Cloud skills have no path, so the fingerprint above cannot see them.
+    .update(cloudCatalogVersion ?? "")
+    .digest("base64url") as RuntimeRevision;
 }
 
 function stableStringify(value: unknown): string {

@@ -28,7 +28,7 @@ export function featureFlagsFromEnv(env: NodeJS.ProcessEnv): FeatureFlags {
   };
 }
 
-/** Environment entries that an installed daemon service must retain. */
+/** Only enabled flags reach the service file; absence means off. */
 export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<string, string> {
   return {
     ...(flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {}),
