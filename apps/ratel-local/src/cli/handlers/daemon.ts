@@ -33,7 +33,7 @@ import {
   type TelemetryHandle,
   type TelemetryInitOptions,
 } from "@ratel-ai/telemetry-otlp";
-import { createCloudCatalogSource } from "../../cloud/catalog.js";
+import { CLOUD_CATALOG_TIMEOUT_MS, createCloudCatalogSource } from "../../cloud/catalog.js";
 import {
   CLOUD_API_KEY_ENV,
   type CloudOtlpTraceRelayOptions,
@@ -88,6 +88,7 @@ import { buildConfiguredGateway, type ServeOptions } from "./serve.js";
 import type { HandlerCtx } from "./types.js";
 
 export const DEFAULT_DAEMON_PORT = 5731;
+export const DAEMON_STARTUP_BUDGET_MS = 5_000 + CLOUD_CATALOG_TIMEOUT_MS;
 export const DAEMON_LABEL = "ai.ratel.local.daemon";
 export const SYSTEMD_SERVICE = "ratel-local-daemon.service";
 export const DAEMON_SERVICE_ID = "ratel-local-daemon";
@@ -432,16 +433,13 @@ export async function runDaemonServer(
         ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
       })
     : undefined;
-  const resolverOptions = { homeDir: ctx.env.homeDir, projectRegistry };
   const snapshotResolver =
     opts.snapshotResolver ??
     createContextSnapshotResolver({
-      ...resolverOptions,
+      homeDir: ctx.env.homeDir,
+      projectRegistry,
       ...(cloudCatalog ? { cloudCatalog } : {}),
     });
-  // OAuth migration reads `mcpEntries` only; a catalog pull here would block
-  // listen by one timeout per context.
-  const migrationResolver = opts.snapshotResolver ?? createContextSnapshotResolver(resolverOptions);
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -479,7 +477,7 @@ export async function runDaemonServer(
   // Recover any interrupted config ownership change before snapshots drive OAuth
   // migration; otherwise a transient half-transaction could mis-scope credentials.
   if (useResolvedControlPlane) {
-    await migrateDaemonOAuthStores(ctx.env.homeDir, projectRegistry, migrationResolver, log);
+    await migrateDaemonOAuthStores(ctx.env.homeDir, projectRegistry, snapshotResolver, log);
   }
   const localGitExcludeManager = useResolvedControlPlane
     ? createLocalGitExcludeManager()
@@ -800,17 +798,17 @@ async function migrateDaemonOAuthStores(
       .filter(({ status }) => status === "available")
       .map(({ id }) => ({ kind: "project" as const, projectId: id })),
   ];
-  const entries = [];
-  for (const context of contexts) {
-    try {
-      entries.push(...(await resolver.resolve(context)).mcpEntries);
-    } catch (error) {
-      log(
-        `[ratel] skipped OAuth migration because a context is invalid: ${(error as Error).message}`,
-      );
-      return;
-    }
+  const resolved = await Promise.allSettled(contexts.map((context) => resolver.resolve(context)));
+  const failed = resolved.filter((result) => result.status === "rejected");
+  if (failed[0]) {
+    log(
+      `[ratel] skipped OAuth migration because ${failed.length} of ${contexts.length} contexts are invalid: ${(failed[0].reason as Error).message}`,
+    );
+    return;
   }
+  const entries = resolved.flatMap((result) =>
+    result.status === "fulfilled" ? result.value.mcpEntries : [],
+  );
   try {
     const report = await migrateLegacyOAuthStores({ homeDir, entries });
     for (const item of report.migrated) {
@@ -1395,7 +1393,7 @@ async function waitForDaemon(
   probe: ProbeDaemon,
   expectedVersion?: string,
 ): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + DAEMON_STARTUP_BUDGET_MS;
   let lastError = "not responding";
   while (Date.now() < deadline) {
     const result = await probe(port);

@@ -5,9 +5,9 @@ import { secretFreeHttpsUrl } from "./url.js";
 
 export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/api/v1/catalog";
 
-const TIMEOUT_MS = 10_000;
+export const CLOUD_CATALOG_TIMEOUT_MS = 10_000;
 const AUTH_FAILURE_COOLDOWN_MS = 60_000;
-const UNAVAILABLE_COOLDOWN_MS = TIMEOUT_MS;
+const UNAVAILABLE_COOLDOWN_MS = CLOUD_CATALOG_TIMEOUT_MS;
 
 /** The wire projection `protocol/v1` serves: exactly these seven fields. */
 const WIRE_FIELDS = ["id", "name", "description", "tags", "tools", "metadata", "body"] as const;
@@ -78,56 +78,67 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   let rejected: { until: number; status: number } | undefined;
   let unavailable: { until: number; reason: string } | undefined;
 
-  return {
-    async load() {
-      if (rejected && now() < rejected.until) throw new CloudCatalogAuthError(rejected.status);
-      if (!cached && unavailable && now() < unavailable.until) {
-        throw new CloudCatalogUnavailableError(unavailable.reason);
-      }
-      const degrade = (reason: string) => {
-        if (!cached) unavailable = { until: now() + UNAVAILABLE_COOLDOWN_MS, reason };
-        return degradeOrThrow(cached, reason);
-      };
-      let response: Response;
-      try {
-        response = await fetchUpstream(endpoint, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${options.apiKey}`,
-            Accept: "application/json",
-            ...(cached ? { "If-None-Match": `"${cached.catalogVersion}"` } : {}),
-          },
-          redirect: "error",
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-        });
-      } catch (error) {
-        return degrade((error as Error).message);
-      }
+  const pull = async (): Promise<CloudCatalogLoadResult> => {
+    if (rejected && now() < rejected.until) throw new CloudCatalogAuthError(rejected.status);
+    if (!cached && unavailable && now() < unavailable.until) {
+      throw new CloudCatalogUnavailableError(unavailable.reason);
+    }
+    const degrade = (reason: string) => {
+      if (!cached) unavailable = { until: now() + UNAVAILABLE_COOLDOWN_MS, reason };
+      return degradeOrThrow(cached, reason);
+    };
+    let response: Response;
+    try {
+      response = await fetchUpstream(endpoint, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+          Accept: "application/json",
+          ...(cached ? { "If-None-Match": `"${cached.catalogVersion}"` } : {}),
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(CLOUD_CATALOG_TIMEOUT_MS),
+      });
+    } catch (error) {
+      return degrade((error as Error).message);
+    }
 
-      if (response.status === 401 || response.status === 403) {
-        rejected = { until: now() + AUTH_FAILURE_COOLDOWN_MS, status: response.status };
-        throw new CloudCatalogAuthError(response.status);
+    if (response.status === 401 || response.status === 403) {
+      rejected = { until: now() + AUTH_FAILURE_COOLDOWN_MS, status: response.status };
+      throw new CloudCatalogAuthError(response.status);
+    }
+    if (response.status === 304) {
+      if (!cached) {
+        throw new CloudCatalogProtocolError("304 without a cached catalog");
       }
-      if (response.status === 304) {
-        if (!cached) {
-          throw new CloudCatalogProtocolError("304 without a cached catalog");
-        }
-        return { snapshot: handout(cached) };
-      }
-      if (response.status !== 200) {
-        return degrade(`HTTP ${response.status}`);
-      }
-
-      let text: string;
-      try {
-        text = await response.text();
-      } catch (error) {
-        return degrade((error as Error).message);
-      }
-      cached = parseCatalog(text);
       return { snapshot: handout(cached) };
-    },
+    }
+    if (response.status !== 200) {
+      return degrade(`HTTP ${response.status}`);
+    }
+
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      return degrade((error as Error).message);
+    }
+    cached = parseCatalog(text);
+    return { snapshot: handout(cached) };
   };
+
+  const load = singleFlight(pull);
+
+  return { load };
+}
+
+/** Runs `fn` once for every set of overlapping calls. The next call starts afresh. */
+function singleFlight<T>(fn: () => Promise<T>): () => Promise<T> {
+  let inflight: Promise<T> | undefined;
+  return () =>
+    (inflight ??= fn().finally(() => {
+      inflight = undefined;
+    }));
 }
 
 /**

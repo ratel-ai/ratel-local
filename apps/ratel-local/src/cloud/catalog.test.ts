@@ -196,6 +196,33 @@ describe("createCloudCatalogLoader", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("serves overlapping loads from one request", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const impl = (async (input: URL | RequestInfo) => {
+      calls.push(String(input));
+      await gate;
+      return jsonResponse(WIRE);
+    }) as unknown as typeof fetch;
+    const client = loader(impl);
+
+    const [first, second, third] = [client.load(), client.load(), client.load()];
+    release();
+    const results = await Promise.all([first, second, third]);
+
+    expect(calls).toHaveLength(1);
+    expect(results.map(({ snapshot }) => snapshot.catalogVersion)).toEqual([
+      VERSION,
+      VERSION,
+      VERSION,
+    ]);
+    await client.load();
+    expect(calls).toHaveLength(2);
+  });
+
   it("holds an unreachable Cloud rather than paying its timeout on every resolve", async () => {
     const { calls, impl } = recordingFetch(
       jsonResponse({ error: "gateway" }, 503),

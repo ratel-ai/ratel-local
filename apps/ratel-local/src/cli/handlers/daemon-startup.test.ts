@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CLOUD_CATALOG_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
-import { runDaemon } from "./daemon.js";
+import { DAEMON_STARTUP_BUDGET_MS, runDaemon } from "./daemon.js";
 import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -53,7 +53,7 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/** The same 5s /healthz poll `waitForDaemon` runs after launchd/systemd starts the daemon. */
+/** The same /healthz poll `waitForDaemon` runs after launchd/systemd starts the daemon. */
 async function pollHealthz(port: number, timeoutMs: number): Promise<number | undefined> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -69,7 +69,7 @@ async function pollHealthz(port: number, timeoutMs: number): Promise<number | un
 }
 
 describe("daemon startup budget", () => {
-  it("serves /healthz within the restart budget while Cloud hangs", async () => {
+  it("pulls the catalog once for every context the OAuth migration resolves", async () => {
     const homeDir = await mkdtemp(join(tmpdir(), "ratel-startup-repro-"));
     const projectA = join(homeDir, "project-a");
     const projectB = join(homeDir, "project-b");
@@ -79,18 +79,11 @@ describe("daemon startup budget", () => {
     await registry.registerRoot(projectA);
     await registry.registerRoot(projectB);
 
-    const callsAt: number[] = [];
     const started = Date.now();
-    // Hang until the loader's AbortSignal.timeout fires.
-    const catalogFetch = vi.fn(
-      (_input: string | URL | Request, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          callsAt.push(Date.now() - started);
-          init?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("The operation was aborted.", "TimeoutError")),
-          );
-        }),
-    );
+    const catalogFetch = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 });
+    });
 
     const port = await freePort();
     const fs = new MemFs();
@@ -115,15 +108,14 @@ describe("daemon startup budget", () => {
       },
     );
 
-    const healthyWithin5s = await pollHealthz(port, 5_000);
+    const healthy = await pollHealthz(port, DAEMON_STARTUP_BUDGET_MS);
     const result = await booting;
     const bootMs = Date.now() - started;
     try {
-      expect(healthyWithin5s).toBeDefined();
-      // Migration must not pull: one timeout per registered context would miss the budget.
-      expect(catalogFetch).not.toHaveBeenCalled();
-      expect(bootMs).toBeLessThan(5_000);
-      expect(callsAt).toEqual([]);
+      expect(healthy).toBeDefined();
+      // Three contexts — the global one plus two projects — sharing one request.
+      expect(catalogFetch).toHaveBeenCalledTimes(1);
+      expect(bootMs).toBeLessThan(DAEMON_STARTUP_BUDGET_MS);
     } finally {
       await result.shutdown?.();
       await rm(homeDir, { recursive: true, force: true });
