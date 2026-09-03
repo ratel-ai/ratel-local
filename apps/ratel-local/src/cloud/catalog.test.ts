@@ -197,6 +197,30 @@ describe("createCloudCatalogLoader", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("holds an unreachable Cloud rather than paying its timeout on every resolve", async () => {
+    const { calls, impl } = recordingFetch(
+      jsonResponse({ error: "gateway" }, 503),
+      jsonResponse(WIRE),
+    );
+    let clock = 0;
+    const client = createCloudCatalogLoader({
+      endpoint: ENDPOINT,
+      apiKey: "rtl_test",
+      fetch: impl,
+      now: () => clock,
+    });
+
+    await expect(client.load()).rejects.toThrow(CloudCatalogUnavailableError);
+    // A commit fans out to every active context in series; without this the burst
+    // pays the 10s timeout once per context.
+    await expect(client.load()).rejects.toThrow(/HTTP 503/);
+    expect(calls).toHaveLength(1);
+
+    clock = 10_001;
+    expect((await client.load()).snapshot.catalogVersion).toBe(VERSION);
+    expect(calls).toHaveLength(2);
+  });
+
   it("surfaces a contract violation instead of falling back to the cache", async () => {
     const { impl } = recordingFetch(
       jsonResponse(WIRE),

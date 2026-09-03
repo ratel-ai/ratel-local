@@ -7,6 +7,7 @@ export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/api/v1/cat
 
 const TIMEOUT_MS = 10_000;
 const AUTH_FAILURE_COOLDOWN_MS = 60_000;
+const UNAVAILABLE_COOLDOWN_MS = TIMEOUT_MS;
 
 /** The wire projection `protocol/v1` serves: exactly these seven fields. */
 const WIRE_FIELDS = ["id", "name", "description", "tags", "tools", "metadata", "body"] as const;
@@ -84,12 +85,22 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const now = options.now ?? Date.now;
   let cached: CloudCatalogSnapshot | undefined;
   let rejected: { until: number; status: number } | undefined;
+  let unavailable: { until: number; reason: string } | undefined;
 
   return {
     async load() {
       // A revoked key fails identically every time, and every context resolve
       // asks again. Hold the answer rather than ask Cloud on a loop.
       if (rejected && now() < rejected.until) throw new CloudCatalogAuthError(rejected.status);
+      // Same for an unreachable Cloud with nothing cached, except each of those
+      // asks costs the full timeout, and contexts are resolved in series.
+      if (!cached && unavailable && now() < unavailable.until) {
+        throw new CloudCatalogUnavailableError(unavailable.reason);
+      }
+      const degrade = (reason: string) => {
+        if (!cached) unavailable = { until: now() + UNAVAILABLE_COOLDOWN_MS, reason };
+        return degradeOrThrow(cached, reason);
+      };
       let response: Response;
       try {
         response = await fetchUpstream(endpoint, {
@@ -103,7 +114,7 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (error) {
-        return degradeOrThrow(cached, (error as Error).message);
+        return degrade((error as Error).message);
       }
 
       if (response.status === 401 || response.status === 403) {
@@ -117,14 +128,14 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
         return { snapshot: handout(cached) };
       }
       if (response.status !== 200) {
-        return degradeOrThrow(cached, `HTTP ${response.status}`);
+        return degrade(`HTTP ${response.status}`);
       }
 
       let text: string;
       try {
         text = await response.text();
       } catch (error) {
-        return degradeOrThrow(cached, (error as Error).message);
+        return degrade((error as Error).message);
       }
       cached = parseCatalog(text);
       return { snapshot: handout(cached) };
