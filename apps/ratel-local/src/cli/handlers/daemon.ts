@@ -432,13 +432,16 @@ export async function runDaemonServer(
         ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
       })
     : undefined;
+  const resolverOptions = { homeDir: ctx.env.homeDir, projectRegistry };
   const snapshotResolver =
     opts.snapshotResolver ??
     createContextSnapshotResolver({
-      homeDir: ctx.env.homeDir,
-      projectRegistry,
+      ...resolverOptions,
       ...(cloudCatalog ? { cloudCatalog } : {}),
     });
+  // The migration reads `mcpEntries` only, and a pull here costs one catalog
+  // timeout per context before the HTTP server listens.
+  const migrationResolver = opts.snapshotResolver ?? createContextSnapshotResolver(resolverOptions);
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -476,7 +479,7 @@ export async function runDaemonServer(
   // Recover any interrupted config ownership change before snapshots drive OAuth
   // migration; otherwise a transient half-transaction could mis-scope credentials.
   if (useResolvedControlPlane) {
-    await migrateDaemonOAuthStores(ctx.env.homeDir, projectRegistry, snapshotResolver, log);
+    await migrateDaemonOAuthStores(ctx.env.homeDir, projectRegistry, migrationResolver, log);
   }
   const localGitExcludeManager = useResolvedControlPlane
     ? createLocalGitExcludeManager()
