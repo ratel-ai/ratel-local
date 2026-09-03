@@ -482,6 +482,7 @@ function digestRuntimeRevision(
     runtimeCwd,
     oauthFingerprint: oauthKey.fingerprint,
   }));
+  // Cloud skills have no path, so the catalog version stands in for them.
   return createHash("sha256")
     .update(`ratel-runtime-v${CONTEXT_SNAPSHOT_RESOLVER_VERSION}\0`)
     .update(stableStringify(normalizedDocuments))
@@ -492,7 +493,6 @@ function digestRuntimeRevision(
     .update("\0")
     .update(stableStringify(oauthStoreRevisions))
     .update("\0")
-    // Cloud skills have no path, so the fingerprint above cannot see them.
     .update(cloudCatalogVersion ?? "")
     .digest("base64url") as RuntimeRevision;
 }
