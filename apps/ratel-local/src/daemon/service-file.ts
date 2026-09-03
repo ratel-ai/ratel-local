@@ -8,26 +8,15 @@ const LAUNCH_AGENT_ENV_BLOCK_RE =
 export const SERVICE_SHAPE_ERROR =
   'installed daemon service is not a Ratel Local unit; reinstall with "ratel-local daemon install"';
 
-/**
- * Rewrite named feature-flag entries in an installed launchd plist without
- * regenerating the unit. Regenerating would refresh install-time `PATH` and
- * `RATEL_DAEMON_INSTALL_PATH`, which ADR-0020 preserves so npm/npx cannot
- * reorder agent plugin executables.
- * ponytail: string surgery on the generated unit; a plist parser only if we
- * start editing fields we did not emit.
- *
- * Enabled entries go in the `EnvironmentVariables` dict `createLaunchAgentPlist`
- * emits, immediately above `StandardOutPath`. An unrecognised shape throws.
- */
 export function applyFeatureFlagsToLaunchAgentPlist(
   plist: string,
   overrides: ServiceFeatureFlagOverrides,
 ): string {
   let next = plist;
   for (const [name, enabled] of Object.entries(overrides)) {
-    // Drop the entry, then an environment dict it may have left empty, so the
-    // insertion below always sees the shape `createLaunchAgentPlist` emits.
-    // Without that, enabling twice appends a dict beside the emptied one.
+    // Drop the entry, then an environment dict it may have left empty. Both
+    // branches below assume the shape `createLaunchAgentPlist` emits: without the
+    // second replace, enabling twice appends a new dict beside the emptied one.
     const stripped = next.replace(launchAgentEntryRe(name), "");
     next = stripped.replace(EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE, "");
     if (!enabled) continue;
@@ -46,10 +35,6 @@ export function applyFeatureFlagsToLaunchAgentPlist(
   return next;
 }
 
-/**
- * The same rewrite for a systemd user unit. `Environment=` lines sit
- * immediately above `Restart=always`, matching `createSystemdUserService`.
- */
 export function applyFeatureFlagsToSystemdUserService(
   unit: string,
   overrides: ServiceFeatureFlagOverrides,

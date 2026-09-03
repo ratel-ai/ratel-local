@@ -387,8 +387,8 @@ export async function runDaemonServer(
       log(`[ratel] ignored invalid Cloud trace settings: ${(error as Error).message}`);
     }
   }
-  // Catalog pulls after the strip below; hold the env credential so they still
-  // see it. Subprocesses must not inherit `RATEL_API_KEY`.
+  // Capture before the strip below; catalog pulls still need it. Subprocesses
+  // must not inherit `RATEL_API_KEY`.
   const environmentApiKey =
     featureFlags.cloudTelemetry || featureFlags.cloudCatalog
       ? daemonProcessEnv[CLOUD_API_KEY_ENV]
@@ -439,8 +439,8 @@ export async function runDaemonServer(
       ...resolverOptions,
       ...(cloudCatalog ? { cloudCatalog } : {}),
     });
-  // The migration reads `mcpEntries` only, and a pull here costs one catalog
-  // timeout per context before the HTTP server listens.
+  // OAuth migration reads `mcpEntries` only; a catalog pull here would block
+  // listen by one timeout per context.
   const migrationResolver = opts.snapshotResolver ?? createContextSnapshotResolver(resolverOptions);
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
@@ -898,7 +898,7 @@ export function createLaunchAgentPlist(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
-  featureFlags?: FeatureFlags;
+  featureFlags?: Partial<FeatureFlags>;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const args = [
@@ -913,9 +913,11 @@ export function createLaunchAgentPlist(input: {
   ];
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(
-      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
-    ),
+    ...featureFlagServiceEnvironment({
+      cloudTelemetry: false,
+      cloudCatalog: false,
+      ...input.featureFlags,
+    }),
   };
   const environmentXml = Object.entries(serviceEnvironment)
     .map(
@@ -962,7 +964,7 @@ export function createSystemdUserService(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
-  featureFlags?: FeatureFlags;
+  featureFlags?: Partial<FeatureFlags>;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const command = [input.executablePath, ...(input.executableArgs ?? [])]
@@ -970,9 +972,11 @@ export function createSystemdUserService(input: {
     .join(" ");
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(
-      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
-    ),
+    ...featureFlagServiceEnvironment({
+      cloudTelemetry: false,
+      cloudCatalog: false,
+      ...input.featureFlags,
+    }),
   };
   const environmentLines = Object.entries(serviceEnvironment)
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
@@ -1023,7 +1027,6 @@ async function reconfigureInstalledServiceFeatureFlags(
   return overrides;
 }
 
-/** Which status field reports each flag a service file can carry. */
 const FLAG_STATUS_FIELD = {
   [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
   [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",

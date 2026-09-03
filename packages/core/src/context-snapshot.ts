@@ -493,7 +493,6 @@ function digestRuntimeRevision(
       .update("\0")
       .update(stableStringify(oauthStoreRevisions))
       .update("\0")
-      // Cloud skills have no path, so the fingerprint above cannot see them.
       .update(cloudCatalogVersion ?? "")
       .digest("base64url") as RuntimeRevision
   );

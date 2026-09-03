@@ -254,8 +254,6 @@ describe("ContextSnapshotResolver", () => {
   });
 
   it("pulls the Cloud catalog once per resolve, and again on the next one", async () => {
-    // The memo lives inside `resolve`. Hoisting it would make a published
-    // change invisible until the daemon restarted.
     const { homeDir, project } = await fixture();
     const registry = createProjectRegistry({ homeDir });
     const pulls: unknown[] = [];
@@ -310,7 +308,6 @@ describe("ContextSnapshotResolver", () => {
     const stale = snapshot.diagnostics.find((d) => d.code === "cloud-catalog-degraded");
     expect(stale?.severity).toBe("warning");
     expect(stale?.message).toContain("aborted due to timeout");
-    // Degraded is not unavailable: the cached catalog is still in use.
     expect(
       snapshot.diagnostics.find((d) => d.code === "cloud-catalog-unavailable"),
     ).toBeUndefined();

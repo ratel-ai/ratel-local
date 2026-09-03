@@ -77,7 +77,6 @@ describe("createCloudCatalogLoader", () => {
     expect(snapshot.catalogVersion).toBe(VERSION);
     expect(snapshot.skills).toEqual(WIRE.skills);
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_test");
-    // Nothing cached yet, so the first pull must be unconditional.
     expect(calls[0].headers.has("if-none-match")).toBe(false);
   });
 
@@ -211,8 +210,6 @@ describe("createCloudCatalogLoader", () => {
     });
 
     await expect(client.load()).rejects.toThrow(CloudCatalogUnavailableError);
-    // A commit fans out to every active context in series; without this the burst
-    // pays the 10s timeout once per context.
     await expect(client.load()).rejects.toThrow(/HTTP 503/);
     expect(calls).toHaveLength(1);
 
@@ -317,7 +314,6 @@ describe("createCloudCatalogSource", () => {
       "Bearer rtl_one",
       "Bearer rtl_two",
     ]);
-    // The rotated key gets its own loader, so it revalidates nothing it never fetched.
     expect(calls[1]?.headers.get("If-None-Match")).toBeNull();
   });
 

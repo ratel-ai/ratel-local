@@ -345,8 +345,6 @@ describe("runDaemon", () => {
 
       expect(config.status).toBe(200);
       expect(catalogFetch).toHaveBeenCalled();
-      // The credential reached the catalog without enabling telemetry: the relay
-      // route stays absent and the settings endpoint still reports it unconfigured.
       const relay = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
         method: "POST",
         headers: { "Content-Type": "application/x-protobuf" },
@@ -970,7 +968,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
+      featureFlags: { cloudTelemetry: true },
     });
 
     expect(plist).toContain("<key>EnvironmentVariables</key>");
@@ -1069,7 +1067,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
+        featureFlags: { cloudTelemetry: false },
       };
       fs.files.set(
         servicePath,
@@ -1122,7 +1120,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
+        featureFlags: { cloudTelemetry: true },
       };
       const original =
         platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input);
@@ -1166,7 +1164,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
+        featureFlags: { cloudTelemetry: true },
       };
       fs.files.set(
         servicePath,
@@ -1200,7 +1198,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
+      featureFlags: { cloudTelemetry: true },
     });
     fs.files.set(paths.systemdService, original);
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -1298,7 +1296,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: false, cloudCatalog: false },
+      featureFlags: { cloudTelemetry: false },
     });
 
   const restartWithProbe = (
@@ -1387,7 +1385,7 @@ describe("runDaemon", () => {
         executablePath: "/opt/bin/ratel-local",
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
-        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
+        featureFlags: { cloudTelemetry: false },
       };
       fs.files.set(
         servicePath,
@@ -1584,7 +1582,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
+      featureFlags: { cloudTelemetry: true },
     });
 
     expect(service).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");

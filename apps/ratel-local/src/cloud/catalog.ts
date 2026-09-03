@@ -58,25 +58,16 @@ export class CloudCatalogUnavailableError extends Error {
   }
 }
 
-// ponytail: the shared guard rejects a query string, which is right while the
-// loader is global-only; a future `?scope=` pull has to relax it for this caller.
 export function cloudCatalogEndpoint(value: string): URL {
   return secretFreeHttpsUrl(value, "Ratel Cloud catalog endpoint");
 }
 
 /**
  * Conditional-GET client for the `protocol/v1` catalog pull.
- *
- * The cache lives for the life of this loader — a daemon restart re-pulls.
- * Deliberately: the contract serves `Cache-Control: no-cache`, so every
- * acquisition revalidates anyway, and a disk cache would add an offline story
- * the vertical slice does not need.
- * ponytail: daemon-lifetime cache; persistent offline cache deferred.
- * ponytail: concurrent load() can stampede; ceiling = one in-flight promise.
- *
- * A cached snapshot covers *availability* failures only. An invalid credential
- * or a contract violation always surfaces, so a revoked key cannot hide behind
- * the last good catalog indefinitely.
+ * The cache lives for this loader's lifetime — a restart re-pulls. A cached
+ * snapshot covers availability failures only; a revoked key or contract
+ * violation always surfaces. Auth failures and uncached misses are held
+ * briefly so context resolves do not retry Cloud in a loop.
  */
 export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const endpoint = cloudCatalogEndpoint(options.endpoint);
@@ -89,11 +80,7 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
 
   return {
     async load() {
-      // A revoked key fails identically every time, and every context resolve
-      // asks again. Hold the answer rather than ask Cloud on a loop.
       if (rejected && now() < rejected.until) throw new CloudCatalogAuthError(rejected.status);
-      // Same for an unreachable Cloud with nothing cached, except each of those
-      // asks costs the full timeout, and contexts are resolved in series.
       if (!cached && unavailable && now() < unavailable.until) {
         throw new CloudCatalogUnavailableError(unavailable.reason);
       }
@@ -144,13 +131,9 @@ export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
 }
 
 /**
- * The catalog pull the context resolver injects. The credential is read per
- * pull rather than captured at boot, so a key rotated while the daemon runs is
- * picked up on the next context resolve instead of at the next restart.
- *
- * One loader is kept, rebuilt when the credential changes, because the loader
- * owns the conditional-GET cache: a new one per pull would re-download the
- * catalog every time.
+ * Catalog pull injected into the context resolver. Reads the credential on
+ * each call so a rotated key applies without a restart, and reuses one loader
+ * so the conditional-GET cache survives across pulls.
  */
 export function createCloudCatalogSource(input: {
   apiKey: () => Promise<string | undefined>;
@@ -170,7 +153,7 @@ export function createCloudCatalogSource(input: {
         loader: createCloudCatalogLoader({
           endpoint,
           apiKey,
-          ...(input.fetch ? { fetch: input.fetch } : {}),
+          fetch: input.fetch,
         }),
       };
     }
@@ -181,8 +164,7 @@ export function createCloudCatalogSource(input: {
 }
 
 function handout(snapshot: CloudCatalogSnapshot): CloudCatalogSnapshot {
-  // ponytail: shallow copy guards the cached array; skill objects are still shared,
-  // deep-clone only if a consumer starts mutating them in place.
+  // Copy the array; skill objects stay shared.
   return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
 }
 

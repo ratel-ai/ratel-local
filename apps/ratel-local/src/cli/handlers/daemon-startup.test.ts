@@ -81,8 +81,7 @@ describe("daemon startup budget", () => {
 
     const callsAt: number[] = [];
     const started = Date.now();
-    // Cloud accepts the connection and never answers: only the loader's own
-    // AbortSignal.timeout(10s) ends the request.
+    // Hang until the loader's AbortSignal.timeout fires.
     const catalogFetch = vi.fn(
       (_input: string | URL | Request, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
@@ -121,8 +120,7 @@ describe("daemon startup budget", () => {
     const bootMs = Date.now() - started;
     try {
       expect(healthyWithin5s).toBeDefined();
-      // The migration resolves the global context plus every registered project;
-      // one catalog pull each would overrun the budget on its own.
+      // Migration must not pull: one timeout per registered context would miss the budget.
       expect(catalogFetch).not.toHaveBeenCalled();
       expect(bootMs).toBeLessThan(5_000);
       expect(callsAt).toEqual([]);

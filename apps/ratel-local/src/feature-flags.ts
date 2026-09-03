@@ -28,7 +28,7 @@ export function featureFlagsFromEnv(env: NodeJS.ProcessEnv): FeatureFlags {
   };
 }
 
-/** Persist only enabled flags into an installed service; absence means off. */
+/** Environment entries that an installed daemon service must retain. */
 export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<string, string> {
   return {
     ...(flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {}),
@@ -37,9 +37,9 @@ export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<strin
 }
 
 /**
- * The flags an operator named explicitly, by presence in the environment. A
- * flag left out keeps whatever the installed service already says, so changing
- * one never disturbs another (ADR-0020).
+ * Explicit feature-flag overrides from the invoking environment.
+ * A flag left out keeps installed service state. Any present value is an
+ * override: only exact `1` enables.
  */
 export function featureFlagOverridesFromEnv(env: NodeJS.ProcessEnv): ServiceFeatureFlagOverrides {
   const overrides: Partial<Record<(typeof SERVICE_FEATURE_FLAG_ENVS)[number], boolean>> = {};
