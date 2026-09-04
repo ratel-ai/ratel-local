@@ -4,6 +4,8 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-04
+
 ### Added
 - Added the off-by-default `RATEL_FEATURE_CLOUD_CATALOG=1` daemon flag. When it
   is on, the daemon pulls published Cloud skills into the snapshot using the
