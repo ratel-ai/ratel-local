@@ -5,13 +5,14 @@ import {
   CloudCatalogUnavailableError,
   cloudCatalogEndpoint,
   createCloudCatalogLoader,
+  createCloudCatalogSource,
   DEFAULT_CLOUD_CATALOG_ENDPOINT,
 } from "./catalog.js";
 
 const ENDPOINT = DEFAULT_CLOUD_CATALOG_ENDPOINT;
 const VERSION = "6f7f0cee520a24a6edbb6dc7df6b623751cbdf05771e7e7bbe45cc9de943f0a6";
 
-// Shape taken from a real `GET /v1/catalog` against a seeded project; the
+// Shape taken from a real `GET /api/v1/catalog` against a seeded project; the
 // bodies are truncated because the loader treats them as opaque strings.
 const WIRE = {
   catalogVersion: VERSION,
@@ -76,7 +77,6 @@ describe("createCloudCatalogLoader", () => {
     expect(snapshot.catalogVersion).toBe(VERSION);
     expect(snapshot.skills).toEqual(WIRE.skills);
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_test");
-    // Nothing cached yet, so the first pull must be unconditional.
     expect(calls[0].headers.has("if-none-match")).toBe(false);
   });
 
@@ -174,6 +174,77 @@ describe("createCloudCatalogLoader", () => {
     await expect(client.load()).rejects.toThrow(CloudCatalogAuthError);
   });
 
+  it("holds a rejected key rather than asking Cloud on every resolve", async () => {
+    const { calls, impl } = recordingFetch(
+      jsonResponse({ error: "nope" }, 401),
+      jsonResponse(WIRE),
+    );
+    let clock = 0;
+    const client = createCloudCatalogLoader({
+      endpoint: ENDPOINT,
+      apiKey: "rtl_revoked",
+      fetch: impl,
+      now: () => clock,
+    });
+
+    await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
+    await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
+    expect(calls).toHaveLength(1);
+
+    clock = 60_001;
+    await client.load();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("serves overlapping loads from one request", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const impl = (async (input: URL | RequestInfo) => {
+      calls.push(String(input));
+      await gate;
+      return jsonResponse(WIRE);
+    }) as unknown as typeof fetch;
+    const client = loader(impl);
+
+    const [first, second, third] = [client.load(), client.load(), client.load()];
+    release();
+    const results = await Promise.all([first, second, third]);
+
+    expect(calls).toHaveLength(1);
+    expect(results.map(({ snapshot }) => snapshot.catalogVersion)).toEqual([
+      VERSION,
+      VERSION,
+      VERSION,
+    ]);
+    await client.load();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("holds an unreachable Cloud rather than paying its timeout on every resolve", async () => {
+    const { calls, impl } = recordingFetch(
+      jsonResponse({ error: "gateway" }, 503),
+      jsonResponse(WIRE),
+    );
+    let clock = 0;
+    const client = createCloudCatalogLoader({
+      endpoint: ENDPOINT,
+      apiKey: "rtl_test",
+      fetch: impl,
+      now: () => clock,
+    });
+
+    await expect(client.load()).rejects.toThrow(CloudCatalogUnavailableError);
+    await expect(client.load()).rejects.toThrow(/HTTP 503/);
+    expect(calls).toHaveLength(1);
+
+    clock = 10_001;
+    expect((await client.load()).snapshot.catalogVersion).toBe(VERSION);
+    expect(calls).toHaveLength(2);
+  });
+
   it("surfaces a contract violation instead of falling back to the cache", async () => {
     const { impl } = recordingFetch(
       jsonResponse(WIRE),
@@ -231,5 +302,62 @@ describe("createCloudCatalogLoader", () => {
   it("rejects a 304 that arrives before anything is cached", async () => {
     const { impl } = recordingFetch(new Response(null, { status: 304 }));
     await expect(loader(impl).load()).rejects.toThrow(/304 without a cached catalog/);
+  });
+});
+
+describe("createCloudCatalogSource", () => {
+  const source = (
+    apiKey: () => Promise<string | undefined>,
+    fetchImpl: typeof fetch,
+    log: (message: string) => void = () => {},
+  ) => createCloudCatalogSource({ apiKey, endpoint: ENDPOINT, log, fetch: fetchImpl });
+
+  it("pulls nothing, and asks Cloud nothing, when no credential is configured", async () => {
+    const { calls, impl } = recordingFetch();
+
+    expect(await source(async () => undefined, impl)()).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps one loader across pulls, so the second revalidates instead of re-downloading", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE), new Response(null, { status: 304 }));
+    const pull = source(async () => "rtl_one", impl);
+
+    expect((await pull())?.catalog.catalogVersion).toBe(VERSION);
+    expect((await pull())?.catalog.catalogVersion).toBe(VERSION);
+    expect(calls[1]?.headers.get("If-None-Match")).toBe(`"${VERSION}"`);
+  });
+
+  it("picks up a key rotated while the daemon runs", async () => {
+    const { calls, impl } = recordingFetch(jsonResponse(WIRE), jsonResponse(WIRE));
+    let apiKey = "rtl_one";
+    const pull = source(async () => apiKey, impl);
+
+    await pull();
+    apiKey = "rtl_two";
+    await pull();
+
+    expect(calls.map(({ headers }) => headers.get("Authorization"))).toEqual([
+      "Bearer rtl_one",
+      "Bearer rtl_two",
+    ]);
+    expect(calls[1]?.headers.get("If-None-Match")).toBeNull();
+  });
+
+  it("marks a cached catalog as degraded and says so in the daemon log", async () => {
+    const { impl } = recordingFetch(jsonResponse(WIRE), jsonResponse({}, 500));
+    const logs: string[] = [];
+    const pull = source(
+      async () => "rtl_one",
+      impl,
+      (message) => logs.push(message),
+    );
+
+    await pull();
+    const stale = await pull();
+
+    expect(stale?.degraded).toBe("HTTP 500");
+    expect(stale?.catalog.catalogVersion).toBe(VERSION);
+    expect(logs.some((message) => message.includes("HTTP 500"))).toBe(true);
   });
 });

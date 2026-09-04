@@ -12,12 +12,10 @@ import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core"
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import { connectorHeaders } from "../../daemon/access.js";
-import { CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
+import { CLOUD_CATALOG_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
-  applyCloudTelemetryToLaunchAgentPlist,
-  applyCloudTelemetryToSystemdUserService,
   createLaunchAgentPlist,
   createSystemdUserService,
   DAEMON_INSTALL_PATH_ENV,
@@ -311,6 +309,52 @@ describe("runDaemon", () => {
       expect(configureRatelTelemetry).not.toHaveBeenCalled();
       expect(cloudFetch).not.toHaveBeenCalled();
       expect(daemonProcessEnv).not.toHaveProperty("RATEL_API_KEY");
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("pulls the Cloud catalog with the environment credential while the relay stays off", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const catalogFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 }),
+    );
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_CATALOG_FEATURE_ENV]: "1", RATEL_API_KEY: "rtl_env" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudCatalogFetch: catalogFetch,
+        cloudTraceSettingsStore: { load: async () => undefined, save: async () => {} },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+
+      expect(config.status).toBe(200);
+      expect(catalogFetch).toHaveBeenCalled();
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+      expect(relay.status).toBe(404);
+      const status = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+      expect(await status.json()).toMatchObject({ featureEnabled: false, configured: false });
     } finally {
       await result.shutdown?.();
     }
@@ -1012,57 +1056,6 @@ describe("runDaemon", () => {
     expect(fs.files.get(paths.plist)).toBe(original);
   });
 
-  it("refuses to enable Cloud telemetry in an unrecognised service file", () => {
-    expect(() => applyCloudTelemetryToLaunchAgentPlist("<plist />", true)).toThrow(
-      /not a Ratel Local unit/,
-    );
-    expect(() => applyCloudTelemetryToSystemdUserService("[Service]\n", true)).toThrow(
-      /not a Ratel Local unit/,
-    );
-    // Disabling stays a no-op there: there is no Ratel route to remove.
-    expect(applyCloudTelemetryToLaunchAgentPlist("<plist />", false)).toBe("<plist />");
-    expect(applyCloudTelemetryToSystemdUserService("[Service]\n", false)).toBe("[Service]\n");
-  });
-
-  // Without `pathEnv` the flag is the only environment entry, so enabling has to
-  // create the dict from scratch and disabling has to remove it again. That is
-  // the shape an install performs when PATH is unset in its environment.
-  for (const pathEnv of ["/opt/node/bin:/usr/bin:/bin", undefined]) {
-    it(`round-trips Cloud telemetry flag edits against generated service files (pathEnv: ${pathEnv ? "set" : "unset"})`, () => {
-      const base = {
-        executablePath: "/opt/bin/ratel-local",
-        homeDir: HOME,
-        port: DEFAULT_DAEMON_PORT,
-        ...(pathEnv ? { pathEnv } : {}),
-      };
-      const disabledPlist = createLaunchAgentPlist({
-        ...base,
-        featureFlags: { cloudTelemetry: false },
-      });
-      const enabledPlist = createLaunchAgentPlist({
-        ...base,
-        featureFlags: { cloudTelemetry: true },
-      });
-      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, true)).toBe(enabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, false)).toBe(disabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, true)).toBe(enabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, false)).toBe(disabledPlist);
-
-      const disabledUnit = createSystemdUserService({
-        ...base,
-        featureFlags: { cloudTelemetry: false },
-      });
-      const enabledUnit = createSystemdUserService({
-        ...base,
-        featureFlags: { cloudTelemetry: true },
-      });
-      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, true)).toBe(enabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, false)).toBe(disabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, true)).toBe(enabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, false)).toBe(disabledUnit);
-    });
-  }
-
   for (const platform of ["darwin", "linux"] as const) {
     it(`enables Cloud telemetry on ${platform} restart when the flag is explicitly set`, async () => {
       const fs = new MemFs();
@@ -1378,9 +1371,9 @@ describe("runDaemon", () => {
 
     await restartWithProbe(fs, restartStatusProbe(undefined), logs);
 
-    expect(logs.some((message) => message.includes("could not confirm Cloud telemetry"))).toBe(
-      true,
-    );
+    expect(
+      logs.some((message) => message.includes("could not confirm the requested feature flags")),
+    ).toBe(true);
   });
 
   for (const platform of ["darwin", "linux"] as const) {

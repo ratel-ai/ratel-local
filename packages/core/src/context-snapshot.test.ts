@@ -197,4 +197,126 @@ describe("ContextSnapshotResolver", () => {
       InvalidContextSnapshotError,
     );
   });
+
+  it("adds Cloud skills, lets a local skill of the same id win, and says which was shadowed", async () => {
+    const { homeDir, project } = await fixture();
+    await mkdir(join(homeDir, ".ratel", "skills", "shared"), { recursive: true });
+    await writeFile(
+      join(homeDir, ".ratel", "skills", "shared", "SKILL.md"),
+      "---\nname: shared\ndescription: the local copy\n---\n\nlocal body\n",
+    );
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      JSON.stringify({ skills: { dirs: [join(homeDir, ".ratel", "skills")] } }),
+    );
+    const registry = createProjectRegistry({ homeDir });
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: registry,
+      cloudCatalog: async () => ({
+        catalog: {
+          catalogVersion: "v1",
+          skills: [
+            { id: "shared", name: "shared", description: "the published copy", body: "cloud" },
+            { id: "cloud-only", name: "cloud-only", description: "published", body: "cloud" },
+          ],
+        },
+      }),
+    });
+
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+    const byId = new Map(snapshot.skills.effectiveSkills.map((skill) => [skill.id, skill]));
+    expect([...byId.keys()].sort()).toEqual(["cloud-only", "shared"]);
+    expect(byId.get("shared")?.description).toBe("the local copy");
+    const shadowed = snapshot.diagnostics.find((d) => d.code === "cloud-skill-shadowed");
+    expect(shadowed?.severity).toBe("warning");
+    expect(shadowed?.message).toContain('"shared"');
+    expect(shadowed?.message).toContain("rename the local skill to use the published one");
+  });
+
+  it("changes the runtime revision when only the Cloud catalog version changes", async () => {
+    const { homeDir, project } = await fixture();
+    const registry = createProjectRegistry({ homeDir });
+    const resolverFor = (catalogVersion: string) =>
+      createContextSnapshotResolver({
+        homeDir,
+        projectRegistry: registry,
+        cloudCatalog: async () => ({ catalog: { catalogVersion, skills: [] } }),
+      });
+
+    const context = { kind: "project" as const, projectId: project.id };
+    const first = await resolverFor("v1").resolve(context);
+    const same = await resolverFor("v1").resolve(context);
+    const later = await resolverFor("v2").resolve(context);
+
+    expect(same.runtimeRevision).toBe(first.runtimeRevision);
+    expect(later.runtimeRevision).not.toBe(first.runtimeRevision);
+  });
+
+  it("pulls the Cloud catalog once per resolve, and again on the next one", async () => {
+    const { homeDir, project } = await fixture();
+    const registry = createProjectRegistry({ homeDir });
+    const pulls: unknown[] = [];
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: registry,
+      cloudCatalog: async () => {
+        pulls.push(null);
+        return { catalog: { catalogVersion: `v${pulls.length}`, skills: [] } };
+      },
+    });
+
+    const context = { kind: "project" as const, projectId: project.id };
+    const first = await resolver.resolve(context);
+    const second = await resolver.resolve(context);
+
+    expect(pulls).toHaveLength(2);
+    expect(second.runtimeRevision).not.toBe(first.runtimeRevision);
+  });
+
+  it("reports a failed Cloud pull as a warning instead of failing the resolve", async () => {
+    const { homeDir, project } = await fixture();
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+      cloudCatalog: async () => {
+        throw new Error("Cloud catalog auth failed: HTTP 401");
+      },
+    });
+
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+
+    const failed = snapshot.diagnostics.find((d) => d.code === "cloud-catalog-unavailable");
+    expect(failed?.severity).toBe("warning");
+    expect(failed?.message).toContain("HTTP 401");
+    expect(snapshot.skills.effectiveSkills).toEqual([]);
+  });
+
+  it("warns when the catalog served is a cached one, so a stale catalog is not silent", async () => {
+    const { homeDir, project } = await fixture();
+    const resolver = createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+      cloudCatalog: async () => ({
+        catalog: { catalogVersion: "v1", skills: [] },
+        degraded: "The operation was aborted due to timeout",
+      }),
+    });
+
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+
+    const stale = snapshot.diagnostics.find((d) => d.code === "cloud-catalog-degraded");
+    expect(stale?.severity).toBe("warning");
+    expect(stale?.message).toContain("aborted due to timeout");
+    expect(
+      snapshot.diagnostics.find((d) => d.code === "cloud-catalog-unavailable"),
+    ).toBeUndefined();
+  });
+
+  it("resolves without a Cloud catalog at all", async () => {
+    const { project, resolver } = await fixture();
+    const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
+    expect(snapshot.skills.effectiveSkills).toEqual([]);
+    expect(snapshot.diagnostics).toEqual([]);
+  });
 });

@@ -1,10 +1,13 @@
+import type { CloudCatalogPullResult } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
-export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/v1/catalog";
+export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/api/v1/catalog";
 
-const TIMEOUT_MS = 10_000;
+export const CLOUD_CATALOG_TIMEOUT_MS = 10_000;
+const AUTH_FAILURE_COOLDOWN_MS = 60_000;
+const UNAVAILABLE_COOLDOWN_MS = CLOUD_CATALOG_TIMEOUT_MS;
 
 /** The wire projection `protocol/v1` serves: exactly these seven fields. */
 const WIRE_FIELDS = ["id", "name", "description", "tags", "tools", "metadata", "body"] as const;
@@ -30,6 +33,8 @@ export interface CloudCatalogLoaderOptions {
   apiKey: string;
   /** Injected by tests; the daemon uses the global `fetch`. */
   fetch?: typeof fetch;
+  /** Injected by tests; the daemon uses the wall clock. */
+  now?: () => number;
 }
 
 export class CloudCatalogAuthError extends Error {
@@ -53,78 +58,124 @@ export class CloudCatalogUnavailableError extends Error {
   }
 }
 
-// ponytail: the shared guard rejects a query string, which is right while the
-// loader is global-only; a future `?scope=` pull has to relax it for this caller.
 export function cloudCatalogEndpoint(value: string): URL {
   return secretFreeHttpsUrl(value, "Ratel Cloud catalog endpoint");
 }
 
 /**
  * Conditional-GET client for the `protocol/v1` catalog pull.
- *
- * The cache lives for the life of this loader — a daemon restart re-pulls.
- * Deliberately: the contract serves `Cache-Control: no-cache`, so every
- * acquisition revalidates anyway, and a disk cache would add an offline story
- * the vertical slice does not need.
- * ponytail: daemon-lifetime cache; persistent offline cache deferred.
- * ponytail: concurrent load() can stampede; ceiling = one in-flight promise.
- *
- * A cached snapshot covers *availability* failures only. An invalid credential
- * or a contract violation always surfaces, so a revoked key cannot hide behind
- * the last good catalog indefinitely.
+ * The cache lives for this loader's lifetime — a restart re-pulls. A cached
+ * snapshot covers availability failures only; a revoked key or contract
+ * violation always surfaces. Auth failures and uncached misses are held
+ * briefly so context resolves do not retry Cloud in a loop.
  */
 export function createCloudCatalogLoader(options: CloudCatalogLoaderOptions) {
   const endpoint = cloudCatalogEndpoint(options.endpoint);
   headerSafeSecret(options.apiKey, "Ratel Cloud API key");
   const fetchUpstream = options.fetch ?? fetch;
+  const now = options.now ?? Date.now;
   let cached: CloudCatalogSnapshot | undefined;
+  let rejected: { until: number; status: number } | undefined;
+  let unavailable: { until: number; reason: string } | undefined;
 
-  return {
-    async load() {
-      let response: Response;
-      try {
-        response = await fetchUpstream(endpoint, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${options.apiKey}`,
-            Accept: "application/json",
-            ...(cached ? { "If-None-Match": `"${cached.catalogVersion}"` } : {}),
-          },
-          redirect: "error",
-          signal: AbortSignal.timeout(TIMEOUT_MS),
-        });
-      } catch (error) {
-        return degradeOrThrow(cached, (error as Error).message);
-      }
+  const pull = async (): Promise<CloudCatalogLoadResult> => {
+    if (rejected && now() < rejected.until) throw new CloudCatalogAuthError(rejected.status);
+    if (!cached && unavailable && now() < unavailable.until) {
+      throw new CloudCatalogUnavailableError(unavailable.reason);
+    }
+    const degrade = (reason: string) => {
+      if (!cached) unavailable = { until: now() + UNAVAILABLE_COOLDOWN_MS, reason };
+      return degradeOrThrow(cached, reason);
+    };
+    let response: Response;
+    try {
+      response = await fetchUpstream(endpoint, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${options.apiKey}`,
+          Accept: "application/json",
+          ...(cached ? { "If-None-Match": `"${cached.catalogVersion}"` } : {}),
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(CLOUD_CATALOG_TIMEOUT_MS),
+      });
+    } catch (error) {
+      return degrade((error as Error).message);
+    }
 
-      if (response.status === 401 || response.status === 403) {
-        throw new CloudCatalogAuthError(response.status);
+    if (response.status === 401 || response.status === 403) {
+      rejected = { until: now() + AUTH_FAILURE_COOLDOWN_MS, status: response.status };
+      throw new CloudCatalogAuthError(response.status);
+    }
+    if (response.status === 304) {
+      if (!cached) {
+        throw new CloudCatalogProtocolError("304 without a cached catalog");
       }
-      if (response.status === 304) {
-        if (!cached) {
-          throw new CloudCatalogProtocolError("304 without a cached catalog");
-        }
-        return { snapshot: handout(cached) };
-      }
-      if (response.status !== 200) {
-        return degradeOrThrow(cached, `HTTP ${response.status}`);
-      }
-
-      let text: string;
-      try {
-        text = await response.text();
-      } catch (error) {
-        return degradeOrThrow(cached, (error as Error).message);
-      }
-      cached = parseCatalog(text);
       return { snapshot: handout(cached) };
-    },
+    }
+    if (response.status !== 200) {
+      return degrade(`HTTP ${response.status}`);
+    }
+
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (error) {
+      return degrade((error as Error).message);
+    }
+    cached = parseCatalog(text);
+    return { snapshot: handout(cached) };
+  };
+
+  const load = singleFlight(pull);
+
+  return { load };
+}
+
+/** Runs `fn` once for every set of overlapping calls. The next call starts afresh. */
+function singleFlight<T>(fn: () => Promise<T>): () => Promise<T> {
+  let inflight: Promise<T> | undefined;
+  return () =>
+    (inflight ??= fn().finally(() => {
+      inflight = undefined;
+    }));
+}
+
+/**
+ * Catalog pull injected into the context resolver. Reads the credential on
+ * each call so a rotated key applies without a restart, and reuses one loader
+ * so the conditional-GET cache survives across pulls.
+ */
+export function createCloudCatalogSource(input: {
+  apiKey: () => Promise<string | undefined>;
+  endpoint?: string;
+  log: (message: string) => void;
+  fetch?: typeof fetch;
+}) {
+  let current: { apiKey: string; loader: ReturnType<typeof createCloudCatalogLoader> } | undefined;
+  const endpoint = input.endpoint ?? DEFAULT_CLOUD_CATALOG_ENDPOINT;
+
+  return async (): Promise<CloudCatalogPullResult | undefined> => {
+    const apiKey = await input.apiKey();
+    if (!apiKey) return undefined;
+    if (current?.apiKey !== apiKey) {
+      current = {
+        apiKey,
+        loader: createCloudCatalogLoader({
+          endpoint,
+          apiKey,
+          fetch: input.fetch,
+        }),
+      };
+    }
+    const { snapshot, degraded } = await current.loader.load();
+    if (degraded) input.log(`[ratel] serving a cached Cloud catalog: ${degraded}`);
+    return { catalog: snapshot, ...(degraded ? { degraded } : {}) };
   };
 }
 
 function handout(snapshot: CloudCatalogSnapshot): CloudCatalogSnapshot {
-  // ponytail: shallow copy guards the cached array; skill objects are still shared,
-  // deep-clone only if a consumer starts mutating them in place.
+  // Copy the array; skill objects stay shared.
   return { catalogVersion: snapshot.catalogVersion, skills: [...snapshot.skills] };
 }
 
