@@ -131,6 +131,8 @@ export interface DaemonStatusBody extends DaemonState {
   retrievalHealth?: RetrievalHealthStats;
   /** Absent on daemons older than the restart-reconfiguration support. */
   cloudTelemetry?: boolean;
+  /** Absent on daemons older than adaptive-ranking restart verification. */
+  adaptiveRanking?: boolean;
 }
 
 interface CommandResult {
@@ -275,7 +277,7 @@ export async function runDaemon(
         spinner?.message("Starting Ratel Local again…");
         await startDaemon(parsed, ctx, options, lifecycleLog, opts, "restart");
         if (applied !== undefined) {
-          restartNote = await verifyCloudTelemetryApplied(
+          restartNote = await verifyFeatureFlagsApplied(
             await daemonPort(parsed, ctx),
             opts.probe ?? probeDaemon,
             applied,
@@ -700,6 +702,7 @@ export async function runDaemonServer(
           activeUserGatewayCount: poolStats.activeUserGatewayCount,
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
           cloudTelemetry: featureFlags.cloudTelemetry,
+          adaptiveRanking: featureFlags.adaptiveRanking,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
         });
         return true;
@@ -1059,13 +1062,13 @@ function applyAdaptiveRankingToSystemdUserService(unit: string, enabled: boolean
 
 /**
  * Apply explicit feature-flag overrides to the installed service file.
- * Returns the Cloud override for its post-restart verification, when present.
+ * Returns the overrides for post-restart verification, when a service exists.
  */
 async function reconfigureInstalledServiceFeatureFlags(
   ctx: HandlerCtx,
   options: ServeOptions,
   opts: DaemonHandlerDeps,
-): Promise<boolean | undefined> {
+): Promise<Partial<FeatureFlags> | undefined> {
   const env = options.processEnv ?? process.env;
   const cloudOverride = cloudTelemetryOverrideFromEnv(env);
   const adaptiveOverride = adaptiveRankingOverrideFromEnv(env);
@@ -1092,7 +1095,10 @@ async function reconfigureInstalledServiceFeatureFlags(
     await ctx.fs.writeAtomic(servicePath, next);
     if (platform === "linux") await systemctl(opts, ["daemon-reload"]);
   }
-  return cloudOverride;
+  return {
+    ...(cloudOverride === undefined ? {} : { cloudTelemetry: cloudOverride }),
+    ...(adaptiveOverride === undefined ? {} : { adaptiveRanking: adaptiveOverride }),
+  };
 }
 
 /**
@@ -1101,22 +1107,51 @@ async function reconfigureInstalledServiceFeatureFlags(
  * serving the previous definition. Throws on a mismatch; returns a note when
  * the running daemon is too old to report the flag at all.
  */
-async function verifyCloudTelemetryApplied(
+async function verifyFeatureFlagsApplied(
   port: number,
   probe: ProbeDaemon,
-  expected: boolean,
+  expected: Partial<FeatureFlags>,
 ): Promise<string | undefined> {
-  const wanted = expected ? "enabled" : "disabled";
   const result = await probe(port);
-  const unconfirmed = (reason: string) =>
-    `[ratel] could not confirm Cloud telemetry is ${wanted}: ${reason}. Check "ratel-local traces status".`;
-  if (!result.ok) return unconfirmed("the daemon did not answer");
-  const observed = result.status?.cloudTelemetry;
-  if (observed === expected) return undefined;
-  if (observed === undefined) return unconfirmed("the running daemon does not report it");
-  throw new Error(
-    `service was updated but the restarted daemon reports Cloud telemetry ${observed ? "enabled" : "disabled"}, expected ${wanted}; the previous service definition may still be loaded. Reinstall with "ratel-local daemon uninstall" then "${CLOUD_TELEMETRY_FEATURE_ENV}=${expected ? "1" : "0"} ratel-local daemon install".`,
+  const notes: string[] = [];
+  const verify = (
+    label: string,
+    envName: string,
+    wantedValue: boolean | undefined,
+    observed: boolean | undefined,
+  ) => {
+    if (wantedValue === undefined) return;
+    const wanted = wantedValue ? "enabled" : "disabled";
+    const help = label === "Cloud telemetry" ? ' Check "ratel-local traces status".' : "";
+    const unconfirmed = (reason: string) =>
+      `[ratel] could not confirm ${label} is ${wanted}: ${reason}.${help}`;
+    if (!result.ok) {
+      notes.push(unconfirmed("the daemon did not answer"));
+      return;
+    }
+    if (observed === wantedValue) return;
+    if (observed === undefined) {
+      notes.push(unconfirmed("the running daemon does not report it"));
+      return;
+    }
+    throw new Error(
+      `service was updated but the restarted daemon reports ${label} ${observed ? "enabled" : "disabled"}, expected ${wanted}; the previous service definition may still be loaded. Reinstall with "ratel-local daemon uninstall" then "${envName}=${wantedValue ? "1" : "0"} ratel-local daemon install".`,
+    );
+  };
+
+  verify(
+    "Cloud telemetry",
+    CLOUD_TELEMETRY_FEATURE_ENV,
+    expected.cloudTelemetry,
+    result.status?.cloudTelemetry,
   );
+  verify(
+    "adaptive ranking",
+    ADAPTIVE_RANKING_FEATURE_ENV,
+    expected.adaptiveRanking,
+    result.status?.adaptiveRanking,
+  );
+  return notes.length > 0 ? notes.join(" ") : undefined;
 }
 
 async function installDaemon(

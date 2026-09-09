@@ -708,6 +708,10 @@ describe("runDaemon", () => {
           requestInit: { headers: connectorHeaders("daemon-test-token") },
         }),
       );
+      const statusResponse = await fetch(new URL("/api/daemon/status", daemonUrlFromLogs(logs)));
+      expect((await statusResponse.json()) as { adaptiveRanking?: boolean }).toMatchObject({
+        adaptiveRanking: true,
+      });
       await client.callTool({
         name: "search_capabilities",
         arguments: { query: "is the build passing" },
@@ -1465,6 +1469,27 @@ describe("runDaemon", () => {
     );
   });
 
+  it("fails a restart whose daemon still reports the previous adaptive-ranking state", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, installedPlist());
+
+    await expect(
+      runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } },
+        () => {},
+        {
+          platform: "darwin",
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: restartStatusProbe(undefined, false),
+          lifecycleProgress: false,
+        },
+      ),
+    ).rejects.toThrow(/previous service definition may still be loaded/);
+  });
+
   it("notes, but does not fail, a restart whose daemon cannot report the flag", async () => {
     const fs = new MemFs();
     fs.files.set(daemonPaths(HOME).plist, installedPlist());
@@ -1820,7 +1845,7 @@ describe("runDaemon", () => {
   });
 });
 
-function restartStatusProbe(cloudTelemetry?: boolean) {
+function restartStatusProbe(cloudTelemetry?: boolean, adaptiveRanking?: boolean) {
   let calls = 0;
   return async (port: number) => {
     calls += 1;
@@ -1845,6 +1870,7 @@ function restartStatusProbe(cloudTelemetry?: boolean) {
         activeUserGatewayCount: 0,
         activeProjectGatewayCount: 0,
         ...(cloudTelemetry === undefined ? {} : { cloudTelemetry }),
+        ...(adaptiveRanking === undefined ? {} : { adaptiveRanking }),
       },
     };
   };

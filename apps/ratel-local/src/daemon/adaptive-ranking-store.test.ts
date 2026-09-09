@@ -95,20 +95,49 @@ describe("AdaptiveRankingStore", () => {
     await store.shutdown();
   });
 
-  it("falls back to an empty graph when the saved graph is invalid", async () => {
+  it("falls back to an empty graph without overwriting an unsupported saved graph", async () => {
     const homeDir = await temporaryHome();
     const log = vi.fn();
     const path = adaptiveRankingGraphPath(homeDir, { kind: "global" });
+    const unsupportedGraph = '{"v":2,"built_from_ts":0,"rev":1,"intents":[]}';
     await mkdir(join(homeDir, ".ratel", "adaptive-ranking"), { recursive: true });
-    await writeFile(path, "not-json");
+    await writeFile(path, unsupportedGraph);
 
     const store = new AdaptiveRankingStore({ homeDir, logger: log, flushIntervalMs: 60_000 });
-    expect((await store.graphFor({ kind: "global" })).rev).toBe(0);
+    const graph = await store.graphFor({ kind: "global" });
+    expect(graph.rev).toBe(0);
     expect(log).toHaveBeenCalledWith(
       expect.stringMatching(/ignored invalid adaptive ranking graph/i),
     );
 
+    await teach(graph);
     await store.shutdown();
+    expect(await readFile(path, "utf8")).toBe(unsupportedGraph);
+  });
+
+  it("runs a final flush after an in-flight flush before shutdown resolves", async () => {
+    const homeDir = await temporaryHome();
+    const context = { kind: "global" } as const;
+    const path = adaptiveRankingGraphPath(homeDir, context);
+    const store = new AdaptiveRankingStore({ homeDir, flushIntervalMs: 60_000 });
+    const graph = await store.graphFor(context);
+    await teach(graph);
+
+    type StoreInternals = { flushInFlight?: Promise<void> };
+    const internals = store as unknown as StoreInternals;
+    let releaseFlush!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    }).finally(() => {
+      internals.flushInFlight = undefined;
+    });
+    internals.flushInFlight = inFlight;
+
+    const shutdown = store.shutdown();
+    releaseFlush();
+    await shutdown;
+
+    expect(IntentGraph.fromJson(await readFile(path, "utf8")).rev).toBe(graph.rev);
   });
 
   it("does not overwrite a graph advanced by another writer", async () => {
@@ -128,6 +157,29 @@ describe("AdaptiveRankingStore", () => {
 
     expect(IntentGraph.fromJson(await readFile(path, "utf8")).rev).toBe(graph.rev + 1);
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/newer adaptive ranking graph/i));
+    await store.shutdown();
+  });
+
+  it("does not overwrite an unsupported graph written after this process loaded", async () => {
+    const homeDir = await temporaryHome();
+    const log = vi.fn();
+    const context = { kind: "global" } as const;
+    const path = adaptiveRankingGraphPath(homeDir, context);
+    const unsupportedGraph = '{"v":2,"built_from_ts":0,"rev":2,"intents":[]}';
+    await mkdir(join(homeDir, ".ratel", "adaptive-ranking"), { recursive: true });
+    await writeFile(path, graphJson(1));
+
+    const store = new AdaptiveRankingStore({ homeDir, logger: log, flushIntervalMs: 60_000 });
+    const graph = await store.graphFor(context);
+    await teach(graph);
+    await writeFile(path, unsupportedGraph);
+
+    await store.flush();
+
+    expect(await readFile(path, "utf8")).toBe(unsupportedGraph);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(/failed to persist adaptive ranking graph/i),
+    );
     await store.shutdown();
   });
 });

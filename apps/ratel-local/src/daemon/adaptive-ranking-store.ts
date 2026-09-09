@@ -32,6 +32,7 @@ export class AdaptiveRankingStore {
   private readonly logger: (message: string) => void;
   private readonly timer: ReturnType<typeof setInterval>;
   private flushInFlight?: Promise<void>;
+  private shutdownInFlight?: Promise<void>;
   private stopped = false;
 
   constructor(private readonly options: AdaptiveRankingStoreOptions) {
@@ -64,10 +65,16 @@ export class AdaptiveRankingStore {
     return run;
   }
 
-  async shutdown(): Promise<void> {
-    if (this.stopped) return;
+  shutdown(): Promise<void> {
+    if (this.shutdownInFlight) return this.shutdownInFlight;
     this.stopped = true;
     clearInterval(this.timer);
+    this.shutdownInFlight = this.finishShutdown();
+    return this.shutdownInFlight;
+  }
+
+  private async finishShutdown(): Promise<void> {
+    await this.flushInFlight;
     await this.flush();
   }
 
@@ -82,7 +89,12 @@ export class AdaptiveRankingStore {
           `[ratel] ignored invalid adaptive ranking graph at ${path}: ${errorMessage(error)}`,
         );
       }
-      return { graph: new IntentGraph(), path, persistedRev: 0, conflicted: false };
+      return {
+        graph: new IntentGraph(),
+        path,
+        persistedRev: 0,
+        conflicted: (error as NodeJS.ErrnoException).code !== "ENOENT",
+      };
     }
   }
 
@@ -139,7 +151,7 @@ async function readGraphRevision(path: string): Promise<number | undefined> {
     return graphRevision(await readFile(path, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    return undefined;
+    throw error;
   }
 }
 
