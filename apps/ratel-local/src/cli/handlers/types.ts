@@ -9,6 +9,7 @@ import type {
 } from "@ratel-ai/ratel-local-core";
 import type { AgentPluginInstaller } from "../../agent-plugin.js";
 import type { ParsedArgs } from "../args.js";
+import type { CliOutput } from "../output/index.js";
 import type { PromptAdapter } from "../prompts.js";
 
 export interface HandlerCtx {
@@ -16,6 +17,7 @@ export interface HandlerCtx {
   env: HierarchyEnv;
   fs: JsonFs & BackupFs;
   log: (message: string) => void;
+  output?: CliOutput;
   prompts: PromptAdapter;
   installAgentPlugin?: AgentPluginInstaller;
   preparedChanges?: PreparedChangeCoordinator;

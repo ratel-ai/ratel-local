@@ -7,6 +7,7 @@ import type {
 } from "@ratel-ai/ratel-local-core";
 import { ArgError } from "../args.js";
 import { requestRunningDaemon, requireDaemonJson } from "../daemon-api.js";
+import { getCliOutput } from "../output/index.js";
 import type { HandlerCtx } from "./types.js";
 
 export const PROJECT_USAGE = `usage: ratel project <verb> [args...]
@@ -57,7 +58,7 @@ async function removeProject(
   // Never hold the cross-process admission lock while calling the daemon: its
   // DELETE route takes the same lock before checking sessions and leases.
   if (await dependencies.removeThroughDaemon?.(project.id)) {
-    ctx.log(`forgot ${project.id}  ${project.canonicalRoot}`);
+    getCliOutput(ctx).success(`forgot ${project.id}  ${project.canonicalRoot}`);
     return;
   }
 
@@ -69,7 +70,7 @@ async function removeProject(
       );
     }
     await dependencies.registry.forget(current.id);
-    ctx.log(`forgot ${current.id}  ${current.canonicalRoot}`);
+    getCliOutput(ctx).success(`forgot ${current.id}  ${current.canonicalRoot}`);
   };
   return dependencies.admissionLock ? dependencies.admissionLock.run(removeLocal) : removeLocal();
 }
@@ -102,7 +103,9 @@ async function addProject(
     (await dependencies.addThroughDaemon?.(input)) ??
     (await addProjectThroughRunningDaemon(ctx, input)) ??
     (await dependencies.registry.registerRoot(input));
-  ctx.log(`registered ${project.id}  ${project.displayName}  ${project.canonicalRoot}`);
+  getCliOutput(ctx).success(
+    `registered ${project.id}  ${project.displayName}  ${project.canonicalRoot}`,
+  );
 }
 
 async function addProjectThroughRunningDaemon(
@@ -123,12 +126,20 @@ async function addProjectThroughRunningDaemon(
 }
 
 async function listProjects(ctx: HandlerCtx, registry: ProjectRegistry): Promise<void> {
+  const output = getCliOutput(ctx);
   const projects = await registry.list();
   if (projects.length === 0) {
-    ctx.log("no projects registered");
+    output.info("no projects registered");
     return;
   }
-  for (const project of projects) {
-    ctx.log(`${project.id}  [${project.status}]  ${project.displayName}  ${project.canonicalRoot}`);
-  }
+  output.heading("Projects");
+  output.table(
+    ["ID", "Status", "Name", "Path"],
+    projects.map((project) => [
+      project.id,
+      project.status,
+      project.displayName,
+      project.canonicalRoot,
+    ]),
+  );
 }

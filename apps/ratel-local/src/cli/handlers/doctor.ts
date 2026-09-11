@@ -12,6 +12,7 @@ import {
   type ResolvedContextSnapshot,
   type RuntimeContextRef,
 } from "@ratel-ai/ratel-local-core";
+import { getCliOutput } from "../output/index.js";
 import type { HandlerCtx } from "./types.js";
 
 export class DoctorFailure extends Error {
@@ -28,17 +29,18 @@ export class DoctorFailure extends Error {
 }
 
 export async function runDoctor(ctx: HandlerCtx): Promise<void> {
+  const output = getCliOutput(ctx);
   const controlDir = join(ctx.env.homeDir, ".ratel");
   let mutationEngine: Awaited<ReturnType<typeof createMutationEngine>>;
   try {
     mutationEngine = await createMutationEngine({ controlDir });
   } catch (error) {
-    ctx.log(
-      `[error] mutation_recovery_failed: ${(error as Error).message}. Action: inspect ${join(controlDir, "transactions")} and repair or restore the reported journal before retrying.`,
+    output.error(
+      `mutation_recovery_failed: ${(error as Error).message}. Action: inspect ${join(controlDir, "transactions")} and repair or restore the reported journal before retrying.`,
     );
     throw new DoctorFailure(1, { cause: error });
   }
-  ctx.log("[ok] mutation_recovery: transaction recovery completed");
+  output.success("mutation_recovery: transaction recovery completed");
 
   const registry = createProjectRegistry({ homeDir: ctx.env.homeDir });
   const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
@@ -62,30 +64,34 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
         preparedChanges.cancel(migration.changeId);
       }
       for (const id of migration.preview.migrated) {
-        ctx.log(
-          ctx.argv.flags.fix === true
-            ? `[ok] legacy_skill_migrated [skill:${id}]: converted legacy symlink management to a user-scoped reference`
-            : `[info] legacy_skill_migration_ready [skill:${id}]: run ratel doctor --fix to migrate`,
-        );
+        if (ctx.argv.flags.fix === true) {
+          output.success(
+            `legacy_skill_migrated [skill:${id}]: converted legacy symlink management to a user-scoped reference`,
+          );
+        } else {
+          output.info(
+            `legacy_skill_migration_ready [skill:${id}]: run ratel doctor --fix to migrate`,
+          );
+        }
       }
       for (const diagnostic of migration.preview.diagnostics) {
         issueCount += 1;
-        ctx.log(
-          `[error] ${diagnostic.code} [skill:${diagnostic.id}]: ${diagnostic.message}. Action: inspect the legacy manifest and native skill before retrying doctor --fix.`,
+        output.error(
+          `${diagnostic.code} [skill:${diagnostic.id}]: ${diagnostic.message}. Action: inspect the legacy manifest and native skill before retrying doctor --fix.`,
         );
       }
     } else {
       await access(legacyManifestPath);
       issueCount += 1;
-      ctx.log(
-        `[error] legacy_skill_migration_blocked: ${legacyManifestPath} exists but has no automatically safe entries. Action: inspect the manifest and resolve its conflicts before retrying doctor --fix.`,
+      output.error(
+        `legacy_skill_migration_blocked: ${legacyManifestPath} exists but has no automatically safe entries. Action: inspect the manifest and resolve its conflicts before retrying doctor --fix.`,
       );
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       issueCount += 1;
-      ctx.log(
-        `[error] legacy_skill_migration_failed: ${(error as Error).message}. Action: inspect ${legacyManifestPath}; no ambiguous entry was changed.`,
+      output.error(
+        `legacy_skill_migration_failed: ${(error as Error).message}. Action: inspect ${legacyManifestPath}; no ambiguous entry was changed.`,
       );
     }
   }
@@ -103,20 +109,20 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
       const snapshot = await resolver.resolve(context);
       snapshots.push(snapshot);
       for (const diagnostic of snapshot.diagnostics) {
-        ctx.log(`[${diagnostic.severity}] ${diagnostic.code} [${label}]: ${diagnostic.message}`);
+        output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
         if (diagnostic.severity === "error") issueCount += 1;
       }
-      ctx.log(`[ok] ${successMessage}`);
+      output.success(`${successMessage}`);
     } catch (error) {
       if (error instanceof InvalidContextSnapshotError) {
         for (const diagnostic of error.diagnostics) {
-          ctx.log(`[${diagnostic.severity}] ${diagnostic.code} [${label}]: ${diagnostic.message}`);
+          output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
           if (diagnostic.severity === "error") issueCount += 1;
         }
         return;
       }
       issueCount += 1;
-      ctx.log(`[error] context_resolution_failed [${label}]: ${(error as Error).message}`);
+      output.error(`context_resolution_failed [${label}]: ${(error as Error).message}`);
     }
   };
   await resolveContext({ kind: "global" }, "global", "context_global: resolved global context");
@@ -126,15 +132,15 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     projects = await registry.list();
   } catch (error) {
     issueCount += 1;
-    ctx.log(
-      `[error] project_registry_invalid: ${(error as Error).message}. Action: inspect ${join(controlDir, "projects.json")} and restore valid versioned project data.`,
+    output.error(
+      `project_registry_invalid: ${(error as Error).message}. Action: inspect ${join(controlDir, "projects.json")} and restore valid versioned project data.`,
     );
   }
   for (const project of projects) {
     if (project.status === "missing") {
       issueCount += 1;
-      ctx.log(
-        `[error] project_missing: project ${project.id} root is unavailable: ${project.canonicalRoot}. Action: restore the root or remove the registration.`,
+      output.error(
+        `project_missing: project ${project.id} root is unavailable: ${project.canonicalRoot}. Action: restore the root or remove the registration.`,
       );
       continue;
     }
@@ -156,27 +162,27 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     });
   } catch (error) {
     issueCount += 1;
-    ctx.log(
-      `[error] legacy_oauth_inventory_failed: ${(error as Error).message}. Action: inspect ${join(controlDir, "oauth")} and repair its type, permissions, or contents before retrying.`,
+    output.error(
+      `legacy_oauth_inventory_failed: ${(error as Error).message}. Action: inspect ${join(controlDir, "oauth")} and repair its type, permissions, or contents before retrying.`,
     );
     throw new DoctorFailure(issueCount, { cause: error });
   }
   for (const item of oauth.ready) {
-    ctx.log(
-      `[info] legacy_oauth_migration_ready [oauth:${item.serverName}]: legacy OAuth state can be migrated to ${item.target.path} when daemon starts; no files were changed.`,
+    output.info(
+      `legacy_oauth_migration_ready [oauth:${item.serverName}]: legacy OAuth state can be migrated to ${item.target.path} when daemon starts; no files were changed.`,
     );
   }
   for (const diagnostic of oauth.diagnostics) {
     const action = diagnostic.requiresReauthentication
       ? `re-authenticate "${diagnostic.serverName}" in the intended scope; legacy state was not changed.`
       : `inspect ${diagnostic.legacyPath} and its scoped destination; no files were changed.`;
-    ctx.log(
-      `[${diagnostic.severity}] ${diagnostic.code} [oauth:${diagnostic.serverName}]: ${diagnostic.message}. Action: ${action}`,
+    output[diagnostic.severity](
+      `${diagnostic.code} [oauth:${diagnostic.serverName}]: ${diagnostic.message}. Action: ${action}`,
     );
     issueCount += 1;
   }
   if (issueCount > 0) throw new DoctorFailure(issueCount);
-  ctx.log(
+  output.success(
     `doctor: ok (${snapshots.length} ${snapshots.length === 1 ? "context" : "contexts"} checked)`,
   );
 }
