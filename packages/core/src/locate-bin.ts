@@ -38,19 +38,22 @@ export async function locateRatelBin(env: LocateBinEnv): Promise<ResolvedBin> {
     }
   }
   throw new Error(
-    "Could not locate the ratel-local binary. Set $RATEL_LOCAL_BIN or run from inside the ratel-local workspace.",
+    "Could not locate the ratel binary. Set $RATEL_LOCAL_BIN or run from inside the ratel-local workspace.",
   );
 }
 
 export function whichRatelBin(): string | undefined {
-  try {
-    const out = execSync("which ratel-local", {
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-    return out || undefined;
-  } catch {
-    return undefined;
+  for (const command of ["ratel", "ratel-local"]) {
+    try {
+      const out = execSync(`which ${command}`, {
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .toString()
+        .trim();
+      if (out) return out;
+    } catch {
+      // Older installations may expose only the compatibility alias.
+    }
   }
+  return undefined;
 }

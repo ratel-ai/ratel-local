@@ -1,6 +1,6 @@
 # Ratel Local UI
 
-Local UI development uses the real `ratel-local ui` API server and Vite for the React app.
+Local UI development uses the real `ratel ui` API server and Vite for the React app.
 
 From the workspace root:
 
@@ -10,7 +10,7 @@ pnpm dev:ui
 
 That command:
 
-- starts `ratel-local ui --no-open` on `127.0.0.1`;
+- starts `ratel ui --no-open` on `127.0.0.1`;
 - starts Vite on `127.0.0.1`;
 - chooses alternate free ports when the defaults are busy;
 - wires Vite's `/api` proxy through `RATEL_LOCAL_API_TARGET`;

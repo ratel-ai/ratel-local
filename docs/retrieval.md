@@ -10,19 +10,19 @@ selects `semantic` or `hybrid`. The retrieval block is atomic: the rightmost sco
 
 ```bash
 # Show user/project/local overrides and the effective value.
-ratel-local retrieval status
+ratel retrieval status
 
 # Keep the user scope model-free.
-ratel-local retrieval configure --scope user --method bm25
+ratel retrieval configure --scope user --method bm25
 
 # Use the pinned built-in model for one project.
-ratel-local retrieval configure \
+ratel retrieval configure \
   --scope project \
   --method hybrid \
   --source built-in
 
 # Remove the project override and inherit the user scope again.
-ratel-local retrieval reset --scope project
+ratel retrieval reset --scope project
 ```
 
 `configure` and `reset` use the same revision checks, transaction journal, backup, and local
@@ -55,7 +55,7 @@ important.
 ### Hugging Face
 
 ```bash
-ratel-local retrieval configure \
+ratel retrieval configure \
   --scope project \
   --method hybrid \
   --source huggingface \
@@ -71,7 +71,7 @@ changing the persisted startup policy.
 ### Local model directory
 
 ```bash
-ratel-local retrieval configure \
+ratel retrieval configure \
   --scope local \
   --method semantic \
   --source local \
@@ -84,7 +84,7 @@ machine.
 ### Ollama
 
 ```bash
-ratel-local retrieval configure \
+ratel retrieval configure \
   --scope project \
   --method semantic \
   --source ollama \
@@ -99,7 +99,7 @@ confirm that the configured local service and model are available.
 ```bash
 export EMBEDDING_API_KEY=...
 
-ratel-local retrieval configure \
+ratel retrieval configure \
   --scope project \
   --method hybrid \
   --source endpoint \
@@ -117,10 +117,10 @@ selected scope.
 
 ```bash
 # Prepare the effective merged configuration.
-ratel-local retrieval prepare
+ratel retrieval prepare
 
 # Prepare/check only the project override.
-ratel-local retrieval prepare --scope project
+ratel retrieval prepare --scope project
 ```
 
 Preflight does not start the gateway:
@@ -155,7 +155,7 @@ failed build is returned to its requesting client and does not leave the daemon 
 To roll back dense retrieval, reset the affected scope to BM25 and reconnect the affected client:
 
 ```bash
-ratel-local retrieval configure --scope user --method bm25
+ratel retrieval configure --scope user --method bm25
 ```
 
 Use `--scope project` or `--scope local` when that is where the dense override lives.

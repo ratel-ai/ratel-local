@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
 import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import { type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import { resolveSetupServiceExecutable, runSetup } from "./setup.js";
 import type { HandlerCtx } from "./types.js";
+
+const packageVersion = JSON.parse(
+  readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+).version as string;
 
 class MemFs implements BackupFs, JsonFs {
   async read() {
@@ -53,7 +58,7 @@ describe("runSetup", () => {
   it("persists a stable node+npx package runner instead of the npx cache script", () => {
     expect(
       resolveSetupServiceExecutable({
-        expectedVersion: "0.6.0-rc.0",
+        expectedVersion: packageVersion,
         env: { PATH: "/opt/node/bin" },
         execPath: "/opt/node/bin/node",
         argv1: "/home/u/.npm/_npx/cache/node_modules/@ratel-ai/ratel-local/dist/bin.js",
@@ -61,22 +66,31 @@ describe("runSetup", () => {
       }),
     ).toEqual({
       executablePath: "/opt/node/bin/node",
-      executableArgs: ["/opt/node/bin/npx", "-y", "@ratel-ai/ratel-local@0.6.0-rc.0"],
+      executableArgs: [
+        "/opt/node/bin/npx",
+        "-y",
+        "--package",
+        `@ratel-ai/ratel-local@${packageVersion}`,
+        "ratel",
+      ],
     });
   });
 
-  it("persists the currently installed global package instead of fetching an unpublished version", () => {
+  it.each([
+    "ratel",
+    "ratel-local",
+  ])("reuses the installed %s executable instead of fetching a package", (name) => {
     expect(
       resolveSetupServiceExecutable({
-        expectedVersion: "0.8.0",
+        expectedVersion: packageVersion,
         env: { PATH: "/opt/node/bin" },
         execPath: "/opt/node/bin/node",
-        argv1: "/home/u/.nvm/versions/node/v24/bin/ratel-local",
+        argv1: `/home/u/.nvm/versions/node/v24/bin/${name}`,
         isExecutable: (path) => path === "/opt/node/bin/npx",
       }),
     ).toEqual({
       executablePath: "/opt/node/bin/node",
-      executableArgs: ["/home/u/.nvm/versions/node/v24/bin/ratel-local"],
+      executableArgs: [`/home/u/.nvm/versions/node/v24/bin/${name}`],
     });
   });
 
@@ -299,7 +313,7 @@ describe("runSetup", () => {
         },
       }),
     ).rejects.toThrow(
-      "We couldn't finish updating Ratel Local. Your projects and settings are safe. Run `ratel-local daemon status` to see what went wrong.",
+      "We couldn't finish updating Ratel Local. Your projects and settings are safe. Run `ratel daemon status` to see what went wrong.",
     );
     expect(progress).toEqual(["start:Updating Ratel Local…", "stop:We couldn't finish the update"]);
   });

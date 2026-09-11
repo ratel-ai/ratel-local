@@ -36,7 +36,7 @@ If no logs exist, say that there is no tool usage data yet and suggest enabling/
 <project>/.ratel/config.local.json
 ```
 
-5. Run `ratel-local retrieval status` when capability-search quality is part of
+5. Run `ratel retrieval status` when capability-search quality is part of
    the problem. BM25 is the default; recommend semantic or hybrid retrieval
    only when the observed misses justify model setup, memory, and privacy
    tradeoffs.
@@ -58,11 +58,11 @@ For each recommendation, include:
 - what to change;
 - why the logs support it;
 - expected agent behavior improvement;
-- exact `ratel-local` command or config area to inspect when the change is actionable.
+- exact `ratel` command or config area to inspect when the change is actionable.
 
 When recommending a retrieval change, include the target scope, source, model
-or endpoint, `ratel-local retrieval prepare` step, and the need to reconnect the
+or endpoint, `ratel retrieval prepare` step, and the need to reconnect the
 affected agent/context. Never recommend placing a literal API key in retrieval
 configuration; use `--api-key-env` for remote endpoints.
 
-If the user asks you to implement the improvements, make the smallest safe config changes and validate with `ratel-local mcp list` or the relevant Ratel command.
+If the user asks you to implement the improvements, make the smallest safe config changes and validate with `ratel mcp list` or the relevant Ratel command.

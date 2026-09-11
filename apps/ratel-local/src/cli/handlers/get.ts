@@ -13,7 +13,7 @@ const SCOPES: readonly RatelScope[] = ["local", "project", "user"];
 export async function runMcpGet(ctx: HandlerCtx): Promise<void> {
   const name = ctx.argv.rest[0];
   if (!name) {
-    throw new Error("name is required: ratel-local mcp get <name> [--scope <s>]");
+    throw new Error("name is required: ratel mcp get <name> [--scope <s>]");
   }
   const scopeFlag = ctx.argv.flags.scope;
   if (typeof scopeFlag === "string" && scopeFlag.length > 0) {

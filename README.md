@@ -19,7 +19,7 @@
 
 Ratel Local gives coding agents one searchable catalog instead of every tool schema from every upstream MCP server. Tools and skill instructions enter context only when the agent needs them, with no agent-code changes.
 
-It ships as the npm package `@ratel-ai/ratel-local` and the `ratel-local` CLI. The package also exposes library APIs for serving a Ratel `ToolCatalog` over MCP.
+It ships as the npm package `@ratel-ai/ratel-local` and the `ratel` CLI. The `ratel-local` executable remains a working compatibility alias with identical commands and exit behavior; no feature flag is required and no removal date is set. The package also exposes library APIs for serving a Ratel `ToolCatalog` over MCP.
 
 ## Why Ratel Local
 
@@ -56,13 +56,21 @@ Node.js 20.6 or newer is required.
 
 ```bash
 npm install --global @ratel-ai/ratel-local@0.8.2
-ratel-local --version
+ratel --version
+ratel-local --version # compatibility alias
 ```
+
+Both names are installed by the same package and run the same entry point. Existing
+`npx -y @ratel-ai/ratel-local@0.8.2 setup` invocations also keep working.
+Config paths, `RATEL_LOCAL_BIN`, plugin/MCP identifiers, and daemon service names
+are unchanged. Existing services continue to work; no reinstall is required for
+this rename. New services reuse the installed script, or explicitly run `ratel`
+from the pinned package when setup was launched through `npx`.
 
 #### 2. Run setup
 
 ```bash
-ratel-local setup
+ratel setup
 ```
 
 The wizard:
@@ -82,7 +90,7 @@ marketplace channel.
 If you do not have a global installation, run the release-pinned package:
 
 ```bash
-npx -y @ratel-ai/ratel-local@0.8.2 setup
+npx -y --package @ratel-ai/ratel-local@0.8.2 ratel setup
 ```
 
 #### 3. Confirm Ratel Local and restart
@@ -102,24 +110,24 @@ Confirm that `ratel-local` is connected or enabled, then restart Claude Code or 
 Plain `--yes` retains the old safe behavior and changes only the daemon:
 
 ```bash
-ratel-local setup --yes
-ratel-local setup --daemon-only --yes
+ratel setup --yes
+ratel setup --daemon-only --yes
 ```
 
 Agent changes require explicit selection. Repeat `--agent`, or use `auto` to
 connect every detected supported agent:
 
 ```bash
-ratel-local setup --yes --agent claude-code --agent codex
-ratel-local setup --yes --agent auto
+ratel setup --yes --agent claude-code --agent codex
+ratel setup --yes --agent auto
 ```
 
 Automated setup never imports native MCP servers or skills. Use the explicit
 expert command when migration is intended:
 
 ```bash
-ratel-local import --yes --agent claude-code
-ratel-local import --yes --agent codex
+ratel import --yes --agent claude-code
+ratel import --yes --agent codex
 ```
 
 `--port N` selects the first-install daemon port. `--daemon-only` cannot be
@@ -132,17 +140,17 @@ debugging:
 
 ```bash
 # Daemon lifecycle
-ratel-local daemon install
-ratel-local daemon start
-ratel-local daemon status
+ratel daemon install
+ratel daemon start
+ratel daemon status
 
 # Connect without importing native entries
-ratel-local link --agent claude-code
-ratel-local link --agent codex
+ratel link --agent claude-code
+ratel link --agent codex
 
 # Preview and confirm one agent migration
-ratel-local import --agent claude-code
-ratel-local import --agent codex
+ratel import --agent claude-code
+ratel import --agent codex
 ```
 
 `daemon start` is idempotent: when the service is already healthy it leaves the
@@ -157,8 +165,8 @@ rollout flag is off by default.
 Add new upstreams directly after onboarding:
 
 ```bash
-ratel-local mcp add --scope user context7 -- npx -y @upstash/context7-mcp
-ratel-local mcp list
+ratel mcp add --scope user context7 -- npx -y @upstash/context7-mcp
+ratel mcp list
 ```
 
 ### Opt-in semantic and hybrid retrieval
@@ -167,9 +175,9 @@ BM25 remains the model-free default. The `0.7.0` feature line adds scoped
 semantic and hybrid retrieval with explicit model preflight:
 
 ```bash
-ratel-local retrieval status
-ratel-local retrieval configure --scope project --method hybrid --source built-in
-ratel-local retrieval prepare --scope project
+ratel retrieval status
+ratel retrieval configure --scope project --method hybrid --source built-in
+ratel retrieval prepare --scope project
 ```
 
 Reconnect the affected agent after changing retrieval so it acquires the new
@@ -185,15 +193,15 @@ key or native exporter:
 
 ```bash
 # New installation
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local setup
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel setup
 
 # Existing installed daemon
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel daemon restart
 
 # Disable
-RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel daemon restart
 
-ratel-local traces status
+ratel traces status
 ```
 
 Only the exact value `1` enables the feature; any other value disables it. The

@@ -84,5 +84,5 @@ jobs:
             pnpm init
             pnpm add "$pack_dir"/*.tgz
             node --input-type=module -e "import assert from 'node:assert/strict'; assert.equal(process.platform, process.env.EXPECTED_PLATFORM); assert.equal(process.arch, process.env.EXPECTED_ARCH); const pkg = await import('@ratel-ai/ratel-local'); const gateway = await pkg.buildGatewayFromConfig({ mcpServers: {} }, { resolvedSkills: [] }); await gateway.close();"
-            node node_modules/@ratel-ai/ratel-local/dist/bin.js --help
+            node "$GITHUB_WORKSPACE/apps/ratel-local/scripts/smoke-cli.js" "$smoke_dir"
           )

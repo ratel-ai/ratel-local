@@ -5,6 +5,13 @@ All notable changes to this package are documented here. The format is based on 
 ## [Unreleased]
 
 ### Changed
+- Made `ratel` the primary CLI executable, retaining `ratel-local` as a working
+  compatibility alias of the same entry point. No feature flag is required.
+  Help, errors, prompts, and active command examples now use `ratel`; binary
+  lookup prefers it and falls back to `ratel-local`. Generated npx service
+  commands explicitly select `ratel` from the unchanged `@ratel-ai/ratel-local`
+  package. Existing service identities, integrations, config paths, and
+  `RATEL_LOCAL_BIN` remain compatible. No alias removal date is set.
 - Made `daemon restart` reconfigure the Cloud telemetry feature flag in an
   installed launchd or systemd service when `RATEL_FEATURE_CLOUD_TELEMETRY` is
   present in the invoking environment (`=1` enables, any other value disables,

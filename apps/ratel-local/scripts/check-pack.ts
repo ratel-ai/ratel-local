@@ -7,8 +7,15 @@ const dist = resolve(appRoot, "dist");
 
 const packageJson = await readJson<{
   version?: unknown;
+  bin?: Record<string, unknown>;
   dependencies?: Record<string, unknown>;
 }>(resolve(appRoot, "package.json"));
+for (const name of ["ratel", "ratel-local"]) {
+  if (packageJson.bin?.[name] !== "./dist/bin.js") {
+    throw new Error(`${name} must map to the shared ./dist/bin.js entry point`);
+  }
+}
+
 const requiredRatelSdkVersion = "0.9.1";
 const ratelSdkVersion = packageJson.dependencies?.["@ratel-ai/sdk"];
 if (ratelSdkVersion !== requiredRatelSdkVersion) {

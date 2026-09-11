@@ -23,7 +23,7 @@ import type { HandlerCtx } from "./types.js";
 
 export const CONNECTOR_RECOVERY_FEATURE_ENV = "RATEL_FEATURE_CONNECTOR_RECOVERY";
 
-export const CONNECT_USAGE = `usage: ratel-local connect [options]
+export const CONNECT_USAGE = `usage: ratel connect [options]
 
 Bridge one agent MCP session to the project-scoped Ratel daemon.
 

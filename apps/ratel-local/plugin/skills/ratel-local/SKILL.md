@@ -1,6 +1,6 @@
 ---
 name: ratel-local
-description: Configure, use, and debug the Ratel Local plugin and ratel-local CLI. Use when working with Codex or Claude Code plugin setup, native trace exporters, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, configuring capability retrieval, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
+description: Configure, use, and debug the Ratel Local plugin and ratel CLI. Use when working with Codex or Claude Code plugin setup, native trace exporters, importing or linking existing MCP servers into Ratel config, adding upstream MCP servers, configuring capability retrieval, running auth, opening the local UI, checking version mismatches, or troubleshooting missing tools and startup failures.
 ---
 
 # Ratel Local
@@ -46,11 +46,11 @@ start tool checks health and attaches without restarting an already-running
 daemon. The setup tool returns the terminal command; interactive setup must
 never be run on MCP stdio.
 
-For human CLI work, install the package globally and use the `ratel-local` bin:
+For human CLI work, install the package globally and use the `ratel` bin (`ratel-local` remains a compatibility alias; no feature flag is needed):
 
 ```bash
 pnpm add -g @ratel-ai/ratel-local@0.8.2
-ratel-local --version
+ratel --version
 ```
 
 Node 20.6 or newer is required.
@@ -74,7 +74,7 @@ or set `RATEL_PROJECT_ROOT` explicitly.
 ## Config Editing Rule
 
 When adding, removing, or changing upstream MCP server entries, use the
-`ratel-local mcp` CLI by default. Do not edit Ratel config JSON files directly
+`ratel mcp` CLI by default. Do not edit Ratel config JSON files directly
 unless one of these is true:
 
 - the user explicitly asks for a direct file edit;
@@ -88,26 +88,26 @@ the existing config shape, and validate the JSON afterwards.
 
 Top-level commands:
 
-- `ratel-local setup` performs complete daemon and agent onboarding. Repeat `--agent` for explicit agent automation; use `--daemon-only` to skip agent onboarding.
-- `ratel-local traces` inspects or changes native Claude Code and Codex trace exporters through the daemon control plane.
-- `ratel-local connect` bridges one agent session to its scoped daemon gateway.
-- `ratel-local daemon` provides lower-level `install`, `start`, `stop`, `restart`, `status`, `uninstall`, and foreground `run` controls.
-- `ratel-local serve` starts the MCP gateway over stdio.
-- `ratel-local import` migrates agent MCP entries and native skills into Ratel.
-- `ratel-local link` points an agent at the Ratel gateway without removing native MCP entries.
-- `ratel-local mcp` manages upstream MCP server entries.
-- `ratel-local retrieval` inspects and configures scoped BM25, semantic, or hybrid capability search.
-- `ratel-local backup` manages backup snapshots.
-- `ratel-local project` manages registered project roots.
-- `ratel-local skill` manages Claude Code and Codex skills through Ratel.
-- `ratel-local doctor` recovers interrupted mutations and diagnoses scoped config/OAuth state.
-- `ratel-local daemon open` opens the persistent daemon UI with live client and gateway state.
-- `ratel-local ui` opens the persistent daemon UI.
-- `ratel-local statusline` renders or manages the Claude Code Ratel statusline.
-- `ratel-local --version` or `ratel-local version` prints the CLI version.
-- `ratel-local help` prints top-level usage.
+- `ratel setup` performs complete daemon and agent onboarding. Repeat `--agent` for explicit agent automation; use `--daemon-only` to skip agent onboarding.
+- `ratel traces` inspects or changes native Claude Code and Codex trace exporters through the daemon control plane.
+- `ratel connect` bridges one agent session to its scoped daemon gateway.
+- `ratel daemon` provides lower-level `install`, `start`, `stop`, `restart`, `status`, `uninstall`, and foreground `run` controls.
+- `ratel serve` starts the MCP gateway over stdio.
+- `ratel import` migrates agent MCP entries and native skills into Ratel.
+- `ratel link` points an agent at the Ratel gateway without removing native MCP entries.
+- `ratel mcp` manages upstream MCP server entries.
+- `ratel retrieval` inspects and configures scoped BM25, semantic, or hybrid capability search.
+- `ratel backup` manages backup snapshots.
+- `ratel project` manages registered project roots.
+- `ratel skill` manages Claude Code and Codex skills through Ratel.
+- `ratel doctor` recovers interrupted mutations and diagnoses scoped config/OAuth state.
+- `ratel daemon open` opens the persistent daemon UI with live client and gateway state.
+- `ratel ui` opens the persistent daemon UI.
+- `ratel statusline` renders or manages the Claude Code Ratel statusline.
+- `ratel --version` or `ratel version` prints the CLI version.
+- `ratel help` prints top-level usage.
 
-`ratel-local mcp` verbs:
+`ratel mcp` verbs:
 
 - `add` adds an upstream MCP server entry.
 - `remove` removes an upstream from a Ratel scope.
@@ -116,14 +116,14 @@ Top-level commands:
 - `edit` edits fields on an existing entry; it is interactive when no edit flags are supplied.
 - `auth` runs OAuth for HTTP/SSE upstreams or checks stored auth state.
 
-`ratel-local retrieval` verbs:
+`ratel retrieval` verbs:
 
 - `status` shows each scoped override and the effective retrieval mode.
 - `configure` writes one atomic scoped retrieval override.
 - `reset` removes one override so the earlier scope is inherited again.
 - `prepare` downloads or verifies a dense model, or checks an Ollama/endpoint source.
 
-`ratel-local skill` verbs:
+`ratel skill` verbs:
 
 - `import` imports discovered skills into a user, project, or local registration.
 - `add-scope` adds another scoped reference or owned copy for a skill.
@@ -135,7 +135,7 @@ Top-level commands:
 - `install-hook` registers the preload hook in `settings.json`.
 - `uninstall-hook` removes the preload hook from `settings.json`.
 
-`ratel-local statusline` verbs:
+`ratel statusline` verbs:
 
 - no verb renders the Claude Code statusline from stdin.
 - `install` writes the user-scope Claude Code `~/.claude/settings.json` statusLine.
@@ -147,7 +147,7 @@ Top-level commands:
 Run complete interactive onboarding:
 
 ```bash
-ratel-local setup
+ratel setup
 ```
 
 `setup` is idempotent. It installs, updates, or starts the daemon; detects
@@ -159,27 +159,27 @@ Safe automation:
 
 ```bash
 # Preserve the historical daemon-only --yes behavior
-ratel-local setup --yes
-ratel-local setup --daemon-only --yes
+ratel setup --yes
+ratel setup --daemon-only --yes
 
 # Explicitly connect one or more agents; imports are still skipped
-ratel-local setup --yes --agent claude-code --agent codex
-ratel-local setup --yes --agent auto
+ratel setup --yes --agent claude-code --agent codex
+ratel setup --yes --agent auto
 
 # First installation on a custom daemon port
-ratel-local setup --daemon-only --yes --port 7331
+ratel setup --daemon-only --yes --port 7331
 ```
 
 Never assume `setup --yes` imports native configuration. Use the expert
-`ratel-local import --yes --agent <agent>` command only when automated migration
-was explicitly requested. `ratel-local daemon`, `ratel-local link`, and
-`ratel-local import` remain available for targeted workflows.
+`ratel import --yes --agent <agent>` command only when automated migration
+was explicitly requested. `ratel daemon`, `ratel link`, and
+`ratel import` remain available for targeted workflows.
 
 Manage native trace and structured-log export through the CLI, never by directly
 editing Claude Code or Codex configuration:
 
 Cloud telemetry ships off by default. Before offering setup or changing an
-exporter, check `ratel-local traces status`. If the feature is off, explain that
+exporter, check `ratel traces status`. If the feature is off, explain that
 the user must start a foreground daemon with
 `RATEL_FEATURE_CLOUD_TELEMETRY=1`, or restart the background service with that
 environment present so the installed service definition is updated. Do not treat
@@ -188,33 +188,33 @@ an installed service.
 
 ```bash
 # Enable an existing background service
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel daemon restart
 
 # Keep enabled (flag absent)
-ratel-local daemon restart
+ratel daemon restart
 
 # Disable
-RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel daemon restart
 
 # Fallback: reinstall with the environment persisted
-ratel-local daemon uninstall
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon install
+ratel daemon uninstall
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel daemon install
 ```
 
 These lifecycle commands preserve Ratel configuration and saved Cloud settings.
 For a new interactive installation that should offer telemetry onboarding, run
-`RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local setup`.
+`RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel setup`.
 
 ```bash
 # Always inspect semantic state first
-ratel-local traces status
-ratel-local traces status --agent codex --json
+ratel traces status
+ratel traces status --agent codex --json
 
 # Mutations require explicit host selection
-ratel-local traces enable --agent claude-code --agent codex
-ratel-local traces enable --agent claude-code --level tool-details
-ratel-local traces enable --agent codex --level tool-activity
-ratel-local traces disable --agent codex
+ratel traces enable --agent claude-code --agent codex
+ratel traces enable --agent claude-code --level tool-details
+ratel traces enable --agent codex --level tool-activity
+ratel traces disable --agent codex
 ```
 
 Plain `traces enable` selects Redacted. Claude Code also supports
@@ -243,24 +243,24 @@ or consume a Cloud API key.
 Plain `setup --yes` deliberately skips traces. Automated setup must be explicit:
 
 ```bash
-ratel-local setup --yes --traces --agent claude-code --agent codex
+ratel setup --yes --traces --agent claude-code --agent codex
 ```
 
 Inspect configured upstreams:
 
 ```bash
-ratel-local mcp list
+ratel mcp list
 ```
 
 Inspect or opt into dense retrieval:
 
 ```bash
 # BM25 is the model-free default.
-ratel-local retrieval status
+ratel retrieval status
 
 # Opt one project into the pinned built-in model, then prepare it.
-ratel-local retrieval configure --scope project --method hybrid --source built-in
-ratel-local retrieval prepare --scope project
+ratel retrieval configure --scope project --method hybrid --source built-in
+ratel retrieval prepare --scope project
 ```
 
 Treat retrieval as an atomic scoped setting: a narrower scope replaces the
@@ -273,48 +273,48 @@ Settings page in the daemon UI for the same validated flow and consult
 Run a one-off gateway from the current project without the daemon:
 
 ```bash
-ratel-local serve --auto-config
+ratel serve --auto-config
 ```
 
 Open the local UI:
 
 ```bash
-ratel-local daemon open
+ratel daemon open
 ```
 
-`ratel-local ui --no-open` prints a persistent daemon UI session URL without
+`ratel ui --no-open` prints a persistent daemon UI session URL without
 opening a browser.
 
 Required workflow for adding a stdio upstream:
 
 ```bash
-ratel-local mcp add --scope project github -- npx -y @modelcontextprotocol/server-github
+ratel mcp add --scope project github -- npx -y @modelcontextprotocol/server-github
 ```
 
 Required workflow for adding a stdio upstream with local secrets:
 
 ```bash
-ratel-local mcp add --scope local github --env GITHUB_TOKEN=... -- npx -y @modelcontextprotocol/server-github
+ratel mcp add --scope local github --env GITHUB_TOKEN=... -- npx -y @modelcontextprotocol/server-github
 ```
 
 Required workflow for adding an HTTP or SSE upstream:
 
 ```bash
-ratel-local mcp add --scope project docs https://example.com/mcp --transport http
-ratel-local mcp add --scope project docs https://example.com/sse --transport sse
+ratel mcp add --scope project docs https://example.com/mcp --transport http
+ratel mcp add --scope project docs https://example.com/sse --transport sse
 ```
 
 Required workflow for adding headers to an HTTP/SSE upstream:
 
 ```bash
-ratel-local mcp add --scope local docs https://example.com/mcp --header "Authorization: Bearer ..."
+ratel mcp add --scope local docs https://example.com/mcp --header "Authorization: Bearer ..."
 ```
 
 Import existing host MCP servers into Ratel:
 
 ```bash
-ratel-local import --agent codex
-ratel-local import --agent claude-code
+ratel import --agent codex
+ratel import --agent claude-code
 ```
 
 If the selected agent is not linked, interactive import first offers to link
@@ -328,8 +328,8 @@ invoke-only.
 Preview or automate an import:
 
 ```bash
-ratel-local import --agent codex --dry-run
-ratel-local import --agent codex --yes --conflict-strategy add-missing-only
+ratel import --agent codex --dry-run
+ratel import --agent codex --yes --conflict-strategy add-missing-only
 ```
 
 Supported conflict strategies are `add-missing-only`, `replace-selected`, and
@@ -341,50 +341,50 @@ Link a host to the Ratel gateway without importing or removing native MCP
 entries:
 
 ```bash
-ratel-local link --agent codex
-ratel-local link --agent claude-code
+ratel link --agent codex
+ratel link --agent claude-code
 ```
 
-`ratel-local link` changes only the gateway configuration; it never installs the
+`ratel link` changes only the gateway configuration; it never installs the
 Claude Code statusline. After a successful Claude Code import, import offers a
 separate, skippable statusline step when the Ratel statusline is not already
 installed. With `--yes`, import installs a missing statusline automatically but
 leaves an existing non-Ratel statusline unchanged. Manage it directly with:
 
 ```bash
-ratel-local statusline install
-ratel-local statusline install --force
-ratel-local statusline uninstall
+ratel statusline install
+ratel statusline install --force
+ratel statusline uninstall
 ```
 
 Claude Code plugins cannot currently set top-level `statusLine` defaults
 directly; use the standalone statusline CLI, the optional import step, or the
-Claude Code agent page in `ratel-local daemon open`. The statusline reports
+Claude Code agent page in `ratel daemon open`. The statusline reports
 Ratel as on when Claude Code starts Ratel via a linked MCP entry or an enabled
 `ratel-local@...` plugin.
 
 Authorize HTTP/SSE upstreams:
 
 ```bash
-ratel-local mcp auth
-ratel-local mcp auth <name>
-ratel-local mcp auth --check
+ratel mcp auth
+ratel mcp auth <name>
+ratel mcp auth --check
 ```
 
 Inspect backups:
 
 ```bash
-ratel-local backup list
+ratel backup list
 ```
 
 ## Debug Checklist
 
 1. Confirm Node and `npx` are available.
 2. Confirm the plugin `.mcp.json` starts `@ratel-ai/ratel-local@0.8.2` with `connect`.
-3. Run `ratel-local daemon status`; if needed, run `ratel-local setup`.
-4. Run `ratel-local mcp list` to verify Ratel config has upstreams.
-5. Run `ratel-local connect` from the relevant project to reproduce the scoped bridge outside the host, or `ratel-local serve --auto-config` to isolate the gateway itself.
-6. For HTTP/SSE upstreams, run `ratel-local mcp auth --check` or `ratel-local mcp auth <name>`.
+3. Run `ratel daemon status`; if needed, run `ratel setup`.
+4. Run `ratel mcp list` to verify Ratel config has upstreams.
+5. Run `ratel connect` from the relevant project to reproduce the scoped bridge outside the host, or `ratel serve --auto-config` to isolate the gateway itself.
+6. For HTTP/SSE upstreams, run `ratel mcp auth --check` or `ratel mcp auth <name>`.
 7. In Claude Code, run `/mcp` and `/reload-plugins` after plugin changes.
 8. In Codex, restart the thread after plugin install or manifest changes.
 
@@ -393,7 +393,7 @@ Common findings:
 - Bootstrap tools only: initial attachment failed or a live connection was later lost; pending cold starts wait for the complete catalog instead. Call `ratel_daemon_status` first. When it reports `running`, `ratel_daemon_start` safely reattaches without restarting the daemon. When it reports `stopped`, call `ratel_daemon_start`; when it reports `not-installed`, use the command returned by `ratel_daemon_setup`.
 - Repeated daemon interruptions: set `RATEL_FEATURE_CONNECTOR_RECOVERY=1` on the connector process to opt into bounded automatic reattachment. The feature is off by default while it rolls out.
 - Empty catalog: no Ratel configs were found or all configs have empty `mcpServers`.
-- Dense retrieval startup failure: run `ratel-local retrieval status`, then `ratel-local retrieval prepare` in the affected project. Reset that scope to BM25 when the configured model or endpoint should not be used.
+- Dense retrieval startup failure: run `ratel retrieval status`, then `ratel retrieval prepare` in the affected project. Reset that scope to BM25 when the configured model or endpoint should not be used.
 - Missing project tools: the host did not expose a useful project root; set `RATEL_PROJECT_ROOT` or run from the project directory.
 - First startup failure: `npx` may need network access to resolve the pinned npm package version.
 - Auth needed: an upstream returned 401 or 403; complete the Ratel auth flow and retry.

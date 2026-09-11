@@ -2,6 +2,10 @@
 
 This plugin root is shared by Codex and Claude Code. It exposes the Ratel Local gateway and bundles skills for operating the gateway and improving the tool catalog from usage logs.
 
+The package installs `ratel` as the primary CLI and `ratel-local` as a compatibility
+alias. Both run the same commands without a feature flag. The plugin name, MCP
+server identifier, package name, and existing `npx` invocation stay unchanged.
+
 ## Layout
 
 ```text
@@ -116,15 +120,15 @@ the session.
 Use the normal Ratel CLI:
 
 ```bash
-ratel-local mcp add --scope user docs -- npx -y @upstash/context7-mcp
-ratel-local mcp list
-ratel-local mcp auth
+ratel mcp add --scope user docs -- npx -y @upstash/context7-mcp
+ratel mcp list
+ratel mcp auth
 ```
 
 Existing explicit config flows still work:
 
 ```bash
-ratel-local serve --config ~/.ratel/config.json
+ratel serve --config ~/.ratel/config.json
 ```
 
 BM25 remains the default capability search method. Configure opt-in semantic
@@ -132,6 +136,6 @@ or hybrid retrieval through the scoped CLI and preflight the model before
 reconnecting the agent:
 
 ```bash
-ratel-local retrieval configure --scope project --method hybrid --source built-in
-ratel-local retrieval prepare --scope project
+ratel retrieval configure --scope project --method hybrid --source built-in
+ratel retrieval prepare --scope project
 ```

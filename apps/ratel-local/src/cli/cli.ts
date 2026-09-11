@@ -70,7 +70,9 @@ export interface RunCliResult {
   shutdown?: () => Promise<void>;
 }
 
-const TOP_USAGE = `usage: ratel-local <command> [args...]
+const TOP_USAGE = `usage: ratel <command> [args...]
+
+The \`ratel-local\` executable remains a compatibility alias.
 
 Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
@@ -90,7 +92,7 @@ Commands:
   statusline render or install the Claude Code Ratel statusline
   ui       open the persistent daemon UI [--no-open]
 
-Run \`ratel-local <group>\` for the verbs available in a group.`;
+Run \`ratel <group>\` for the verbs available in a group.`;
 
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<RunCliResult> {
   const log = options.logger ?? ((m) => console.error(m));

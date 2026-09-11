@@ -550,7 +550,7 @@ function resolveRatelBin(): string | undefined {
 
 function resolveUiRatelBin(): ResolvedBin {
   const command = resolveRatelBin();
-  if (!command) throw new Error("Could not locate the ratel-local binary for statusline install");
+  if (!command) throw new Error("Could not locate the ratel binary for statusline install");
   return { command, args: [], source: "env" };
 }
 

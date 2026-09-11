@@ -22,8 +22,8 @@ mutations, setup prompts, and UI controls together.
 For a new installation with interactive onboarding, or for a foreground daemon:
 
 ```bash
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local setup
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon run --no-open --auto-config
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel setup
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel daemon run --no-open --auto-config
 ```
 
 When setup installs a macOS launchd or Linux systemd service, it copies the
@@ -33,13 +33,13 @@ the feature-flag variable present or absent on `daemon restart`:
 
 ```bash
 # Enable — rewrites only the feature-flag environment entry
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel daemon restart
 
 # Keep enabled — variable absent; installed service file is preserved
-ratel-local daemon restart
+ratel daemon restart
 
 # Disable — any present value other than `1` removes the persisted flag
-RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel daemon restart
 ```
 
 `daemon start` does not rewrite the service. Uninstall then install remains a
@@ -92,12 +92,12 @@ Use the Agent Setup page or the CLI. Do not edit the native config files by
 hand:
 
 ```bash
-ratel-local traces status
-ratel-local traces status --agent codex --json
-ratel-local traces enable --agent claude-code --agent codex
-ratel-local traces enable --agent claude-code --level tool-details
-ratel-local traces enable --agent codex --level tool-activity
-ratel-local traces disable --agent codex
+ratel traces status
+ratel traces status --agent codex --json
+ratel traces enable --agent claude-code --agent codex
+ratel traces enable --agent claude-code --level tool-details
+ratel traces enable --agent codex --level tool-activity
+ratel traces disable --agent codex
 ```
 
 Both hosts support **Off** and **Redacted**. Redacted is the default for the
@@ -116,7 +116,7 @@ sensitive material. Interactive CLI and Agent Setup flows display a privacy
 warning and require confirmation. Automation must be fully explicit:
 
 ```bash
-ratel-local traces enable --agent claude-code --level full-content \
+ratel traces enable --agent claude-code --level full-content \
   --confirm-content --yes
 ```
 
@@ -131,13 +131,13 @@ missing. The API key is entered through a masked prompt and saved immediately by
 the daemon. `--yes` remains non-interactive: it does not request a secret and
 prints <https://cloud.ratel.sh/settings> as the next step instead.
 
-`ratel-local setup` offers traces as its final optional interactive step. Plain
+`ratel setup` offers traces as its final optional interactive step. Plain
 `setup --yes` continues to skip traces. Explicit automation uses:
 
 ```bash
-ratel-local setup --yes --traces --agent claude-code --agent codex
+ratel setup --yes --traces --agent claude-code --agent codex
 # Add only when replacing a known conflicting exporter is intentional:
-ratel-local setup --yes --traces --overwrite-traces --agent codex
+ratel setup --yes --traces --overwrite-traces --agent codex
 ```
 
 Claude Code is configured in `~/.claude/settings.json` with native telemetry,
