@@ -391,7 +391,7 @@ describe("runCli — help and routing", () => {
     });
 
     expect(homes).toEqual([HOME]);
-    expect(logs).toEqual(["no projects registered"]);
+    expect(logs).toEqual(["[info] no projects registered"]);
   });
 
   it("routes doctor through recovery and scoped diagnostics", async () => {
@@ -406,7 +406,7 @@ describe("runCli — help and routing", () => {
       await rm(homeDir, { recursive: true, force: true });
     }
 
-    expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
+    expect(logs.at(-1)).toBe("[ok] doctor: ok (1 context checked)");
   });
 
   it("`ratel setup --help` describes complete and automated onboarding", async () => {

@@ -236,6 +236,26 @@ When skills are configured, `get_skill_content` loads their instructions.
 
 The CLI manages upstreams, agent imports and links, OAuth, skills, backups, the browser UI, and the Claude Code statusline. The docs are the source of truth for commands and configuration.
 
+### Terminal output
+
+Project listings, doctor diagnostics, and setup messages use shared CLI output helpers.
+Interactive terminals get styled messages, aligned tables, and progress spinners.
+Tables that cannot fit the terminal use labelled records so complete paths remain visible.
+Set `NO_COLOR=1` to disable colors while keeping interactive questions.
+
+Redirecting stdout or stderr selects plain output. Tables use tab-separated columns
+with tabs, newlines, and backslashes inside values escaped. Progress prints a start
+and result line. CI uses the same plain output without animations or elapsed times,
+even when it provides a terminal (`CI=false` and `CI=0` disable CI detection).
+Human-readable output and prompts go to stderr; MCP, hook, and statusline payloads
+keep their existing stdout paths.
+
+Questions require terminal input and output. When a question cannot be asked, the
+command reports an error instead of waiting or accepting a confirmation automatically.
+For automation, supply the command's existing explicit options, such as
+`ratel setup --daemon-only --yes`. There are no new global automation flags in this change.
+The shared renderer is enabled directly, without a feature flag.
+
 ## Development
 
 Development requires Node.js 24+ and pnpm 10+.

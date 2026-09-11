@@ -5,6 +5,17 @@ All notable changes to this package are documented here. The format is based on 
 ## [Unreleased]
 
 ### Changed
+- Added shared CLI formatting for messages, headings, tables, lists, and progress,
+  used by project commands, doctor, and the setup prompt adapter. Terminal output
+  is styled; redirected and CI output is plain and uses fixed progress messages.
+  Narrow tables use labelled records and plain tables preserve complete cell values.
+  Human output stays on stderr and protocol payloads stay on stdout. No feature flag
+  is required. Project list formatting now includes column names; doctor and project
+  messages use consistent severity labels.
+- CLI questions now fail explicitly when interactive input/output is unavailable,
+  including in CI, instead of waiting or implicitly accepting. For automated setup,
+  use the existing `--yes` and explicit agent/daemon options. Existing explicitly
+  injected prompt adapters remain supported.
 - Made `ratel` the primary CLI executable, retaining `ratel-local` as a working
   compatibility alias of the same entry point. No feature flag is required.
   Help, errors, prompts, and active command examples now use `ratel`; binary
