@@ -85,13 +85,6 @@ export interface CloudCatalogPullResult {
   degraded?: string;
 }
 
-/** One catalog pull: what it returned, or why it did not. */
-interface CloudCatalogPull {
-  catalog?: CloudSkillCatalog;
-  error?: string;
-  degraded?: string;
-}
-
 export interface CloudSkillCatalog {
   catalogVersion: string;
   skills: Skill[];
@@ -133,6 +126,13 @@ interface OAuthStoreRevision {
   revision: string;
 }
 
+/** One catalog pull: what it returned, or why it did not. */
+interface CloudCatalogPull {
+  catalog?: CloudSkillCatalog;
+  error?: string;
+  degraded?: string;
+}
+
 export function createContextSnapshotResolver(
   options: ContextSnapshotResolverOptions,
 ): ContextSnapshotResolver {
@@ -140,13 +140,8 @@ export function createContextSnapshotResolver(
   return {
     async resolve(context) {
       let pulled: Promise<CloudCatalogPull> | undefined;
-      const pullCloudCatalog = (profile?: string) => {
-        pulled ??= (options.cloudCatalog?.(context, profile) ?? Promise.resolve(undefined)).then(
-          (result) => (result ? { catalog: result.catalog, degraded: result.degraded } : {}),
-          (error: Error) => ({ error: error.message }),
-        );
-        return pulled;
-      };
+      const pullCloudCatalog = (profile?: string) =>
+        (pulled ??= pullCloudCatalogOnce(options.cloudCatalog, context, profile));
       const projectRoot = await resolveProjectRoot(context, options.projectRegistry);
       const targets = documentTargets(options.homeDir, context, projectRoot);
       if (projectRoot) {
@@ -208,29 +203,7 @@ export function createContextSnapshotResolver(
         const cloud = await pullCloudCatalog(merged.cloud?.profile);
         const composed = composeSkills(skills.effectiveSkills, cloud.catalog?.skills ?? []);
         const diagnostics: Diagnostic[] = [
-          ...(cloud.error
-            ? [
-                {
-                  code: "cloud-catalog-unavailable",
-                  severity: "warning" as const,
-                  message: `Cloud skills are not in use: ${cloud.error}`,
-                },
-              ]
-            : []),
-          ...(cloud.degraded
-            ? [
-                {
-                  code: "cloud-catalog-degraded",
-                  severity: "warning" as const,
-                  message: `Cloud skills may be out of date: the last cached catalog is being served because ${cloud.degraded}.`,
-                },
-              ]
-            : []),
-          ...composed.shadowed.map((id) => ({
-            code: "cloud-skill-shadowed",
-            severity: "warning" as const,
-            message: `Cloud skill "${id}" is not in use: a local skill with the same id takes precedence. Remove or rename the local skill to use the published one.`,
-          })),
+          ...cloudDiagnostics(cloud, composed.shadowed),
           ...skills.diagnostics.map(({ code, severity, message, path }) => ({
             code,
             severity,
@@ -457,6 +430,48 @@ function composeSkills(local: Skill[], cloud: Skill[]) {
   };
 }
 
+function cloudDiagnostics(cloud: CloudCatalogPull, shadowed: string[]): Diagnostic[] {
+  return [
+    ...(cloud.error
+      ? [
+          {
+            code: "cloud-catalog-unavailable",
+            severity: "warning" as const,
+            message: `Cloud skills are not in use: ${cloud.error}`,
+          },
+        ]
+      : []),
+    ...(cloud.degraded
+      ? [
+          {
+            code: "cloud-catalog-degraded",
+            severity: "warning" as const,
+            message: `Cloud skills may be out of date: the last cached catalog is being served because ${cloud.degraded}`,
+          },
+        ]
+      : []),
+    ...shadowed.map((id) => ({
+      code: "cloud-skill-shadowed",
+      severity: "warning" as const,
+      message: `Cloud skill "${id}" is not in use: a local skill with the same id takes precedence; rename the local skill to use the published one`,
+    })),
+  ];
+}
+
+async function pullCloudCatalogOnce(
+  pull: ContextSnapshotResolverOptions["cloudCatalog"],
+  context: RuntimeContextRef,
+  profile?: string,
+): Promise<CloudCatalogPull> {
+  if (!pull) return {};
+  try {
+    const result = await pull(context, profile);
+    return result ? { catalog: result.catalog, degraded: result.degraded } : {};
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
 function digestRuntimeRevision(
   documents: ScopedDocumentSnapshot[],
   mcpEntries: ResolvedMcpEntry[],
@@ -472,21 +487,19 @@ function digestRuntimeRevision(
     runtimeCwd,
     oauthFingerprint: oauthKey.fingerprint,
   }));
-  return (
-    createHash("sha256")
-      .update(`ratel-runtime-v${CONTEXT_SNAPSHOT_RESOLVER_VERSION}\0`)
-      .update(stableStringify(normalizedDocuments))
-      .update("\0")
-      .update(stableStringify(runtimeMcpEntries))
-      .update("\0")
-      .update(skillFingerprint)
-      .update("\0")
-      .update(stableStringify(oauthStoreRevisions))
-      .update("\0")
-      // Cloud skills have no path, so the fingerprint above cannot see them.
-      .update(cloudCatalogVersion ?? "")
-      .digest("base64url") as RuntimeRevision
-  );
+  // Cloud skills have no path, so the catalog version stands in for them.
+  return createHash("sha256")
+    .update(`ratel-runtime-v${CONTEXT_SNAPSHOT_RESOLVER_VERSION}\0`)
+    .update(stableStringify(normalizedDocuments))
+    .update("\0")
+    .update(stableStringify(runtimeMcpEntries))
+    .update("\0")
+    .update(skillFingerprint)
+    .update("\0")
+    .update(stableStringify(oauthStoreRevisions))
+    .update("\0")
+    .update(cloudCatalogVersion ?? "")
+    .digest("base64url") as RuntimeRevision;
 }
 
 function stableStringify(value: unknown): string {

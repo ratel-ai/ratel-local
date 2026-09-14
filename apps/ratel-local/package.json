@@ -1,6 +1,6 @@
 {
   "name": "@ratel-ai/ratel-local",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "Ratel Local package: a project-scoped persistent MCP gateway with BM25, semantic, and hybrid capability search plus the ratel-local CLI.",
   "private": false,
   "type": "module",

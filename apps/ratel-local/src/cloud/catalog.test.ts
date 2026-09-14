@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { createCloudCatalogLoader, createCloudCatalogSource } from "./catalog.js";
+import {
+  CloudCatalogAuthError,
+  CloudCatalogProtocolError,
+  CloudCatalogUnavailableError,
+  cloudCatalogEndpoint,
+  createCloudCatalogLoader,
+  createCloudCatalogSource,
+  DEFAULT_CLOUD_CATALOG_ENDPOINT,
+} from "./catalog.js";
 import type { CloudSettings } from "./settings.js";
 
 const ENDPOINT = "https://cloud.ratel.sh/api/v1/catalog";
 const VERSION = "6f7f0cee520a24a6edbb6dc7df6b623751cbdf05771e7e7bbe45cc9de943f0a6";
 
-// Shape taken from a real `GET /v1/catalog` against a seeded project; the
+// Shape taken from a real `GET /api/v1/catalog` against a seeded project; the
 // bodies are truncated because the loader treats them as opaque strings.
 const WIRE = {
   catalogVersion: VERSION,
@@ -59,7 +67,6 @@ describe("createCloudCatalogLoader", () => {
     expect(snapshot.catalogVersion).toBe(VERSION);
     expect(snapshot.skills).toEqual(WIRE.skills);
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_test");
-    // Nothing cached yet, so the first pull must be unconditional.
     expect(calls[0].headers.has("if-none-match")).toBe(false);
   });
 
@@ -110,6 +117,18 @@ describe("createCloudCatalogLoader", () => {
     await expect(loader(impl).load()).rejects.toThrow(/unavailable and nothing is cached/);
   });
 
+  it("takes the default endpoint and refuses one that could leak the key", () => {
+    expect(cloudCatalogEndpoint(DEFAULT_CLOUD_CATALOG_ENDPOINT).toString()).toBe(
+      DEFAULT_CLOUD_CATALOG_ENDPOINT,
+    );
+    expect(() => cloudCatalogEndpoint("http://cloud.ratel.sh/api/v1/catalog")).toThrow(
+      /secret-free HTTPS URL/,
+    );
+    expect(() => cloudCatalogEndpoint("https://u:p@cloud.ratel.sh/api/v1/catalog")).toThrow(
+      /secret-free HTTPS URL/,
+    );
+  });
+
   it("fails on a network error with nothing cached, and degrades with a cache", async () => {
     const boom = () => {
       throw new Error("connect ECONNREFUSED");
@@ -150,6 +169,7 @@ describe("createCloudCatalogLoader", () => {
     const client = loader(impl);
     await client.load();
     // A revoked key must not hide behind the last good catalog.
+    await expect(client.load()).rejects.toThrow(CloudCatalogAuthError);
     await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
   });
 
@@ -175,6 +195,77 @@ describe("createCloudCatalogLoader", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("holds a rejected key rather than asking Cloud on every resolve", async () => {
+    const { calls, impl } = recordingFetch(
+      jsonResponse({ error: "nope" }, 401),
+      jsonResponse(WIRE),
+    );
+    let clock = 0;
+    const client = createCloudCatalogLoader({
+      endpoint: ENDPOINT,
+      apiKey: "rtl_revoked",
+      fetch: impl,
+      now: () => clock,
+    });
+
+    await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
+    await expect(client.load()).rejects.toThrow(/auth failed: HTTP 401/);
+    expect(calls).toHaveLength(1);
+
+    clock = 60_001;
+    await client.load();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("serves overlapping loads from one request", async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const impl = (async (input: URL | RequestInfo) => {
+      calls.push(String(input));
+      await gate;
+      return jsonResponse(WIRE);
+    }) as unknown as typeof fetch;
+    const client = loader(impl);
+
+    const [first, second, third] = [client.load(), client.load(), client.load()];
+    release();
+    const results = await Promise.all([first, second, third]);
+
+    expect(calls).toHaveLength(1);
+    expect(results.map(({ snapshot }) => snapshot.catalogVersion)).toEqual([
+      VERSION,
+      VERSION,
+      VERSION,
+    ]);
+    await client.load();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("holds an unreachable Cloud rather than paying its timeout on every resolve", async () => {
+    const { calls, impl } = recordingFetch(
+      jsonResponse({ error: "gateway" }, 503),
+      jsonResponse(WIRE),
+    );
+    let clock = 0;
+    const client = createCloudCatalogLoader({
+      endpoint: ENDPOINT,
+      apiKey: "rtl_test",
+      fetch: impl,
+      now: () => clock,
+    });
+
+    await expect(client.load()).rejects.toThrow(CloudCatalogUnavailableError);
+    await expect(client.load()).rejects.toThrow(/HTTP 503/);
+    expect(calls).toHaveLength(1);
+
+    clock = 10_001;
+    expect((await client.load()).snapshot.catalogVersion).toBe(VERSION);
+    expect(calls).toHaveLength(2);
+  });
+
   it("surfaces a contract violation instead of falling back to the cache", async () => {
     const { impl } = recordingFetch(
       jsonResponse(WIRE),
@@ -182,7 +273,7 @@ describe("createCloudCatalogLoader", () => {
     );
     const client = loader(impl);
     await client.load();
-    await expect(client.load()).rejects.toThrow(/malformed catalog/);
+    await expect(client.load()).rejects.toThrow(CloudCatalogProtocolError);
   });
 
   it("rejects a skill missing a required wire field", async () => {
@@ -191,7 +282,7 @@ describe("createCloudCatalogLoader", () => {
       loader(
         recordingFetch(jsonResponse({ catalogVersion: VERSION, skills: [missingTags] })).impl,
       ).load(),
-    ).rejects.toThrow(/invalid tags or tools/);
+    ).rejects.toThrow(/skill 0 is missing tags/);
   });
 
   it("rejects malformed payloads", async () => {
@@ -359,5 +450,18 @@ describe("createCloudCatalogSource", () => {
 
     expect(pulled).toBeUndefined();
     expect(calls).toHaveLength(0);
+  });
+
+  it("marks a cached catalog as degraded and says so in the daemon log", async () => {
+    const { impl } = recordingFetch(jsonResponse(WIRE), jsonResponse({}, 500));
+    const logs: string[] = [];
+    const pull = source(impl, { log: (message) => logs.push(message) });
+
+    await pull(CONTEXT, "acme");
+    const stale = await pull(CONTEXT, "acme");
+
+    expect(stale?.degraded).toBe("HTTP 500");
+    expect(stale?.catalog.catalogVersion).toBe(VERSION);
+    expect(logs.some((message) => message.includes("HTTP 500"))).toBe(true);
   });
 });

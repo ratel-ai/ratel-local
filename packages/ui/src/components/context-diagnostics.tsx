@@ -17,7 +17,7 @@ export function ContextDiagnostics({ diagnostics }: { diagnostics: SnapshotDiagn
   return (
     <div className="flex flex-col gap-2 px-6 pt-6" data-slot="context-diagnostics">
       {[...diagnostics].sort(bySeverity).map((diagnostic) => (
-        // One cause can produce several diagnostics sharing a code.
+        // Codes are not unique: one cause can emit several diagnostics.
         <Alert
           key={`${diagnostic.code}:${diagnostic.path ?? ""}:${diagnostic.message}`}
           variant={diagnostic.severity === "error" ? "destructive" : "default"}

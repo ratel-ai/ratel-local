@@ -334,6 +334,57 @@ describe("runDaemon", () => {
     }
   });
 
+  it("pulls the Cloud catalog with the environment credential while the relay stays off", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const catalogFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 }),
+    );
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: {
+          [CLOUD_CATALOG_FEATURE_ENV]: "1",
+          RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/otlp/v1/traces",
+          RATEL_API_KEY: "rtl_env",
+        },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudCatalogFetch: catalogFetch,
+        cloudSettingsStore: { load: async () => undefined, save: async () => {} },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+
+      expect(config.status).toBe(200);
+      expect(catalogFetch).toHaveBeenCalled();
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+
+      expect(relay.status).toBe(404);
+      const status = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+      expect(await status.json()).toMatchObject({ featureEnabled: false, configured: false });
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("keeps every signal on the deployment a UI save names", async () => {
     const fs = new MemFs();
     const logs: string[] = [];

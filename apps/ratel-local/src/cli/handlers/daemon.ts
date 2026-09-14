@@ -33,7 +33,7 @@ import {
   type TelemetryHandle,
   type TelemetryInitOptions,
 } from "@ratel-ai/telemetry-otlp";
-import { createCloudCatalogSource } from "../../cloud/catalog.js";
+import { CLOUD_CATALOG_TIMEOUT_MS, createCloudCatalogSource } from "../../cloud/catalog.js";
 import {
   CLOUD_API_KEY_ENV,
   type CloudOtlpTraceRelayOptions,
@@ -84,6 +84,8 @@ import {
   featureFlagOverridesFromEnv,
   featureFlagServiceEnvironment,
   featureFlagsFromEnv,
+  SERVICE_FEATURE_FLAG_ENVS,
+  type ServiceFeatureFlagOverrides,
 } from "../../feature-flags.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
@@ -93,6 +95,7 @@ import { buildConfiguredGateway, type ServeOptions } from "./serve.js";
 import type { HandlerCtx } from "./types.js";
 
 export const DEFAULT_DAEMON_PORT = 5731;
+export const DAEMON_STARTUP_BUDGET_MS = 5_000 + CLOUD_CATALOG_TIMEOUT_MS;
 export const DAEMON_LABEL = "ai.ratel.local.daemon";
 export const SYSTEMD_SERVICE = "ratel-local-daemon.service";
 export const DAEMON_SERVICE_ID = "ratel-local-daemon";
@@ -848,17 +851,17 @@ async function migrateDaemonOAuthStores(
       .filter(({ status }) => status === "available")
       .map(({ id }) => ({ kind: "project" as const, projectId: id })),
   ];
-  const entries = [];
-  for (const context of contexts) {
-    try {
-      entries.push(...(await resolver.resolve(context)).mcpEntries);
-    } catch (error) {
-      log(
-        `[ratel] skipped OAuth migration because a context is invalid: ${(error as Error).message}`,
-      );
-      return;
-    }
+  const resolved = await Promise.allSettled(contexts.map((context) => resolver.resolve(context)));
+  const failed = resolved.filter((result) => result.status === "rejected");
+  if (failed[0]) {
+    log(
+      `[ratel] skipped OAuth migration because ${failed.length} of ${contexts.length} contexts are invalid: ${(failed[0].reason as Error).message}`,
+    );
+    return;
   }
+  const entries = resolved.flatMap((result) =>
+    result.status === "fulfilled" ? result.value.mcpEntries : [],
+  );
   try {
     const report = await migrateLegacyOAuthStores({ homeDir, entries });
     for (const item of report.migrated) {
@@ -994,7 +997,7 @@ export function createLaunchAgentPlist(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
-  featureFlags?: FeatureFlags;
+  featureFlags?: Partial<FeatureFlags>;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const args = [
@@ -1009,9 +1012,11 @@ export function createLaunchAgentPlist(input: {
   ];
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(
-      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
-    ),
+    ...featureFlagServiceEnvironment({
+      cloudTelemetry: false,
+      cloudCatalog: false,
+      ...input.featureFlags,
+    }),
   };
   const environmentXml = Object.entries(serviceEnvironment)
     .map(
@@ -1058,7 +1063,7 @@ export function createSystemdUserService(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
-  featureFlags?: FeatureFlags;
+  featureFlags?: Partial<FeatureFlags>;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const command = [input.executablePath, ...(input.executableArgs ?? [])]
@@ -1066,9 +1071,11 @@ export function createSystemdUserService(input: {
     .join(" ");
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(
-      input.featureFlags ?? { cloudTelemetry: false, cloudCatalog: false },
-    ),
+    ...featureFlagServiceEnvironment({
+      cloudTelemetry: false,
+      cloudCatalog: false,
+      ...input.featureFlags,
+    }),
   };
   const environmentLines = Object.entries(serviceEnvironment)
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
@@ -1092,15 +1099,15 @@ WantedBy=default.target
 }
 
 /**
- * Apply an explicit Cloud telemetry override to the installed service file.
- * Returns the applied value, or `undefined` when nothing was written — no
+ * Apply explicit feature-flag overrides to the installed service file.
+ * Returns the applied overrides, or `undefined` when nothing was named — no
  * override in the environment, or no installed service to rewrite.
  */
 async function reconfigureInstalledServiceFeatureFlags(
   ctx: HandlerCtx,
   options: ServeOptions,
   opts: DaemonHandlerDeps,
-): Promise<Readonly<Record<string, boolean>> | undefined> {
+): Promise<ServiceFeatureFlagOverrides | undefined> {
   const overrides = featureFlagOverridesFromEnv(options.processEnv ?? process.env);
   if (Object.keys(overrides).length === 0) return undefined;
   const platform = daemonPlatform(opts);
@@ -1119,30 +1126,31 @@ async function reconfigureInstalledServiceFeatureFlags(
   return overrides;
 }
 
-/**
- * Confirm the restarted daemon actually runs with the flag we just wrote.
- * Rewriting the service file is not proof: launchd or systemd may still be
- * serving the previous definition. Throws on a mismatch; returns a note when
- * the running daemon is too old to report the flag at all.
- */
-/** Which status field reports each flag a service file can carry. */
-const FLAG_STATUS_FIELD: Record<string, keyof DaemonStatusBody> = {
+const FLAG_STATUS_FIELD = {
   [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
   [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
-};
+} as const;
 
+/**
+ * Confirm the restarted daemon actually runs with the flags we just wrote.
+ * Rewriting the service file is not proof: launchd or systemd may still be
+ * serving the previous definition. Throws on a mismatch; returns a note when
+ * the running daemon is too old to report them at all.
+ */
 async function verifyFeatureFlagsApplied(
   port: number,
   probe: ProbeDaemon,
-  expected: Readonly<Record<string, boolean>>,
+  expected: ServiceFeatureFlagOverrides,
 ): Promise<string | undefined> {
   const result = await probe(port);
   const unconfirmed = (reason: string) =>
     `[ratel] could not confirm the requested feature flags: ${reason}. Check "ratel-local traces status".`;
   if (!result.ok) return unconfirmed("the daemon did not answer");
   const unreported: string[] = [];
-  for (const [name, want] of Object.entries(expected)) {
-    const observed = result.status?.[FLAG_STATUS_FIELD[name] as keyof DaemonStatusBody];
+  for (const name of SERVICE_FEATURE_FLAG_ENVS) {
+    if (!Object.hasOwn(expected, name)) continue;
+    const want = expected[name];
+    const observed = result.status?.[FLAG_STATUS_FIELD[name]];
     if (observed === want) continue;
     if (observed === undefined) {
       unreported.push(name);
@@ -1486,7 +1494,7 @@ async function waitForDaemon(
   probe: ProbeDaemon,
   expectedVersion?: string,
 ): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + DAEMON_STARTUP_BUDGET_MS;
   let lastError = "not responding";
   while (Date.now() < deadline) {
     const result = await probe(port);

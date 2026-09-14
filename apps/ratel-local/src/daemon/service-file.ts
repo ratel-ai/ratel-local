@@ -1,11 +1,4 @@
-/**
- * Feature-flag reconciliation inside an installed launchd or systemd service.
- *
- * `daemon restart` rewrites only the flag entries an operator named explicitly
- * (ADR-0020), never the whole unit: regenerating it from the invoking shell
- * would refresh install-time `PATH` and `RATEL_DAEMON_INSTALL_PATH`, which are
- * preserved so npm/npx cannot reorder agent plugin executables.
- */
+import type { ServiceFeatureFlagOverrides } from "../feature-flags.js";
 
 const EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE =
   /\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/;
@@ -15,28 +8,17 @@ const LAUNCH_AGENT_ENV_BLOCK_RE =
 export const SERVICE_SHAPE_ERROR =
   'installed daemon service is not a Ratel Local unit; reinstall with "ratel-local daemon install"';
 
-/** The flags an operator asked to change, by environment variable name. */
-export type ServiceFeatureFlagOverrides = Readonly<Record<string, boolean>>;
-
-const launchAgentEntry = (name: string) => `    <key>${name}</key>\n    <string>1</string>`;
-const launchAgentEntryRe = (name: string) =>
-  new RegExp(`\\n    <key>${name}</key>\\n    <string>[^<]*</string>`);
-const systemdLine = (name: string) => `Environment=${name}=1`;
-const systemdLineRe = (name: string) => new RegExp(`^Environment=${name}=.*\\n`, "m");
-
-/**
- * Apply overrides to a launchd plist. Only the named flags move: a flag absent
- * from `overrides` keeps whatever the installed service already says.
- */
+// Rewrite the installed unit rather than regenerate it: regenerating refreshes
+// install-time PATH, which ADR-0020 preserves so npx can't reorder plugin binaries.
 export function applyFeatureFlagsToLaunchAgentPlist(
   plist: string,
   overrides: ServiceFeatureFlagOverrides,
 ): string {
   let next = plist;
   for (const [name, enabled] of Object.entries(overrides)) {
-    // Drop the entry, then an environment dict it may have left empty, so the
-    // insertion below always sees the shape `createLaunchAgentPlist` emits.
-    // Without that, enabling twice appends a dict beside the emptied one.
+    // Drop the entry, then an environment dict it may have left empty. Both
+    // branches below assume the shape `createLaunchAgentPlist` emits: without the
+    // second replace, enabling twice appends a new dict beside the emptied one.
     const stripped = next.replace(launchAgentEntryRe(name), "");
     next = stripped.replace(EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE, "");
     if (!enabled) continue;
@@ -55,7 +37,6 @@ export function applyFeatureFlagsToLaunchAgentPlist(
   return next;
 }
 
-/** The systemd twin: `Environment=` lines immediately above `Restart=always`. */
 export function applyFeatureFlagsToSystemdUserService(
   unit: string,
   overrides: ServiceFeatureFlagOverrides,
@@ -68,4 +49,20 @@ export function applyFeatureFlagsToSystemdUserService(
     next = next.replace("Restart=always", `${systemdLine(name)}\nRestart=always`);
   }
   return next;
+}
+
+function launchAgentEntry(name: string): string {
+  return `    <key>${name}</key>\n    <string>1</string>`;
+}
+
+function launchAgentEntryRe(name: string): RegExp {
+  return new RegExp(`\\n    <key>${name}</key>\\n    <string>[^<]*</string>`);
+}
+
+function systemdLine(name: string): string {
+  return `Environment=${name}=1`;
+}
+
+function systemdLineRe(name: string): RegExp {
+  return new RegExp(`^Environment=${name}=.*\\n`, "m");
 }

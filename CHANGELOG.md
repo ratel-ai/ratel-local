@@ -12,9 +12,8 @@ All notable changes to this package are documented here. The format is based on 
   restart.
 - Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
   `cloud.apiKey` is rejected.
-- Added the `RATEL_FEATURE_CLOUD_CATALOG` feature flag, off by default and independent of Cloud telemetry. A project's
-  published Cloud skills join the resolved skill set, where a local skill of the same id wins; a catalog change builds a new
-  gateway generation instead of reusing a stale one.
+- Added per-profile credentials to the Cloud skill catalog: a pull uses the profile the directory resolves to, and a
+  directory naming a profile the store does not define fails instead of falling back to another account.
 - Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
   unreadable store, a stored key other users can read, a scope too broken to say which profile it selects, a superseded
   `cloud-traces.json` still holding a key, and signals split across deployments.
@@ -32,9 +31,8 @@ All notable changes to this package are documented here. The format is based on 
   effect. A `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path no longer moves the log route with it; set the
   endpoints in `cloud.json` for that.
 - Made `traces status` name where the daemon's Cloud credential came from, so a wrong account is seen rather than inferred.
-- Made `daemon restart` reconfigure daemon feature flags in an installed launchd or systemd service. Every flag present in the
-  invoking environment is applied (`=1` enables, any other value disables) and a flag left out is untouched, so changing one
-  never disturbs another. Restart waits for the port to be released and verifies the result on `/api/daemon/status`.
+- Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
+  any other value disables, and a flag left out keeps whatever the installed service already says.
 
 ### Removed
 
@@ -48,6 +46,34 @@ All notable changes to this package are documented here. The format is based on 
   variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
   keeps the stored key and refuses the save when there is none to keep.
 - Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
+- Held a rejected Cloud catalog API key for 60 seconds after HTTP 401 or 403,
+  so a revoked key is not retried on every context resolve.
+- Held an unreachable Cloud catalog for 10 seconds when nothing is cached, so an
+  unavailable source is not retried on every context resolve.
+
+## [0.9.0] - 2026-09-04
+
+### Added
+
+- Added the off-by-default `RATEL_FEATURE_CLOUD_CATALOG=1` daemon flag. When it
+  is on, the daemon pulls published Cloud skills into the snapshot using the
+  saved Cloud API key. Local skills of the same id win; a failed pull warns.
+- Added context snapshot diagnostics in the UI shell so catalog and other
+  resolve warnings are visible without failing the page.
+
+### Changed
+
+- Made `daemon restart` reconfigure the Cloud telemetry feature flag in an
+  installed launchd or systemd service when `RATEL_FEATURE_CLOUD_TELEMETRY` is
+  present in the invoking environment (`=1` enables, any other value disables,
+  absent preserves). Restart now waits for the stopped daemon to release its
+  port, and confirms the restarted daemon adopted the change through the new
+  `cloudTelemetry` field on `/api/daemon/status`.
+- Made `daemon restart` reconfigure `RATEL_FEATURE_CLOUD_CATALOG` the same way,
+  independently of Cloud telemetry, and confirm the result through
+  `cloudCatalog` on `/api/daemon/status`.
+- Raised how long `daemon install`, `daemon start` and `daemon restart`
+  wait for healthy status from 5 to 15 seconds.
 
 ## [0.8.2] - 2026-08-19
 

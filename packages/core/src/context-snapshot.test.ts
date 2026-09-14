@@ -231,7 +231,7 @@ describe("ContextSnapshotResolver", () => {
     const shadowed = snapshot.diagnostics.find((d) => d.code === "cloud-skill-shadowed");
     expect(shadowed?.severity).toBe("warning");
     expect(shadowed?.message).toContain('"shared"');
-    expect(shadowed?.message).toContain("Remove or rename the local skill");
+    expect(shadowed?.message).toContain("rename the local skill to use the published one");
   });
 
   it("changes the runtime revision when only the Cloud catalog version changes", async () => {
