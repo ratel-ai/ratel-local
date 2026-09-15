@@ -13,8 +13,6 @@ import {
 } from "./settings.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
-export const DEFAULT_CLOUD_CATALOG_ENDPOINT = "https://cloud.ratel.sh/api/v1/catalog";
-
 export const CLOUD_CATALOG_TIMEOUT_MS = 10_000;
 /** How long a rejected key is taken at its word. A rotation builds a new loader. */
 const AUTH_FAILURE_COOLDOWN_MS = 60_000;
@@ -67,10 +65,6 @@ export class CloudCatalogUnavailableError extends Error {
     super(`Ratel Cloud catalog is unavailable and nothing is cached: ${reason}`);
     this.name = "CloudCatalogUnavailableError";
   }
-}
-
-export function cloudCatalogEndpoint(value: string): URL {
-  return secretFreeHttpsUrl(value, "Ratel Cloud catalog endpoint");
 }
 
 /**

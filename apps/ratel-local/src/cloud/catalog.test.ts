@@ -3,10 +3,8 @@ import {
   CloudCatalogAuthError,
   CloudCatalogProtocolError,
   CloudCatalogUnavailableError,
-  cloudCatalogEndpoint,
   createCloudCatalogLoader,
   createCloudCatalogSource,
-  DEFAULT_CLOUD_CATALOG_ENDPOINT,
 } from "./catalog.js";
 import type { CloudSettings } from "./settings.js";
 
@@ -117,16 +115,16 @@ describe("createCloudCatalogLoader", () => {
     await expect(loader(impl).load()).rejects.toThrow(/unavailable and nothing is cached/);
   });
 
-  it("takes the default endpoint and refuses one that could leak the key", () => {
-    expect(cloudCatalogEndpoint(DEFAULT_CLOUD_CATALOG_ENDPOINT).toString()).toBe(
-      DEFAULT_CLOUD_CATALOG_ENDPOINT,
-    );
-    expect(() => cloudCatalogEndpoint("http://cloud.ratel.sh/api/v1/catalog")).toThrow(
-      /secret-free HTTPS URL/,
-    );
-    expect(() => cloudCatalogEndpoint("https://u:p@cloud.ratel.sh/api/v1/catalog")).toThrow(
-      /secret-free HTTPS URL/,
-    );
+  it("refuses an endpoint that could leak the key", () => {
+    expect(() =>
+      createCloudCatalogLoader({ endpoint: "http://cloud.ratel.sh/api/v1/catalog", apiKey: "rtl" }),
+    ).toThrow(/secret-free HTTPS URL/);
+    expect(() =>
+      createCloudCatalogLoader({
+        endpoint: "https://u:p@cloud.ratel.sh/api/v1/catalog",
+        apiKey: "rtl",
+      }),
+    ).toThrow(/secret-free HTTPS URL/);
   });
 
   it("fails on a network error with nothing cached, and degrades with a cache", async () => {
@@ -326,11 +324,9 @@ describe("createCloudCatalogLoader", () => {
   });
 });
 
-const TRACES = new URL("https://cloud.ratel.sh/api/v1/traces");
 const CONTEXT = { kind: "global" } as const;
 
 const SETTINGS: CloudSettings = {
-  tracesEndpoint: TRACES.toString(),
   default: "personal",
   profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
 };
