@@ -179,8 +179,8 @@ OpenAI-compatible embedding sources plus privacy and memory guidance.
 
 ### Connect a Ratel Cloud account
 
-Cloud credentials are stored as named profiles in `~/.ratel/cloud.json`,
-readable only by you and never inside a repository:
+Cloud skill-catalog credentials are stored as named profiles in
+`~/.ratel/cloud.json`, readable only by you and never inside a repository:
 
 ```bash
 ratel-local cloud add personal   # masked prompt for the key; needs a terminal
@@ -195,13 +195,15 @@ project's skills from a different account:
 ratel-local cloud use acme --scope project
 ```
 
-That writes `cloud.profile` into the project config `.ratel/config.json`,
+That writes `cloud.profile` into the project config `/path/to/project/.ratel/config.json`,
 the file stores a profile name (never a key), so it stays safe to commit
 and your team inherits the binding by cloning. Reconnect the agent afterwards.
 
-Traces do not follow it: an agent's exporter is configured once per machine, so
-the relay uses one account for everything. `ratel-local traces status` names it,
-and `RATEL_PROFILE` changes it for the whole daemon.
+`RATEL_PROFILE` overrides the selection for the whole daemon.
+
+Telemetry is separate and keeps its own single key in `~/.ratel/cloud-traces.json`
+or in `RATEL_API_KEY`: an agent's exporter is configured once per machine, so
+traces and logs go to one Cloud project regardless of `cloud.profile`.
 
 ### Experimental Cloud telemetry
 

@@ -120,13 +120,11 @@ export interface CloudTraceSettingsControlPlane {
   featureEnabled?: boolean;
   status(): Promise<CloudTraceSettingsStatus>;
   save(input: { endpoint: string; apiKey?: string }): Promise<CloudTraceSettingsStatus>;
-  reload(): Promise<CloudTraceSettingsStatus>;
 }
 
 export interface AgentTraceExportersStatus extends AgentTraceStatus {
   featureEnabled?: boolean;
   cloudConfigured: boolean;
-  cloudCredentialSource?: string;
 }
 
 export interface AgentTraceExportersControlPlane {
@@ -242,15 +240,6 @@ async function handleRequest(
   }
 
   try {
-    if (path === "/api/cloud-traces/reload" && opts.cloudTraceSettings) {
-      if (req.method !== "POST") {
-        writeJson(res, 405, { error: "method not allowed" });
-        return;
-      }
-      writeJson(res, 200, await opts.cloudTraceSettings.reload());
-      return;
-    }
-
     if (path === "/api/cloud-traces" && opts.cloudTraceSettings) {
       if (req.method === "GET") {
         writeJson(res, 200, await opts.cloudTraceSettings.status());

@@ -57,19 +57,21 @@ Open the daemon UI and select **Settings**. In the **Ratel Cloud** section, ente
 - API key: your `rtl_...` credential
 
 Saving activates both signal relays and Ratel runtime trace export immediately.
-The daemon persists the endpoint and key in `~/.ratel/cloud.json`, with the
-directory and file restricted to the current user. The authenticated UI API
+The daemon persists the endpoint and key in `~/.ratel/cloud-traces.json`, with
+the directory and file restricted to the current user. The authenticated UI API
 returns only the endpoint and whether a key is configured; it never returns
 the saved key. An installed background daemon loads the same file on its next
 start, so no credential environment variables are required after saving. The
-relay still requires the feature flag; the credential loads without it.
+relay still requires the feature flag.
 
-Every signal sits on `https://cloud.ratel.sh` unless `cloud.json` says otherwise.
-`baseUrl` moves traces, logs and the catalog together; `tracesEndpoint`,
-`logsEndpoint` and `catalogEndpoint` move one at a time. `cloud list` prints the
-three in effect, and `doctor` warns when they stop sharing an origin.
+Logs ride the deployment the traces endpoint names, so only that endpoint is
+stored.
 
-The store holds named profiles, managed from the CLI:
+## Cloud profiles are for the catalog
+
+The Cloud skill catalog resolves its credential per directory, from named
+profiles in `~/.ratel/cloud.json`. That is a separate store from the relay's,
+managed from the CLI:
 
 ```bash
 ratel-local cloud add <profile-name>     # prompts for the key, stores it under a name
@@ -78,26 +80,22 @@ ratel-local cloud list         # profiles, the default, what resolves here
 ```
 
 The first profile stored becomes the default, so a single-project setup never
-selects anything. A project selects another with `cloud.profile` in its layered
-config: a name, never a credential, and therefore safe to commit.
-
-That selection reaches the catalog only. An agent's trace exporter is configured
-once per machine, so the relay uses one account for every project: the one
-`RATEL_API_KEY` supplies, else `RATEL_PROFILE`, else the store default.
-`traces status` names it.
-
-A pre-existing `~/.ratel/cloud-traces.json` becomes the `default` profile and
-stays in place, so a downgrade keeps working. Once the new store is written it
-stops being read while still holding a key — delete it when the downgrade path
-no longer matters. See
+selects anything. A directory selects another with `cloud.profile` in its
+layered config: a name, never a credential, and therefore safe to commit.
+`RATEL_PROFILE` overrides it for the whole daemon. `cloud list` prints the
+catalog endpoint in effect. See
 [ADR 0021](adr/0021-cloud-project-credential-ownership.md).
+
+That selection does not reach the relay. An agent's trace exporter is configured
+once per machine, so telemetry stays on one Cloud project: the one
+`RATEL_API_KEY` supplies, else the key in `~/.ratel/cloud-traces.json`. Routing
+telemetry per directory needs a carrier for the directory that neither host
+provides today, and is not part of this design.
 
 Agent Setup, in the daemon UI, also offers an inline API-key prompt whenever
 native tracing is enabled but Ratel Cloud is not configured. It reuses the
 daemon's Cloud endpoint, so only the API key is requested. Create a key at
-<https://cloud.ratel.sh/settings> if needed. That prompt fires on one global
-boolean and writes the profile the daemon resolved, so it can store a first
-credential but never a second one: use `cloud add` for those.
+<https://cloud.ratel.sh/settings> if needed.
 
 For a one-run override, start the daemon with both values:
 
@@ -154,9 +152,8 @@ port. It does not replace an unrelated exporter by default. Interactive
 overwrite explains that no backup is retained; automation must use both
 `--overwrite` and `--yes`.
 
-When Ratel Cloud is not configured, the `traces enable` command points at
-`ratel-local cloud add <profile>` instead of prompting inline, for the reason
-above.
+When Ratel Cloud is not configured, an interactive `traces enable` offers the
+same masked key prompt; `--yes` points at Agent Setup instead.
 
 `ratel-local setup` offers traces as its final optional interactive step. Plain
 `setup --yes` continues to skip traces. Explicit automation uses:

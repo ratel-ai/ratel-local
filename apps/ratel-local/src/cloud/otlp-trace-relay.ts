@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { headerSafeSecret } from "./header-safe-secret.js";
-import { CLOUD_LOGS_PATH } from "./settings.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
 export const OTLP_TRACES_PATH = "/otlp/v1/traces";
@@ -28,30 +27,6 @@ export interface CloudOtlpTraceRelay {
 
 export interface CloudOtlpTraceRelayController extends CloudOtlpTraceRelay {
   configure(options: CloudOtlpTraceRelayOptions): void;
-}
-
-export function cloudOtlpRelayOptionsFromEnv(
-  env: NodeJS.ProcessEnv,
-): CloudOtlpTraceRelayOptions | undefined {
-  const endpointValue = env[CLOUD_OTLP_TRACES_ENDPOINT_ENV];
-  const apiKey = env[CLOUD_API_KEY_ENV];
-  if (!endpointValue && !apiKey) return undefined;
-  if (!endpointValue) {
-    throw new Error(
-      `Cloud OTLP trace relay requires endpoint environment variable ${CLOUD_OTLP_TRACES_ENDPOINT_ENV}`,
-    );
-  }
-  if (!apiKey) {
-    throw new Error(
-      `Cloud OTLP trace relay requires daemon credential environment variable ${CLOUD_API_KEY_ENV}`,
-    );
-  }
-  const endpoint = parseCloudEndpoint(endpointValue);
-  return cloudOtlpTraceRelayOptions({
-    endpoint: endpoint.toString(),
-    logsEndpoint: new URL(CLOUD_LOGS_PATH, endpoint),
-    apiKey,
-  });
 }
 
 export function cloudOtlpTraceRelayOptions(settings: {

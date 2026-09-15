@@ -67,59 +67,29 @@ describe("inventoryCloudSettings", () => {
     expect(exposed?.action).toContain("chmod 600");
   });
 
-  it("stays quiet about a legacy store with no key left in it", async () => {
+  it("stays quiet about a trace store with no key in it", async () => {
     await writeStore(STORE);
     await writeFile(
       join(homeDir, ".ratel", "cloud-traces.json"),
-      JSON.stringify({ endpoint: STORE.tracesEndpoint, apiKey: "" }),
+      JSON.stringify({ endpoint: TRACES, apiKey: "" }),
       { mode: 0o600 },
     );
     expect(await codes()).toEqual([]);
   });
 
-  it("reports signals left on different deployments", async () => {
-    await writeStore({
-      ...STORE,
-      baseUrl: "https://staging.ratel.sh",
-      catalogEndpoint: "https://cloud.ratel.sh/api/v1/catalog",
-    });
-
-    const diagnostics = await inventoryCloudSettings({ env: { homeDir, projectRoot }, fs: nodeFs });
-
-    const split = diagnostics.find(({ code }) => code === "cloud_endpoints_split");
-    expect(split?.severity).toBe("warning");
-    expect(split?.message).toContain("traces on https://staging.ratel.sh");
-    expect(split?.message).toContain("catalog on https://cloud.ratel.sh");
-  });
-
-  it("says nothing when one baseUrl carries every signal", async () => {
+  it("says nothing when one baseUrl carries the catalog", async () => {
     await writeStore({ ...STORE, baseUrl: "https://staging.ratel.sh" });
     expect(await codes()).toEqual([]);
   });
 
-  it("reports a legacy store other users can read, before any migration", async () => {
+  it("reports a trace store other users can read", async () => {
     const legacy = join(homeDir, ".ratel", "cloud-traces.json");
-    await writeFile(legacy, JSON.stringify({ endpoint: TRACES, apiKey: "rtl_legacy" }));
+    await writeFile(legacy, JSON.stringify({ endpoint: TRACES, apiKey: "rtl_traces" }));
     await chmod(legacy, 0o644);
 
     const diagnostics = await inventoryCloudSettings({ env: { homeDir, projectRoot }, fs: nodeFs });
 
     expect(diagnostics.map(({ code }) => code)).toContain("cloud_settings_permissions");
-  });
-
-  it("reports the legacy store left beside the new one", async () => {
-    await writeStore(STORE);
-    await writeFile(
-      join(homeDir, ".ratel", "cloud-traces.json"),
-      JSON.stringify({ endpoint: STORE.tracesEndpoint, apiKey: "rtl_legacy" }),
-      { mode: 0o600 },
-    );
-
-    const diagnostics = await inventoryCloudSettings({ env: { homeDir, projectRoot }, fs: nodeFs });
-
-    const stale = diagnostics.find(({ code }) => code === "cloud_settings_legacy_present");
-    expect(stale?.severity).toBe("warning");
-    expect(stale?.message).toContain("still holds an API key");
   });
 
   it("reports a scope selecting a profile the store does not define", async () => {

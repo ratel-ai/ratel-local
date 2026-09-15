@@ -8,41 +8,32 @@ All notable changes to this package are documented here. The format is based on 
 
 - Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
   `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills
-  come from; `list` shows what is stored and which profile resolves here. A running daemon adopts a stored key without a
-  restart.
+  come from; `list` shows what is stored and which profile resolves here. A running daemon picks up a stored key without a restart.
 - Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
   `cloud.apiKey` is rejected.
 - Added per-profile credentials to the Cloud skill catalog: a pull uses the profile the directory resolves to, and a
   directory naming a profile the store does not define fails instead of falling back to another account.
 - Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
-  unreadable store, a stored key other users can read, a scope too broken to say which profile it selects, a superseded
-  `cloud-traces.json` still holding a key, and signals split across deployments.
+  unreadable store, a stored key other users can read, and a scope too broken to say which profile it selects.
 
 ### Changed
 
-- Moved the Cloud credential out of the telemetry feature branch: it now loads whenever a Cloud consumer needs it, while
-  `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`. The store moved from
-  `~/.ratel/cloud-traces.json` to `~/.ratel/cloud.json` and holds named profiles. `RATEL_PROFILE` or the store default
-  selects the relay's account; `cloud.profile` selects a project's skills and does not move telemetry, since an agent's trace
-  exporter is configured once per machine. An existing `cloud-traces.json` becomes the `default` profile and is left in
-  place, so a downgrade keeps working.
-- Made every Ratel Cloud endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`.
-  `tracesEndpoint`, `logsEndpoint` and `catalogEndpoint` each override one signal, and `cloud list` shows the three in
-  effect. A `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path no longer moves the log route with it; set the
-  endpoints in `cloud.json` for that.
-- Made `traces status` name where the daemon's Cloud credential came from, so a wrong account is seen rather than inferred.
+- Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load
+  whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
+- Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with
+  `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
+- Made a `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path stop moving the log route with it: logs now ride the
+  origin the traces endpoint names, at `/api/v1/logs`.
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
   any other value disables, and a flag left out keeps whatever the installed service already says.
 
 ### Removed
 
-- Removed the inline Ratel Cloud API-key prompt from `traces enable`: it fired only when no credential existed at all, so a
-  second project's key could never be entered through it. Use `ratel-local cloud add`.
 - Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
 
 ### Fixed
 
-- Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud.json`. When a daemon was started with that
+- Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that
   variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
   keeps the stored key and refuses the save when there is none to keep.
 - Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.

@@ -7,7 +7,6 @@ import {
   type CloudSettingsStoreLike,
   cloudEndpoints,
   cloudSettingsPath,
-  legacyCloudSettingsPath,
 } from "../../cloud/settings.js";
 import { ArgError } from "../args.js";
 import type { CliCloudMutator, HandlerCtx } from "./types.js";
@@ -31,8 +30,6 @@ export interface CloudHandlerDependencies {
   mutateCloud?: CliCloudMutator;
   /** Daemon environment, for the profile `RATEL_PROFILE` selects. */
   processEnv?: NodeJS.ProcessEnv;
-  /** Tells a running daemon to re-read the store this key was just written to. */
-  reloadDaemon?: () => Promise<"reloaded" | "no-daemon" | "failed">;
 }
 
 export async function runCloud(
@@ -40,16 +37,10 @@ export async function runCloud(
   dependencies: CloudHandlerDependencies = {},
 ): Promise<void> {
   const verb = ctx.argv.verb;
-  const store =
-    dependencies.store ??
-    new CloudSettingsStore(
-      cloudSettingsPath(ctx.env.homeDir),
-      legacyCloudSettingsPath(ctx.env.homeDir),
-      ctx.log,
-    );
+  const store = dependencies.store ?? new CloudSettingsStore(cloudSettingsPath(ctx.env.homeDir));
   const settings = (await store.load()) ?? { profiles: {} };
 
-  if (verb === "add") return add(ctx, store, settings, dependencies);
+  if (verb === "add") return add(ctx, store, settings);
   if (verb === "use") return use(ctx, settings, dependencies);
   if (verb === "list") return list(ctx, settings, dependencies.processEnv ?? process.env);
   throw new ArgError(`unknown cloud verb: ${verb}`);
@@ -59,7 +50,6 @@ async function add(
   ctx: HandlerCtx,
   store: NonNullable<CloudHandlerDependencies["store"]>,
   settings: CloudSettings,
-  dependencies: CloudHandlerDependencies,
 ): Promise<void> {
   const profile = profileArgument(ctx);
   // Asked before prompting: the adapter answers EOF with the cancel it also
@@ -89,11 +79,6 @@ async function add(
   };
   await store.save(next);
   ctx.log(`Stored the Ratel Cloud key for "${profile}".`);
-  // A daemon that is not running reads the store at its next start, so only a
-  // live one that refused the reload leaves something to say.
-  if ((await dependencies.reloadDaemon?.()) === "failed") {
-    ctx.log("Restart the daemon to use it: ratel-local daemon restart");
-  }
   if (next.default === profile) {
     ctx.log(`"${profile}" is the default profile.`);
   } else {
@@ -144,11 +129,12 @@ async function list(
     ].filter(Boolean);
     ctx.log(`${name}${marks.length > 0 ? `  (${marks.join(", ")})` : ""}`);
   }
-  for (const [signal, url] of Object.entries(cloudEndpoints(settings))) {
-    const overridden = settings[`${signal}Endpoint` as keyof CloudSettings] !== undefined;
-    const source = overridden ? `${signal}Endpoint` : settings.baseUrl ? "baseUrl" : "default";
-    ctx.log(`${signal.padEnd(8)}${url.toString().padEnd(46)}${source}`);
-  }
+  const catalogSource = settings.catalogEndpoint
+    ? "catalogEndpoint"
+    : settings.baseUrl
+      ? "baseUrl"
+      : "default";
+  ctx.log(`catalog ${cloudEndpoints(settings).catalog.toString().padEnd(46)}${catalogSource}`);
 
   // The `RATEL_API_KEY` pair outranks all of these, but it lives in the daemon's
   // environment, which this process cannot see.
@@ -167,9 +153,7 @@ async function list(
   if (!settings.profiles[resolved.profile]) {
     ctx.log(`  warning: no profile named "${resolved.profile}" is stored, so nothing resolves.`);
   }
-  if (scoped && !selected) {
-    ctx.log('  Traces do not follow cloud.profile; run "ratel-local traces status".');
-  }
+  ctx.log('  Traces use their own key; run "ratel-local traces status".');
 }
 
 function profileArgument(ctx: HandlerCtx): string {

@@ -8,13 +8,8 @@ import {
   ratelConfigPath,
   readJson,
 } from "@ratel-ai/ratel-local-core";
-import {
-  type CloudSettings,
-  CloudSettingsStore,
-  cloudEndpoints,
-  cloudSettingsPath,
-  legacyCloudSettingsPath,
-} from "./settings.js";
+import { CloudSettingsStore, cloudSettingsPath } from "./settings.js";
+import { cloudTraceSettingsPath } from "./trace-settings.js";
 
 const SCOPES: readonly RatelScope[] = ["user", "project", "local"];
 
@@ -76,8 +71,8 @@ export async function inventoryCloudSettings(input: {
 }): Promise<CloudDiagnostic[]> {
   const diagnostics: CloudDiagnostic[] = [];
   const path = cloudSettingsPath(input.env.homeDir);
-  const legacyPath = legacyCloudSettingsPath(input.env.homeDir);
-  const store = new CloudSettingsStore(path, legacyPath);
+  const tracePath = cloudTraceSettingsPath(input.env.homeDir);
+  const store = new CloudSettingsStore(path);
 
   const settings = await store.load().catch((error: Error) => {
     diagnostics.push({
@@ -89,25 +84,14 @@ export async function inventoryCloudSettings(input: {
     return undefined;
   });
 
-  const legacyHoldsKey = await legacyApiKey(legacyPath);
+  // Two stores, two keys on disk: profiles for the catalog, one key for the relay.
   diagnostics.push(
     ...(await exposedSecrets([
       [path, 0o600],
       [dirname(path), 0o700],
-      ...(legacyHoldsKey ? ([[legacyPath, 0o600]] as const) : []),
+      ...((await storesApiKey(tracePath)) ? ([[tracePath, 0o600]] as const) : []),
     ])),
   );
-
-  if (legacyHoldsKey && (await modeOf(path)) !== undefined) {
-    diagnostics.push({
-      code: "cloud_settings_legacy_present",
-      severity: "warning",
-      message: `${legacyPath} is no longer read and still holds an API key`,
-      action: `delete ${legacyPath} once you no longer need to downgrade`,
-    });
-  }
-
-  diagnostics.push(...splitDeployment(settings));
 
   const scopes = await scanCloudProfileScopes(input);
   for (const scope of scopes.unreadable) {
@@ -140,27 +124,6 @@ export async function inventoryCloudSettings(input: {
   return diagnostics;
 }
 
-/**
- * Overriding one signal is a deliberate escape hatch; forgetting one while moving
- * deployment is not, and the two look identical from the outside.
- */
-function splitDeployment(settings: CloudSettings | undefined): CloudDiagnostic[] {
-  const origins = Object.entries(cloudEndpoints(settings)).map(
-    ([signal, url]) => [signal, url.origin] as const,
-  );
-  if (new Set(origins.map(([, origin]) => origin)).size < 2) return [];
-  return [
-    {
-      code: "cloud_endpoints_split",
-      severity: "warning",
-      message: `Cloud signals are split across deployments: ${origins
-        .map(([signal, origin]) => `${signal} on ${origin}`)
-        .join(", ")}`,
-      action: "set `baseUrl` and drop the per-signal endpoints, unless the split is deliberate",
-    },
-  ];
-}
-
 /** A stored key that other users can read is a leaked key. */
 async function exposedSecrets(
   targets: ReadonlyArray<readonly [string, number]>,
@@ -188,7 +151,7 @@ async function modeOf(path: string): Promise<number | undefined> {
 }
 
 /** The warning claims a key is still there, so look rather than assume. */
-async function legacyApiKey(path: string): Promise<boolean> {
+async function storesApiKey(path: string): Promise<boolean> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
     return isPlainObject(parsed) && typeof parsed.apiKey === "string" && parsed.apiKey !== "";

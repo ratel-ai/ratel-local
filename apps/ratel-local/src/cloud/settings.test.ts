@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -6,11 +6,10 @@ import {
   CloudSettingsStore,
   cloudEndpoints,
   cloudSettingsPath,
-  legacyCloudSettingsPath,
   resolveCloudCredential,
 } from "./settings.js";
 
-const ENDPOINT = "https://cloud.example.test/api/v1/traces";
+const CATALOG = "https://cloud.example.test/api/v1/catalog";
 const roots: string[] = [];
 
 afterAll(async () => {
@@ -24,15 +23,15 @@ async function homeWithRatelDir(): Promise<string> {
   return homeDir;
 }
 
-function store(homeDir: string, log: (message: string) => void = () => {}) {
-  return new CloudSettingsStore(cloudSettingsPath(homeDir), legacyCloudSettingsPath(homeDir), log);
+function store(homeDir: string) {
+  return new CloudSettingsStore(cloudSettingsPath(homeDir));
 }
 
 describe("Cloud settings store", () => {
   it("persists profiles with user-only permissions", async () => {
     const homeDir = await homeWithRatelDir();
     await store(homeDir).save({
-      tracesEndpoint: ENDPOINT,
+      catalogEndpoint: CATALOG,
       default: "personal",
       profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
     });
@@ -41,60 +40,13 @@ describe("Cloud settings store", () => {
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect((await stat(join(homeDir, ".ratel"))).mode & 0o777).toBe(0o700);
     expect(await store(homeDir).load()).toEqual({
-      tracesEndpoint: ENDPOINT,
+      catalogEndpoint: CATALOG,
       default: "personal",
       profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
     });
   });
 
-  it("migrates the pre-profile store into a single default profile", async () => {
-    const homeDir = await homeWithRatelDir();
-    await writeFile(
-      legacyCloudSettingsPath(homeDir),
-      JSON.stringify({ endpoint: ENDPOINT, apiKey: "rtl_legacy" }),
-      { encoding: "utf8", mode: 0o600 },
-    );
-
-    const logs: string[] = [];
-    // The old file's origin becomes the deployment; its path is the standard one,
-    // so nothing needs to be carried over as an override.
-    expect(await store(homeDir, (m) => logs.push(m)).load()).toEqual({
-      baseUrl: "https://cloud.example.test",
-      default: "default",
-      profiles: { default: { apiKey: "rtl_legacy" } },
-    });
-    // The operator is told which file was read and that it outlives its use.
-    expect(logs.join("\n")).toContain(legacyCloudSettingsPath(homeDir));
-    expect(logs.join("\n")).toContain("still holds a key");
-    // Reading is not migrating: the old file is left exactly as it was.
-    expect(JSON.parse(await readFile(legacyCloudSettingsPath(homeDir), "utf8"))).toEqual({
-      endpoint: ENDPOINT,
-      apiKey: "rtl_legacy",
-    });
-  });
-
-  it("prefers the current store over the legacy one", async () => {
-    const homeDir = await homeWithRatelDir();
-    await writeFile(
-      legacyCloudSettingsPath(homeDir),
-      JSON.stringify({ endpoint: ENDPOINT, apiKey: "rtl_legacy" }),
-      { encoding: "utf8", mode: 0o600 },
-    );
-    await store(homeDir).save({
-      tracesEndpoint: ENDPOINT,
-      default: "personal",
-      profiles: { personal: { apiKey: "rtl_personal" } },
-    });
-
-    const logs: string[] = [];
-    expect((await store(homeDir, (m) => logs.push(m)).load())?.profiles).toEqual({
-      personal: { apiKey: "rtl_personal" },
-    });
-    // Nothing to say when the current store wins.
-    expect(logs).toEqual([]);
-  });
-
-  it("reports nothing when neither file exists", async () => {
+  it("reports nothing when no store exists", async () => {
     expect(await store(await homeWithRatelDir()).load()).toBeUndefined();
   });
 
@@ -111,12 +63,12 @@ describe("Cloud settings store", () => {
 
     // A default nobody defines would resolve to nothing at startup.
     await expect(
-      store(homeDir).save({ tracesEndpoint: ENDPOINT, default: "absent", profiles: {} }),
+      store(homeDir).save({ catalogEndpoint: CATALOG, default: "absent", profiles: {} }),
     ).rejects.toThrow(/default profile "absent" is not defined/);
 
     await expect(
       store(homeDir).save({
-        tracesEndpoint: "http://cloud.example.test/api/v1/traces",
+        catalogEndpoint: "http://cloud.example.test/api/v1/catalog",
         profiles: { a: { apiKey: "rtl_a" } },
       }),
     ).rejects.toThrow(/HTTPS/);
@@ -125,7 +77,7 @@ describe("Cloud settings store", () => {
 
 describe("resolveCloudCredential", () => {
   const settings = {
-    tracesEndpoint: ENDPOINT,
+    catalogEndpoint: CATALOG,
     default: "personal",
     profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
   };
@@ -134,24 +86,18 @@ describe("resolveCloudCredential", () => {
     expect(resolveCloudCredential(settings, { source: "store default" })).toBe("rtl_personal");
   });
 
-  it("puts every signal on the configured deployment, and only what is overridden elsewhere", () => {
+  it("puts the catalog on the configured deployment, unless it is overridden", () => {
     expect(cloudEndpoints().catalog.toString()).toBe("https://cloud.ratel.sh/api/v1/catalog");
-
-    const staging = cloudEndpoints({ baseUrl: "https://staging.ratel.sh", profiles: {} });
-    expect([staging.traces, staging.logs, staging.catalog].map(String)).toEqual([
-      "https://staging.ratel.sh/api/v1/traces",
-      "https://staging.ratel.sh/api/v1/logs",
-      "https://staging.ratel.sh/api/v1/catalog",
-    ]);
-
-    // One signal aimed elsewhere moves alone; the rest stay on the deployment.
-    const mixed = cloudEndpoints({
-      baseUrl: "https://staging.ratel.sh",
-      catalogEndpoint: "https://scratch.example.test/api/v1/catalog",
-      profiles: {},
-    });
-    expect(mixed.catalog.toString()).toBe("https://scratch.example.test/api/v1/catalog");
-    expect(mixed.traces.toString()).toBe("https://staging.ratel.sh/api/v1/traces");
+    expect(
+      cloudEndpoints({ baseUrl: "https://staging.ratel.sh", profiles: {} }).catalog.toString(),
+    ).toBe("https://staging.ratel.sh/api/v1/catalog");
+    expect(
+      cloudEndpoints({
+        baseUrl: "https://staging.ratel.sh",
+        catalogEndpoint: "https://scratch.example.test/api/v1/catalog",
+        profiles: {},
+      }).catalog.toString(),
+    ).toBe("https://scratch.example.test/api/v1/catalog");
   });
 
   it("uses the named profile over the default", () => {
@@ -172,7 +118,7 @@ describe("resolveCloudCredential", () => {
 
   it("resolves nothing when the store is empty rather than failing", () => {
     expect(
-      resolveCloudCredential({ tracesEndpoint: ENDPOINT, profiles: {} }, { source: "none" }),
+      resolveCloudCredential({ catalogEndpoint: CATALOG, profiles: {} }, { source: "none" }),
     ).toBeUndefined();
   });
 });

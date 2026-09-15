@@ -1,6 +1,3 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { type BackupFs, type JsonFs, ratelConfigPath } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudSettings } from "../../cloud/settings.js";
@@ -98,28 +95,6 @@ describe("cloud add", () => {
     expect(output.join("\n")).toContain("ratel-local cloud use acme");
   });
 
-  it("tells a running daemon to re-read the store", async () => {
-    const reloadDaemon = vi.fn(async () => "reloaded" as const);
-    const { ctx, output } = context("add", ["acme"], {}, answering("rtl_acme"));
-
-    await runCloud(ctx, { store: store(EXISTING), reloadDaemon });
-
-    expect(reloadDaemon).toHaveBeenCalledOnce();
-    expect(output.join("\n")).not.toContain("daemon restart");
-  });
-
-  it("asks for a restart only when a live daemon refused the reload", async () => {
-    // No daemon is the first-run case: it reads the store when it starts, so
-    // telling the user to restart one names something that does not exist.
-    const absent = context("add", ["acme"], {}, answering("rtl_acme"));
-    await runCloud(absent.ctx, { store: store(EXISTING), reloadDaemon: async () => "no-daemon" });
-    expect(absent.output.join("\n")).not.toContain("daemon restart");
-
-    const refused = context("add", ["acme"], {}, answering("rtl_acme"));
-    await runCloud(refused.ctx, { store: store(EXISTING), reloadDaemon: async () => "failed" });
-    expect(refused.output.join("\n")).toContain("ratel-local daemon restart");
-  });
-
   it("stores nothing when the prompt is cancelled", async () => {
     const { ctx } = context("add", ["acme"], {}, answering(CANCEL_SYMBOL));
     const target = store(EXISTING);
@@ -146,27 +121,6 @@ describe("cloud add", () => {
 
     await expect(runCloud(ctx, { store: target })).rejects.toThrow(/no API key was entered/);
     expect(target.saved).toEqual([]);
-  });
-
-  it("reports the legacy store migration to the user, not only to the daemon", async () => {
-    // No injected store: the one `runCloud` builds is what carries the logger.
-    const homeDir = await mkdtemp(join(tmpdir(), "ratel-cloud-"));
-    await mkdir(join(homeDir, ".ratel"), { recursive: true });
-    await writeFile(
-      join(homeDir, ".ratel", "cloud-traces.json"),
-      JSON.stringify({ endpoint: "https://cloud.ratel.sh/api/v1/traces", apiKey: "rtl_legacy" }),
-    );
-    const { ctx, output } = context("list", [], {});
-    ctx.env = { homeDir };
-
-    await runCloud(ctx, { processEnv: {} });
-
-    const printed = output.join("\n");
-    expect(printed).toContain(join(homeDir, ".ratel", "cloud-traces.json"));
-    expect(printed).toContain("still holds a key");
-    expect(printed).toContain("Cloud skills here:");
-    expect(printed).not.toContain("rtl_legacy");
-    await rm(homeDir, { recursive: true, force: true });
   });
 
   it("requires a profile name", async () => {
@@ -252,7 +206,7 @@ describe("cloud list bindings", () => {
     expect(printed).toContain(
       'Cloud skills here: "acme" (cloud.profile in /repo/.ratel/config.json)',
     );
-    expect(printed).toContain("Traces do not follow cloud.profile");
+    expect(printed).toContain("Traces use their own key");
   });
 
   it("falls back to the store default when no scope names a profile", async () => {
@@ -290,9 +244,7 @@ describe("cloud list bindings", () => {
       processEnv: {},
     });
 
-    const printed = output.join("\n");
-    expect(printed).toMatch(/traces\s+https:\/\/staging\.ratel\.sh\/api\/v1\/traces\s+baseUrl/);
-    expect(printed).toMatch(
+    expect(output.join("\n")).toMatch(
       /catalog\s+https:\/\/scratch\.example\.test\/api\/v1\/catalog\s+catalogEndpoint/,
     );
   });

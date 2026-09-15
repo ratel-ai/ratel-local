@@ -260,16 +260,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     const registry = options.projectRegistryFactory
       ? options.projectRegistryFactory(ctx.env.homeDir)
       : createProjectRegistry({ homeDir: ctx.env.homeDir });
-    await runCloud(ctx, {
-      mutateCloud: createCliCloudMutator(ctx, registry),
-      reloadDaemon: async () => {
-        const response = await requestRunningDaemon(ctx, "/api/cloud-traces/reload", {
-          method: "POST",
-        });
-        if (response === null) return "no-daemon";
-        return response.ok ? "reloaded" : "failed";
-      },
-    });
+    await runCloud(ctx, { mutateCloud: createCliCloudMutator(ctx, registry) });
     return {};
   }
 

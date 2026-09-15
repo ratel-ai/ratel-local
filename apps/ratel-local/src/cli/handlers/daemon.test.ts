@@ -11,7 +11,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
-import { CLOUD_PROFILE_ENV, type CloudSettings } from "../../cloud/settings.js";
+import type { CloudSettings } from "../../cloud/settings.js";
+import type { CloudTraceSettings } from "../../cloud/trace-settings.js";
 import { connectorHeaders } from "../../daemon/access.js";
 import { CLOUD_CATALOG_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
@@ -101,7 +102,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         preparedChanges: createTestPreparedChanges(makeCtx(fs, { homeDir }).fs),
-        cloudSettingsStore: { load: async () => undefined, save: async () => {} },
+        cloudTraceSettingsStore: { load: async () => undefined, save: async () => {} },
       },
     );
     try {
@@ -117,7 +118,6 @@ describe("runDaemon", () => {
         endpoint: expectedEndpoint,
         cloudConfigured: false,
         featureEnabled: true,
-        cloudCredentialSource: "none",
       });
 
       const prepareResponse = await fetch(new URL("/api/agent-traces/prepare", daemonUrl), {
@@ -152,7 +152,6 @@ describe("runDaemon", () => {
       const afterSave = await fetch(new URL("/api/agent-traces", daemonUrl), { headers });
       expect(await afterSave.json()).toMatchObject({
         cloudConfigured: true,
-        cloudCredentialSource: 'profile "default" (saved in the UI)',
       });
     } finally {
       await result.shutdown?.();
@@ -385,10 +384,10 @@ describe("runDaemon", () => {
     }
   });
 
-  it("keeps every signal on the deployment a UI save names", async () => {
+  it("keeps logs on the deployment a UI save names for traces", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async (_settings: CloudSettings) => {});
+    const save = vi.fn(async (_settings: CloudTraceSettings) => {});
     const cloudFetch = vi.fn(
       async (_input: URL | RequestInfo, _init?: RequestInit) =>
         new Response(Buffer.from([0x00]), { status: 200 }),
@@ -406,7 +405,7 @@ describe("runDaemon", () => {
         ensureToken: async () => "daemon-test-token",
         cloudOtlpFetch: cloudFetch,
         configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
-        cloudSettingsStore: { load: async () => undefined, save },
+        cloudTraceSettingsStore: { load: async () => undefined, save },
       },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
@@ -484,60 +483,10 @@ describe("runDaemon", () => {
     }
   });
 
-  it("adopts a key written to the store while it was running", async () => {
-    const fs = new MemFs();
-    const logs: string[] = [];
-    let stored: CloudSettings | undefined;
-    const result = await runDaemon(
-      daemonArgs(),
-      makeCtx(fs),
-      {
-        readConfig: async () => ({ mcpServers: {} }),
-        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" },
-      },
-      (message) => logs.push(message),
-      {
-        open: () => {},
-        ensureToken: async () => "daemon-test-token",
-        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
-        cloudSettingsStore: { load: async () => stored, save: async () => {} },
-      },
-    );
-    const daemonUrl = daemonUrlFromLogs(logs);
-
-    try {
-      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
-      const token = new URL(uiUrl).searchParams.get("t") ?? "";
-      const headers = { Authorization: `Bearer ${token}` };
-
-      const before = await fetch(new URL("/api/cloud-traces", daemonUrl), { headers });
-      expect(await before.json()).toMatchObject({ configured: false });
-
-      stored = {
-        baseUrl: "https://cloud.example.test",
-        default: "personal",
-        profiles: { personal: { apiKey: "rtl_added" } },
-      };
-      const reloaded = await fetch(new URL("/api/cloud-traces/reload", daemonUrl), {
-        method: "POST",
-        headers,
-      });
-
-      expect(reloaded.status).toBe(200);
-      // Same answer as `status()`: two routes must not disagree about the relay.
-      const status = await (
-        await fetch(new URL("/api/cloud-traces", daemonUrl), { headers })
-      ).json();
-      expect(await reloaded.json()).toEqual(status);
-    } finally {
-      await result.shutdown?.();
-    }
-  });
-
   it("refuses to persist a key the environment supplied", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async (_settings: CloudSettings) => {});
+    const save = vi.fn(async (_settings: CloudTraceSettings) => {});
     const result = await runDaemon(
       daemonArgs(),
       makeCtx(fs),
@@ -554,7 +503,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
-        cloudSettingsStore: { load: async () => undefined, save },
+        cloudTraceSettingsStore: { load: async () => undefined, save },
       },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
@@ -566,15 +515,6 @@ describe("runDaemon", () => {
 
       const status = await fetch(new URL("/api/cloud-traces", daemonUrl), { headers });
       expect(await status.json()).toMatchObject({ configured: true, credentialStored: false });
-
-      // Both routes answer about the same relay, which here holds the env key.
-      const reloaded = await fetch(new URL("/api/cloud-traces/reload", daemonUrl), {
-        method: "POST",
-        headers,
-      });
-      expect(await reloaded.json()).toMatchObject({
-        endpoint: "https://cloud.example.test/api/v1/traces",
-      });
 
       // Saving the endpoint alone used to write RATEL_API_KEY to disk (ADR-0013).
       const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
@@ -590,173 +530,10 @@ describe("runDaemon", () => {
     }
   });
 
-  it("keeps a profile added by the CLI while the daemon was running", async () => {
-    const fs = new MemFs();
-    const logs: string[] = [];
-    const save = vi.fn(async (_settings: CloudSettings) => {});
-    const endpoint = "https://cloud.example.test/api/v1/traces";
-    // `cloud add` writes the store behind the daemon's back, so the second read
-    // returns a profile the boot snapshot never had.
-    const reads: CloudSettings[] = [
-      { tracesEndpoint: endpoint, default: "personal", profiles: { personal: { apiKey: "p" } } },
-      {
-        tracesEndpoint: endpoint,
-        default: "personal",
-        profiles: { personal: { apiKey: "p" }, acme: { apiKey: "a" } },
-      },
-    ];
-    const result = await runDaemon(
-      daemonArgs(),
-      makeCtx(fs),
-      {
-        readConfig: async () => ({ mcpServers: {} }),
-        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" },
-      },
-      (message) => logs.push(message),
-      {
-        open: () => {},
-        ensureToken: async () => "daemon-test-token",
-        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
-        cloudSettingsStore: { load: async () => reads.shift() ?? reads[0], save },
-      },
-    );
-    const daemonUrl = daemonUrlFromLogs(logs);
-
-    try {
-      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
-      const token = new URL(uiUrl).searchParams.get("t") ?? "";
-      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ endpoint, apiKey: "rotated" }),
-      });
-
-      expect(saved.status).toBe(200);
-      expect(Object.keys(save.mock.calls[0]?.[0]?.profiles ?? {}).sort()).toEqual([
-        "acme",
-        "personal",
-      ]);
-    } finally {
-      await result.shutdown?.();
-    }
-  });
-
-  it("does not hand the catalog a credential a failed write never stored", async () => {
-    const fs = new MemFs();
-    const logs: string[] = [];
-    const endpoint = "https://cloud.example.test/api/v1/traces";
-    const stored = {
-      tracesEndpoint: endpoint,
-      default: "personal",
-      profiles: { personal: { apiKey: "rtl_original" } },
-    };
-    const pulls: string[] = [];
-    const cloudCatalogFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
-      pulls.push(new Headers(init?.headers).get("authorization") ?? "");
-      return new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 });
-    }) as unknown as typeof fetch;
-    const result = await runDaemon(
-      daemonArgs(),
-      makeCtx(fs),
-      {
-        processEnv: {
-          [CLOUD_TELEMETRY_FEATURE_ENV]: "1",
-          [CLOUD_CATALOG_FEATURE_ENV]: "1",
-        },
-      },
-      (message) => logs.push(message),
-      {
-        open: () => {},
-        ensureToken: async () => "daemon-test-token",
-        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
-        cloudCatalogFetch,
-        cloudSettingsStore: {
-          load: async () => stored,
-          save: async () => {
-            throw new Error("ENOSPC");
-          },
-        },
-      },
-    );
-    const daemonUrl = daemonUrlFromLogs(logs);
-
-    try {
-      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
-      const token = new URL(uiUrl).searchParams.get("t") ?? "";
-      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-
-      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
-        method: "PATCH",
-        headers,
-        body: JSON.stringify({ endpoint, apiKey: "rtl_rotated" }),
-      });
-      expect(saved.status).toBeGreaterThanOrEqual(400);
-
-      // Forces a context resolve, which is the only surface that reads the
-      // settings the save would have published.
-      const config = await fetch(new URL("/api/config", daemonUrl), { headers });
-      expect(config.status).toBe(200);
-      expect(pulls).not.toContain("Bearer rtl_rotated");
-      expect(pulls.at(-1)).toBe("Bearer rtl_original");
-    } finally {
-      await result.shutdown?.();
-    }
-  });
-
-  it("saves a UI key into the profile the daemon resolved, not the store default", async () => {
-    const fs = new MemFs();
-    const logs: string[] = [];
-    const save = vi.fn(async (_settings: CloudSettings) => {});
-    const stored = {
-      tracesEndpoint: "https://cloud.example.test/api/v1/traces",
-      default: "personal",
-      profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
-    };
-    const result = await runDaemon(
-      daemonArgs(),
-      makeCtx(fs),
-      {
-        readConfig: async () => ({ mcpServers: {} }),
-        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1", [CLOUD_PROFILE_ENV]: "acme" },
-      },
-      (message) => logs.push(message),
-      {
-        open: () => {},
-        ensureToken: async () => "daemon-test-token",
-        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
-        cloudSettingsStore: { load: async () => stored, save },
-      },
-    );
-    const daemonUrl = daemonUrlFromLogs(logs);
-
-    try {
-      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
-      const token = new URL(uiUrl).searchParams.get("t") ?? "";
-      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
-        method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          endpoint: "https://cloud.example.test/api/v1/traces",
-          apiKey: "rtl_rotated",
-        }),
-      });
-
-      expect(saved.status).toBe(200);
-      // The relay is using "acme"; writing "personal" would edit an account this
-      // daemon is not using and report success.
-      expect(save.mock.calls[0]?.[0]).toMatchObject({
-        default: "personal",
-        profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_rotated" } },
-      });
-    } finally {
-      await result.shutdown?.();
-    }
-  });
-
   it("activates and persists Cloud trace settings from the running daemon UI", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async (_settings: CloudSettings) => {});
+    const save = vi.fn(async (_settings: CloudTraceSettings) => {});
     const configureRatelTelemetry = vi.fn(async () => ({ shutdown: async () => {} }));
     const cloudFetch = vi.fn(async () => new Response(Buffer.from([0x00]), { status: 200 }));
     const result = await runDaemon(
@@ -772,7 +549,7 @@ describe("runDaemon", () => {
         ensureToken: async () => "daemon-test-token",
         cloudOtlpFetch: cloudFetch,
         configureRatelTelemetry,
-        cloudSettingsStore: { load: async () => undefined, save },
+        cloudTraceSettingsStore: { load: async () => undefined, save },
       },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
@@ -804,9 +581,8 @@ describe("runDaemon", () => {
         endpoint: "https://cloud.example.test/api/v1/traces",
       });
       expect(save).toHaveBeenCalledWith({
-        baseUrl: "https://cloud.example.test",
-        default: "default",
-        profiles: { default: { apiKey: "saved-cloud-secret" } },
+        endpoint: "https://cloud.example.test/api/v1/traces",
+        apiKey: "saved-cloud-secret",
       });
       expect(configureRatelTelemetry).toHaveBeenCalledWith({
         endpoint: new URL("/otlp/v1/traces", daemonUrl).toString(),
@@ -841,11 +617,10 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry,
-        cloudSettingsStore: {
+        cloudTraceSettingsStore: {
           load: async () => ({
-            tracesEndpoint: "https://cloud.example.test/api/v1/traces",
-            default: "personal",
-            profiles: { personal: { apiKey: "persisted-cloud-secret" } },
+            endpoint: "https://cloud.example.test/api/v1/traces",
+            apiKey: "persisted-cloud-secret",
           }),
           save: async () => {},
         },
@@ -863,30 +638,46 @@ describe("runDaemon", () => {
   });
 
   it("reads the Cloud credential store with Cloud telemetry disabled", async () => {
+    // ADR-0021: the credential belongs to the Cloud project, so the catalog
+    // reaches it without the observability flag, and the relay stays dark.
     const fs = new MemFs();
     const logs: string[] = [];
     const configureRatelTelemetry = vi.fn();
     const load = vi.fn(async () => ({
-      tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+      baseUrl: "https://cloud.example.test",
       default: "personal",
       profiles: { personal: { apiKey: "persisted-cloud-secret" } },
     }));
+    const cloudCatalogFetch = (async () =>
+      new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), {
+        status: 200,
+      })) as unknown as typeof fetch;
     const result = await runDaemon(
       daemonArgs(),
       makeCtx(fs),
-      { readConfig: async () => ({ mcpServers: {} }), processEnv: {} },
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_CATALOG_FEATURE_ENV]: "1" },
+      },
       (message) => logs.push(message),
       {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry,
+        cloudCatalogFetch,
         cloudSettingsStore: { load, save: async () => {} },
       },
     );
+    const daemonUrl = daemonUrlFromLogs(logs);
 
     try {
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+      expect(config.status).toBe(200);
       expect(load).toHaveBeenCalled();
-      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrlFromLogs(logs)), {
+
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
         method: "POST",
         headers: { "Content-Type": "application/x-protobuf" },
         body: Buffer.from([0x0a, 0x00]),
@@ -898,47 +689,44 @@ describe("runDaemon", () => {
     }
   });
 
-  it("selects a stored profile by name through RATEL_PROFILE", async () => {
+  it("selects the catalog profile by name through RATEL_PROFILE", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const cloudOtlpFetch = vi.fn(
-      async (_input: URL | RequestInfo, _init?: RequestInit) => new Response(null, { status: 202 }),
-    );
+    const pulls: string[] = [];
+    const cloudCatalogFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      pulls.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
     const result = await runDaemon(
       daemonArgs(),
       makeCtx(fs),
       {
         readConfig: async () => ({ mcpServers: {} }),
-        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1", RATEL_PROFILE: "acme" },
+        processEnv: { [CLOUD_CATALOG_FEATURE_ENV]: "1", RATEL_PROFILE: "acme" },
       },
       (message) => logs.push(message),
       {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
-        cloudOtlpFetch,
-        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudCatalogFetch,
         cloudSettingsStore: {
           load: async () => ({
-            tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+            baseUrl: "https://cloud.example.test",
             default: "personal",
-            profiles: {
-              personal: { apiKey: "wrong-secret" },
-              acme: { apiKey: "acme-secret" },
-            },
+            profiles: { personal: { apiKey: "wrong-secret" }, acme: { apiKey: "acme-secret" } },
           }),
           save: async () => {},
         },
       },
     );
+    const daemonUrl = daemonUrlFromLogs(logs);
 
     try {
-      await fetch(new URL("/otlp/v1/traces", daemonUrlFromLogs(logs)), {
-        method: "POST",
-        headers: { "Content-Type": "application/x-protobuf" },
-        body: Buffer.from([0x0a, 0x00]),
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
       });
-      const init = cloudOtlpFetch.mock.calls[0]?.[1];
-      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer acme-secret");
+      expect(config.status).toBe(200);
+      expect(pulls).toEqual(["Bearer acme-secret"]);
     } finally {
       await result.shutdown?.();
     }
@@ -947,20 +735,26 @@ describe("runDaemon", () => {
   it("keeps the daemon up when RATEL_PROFILE names a profile that is not stored", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
+    const pulls: string[] = [];
+    const cloudCatalogFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      pulls.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
     const result = await runDaemon(
       daemonArgs(),
       makeCtx(fs),
       {
         readConfig: async () => ({ mcpServers: {} }),
-        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1", RATEL_PROFILE: "ghost" },
+        processEnv: { [CLOUD_CATALOG_FEATURE_ENV]: "1", RATEL_PROFILE: "ghost" },
       },
       (message) => logs.push(message),
       {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
+        cloudCatalogFetch,
         cloudSettingsStore: {
           load: async () => ({
-            tracesEndpoint: "https://cloud.example.test/api/v1/traces",
+            baseUrl: "https://cloud.example.test",
             default: "personal",
             profiles: { personal: { apiKey: "persisted-cloud-secret" } },
           }),
@@ -968,22 +762,21 @@ describe("runDaemon", () => {
         },
       },
     );
+    const daemonUrl = daemonUrlFromLogs(logs);
 
     try {
-      expect(logs.join("\n")).toContain('Cloud profile "ghost" (RATEL_PROFILE environment)');
-      // Unresolved profile: 503, never the default key.
-      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrlFromLogs(logs)), {
-        method: "POST",
-        headers: { "Content-Type": "application/x-protobuf" },
-        body: Buffer.from([0x0a, 0x00]),
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
       });
-      expect(relay.status).toBe(503);
+      // Up, and nothing pulled: an unknown profile never falls back to the default.
+      expect(config.status).toBe(200);
+      expect(pulls).toEqual([]);
     } finally {
       await result.shutdown?.();
     }
   });
 
-  it("ignores malformed persisted Cloud settings without taking down the daemon", async () => {
+  it("ignores malformed persisted Cloud trace settings without taking down the daemon", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
     const configureRatelTelemetry = vi.fn();
@@ -999,7 +792,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry,
-        cloudSettingsStore: {
+        cloudTraceSettingsStore: {
           load: async () => {
             throw new Error("settings are malformed");
           },
@@ -1009,7 +802,7 @@ describe("runDaemon", () => {
     );
 
     try {
-      expect(logs.join("\n")).toContain("ignored invalid Cloud settings");
+      expect(logs.join("\n")).toContain("ignored invalid Cloud trace settings");
       expect(logs.join("\n")).toContain("settings are malformed");
       expect(configureRatelTelemetry).not.toHaveBeenCalled();
     } finally {

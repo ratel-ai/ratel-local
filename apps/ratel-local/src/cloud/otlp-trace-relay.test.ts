@@ -2,7 +2,6 @@ import { createServer as createHttpServer, request as httpRequest, type Server }
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  cloudOtlpRelayOptionsFromEnv,
   createCloudOtlpTraceRelay,
   createCloudOtlpTraceRelayController,
   OTLP_LOGS_PATH,
@@ -28,44 +27,6 @@ afterEach(async () => {
           ),
       ),
   );
-});
-
-describe("Cloud OTLP trace relay configuration", () => {
-  it("requires no feature flag and activates when daemon-owned environment values are present", () => {
-    expect(cloudOtlpRelayOptionsFromEnv({})).toBeUndefined();
-    expect(() =>
-      cloudOtlpRelayOptionsFromEnv({
-        RATEL_CLOUD_OTLP_TRACES_ENDPOINT: CLOUD_ENDPOINT,
-      }),
-    ).toThrow(/credential/i);
-
-    expect(
-      cloudOtlpRelayOptionsFromEnv({
-        RATEL_CLOUD_OTLP_TRACES_ENDPOINT: CLOUD_ENDPOINT,
-        RATEL_API_KEY: CLOUD_SECRET,
-      }),
-    ).toMatchObject({
-      endpoint: new URL(CLOUD_ENDPOINT),
-      logsEndpoint: new URL("https://cloud.example.test/api/v1/logs"),
-      apiKey: CLOUD_SECRET,
-    });
-  });
-
-  it("requires a secret-free HTTPS Cloud endpoint", () => {
-    for (const endpoint of [
-      "http://cloud.example.test/otlp/v1/traces",
-      "https://key@cloud.example.test/otlp/v1/traces",
-      "https://cloud.example.test/otlp/v1/traces?api_key=secret",
-      "not-a-url",
-    ]) {
-      expect(() =>
-        cloudOtlpRelayOptionsFromEnv({
-          RATEL_CLOUD_OTLP_TRACES_ENDPOINT: endpoint,
-          RATEL_API_KEY: CLOUD_SECRET,
-        }),
-      ).toThrow(/endpoint/i);
-    }
-  });
 });
 
 describe("Cloud OTLP relay controller", () => {
