@@ -1020,14 +1020,15 @@ describe("runDaemon", () => {
     expect(logs).toEqual([]);
   });
 
-  it("carries the Skill storage flag through install and reinstall", async () => {
+  it("regenerates the Skill storage flag from the environment on every install", async () => {
     const fs = new MemFs();
     const paths = daemonPaths(HOME);
-    const install = async () =>
+    const entry = `<key>${SKILL_STORAGE_FEATURE_ENV}</key>\n    <string>1</string>`;
+    const install = async (processEnv: NodeJS.ProcessEnv) =>
       runDaemon(
         daemonArgs({ verb: "install", flags: { telemetry: "off", open: false } }),
         makeCtx(fs),
-        { processEnv: { [SKILL_STORAGE_FEATURE_ENV]: "1", PATH: "/usr/bin" } },
+        { processEnv: { PATH: "/usr/bin", ...processEnv } },
         () => {},
         {
           platform: "darwin",
@@ -1039,10 +1040,13 @@ describe("runDaemon", () => {
         },
       );
 
-    await install();
-    expect(fs.files.get(paths.plist)).toContain(`<key>${SKILL_STORAGE_FEATURE_ENV}</key>`);
-    await install();
-    expect(fs.files.get(paths.plist)).toContain(`<key>${SKILL_STORAGE_FEATURE_ENV}</key>`);
+    await install({ [SKILL_STORAGE_FEATURE_ENV]: "1" });
+    expect(fs.files.get(paths.plist)?.split(entry)).toHaveLength(2);
+
+    // Unlike restart, which leaves flags the environment does not name alone,
+    // install rewrites the unit from scratch: an unset flag is dropped.
+    await install({});
+    expect(fs.files.get(paths.plist)).not.toContain(SKILL_STORAGE_FEATURE_ENV);
   });
 
   it("keeps restart visibly active with friendly lifecycle copy", async () => {
