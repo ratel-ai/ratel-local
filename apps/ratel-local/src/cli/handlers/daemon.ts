@@ -43,7 +43,6 @@ import {
 } from "../../cloud/otlp-trace-relay.js";
 import {
   CLOUD_CATALOG_PATH,
-  CLOUD_PROFILE_ENV,
   CloudSettingsStore,
   type CloudSettingsStoreLike,
   cloudSettingsPath,
@@ -444,7 +443,6 @@ export async function runDaemonServer(
           catalog: new URL(CLOUD_CATALOG_PATH, environmentCloudOptions.endpoint),
           apiKey: environmentCloudOptions.apiKey,
         },
-        environmentProfile: daemonProcessEnv[CLOUD_PROFILE_ENV],
         log,
         ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
       })

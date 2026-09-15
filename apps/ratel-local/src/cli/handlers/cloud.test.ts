@@ -163,22 +163,21 @@ describe("cloud use", () => {
 });
 
 describe("cloud list", () => {
-  it("marks the default and the environment override", async () => {
+  it("marks the store default", async () => {
     const { ctx, output } = context("list");
     await runCloud(ctx, {
       store: store({
         ...EXISTING,
         profiles: { personal: { apiKey: "a" }, acme: { apiKey: "b" } },
       }),
-      processEnv: { RATEL_PROFILE: "acme" },
     });
-    expect(output.join("\n")).toContain("acme  (RATEL_PROFILE)");
     expect(output.join("\n")).toContain("personal  (default)");
+    expect(output.join("\n")).toContain("acme");
   });
 
   it("says how to start when nothing is stored", async () => {
     const { ctx, output } = context("list");
-    await runCloud(ctx, { store: store(), processEnv: {} });
+    await runCloud(ctx, { store: store() });
     expect(output.join("\n")).toContain("ratel-local cloud add <profile>");
   });
 });
@@ -198,7 +197,7 @@ describe("cloud list bindings", () => {
   it("names the profile this directory selects and the file that selects it", async () => {
     const { ctx, output } = context("list", [], {}, silentPromptAdapter(), projectConfig("acme"));
 
-    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+    await runCloud(ctx, { store: store(TWO_PROFILES) });
 
     const printed = output.join("\n");
     expect(printed).toContain("acme  (cloud.profile)");
@@ -212,7 +211,7 @@ describe("cloud list bindings", () => {
   it("falls back to the store default when no scope names a profile", async () => {
     const { ctx, output } = context("list", [], {});
 
-    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+    await runCloud(ctx, { store: store(TWO_PROFILES) });
 
     expect(output.join("\n")).toContain('Cloud skills here: "personal" (store default)');
     expect(output.join("\n")).not.toContain("Traces do not follow");
@@ -225,7 +224,7 @@ describe("cloud list bindings", () => {
       },
     });
 
-    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+    await runCloud(ctx, { store: store(TWO_PROFILES) });
 
     const printed = output.join("\n");
     expect(printed).toContain("warning: ignoring /repo/.ratel/config.json");
@@ -241,7 +240,6 @@ describe("cloud list bindings", () => {
         baseUrl: "https://staging.ratel.sh",
         catalogEndpoint: "https://scratch.example.test/api/v1/catalog",
       }),
-      processEnv: {},
     });
 
     expect(output.join("\n")).toMatch(
@@ -252,17 +250,9 @@ describe("cloud list bindings", () => {
   it("warns when the selected profile is not stored", async () => {
     const { ctx, output } = context("list", [], {}, silentPromptAdapter(), projectConfig("gone"));
 
-    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+    await runCloud(ctx, { store: store(TWO_PROFILES) });
 
     expect(output.join("\n")).toContain('no profile named "gone" is stored');
-  });
-
-  it("reports the RATEL_PROFILE selection when no scope overrides it", async () => {
-    const { ctx, output } = context("list", [], {});
-
-    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: { RATEL_PROFILE: "acme" } });
-
-    expect(output.join("\n")).toContain('Cloud skills here: "acme" (RATEL_PROFILE)');
   });
 });
 
@@ -270,7 +260,7 @@ describe("cloud status", () => {
   it("prints the resolved profile, source, catalog, and ready state", async () => {
     const { ctx, output } = context("status", [], {}, silentPromptAdapter(), projectConfig("acme"));
 
-    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+    await runCloud(ctx, { store: store(TWO_PROFILES) });
 
     const printed = output.join("\n");
     expect(printed).toContain('profile "acme"');
@@ -284,7 +274,7 @@ describe("cloud status", () => {
   it("falls back to the store default when nothing selects a profile", async () => {
     const { ctx, output } = context("status", [], {});
 
-    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+    await runCloud(ctx, { store: store(TWO_PROFILES) });
 
     const printed = output.join("\n");
     expect(printed).toContain('profile "personal"');
@@ -292,41 +282,19 @@ describe("cloud status", () => {
     expect(printed).toContain("state ready");
   });
 
-  it("names RATEL_PROFILE as the source when it wins", async () => {
-    const { ctx, output } = context("status", [], {});
-
-    await runCloud(ctx, {
-      store: store(TWO_PROFILES),
-      processEnv: { RATEL_PROFILE: "acme" },
-    });
-
-    const printed = output.join("\n");
-    expect(printed).toContain('profile "acme"');
-    expect(printed).toContain("RATEL_PROFILE");
-    expect(printed).toContain("state ready");
-  });
-
   it("fails when a config file names a profile that is not stored", async () => {
     const { ctx, output } = context("status", [], {}, silentPromptAdapter(), projectConfig("gone"));
 
-    await expect(runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} })).rejects.toThrow(
+    await expect(runCloud(ctx, { store: store(TWO_PROFILES) })).rejects.toThrow(
       /cloud\.profile in \/repo\/\.ratel\/config\.json.*gone.*cloud add gone/s,
     );
     expect(output.join("\n")).not.toContain("rtl_");
   });
 
-  it("fails when RATEL_PROFILE names a profile that is not stored", async () => {
-    const { ctx } = context("status", [], {});
-
-    await expect(
-      runCloud(ctx, { store: store(TWO_PROFILES), processEnv: { RATEL_PROFILE: "gone" } }),
-    ).rejects.toThrow(/RATEL_PROFILE.*"gone".*cloud add gone/s);
-  });
-
   it("reports none when nothing is stored and nothing selects a profile", async () => {
     const { ctx, output } = context("status", [], {});
 
-    await runCloud(ctx, { store: store(), processEnv: {} });
+    await runCloud(ctx, { store: store() });
 
     const printed = output.join("\n");
     expect(printed).toContain("state none");
@@ -461,7 +429,7 @@ describe("cloud remove", () => {
     const { ctx, output } = context("remove", ["acme"]);
     const target = store(TWO_PROFILES);
 
-    await runCloud(ctx, { store: target, processEnv: {} });
+    await runCloud(ctx, { store: target });
 
     expect(target.saved).toEqual([
       { default: "personal", profiles: { personal: { apiKey: "rtl_personal" } } },
@@ -474,7 +442,7 @@ describe("cloud remove", () => {
     const { ctx, output } = context("remove", ["personal"]);
     const target = store(TWO_PROFILES);
 
-    await runCloud(ctx, { store: target, processEnv: {} });
+    await runCloud(ctx, { store: target });
 
     expect(target.saved).toEqual([{ profiles: { acme: { apiKey: "rtl_acme" } } }]);
     expect(output.join("\n")).toContain("default was cleared");
@@ -485,7 +453,7 @@ describe("cloud remove", () => {
     const { ctx } = context("remove", ["personal"]);
     const target = store(EXISTING);
 
-    await runCloud(ctx, { store: target, processEnv: {} });
+    await runCloud(ctx, { store: target });
 
     expect(target.saved).toEqual([{ profiles: {} }]);
   });
@@ -494,7 +462,7 @@ describe("cloud remove", () => {
     const { ctx } = context("remove", ["acme"], {}, silentPromptAdapter(), projectConfig("acme"));
     const target = store(TWO_PROFILES);
 
-    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
+    await expect(runCloud(ctx, { store: target })).rejects.toThrow(
       /\/repo\/\.ratel\/config\.json.*this directory.*user\/project\/local/s,
     );
     expect(target.saved).toEqual([]);
@@ -507,7 +475,7 @@ describe("cloud remove", () => {
     });
     const target = store(TWO_PROFILES);
 
-    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
+    await expect(runCloud(ctx, { store: target })).rejects.toThrow(
       /\/home\/u\/\.ratel\/config\.json.*this directory/s,
     );
     expect(target.saved).toEqual([]);
@@ -523,7 +491,7 @@ describe("cloud remove", () => {
     );
     const target = store(TWO_PROFILES);
 
-    await runCloud(ctx, { store: target, processEnv: {} });
+    await runCloud(ctx, { store: target });
 
     expect(target.saved).toEqual([
       { default: "personal", profiles: { personal: { apiKey: "rtl_personal" } } },
@@ -536,30 +504,17 @@ describe("cloud remove", () => {
     const { ctx } = context("remove", ["ghost"]);
     const target = store(EXISTING);
 
-    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
+    await expect(runCloud(ctx, { store: target })).rejects.toThrow(
       /no Cloud profile named "ghost"/,
     );
     expect(target.saved).toEqual([]);
-  });
-
-  it("does not refuse solely because RATEL_PROFILE names the profile", async () => {
-    const { ctx } = context("remove", ["acme"]);
-    const target = store(TWO_PROFILES);
-
-    await runCloud(ctx, { store: target, processEnv: { RATEL_PROFILE: "acme" } });
-
-    expect(target.saved).toEqual([
-      { default: "personal", profiles: { personal: { apiKey: "rtl_personal" } } },
-    ]);
   });
 
   it("refuses when the local scope names the profile", async () => {
     const { ctx } = context("remove", ["acme"], {}, silentPromptAdapter(), localConfig("acme"));
     const target = store(TWO_PROFILES);
 
-    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
-      /config\.local\.json/,
-    );
+    await expect(runCloud(ctx, { store: target })).rejects.toThrow(/config\.local\.json/);
     expect(target.saved).toEqual([]);
   });
 });

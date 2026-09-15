@@ -10,8 +10,6 @@ export const DEFAULT_CLOUD_BASE_URL = "https://cloud.ratel.sh";
 /** Paths are the protocol, not a setting: only the deployment they sit on varies. */
 export const CLOUD_CATALOG_PATH = "/api/v1/catalog";
 
-export const CLOUD_PROFILE_ENV = "RATEL_PROFILE";
-
 export interface CloudProfile {
   apiKey: string;
 }

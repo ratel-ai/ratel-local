@@ -7,7 +7,6 @@ import {
 } from "../../cloud/catalog.js";
 import { scanCloudProfileScopes } from "../../cloud/inventory.js";
 import {
-  CLOUD_PROFILE_ENV,
   type CloudSettings,
   CloudSettingsStore,
   type CloudSettingsStoreLike,
@@ -38,8 +37,6 @@ export interface CloudHandlerDependencies {
   store?: CloudSettingsStoreLike;
   /** Writes `cloud.profile` into a scoped config, with a backup. */
   mutateCloud?: CliCloudMutator;
-  /** Daemon environment, for the profile `RATEL_PROFILE` selects. */
-  processEnv?: NodeJS.ProcessEnv;
   /** Injected by tests; the CLI uses the global `fetch`. */
   fetch?: typeof fetch;
 }
@@ -51,12 +48,11 @@ export async function runCloud(
   const verb = ctx.argv.verb;
   const store = dependencies.store ?? new CloudSettingsStore(cloudSettingsPath(ctx.env.homeDir));
   const settings = (await store.load()) ?? { profiles: {} };
-  const env = dependencies.processEnv ?? process.env;
 
   if (verb === "add") return add(ctx, store, settings);
   if (verb === "use") return use(ctx, settings, dependencies);
-  if (verb === "list") return list(ctx, settings, env);
-  if (verb === "status") return status(ctx, settings, env);
+  if (verb === "list") return list(ctx, settings);
+  if (verb === "status") return status(ctx, settings);
   if (verb === "test") return test(ctx, settings, dependencies);
   if (verb === "remove") return remove(ctx, store, settings);
   throw new ArgError(`unknown cloud verb: ${verb}`);
@@ -121,17 +117,12 @@ async function use(
   ctx.log("Reconnect the agent to apply it.");
 }
 
-async function list(
-  ctx: HandlerCtx,
-  settings: CloudSettings,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
+async function list(ctx: HandlerCtx, settings: CloudSettings): Promise<void> {
   const names = Object.keys(settings.profiles).sort();
   if (names.length === 0) {
     ctx.log("No Cloud profiles stored. Add one with: ratel-local cloud add <profile>");
     return;
   }
-  const selected = env[CLOUD_PROFILE_ENV];
   const scopes = await scanCloudProfileScopes(ctx);
   for (const scope of scopes.unreadable) {
     ctx.log(`warning: ignoring ${scope.path}: ${scope.message}`);
@@ -140,7 +131,6 @@ async function list(
   for (const name of names) {
     const marks = [
       name === settings.default ? "default" : "",
-      name === selected ? `${CLOUD_PROFILE_ENV}` : "",
       name === scoped?.profile ? "cloud.profile" : "",
     ].filter(Boolean);
     ctx.log(`${name}${marks.length > 0 ? `  (${marks.join(", ")})` : ""}`);
@@ -151,7 +141,7 @@ async function list(
 
   // The `RATEL_API_KEY` pair outranks all of these, but it lives in the daemon's
   // environment, which this process cannot see.
-  const resolved = resolveHere(settings, env, scoped);
+  const resolved = resolveHere(settings, scoped);
   if (!resolved) {
     ctx.log("Cloud skills here: no profile resolves.");
     return;
@@ -163,16 +153,12 @@ async function list(
   ctx.log('  Traces use their own key; run "ratel-local traces status".');
 }
 
-async function status(
-  ctx: HandlerCtx,
-  settings: CloudSettings,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
+async function status(ctx: HandlerCtx, settings: CloudSettings): Promise<void> {
   const scopes = await scanCloudProfileScopes(ctx);
   for (const scope of scopes.unreadable) {
     ctx.log(`warning: ignoring ${scope.path}: ${scope.message}`);
   }
-  const resolved = resolveHere(settings, env, scopes.selected);
+  const resolved = resolveHere(settings, scopes.selected);
   const catalogSource = catalogSourceOf(settings);
   ctx.log(`catalog ${cloudEndpoints(settings).catalog.toString().padEnd(46)}${catalogSource}`);
   if (!resolved) {
@@ -278,11 +264,8 @@ async function remove(
 
 function resolveHere(
   settings: CloudSettings,
-  env: NodeJS.ProcessEnv,
   scoped: { profile: string; path: string } | undefined,
 ): { profile: string; source: string } | undefined {
-  const selected = env[CLOUD_PROFILE_ENV];
-  if (selected) return { profile: selected, source: CLOUD_PROFILE_ENV };
   if (scoped) return { profile: scoped.profile, source: `cloud.profile in ${scoped.path}` };
   if (settings.default) return { profile: settings.default, source: "store default" };
   return undefined;

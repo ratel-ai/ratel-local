@@ -203,9 +203,9 @@ and your team inherits the binding by cloning. Reconnect the agent afterwards.
 Check a stored key with `ratel-local cloud test <profile>` (reachability and
 authorization are reported separately). Remove one with
 `ratel-local cloud remove <profile>`; the command refuses while this directory's
-user/project/local configs still select it unless you pass `--force`.
-
-`RATEL_PROFILE` overrides the selection for the whole daemon.
+user/project/local configs still select it unless you pass `--force`. For a
+machine-local switch that is not committed, use
+`ratel-local cloud use <profile> --scope local`.
 
 Telemetry is separate and keeps its own single key in `~/.ratel/cloud-traces.json`
 or in `RATEL_API_KEY`: an agent's exporter is configured once per machine, so

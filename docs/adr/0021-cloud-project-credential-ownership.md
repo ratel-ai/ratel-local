@@ -54,15 +54,16 @@ it serves. Layered scopes (`user`, `project`, `local`) are
   directory moves, forces a definition of _project_ across monorepo packages and
   worktrees, and cannot be shared with a team.
 
-- **A project selects a profile by name** under `cloud.profile`, and
-  `RATEL_PROFILE` overrides it as `AWS_PROFILE` does. When nothing selects a
-  profile, resolution uses `profiles[default]`. When a selector names a profile
-  absent from the store, that is an error that names the profile and how it was
-  selected — never a silent fall back to `default`. The catalog reports
-  `cloud.profile` or `RATEL_PROFILE`; `doctor` reports the config file that
-  asked for it, from the files alone, before anything reaches Cloud. The failure
-  this prevents is serving one project from another project's Cloud account
-  while reporting success.
+- **A project selects a profile by name** under `cloud.profile`. When nothing
+  selects a profile, resolution uses `profiles[default]`. When a selector names
+  a profile absent from the store, that is an error that names the profile and
+  how it was selected — never a silent fall back to `default`. The catalog
+  reports `cloud.profile`; `doctor` reports the config file that asked for it,
+  from the files alone, before anything reaches Cloud. Selection comes from the
+  files alone: an environment override that only acts when it is in the daemon's
+  environment, and that no CLI run can see, produces confident wrong answers,
+  which is the failure class that this ADR exists to prevent — serving one
+  project from another project's Cloud account while reporting success.
 
 - **`baseUrl` in `cloud.json` chooses the Cloud instance; the catalog path is
   fixed by the protocol.** The catalog sits at `/api/v1/catalog` on that
@@ -72,8 +73,8 @@ it serves. Layered scopes (`user`, `project`, `local`) are
 
 - **ADR 0013's environment pair and relay rules stand.**
   `RATEL_API_KEY` with `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` supplies a credential
-  outright rather than selecting a stored profile, stays above layered config
-  and `RATEL_PROFILE`, and is never written to disk. `RATEL_API_KEY` is consumed
+  outright rather than selecting a stored profile, stays above layered config,
+  and is never written to disk. `RATEL_API_KEY` is consumed
   into memory at startup and deleted from the daemon environment before any
   subprocess can inherit it; it never reaches daemon state, logs, or HTTP
   responses. The catalog reads `cloud.json` on each pull, so `cloud add` is
@@ -119,7 +120,6 @@ current-run override that bypasses both files and points the catalog at
 | selector                                                           | resolves to                         |
 | ------------------------------------------------------------------ | ----------------------------------- |
 | `RATEL_API_KEY` (with `RATEL_CLOUD_OTLP_TRACES_ENDPOINT`)          | that key; catalog on the traces origin; no profile |
-| `RATEL_PROFILE=acme`                                               | `profiles.acme`                     |
 | `cloud.profile`, nearest scope wins (`local` > `project` > `user`) | that profile                        |
 | nothing selects a profile                                          | `profiles[default]`                 |
 | a selected name is not in the store                                | error, naming the profile and its source |

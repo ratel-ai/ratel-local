@@ -316,7 +316,6 @@ const source = (
   createCloudCatalogSource({
     settings: () => SETTINGS,
     environment: undefined,
-    environmentProfile: undefined,
     log: () => {},
     fetch: fetchImpl,
     ...overrides,
@@ -343,25 +342,6 @@ describe("createCloudCatalogSource", () => {
 
     expect(calls[0].url).toBe("https://cloud.ratel.sh/api/v1/catalog");
     expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_env");
-  });
-
-  it("lets RATEL_PROFILE outrank the profile a scope names", async () => {
-    // ADR-0021 puts the environment above layered config, as AWS_PROFILE does.
-    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
-
-    await source(impl, { environmentProfile: "personal" })(CONTEXT, "acme");
-
-    expect(calls[0].url).toBe("https://cloud.ratel.sh/api/v1/catalog");
-    expect(calls[0].headers.get("authorization")).toBe("Bearer rtl_personal");
-  });
-
-  it("refuses a RATEL_PROFILE the store does not define", async () => {
-    const { calls, impl } = recordingFetch(jsonResponse(WIRE));
-
-    await expect(source(impl, { environmentProfile: "nope" })(CONTEXT, "acme")).rejects.toThrow(
-      /"nope" \(RATEL_PROFILE\)/,
-    );
-    expect(calls).toHaveLength(0);
   });
 
   it("falls back to the store default when no scope names a profile", async () => {

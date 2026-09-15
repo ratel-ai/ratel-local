@@ -85,7 +85,8 @@ ratel-local cloud remove <profile-name>  # delete a stored profile (--force to o
 The first profile stored becomes the default, so a single-project setup never
 selects anything. A directory selects another with `cloud.profile` in its
 layered config: a name, never a credential, and therefore safe to commit.
-`RATEL_PROFILE` overrides it for the whole daemon. `cloud list` and
+For a machine-local switch that is not committed, use
+`ratel-local cloud use <profile> --scope local`. `cloud list` and
 `cloud status` print the catalog endpoint in effect from the files only; they
 cannot see a daemon's scrubbed `RATEL_API_KEY`. `cloud test` calls the catalog
 itself and reports reachability separately from a rejected key. `cloud remove`

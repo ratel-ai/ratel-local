@@ -5,12 +5,7 @@ import {
 } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import { headerSafeSecret } from "./header-safe-secret.js";
-import {
-  CLOUD_PROFILE_ENV,
-  type CloudSettings,
-  cloudEndpoints,
-  resolveCloudCredential,
-} from "./settings.js";
+import { type CloudSettings, cloudEndpoints, resolveCloudCredential } from "./settings.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
 export const CLOUD_CATALOG_TIMEOUT_MS = 10_000;
@@ -160,7 +155,6 @@ export function createCloudCatalogSource(input: {
   /** From disk each pull, not the boot snapshot. */
   settings: () => Promise<CloudSettings | undefined>;
   environment: CloudCredential | undefined;
-  environmentProfile: string | undefined;
   log: (message: string) => void;
   fetch?: typeof fetch;
 }) {
@@ -168,8 +162,8 @@ export function createCloudCatalogSource(input: {
   const resolve = async (scopeProfile?: string): Promise<CloudCredential | undefined> => {
     if (input.environment) return input.environment;
     const settings = await input.settings();
-    const profile = input.environmentProfile ?? scopeProfile;
-    const source = input.environmentProfile ? CLOUD_PROFILE_ENV : "cloud.profile";
+    const profile = scopeProfile;
+    const source = "cloud.profile";
     if (!settings) {
       if (!profile) return undefined;
       throw new Error(

@@ -103,7 +103,7 @@ describe("resolveCloudCredential", () => {
   it("uses the named profile over the default", () => {
     const resolved = resolveCloudCredential(settings, {
       profile: "acme",
-      source: "RATEL_PROFILE environment",
+      source: "cloud.profile",
     });
     expect(resolved).toBe("rtl_acme");
   });
