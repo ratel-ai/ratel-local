@@ -12,7 +12,11 @@ import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core"
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import { connectorHeaders } from "../../daemon/access.js";
-import { CLOUD_CATALOG_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
+import {
+  CLOUD_CATALOG_FEATURE_ENV,
+  CLOUD_TELEMETRY_FEATURE_ENV,
+  SKILL_STORAGE_FEATURE_ENV,
+} from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
@@ -1014,6 +1018,35 @@ describe("runDaemon", () => {
     ]);
     expect(progress).toEqual(["start:Setting up Ratel Local…", "stop:Ratel Local is ready"]);
     expect(logs).toEqual([]);
+  });
+
+  it("regenerates the Skill storage flag from the environment on every install", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    const entry = `<key>${SKILL_STORAGE_FEATURE_ENV}</key>\n    <string>1</string>`;
+    const install = async (processEnv: NodeJS.ProcessEnv) =>
+      runDaemon(
+        daemonArgs({ verb: "install", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { PATH: "/usr/bin", ...processEnv } },
+        () => {},
+        {
+          platform: "darwin",
+          executablePath: "/opt/bin/ratel-local",
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+    await install({ [SKILL_STORAGE_FEATURE_ENV]: "1" });
+    expect(fs.files.get(paths.plist)?.split(entry)).toHaveLength(2);
+
+    // Unlike restart, which leaves flags the environment does not name alone,
+    // install rewrites the unit from scratch: an unset flag is dropped.
+    await install({});
+    expect(fs.files.get(paths.plist)).not.toContain(SKILL_STORAGE_FEATURE_ENV);
   });
 
   it("keeps restart visibly active with friendly lifecycle copy", async () => {

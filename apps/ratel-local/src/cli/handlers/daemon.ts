@@ -79,6 +79,7 @@ import {
   featureFlagsFromEnv,
   SERVICE_FEATURE_FLAG_ENVS,
   type ServiceFeatureFlagOverrides,
+  SKILL_STORAGE_FEATURE_ENV,
 } from "../../feature-flags.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
@@ -138,6 +139,7 @@ export interface DaemonStatusBody extends DaemonState {
   /** Absent on daemons older than the restart-reconfiguration support. */
   cloudTelemetry?: boolean;
   cloudCatalog?: boolean;
+  skillStorage?: boolean;
 }
 
 interface CommandResult {
@@ -716,6 +718,7 @@ export async function runDaemonServer(
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
           cloudTelemetry: featureFlags.cloudTelemetry,
           cloudCatalog: featureFlags.cloudCatalog,
+          skillStorage: featureFlags.skillStorage,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
         });
         return true;
@@ -911,11 +914,7 @@ export function createLaunchAgentPlist(input: {
   ];
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment({
-      cloudTelemetry: false,
-      cloudCatalog: false,
-      ...input.featureFlags,
-    }),
+    ...featureFlagServiceEnvironment(input.featureFlags ?? {}),
   };
   const environmentXml = Object.entries(serviceEnvironment)
     .map(
@@ -970,11 +969,7 @@ export function createSystemdUserService(input: {
     .join(" ");
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment({
-      cloudTelemetry: false,
-      cloudCatalog: false,
-      ...input.featureFlags,
-    }),
+    ...featureFlagServiceEnvironment(input.featureFlags ?? {}),
   };
   const environmentLines = Object.entries(serviceEnvironment)
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
@@ -1028,6 +1023,7 @@ async function reconfigureInstalledServiceFeatureFlags(
 const FLAG_STATUS_FIELD = {
   [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
   [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
+  [SKILL_STORAGE_FEATURE_ENV]: "skillStorage",
 } as const;
 
 /**
