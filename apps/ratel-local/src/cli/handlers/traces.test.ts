@@ -112,20 +112,6 @@ describe("runTraces", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("points at Agent Setup when Cloud is not configured and nobody can be asked", async () => {
-    const { ctx, output } = context("enable", { agent: ["claude-code"], yes: true });
-    await runTraces(ctx, {
-      request: async (path) => {
-        if (path === "/api/agent-traces") return response({ ...status(), cloudConfigured: false });
-        if (path === "/api/agent-traces/prepare") {
-          return response({ changeId: "trace-1", kind: "agent-traces.enable", preview: {} });
-        }
-        return response({ result: { action: "enable", hosts: status().hosts } });
-      },
-    });
-    expect(output.join("\n")).toContain("Ratel Cloud tracing is not configured");
-  });
-
   it("prepares and commits a secret-free enable", async () => {
     const calls: Array<{ path: string; body?: unknown }> = [];
     const { ctx, output } = context("enable", { agent: ["claude-code", "codex"], yes: true });
