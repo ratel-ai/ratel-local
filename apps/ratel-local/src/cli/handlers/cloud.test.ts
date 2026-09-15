@@ -24,7 +24,7 @@ class MemFs implements BackupFs, JsonFs {
 }
 
 function context(
-  verb: "add" | "use" | "list",
+  verb: "add" | "use" | "list" | "status" | "test" | "remove",
   rest: string[] = [],
   flags: Record<string, string | boolean | string[]> = {},
   prompts = silentPromptAdapter(),
@@ -263,5 +263,303 @@ describe("cloud list bindings", () => {
     await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: { RATEL_PROFILE: "acme" } });
 
     expect(output.join("\n")).toContain('Cloud skills here: "acme" (RATEL_PROFILE)');
+  });
+});
+
+describe("cloud status", () => {
+  it("prints the resolved profile, source, catalog, and ready state", async () => {
+    const { ctx, output } = context("status", [], {}, silentPromptAdapter(), projectConfig("acme"));
+
+    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+
+    const printed = output.join("\n");
+    expect(printed).toContain('profile "acme"');
+    expect(printed).toContain("cloud.profile in /repo/.ratel/config.json");
+    expect(printed).toMatch(/catalog\s+https:\/\/cloud\.ratel\.sh\/api\/v1\/catalog\s+default/);
+    expect(printed).toContain("state ready");
+    expect(printed).not.toContain("rtl_");
+    expect(printed).not.toContain("Traces use their own key");
+  });
+
+  it("falls back to the store default when nothing selects a profile", async () => {
+    const { ctx, output } = context("status", [], {});
+
+    await runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} });
+
+    const printed = output.join("\n");
+    expect(printed).toContain('profile "personal"');
+    expect(printed).toContain("store default");
+    expect(printed).toContain("state ready");
+  });
+
+  it("names RATEL_PROFILE as the source when it wins", async () => {
+    const { ctx, output } = context("status", [], {});
+
+    await runCloud(ctx, {
+      store: store(TWO_PROFILES),
+      processEnv: { RATEL_PROFILE: "acme" },
+    });
+
+    const printed = output.join("\n");
+    expect(printed).toContain('profile "acme"');
+    expect(printed).toContain("RATEL_PROFILE");
+    expect(printed).toContain("state ready");
+  });
+
+  it("fails when a config file names a profile that is not stored", async () => {
+    const { ctx, output } = context("status", [], {}, silentPromptAdapter(), projectConfig("gone"));
+
+    await expect(runCloud(ctx, { store: store(TWO_PROFILES), processEnv: {} })).rejects.toThrow(
+      /cloud\.profile in \/repo\/\.ratel\/config\.json.*gone.*cloud add gone/s,
+    );
+    expect(output.join("\n")).not.toContain("rtl_");
+  });
+
+  it("fails when RATEL_PROFILE names a profile that is not stored", async () => {
+    const { ctx } = context("status", [], {});
+
+    await expect(
+      runCloud(ctx, { store: store(TWO_PROFILES), processEnv: { RATEL_PROFILE: "gone" } }),
+    ).rejects.toThrow(/RATEL_PROFILE.*"gone".*cloud add gone/s);
+  });
+
+  it("reports none when nothing is stored and nothing selects a profile", async () => {
+    const { ctx, output } = context("status", [], {});
+
+    await runCloud(ctx, { store: store(), processEnv: {} });
+
+    const printed = output.join("\n");
+    expect(printed).toContain("state none");
+    expect(printed).toContain("ratel-local cloud add <profile>");
+  });
+});
+
+const VALID_CATALOG = {
+  catalogVersion: "v1",
+  skills: [
+    {
+      id: "demo",
+      name: "demo",
+      description: "demo skill",
+      tags: [],
+      tools: [],
+      metadata: {},
+      body: "# secret body that must not print",
+    },
+  ],
+};
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+describe("cloud test", () => {
+  it("reports reachable and authorized for a valid catalog", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(VALID_CATALOG));
+    const { ctx, output } = context("test", ["personal"]);
+
+    await runCloud(ctx, { store: store(EXISTING), fetch: fetchImpl as unknown as typeof fetch });
+
+    const printed = output.join("\n");
+    expect(printed).toContain("reachable yes");
+    expect(printed).toContain("authorized yes");
+    expect(printed).not.toContain("rtl_personal");
+    expect(printed).not.toContain("secret body");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each([401, 403])("separates reachability from a rejected key (%s)", async (status) => {
+    const fetchImpl = vi.fn(async () => new Response("nope", { status }));
+    const { ctx, output } = context("test", ["personal"]);
+
+    await expect(
+      runCloud(ctx, { store: store(EXISTING), fetch: fetchImpl as unknown as typeof fetch }),
+    ).rejects.toThrow(/authorized no|HTTP/);
+
+    const printed = output.join("\n");
+    expect(printed).toContain("reachable yes");
+    expect(printed).toContain("authorized no");
+    expect(printed).toContain(`HTTP ${status}`);
+    expect(printed).not.toContain("rtl_personal");
+  });
+
+  it("reports unreachable when the network fails", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("fetch failed");
+    });
+    const { ctx, output } = context("test", ["personal"]);
+
+    await expect(
+      runCloud(ctx, { store: store(EXISTING), fetch: fetchImpl as unknown as typeof fetch }),
+    ).rejects.toThrow(/reachable no|unavailable/i);
+
+    const printed = output.join("\n");
+    expect(printed).toContain("reachable no");
+    expect(printed).toContain("authorized unknown");
+    expect(printed).not.toContain("rtl_personal");
+  });
+
+  it("reports unreachable for a non-auth HTTP failure", async () => {
+    const fetchImpl = vi.fn(async () => new Response("down", { status: 500 }));
+    const { ctx, output } = context("test", ["personal"]);
+
+    await expect(
+      runCloud(ctx, { store: store(EXISTING), fetch: fetchImpl as unknown as typeof fetch }),
+    ).rejects.toThrow(/reachable no|unavailable/i);
+
+    const printed = output.join("\n");
+    expect(printed).toContain("reachable no");
+    expect(printed).toContain("authorized unknown");
+  });
+
+  it("reports a malformed catalog separately from auth", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>not json</html>", { status: 200 }));
+    const { ctx, output } = context("test", ["personal"]);
+
+    await expect(
+      runCloud(ctx, { store: store(EXISTING), fetch: fetchImpl as unknown as typeof fetch }),
+    ).rejects.toThrow(/catalog malformed/i);
+
+    const printed = output.join("\n");
+    expect(printed).toContain("reachable yes");
+    expect(printed).toContain("authorized yes");
+    expect(printed).not.toContain("rtl_personal");
+  });
+
+  it("refuses a profile that is not stored without calling the network", async () => {
+    const fetchImpl = vi.fn();
+    const { ctx } = context("test", ["ghost"]);
+
+    await expect(
+      runCloud(ctx, { store: store(EXISTING), fetch: fetchImpl as unknown as typeof fetch }),
+    ).rejects.toThrow(/no Cloud profile named "ghost".*stored profiles: personal/s);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("requires a profile name", async () => {
+    const { ctx } = context("test", []);
+    await expect(runCloud(ctx, { store: store(EXISTING) })).rejects.toThrow(
+      /requires a profile name/,
+    );
+  });
+});
+
+const userConfig = (profile: string) => ({
+  [ratelConfigPath("user", { homeDir: "/home/u", projectRoot: "/repo" })]: {
+    cloud: { profile },
+  },
+});
+
+const localConfig = (profile: string) => ({
+  [ratelConfigPath("local", { homeDir: "/home/u", projectRoot: "/repo" })]: {
+    cloud: { profile },
+  },
+});
+
+describe("cloud remove", () => {
+  it("removes a non-selected, non-default profile", async () => {
+    const { ctx, output } = context("remove", ["acme"]);
+    const target = store(TWO_PROFILES);
+
+    await runCloud(ctx, { store: target, processEnv: {} });
+
+    expect(target.saved).toEqual([
+      { default: "personal", profiles: { personal: { apiKey: "rtl_personal" } } },
+    ]);
+    expect(output.join("\n")).toContain('Removed Cloud profile "acme"');
+    expect(output.join("\n")).not.toContain("rtl_");
+  });
+
+  it("clears the store default when that profile is removed", async () => {
+    const { ctx, output } = context("remove", ["personal"]);
+    const target = store(TWO_PROFILES);
+
+    await runCloud(ctx, { store: target, processEnv: {} });
+
+    expect(target.saved).toEqual([{ profiles: { acme: { apiKey: "rtl_acme" } } }]);
+    expect(output.join("\n")).toContain("default was cleared");
+    expect(output.join("\n")).not.toContain("rtl_");
+  });
+
+  it("removes the last profile and leaves an empty store", async () => {
+    const { ctx } = context("remove", ["personal"]);
+    const target = store(EXISTING);
+
+    await runCloud(ctx, { store: target, processEnv: {} });
+
+    expect(target.saved).toEqual([{ profiles: {} }]);
+  });
+
+  it("refuses when this directory's project config still selects the profile", async () => {
+    const { ctx } = context("remove", ["acme"], {}, silentPromptAdapter(), projectConfig("acme"));
+    const target = store(TWO_PROFILES);
+
+    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
+      /\/repo\/\.ratel\/config\.json.*this directory.*user\/project\/local/s,
+    );
+    expect(target.saved).toEqual([]);
+  });
+
+  it("refuses when a non-winning scope file still names the profile", async () => {
+    const { ctx } = context("remove", ["personal"], {}, silentPromptAdapter(), {
+      ...userConfig("personal"),
+      ...projectConfig("acme"),
+    });
+    const target = store(TWO_PROFILES);
+
+    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
+      /\/home\/u\/\.ratel\/config\.json.*this directory/s,
+    );
+    expect(target.saved).toEqual([]);
+  });
+
+  it("removes with --force even when this directory still selects the profile", async () => {
+    const { ctx, output } = context(
+      "remove",
+      ["acme"],
+      { force: true },
+      silentPromptAdapter(),
+      projectConfig("acme"),
+    );
+    const target = store(TWO_PROFILES);
+
+    await runCloud(ctx, { store: target, processEnv: {} });
+
+    expect(target.saved).toEqual([
+      { default: "personal", profiles: { personal: { apiKey: "rtl_personal" } } },
+    ]);
+    expect(output.join("\n")).toContain('Removed Cloud profile "acme"');
+    expect(output.join("\n")).not.toContain("rtl_");
+  });
+
+  it("refuses a profile that is not stored", async () => {
+    const { ctx } = context("remove", ["ghost"]);
+    const target = store(EXISTING);
+
+    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
+      /no Cloud profile named "ghost"/,
+    );
+    expect(target.saved).toEqual([]);
+  });
+
+  it("does not refuse solely because RATEL_PROFILE names the profile", async () => {
+    const { ctx } = context("remove", ["acme"]);
+    const target = store(TWO_PROFILES);
+
+    await runCloud(ctx, { store: target, processEnv: { RATEL_PROFILE: "acme" } });
+
+    expect(target.saved).toEqual([
+      { default: "personal", profiles: { personal: { apiKey: "rtl_personal" } } },
+    ]);
+  });
+
+  it("refuses when the local scope names the profile", async () => {
+    const { ctx } = context("remove", ["acme"], {}, silentPromptAdapter(), localConfig("acme"));
+    const target = store(TWO_PROFILES);
+
+    await expect(runCloud(ctx, { store: target, processEnv: {} })).rejects.toThrow(
+      /config\.local\.json/,
+    );
+    expect(target.saved).toEqual([]);
   });
 });

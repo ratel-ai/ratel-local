@@ -83,7 +83,7 @@ Commands:
            or --auto-config to load user/project/local Ratel configs)
   connect  bridge this agent session to the scoped local daemon [--project-root <path>]
   setup    onboard the daemon and supported agents [--agent NAME] [--daemon-only] [--yes]
-  cloud    manage Ratel Cloud profiles (add, use, list)
+  cloud    manage Ratel Cloud profiles (add, use, list, status, test, remove)
   traces   manage native Claude Code and Codex trace exporters
   daemon   manage the loopback HTTP daemon and UI (run, install, status, daemon open)
   import   migrate agent MCP configs and native skills into Ratel

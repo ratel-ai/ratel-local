@@ -185,6 +185,7 @@ Cloud skill-catalog credentials are stored as named profiles in
 ```bash
 ratel-local cloud add personal   # masked prompt for the key; needs a terminal
 ratel-local cloud list           # stored profiles, and which one applies here
+ratel-local cloud status         # this directory's resolved profile and state
 ```
 
 Create a key at <https://cloud.ratel.sh/settings>. The first profile you store
@@ -198,6 +199,11 @@ ratel-local cloud use acme --scope project
 That writes `cloud.profile` into the project config `/path/to/project/.ratel/config.json`,
 the file stores a profile name (never a key), so it stays safe to commit
 and your team inherits the binding by cloning. Reconnect the agent afterwards.
+
+Check a stored key with `ratel-local cloud test <profile>` (reachability and
+authorization are reported separately). Remove one with
+`ratel-local cloud remove <profile>`; the command refuses while this directory's
+user/project/local configs still select it unless you pass `--force`.
 
 `RATEL_PROFILE` overrides the selection for the whole daemon.
 

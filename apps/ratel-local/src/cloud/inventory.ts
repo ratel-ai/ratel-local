@@ -28,6 +28,8 @@ export interface CloudEnv {
 export interface CloudScopeScan {
   /** The nearest scope naming a profile. Nearest wins: local, then project, then user. */
   selected?: { profile: string; path: string };
+  /** Every readable scope file that names a profile, nearest last. */
+  bindings: Array<{ profile: string; path: string }>;
   unreadable: Array<{ path: string; message: string }>;
 }
 
@@ -53,7 +55,7 @@ export async function scanCloudProfileScopes(input: {
     }
   }
   const selected = found.at(-1);
-  return { ...(selected ? { selected } : {}), unreadable };
+  return { ...(selected ? { selected } : {}), bindings: found, unreadable };
 }
 
 function scopedConfigPath(scope: RatelScope, env: CloudEnv): string | undefined {

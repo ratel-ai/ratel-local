@@ -76,14 +76,22 @@ managed from the CLI:
 ```bash
 ratel-local cloud add <profile-name>     # prompts for the key, stores it under a name
 ratel-local cloud use <profile-name>     # selects it for this scope, with a backup
-ratel-local cloud list         # profiles, the default, what resolves here
+ratel-local cloud list                   # profiles, the default, what resolves here
+ratel-local cloud status                 # this directory's resolved profile and state
+ratel-local cloud test <profile-name>    # one authenticated catalog GET
+ratel-local cloud remove <profile-name>  # delete a stored profile (--force to override)
 ```
 
 The first profile stored becomes the default, so a single-project setup never
 selects anything. A directory selects another with `cloud.profile` in its
 layered config: a name, never a credential, and therefore safe to commit.
-`RATEL_PROFILE` overrides it for the whole daemon. `cloud list` prints the
-catalog endpoint in effect. See
+`RATEL_PROFILE` overrides it for the whole daemon. `cloud list` and
+`cloud status` print the catalog endpoint in effect from the files only; they
+cannot see a daemon's scrubbed `RATEL_API_KEY`. `cloud test` calls the catalog
+itself and reports reachability separately from a rejected key. `cloud remove`
+refuses while this directory's user/project/local configs still select the
+profile, unless `--force` is passed; the check does not scan every project on
+the machine. See
 [ADR 0021](adr/0021-cloud-project-credential-ownership.md).
 
 That selection does not reach the relay. An agent's trace exporter is configured

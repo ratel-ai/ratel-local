@@ -63,7 +63,14 @@ const STATUSLINE_VERBS: ReadonlySet<string> = new Set(["install", "uninstall"]);
 
 const TRACES_VERBS: ReadonlySet<string> = new Set(["status", "enable", "disable"]);
 
-const CLOUD_VERBS: ReadonlySet<string> = new Set(["add", "use", "list"]);
+const CLOUD_VERBS: ReadonlySet<string> = new Set([
+  "add",
+  "use",
+  "list",
+  "status",
+  "test",
+  "remove",
+]);
 
 const DAEMON_VERBS: ReadonlySet<string> = new Set([
   "run",

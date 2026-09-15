@@ -9,6 +9,11 @@ All notable changes to this package are documented here. The format is based on 
 - Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
   `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills
   come from; `list` shows what is stored and which profile resolves here. A running daemon picks up a stored key without a restart.
+- Added `ratel-local cloud status|test|remove`: `status` prints this directory's resolved profile, source, catalog endpoint,
+  and ready/error/none state (files only; a missing selected profile fails with the selecting file and a `cloud add` remedy);
+  `test` performs one authenticated catalog GET and reports reachability and credential validity separately; `remove` deletes
+  a stored profile, clears the store default when that profile was it, and refuses while this directory's user/project/local
+  configs still select it unless `--force` is passed.
 - Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
   `cloud.apiKey` is rejected.
 - Added per-profile credentials to the Cloud skill catalog: a pull uses the profile the directory resolves to, and a
