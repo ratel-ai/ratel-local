@@ -27,20 +27,11 @@ All notable changes to this package are documented here. The format is based on 
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
   any other value disables, and a flag left out keeps whatever the installed service already says.
 
-### Removed
-
-- Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
-
 ### Fixed
 
 - Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that
   variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
   keeps the stored key and refuses the save when there is none to keep.
-- Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
-- Held a rejected Cloud catalog API key for 60 seconds after HTTP 401 or 403,
-  so a revoked key is not retried on every context resolve.
-- Held an unreachable Cloud catalog for 10 seconds when nothing is cached, so an
-  unavailable source is not retried on every context resolve.
 
 ## [0.9.0] - 2026-09-04
 
@@ -65,6 +56,18 @@ All notable changes to this package are documented here. The format is based on 
   `cloudCatalog` on `/api/daemon/status`.
 - Raised how long `daemon install`, `daemon start` and `daemon restart`
   wait for healthy status from 5 to 15 seconds.
+
+### Removed
+
+- Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
+
+### Fixed
+
+- Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
+- Held a rejected Cloud catalog API key for 60 seconds after HTTP 401 or 403,
+  so a revoked key is not retried on every context resolve.
+- Held an unreachable Cloud catalog for 10 seconds when nothing is cached, so an
+  unavailable source is not retried on every context resolve.
 
 ## [0.8.2] - 2026-08-19
 
