@@ -1,4 +1,16 @@
 import { createHash } from "node:crypto";
+import type { Stats } from "node:fs";
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { HierarchyEnv } from "./hierarchy.js";
 
@@ -14,11 +26,17 @@ export interface BackupEntry {
   originalPath: string;
   backupPath: string;
   existedBefore: boolean;
+  kind?: "file" | "dir" | "symlink";
+  digest?: string;
+  target?: string;
+  mode?: number;
+  mtime?: string;
 }
 
 export interface BackupManifest {
   createdAt: string;
-  action: "import" | "add" | "remove" | "edit" | "link";
+  action: "import" | "add" | "remove" | "edit" | "link" | "migrate" | "duplicate" | "cloud-update";
+  source?: string;
   entries: BackupEntry[];
 }
 
@@ -99,4 +117,80 @@ export async function listBackups(env: HierarchyEnv, fs: BackupFs): Promise<Back
   }
   manifests.sort((a, b) => (a.name < b.name ? 1 : -1));
   return manifests.map((m) => m.manifest);
+}
+
+export interface SnapshotRequest {
+  action: BackupManifest["action"];
+  paths: readonly string[];
+  source?: string;
+}
+
+export async function captureSnapshot(
+  env: HierarchyEnv,
+  request: SnapshotRequest,
+  now: () => Date = () => new Date(),
+): Promise<BackupManifest> {
+  const dir = join(backupsRoot(env), safeStamp(now()));
+  await mkdir(dir, { recursive: true });
+  const entries: BackupEntry[] = [];
+  const seen = new Set<string>();
+  for (const originalPath of request.paths) {
+    if (seen.has(originalPath)) continue;
+    seen.add(originalPath);
+    await captureNode(originalPath, join(dir, backupFileName(originalPath)), entries);
+  }
+  const manifest: BackupManifest = {
+    createdAt: now().toISOString(),
+    action: request.action,
+    ...(request.source === undefined ? {} : { source: request.source }),
+    entries,
+  };
+  // Written last: an interrupted capture leaves a directory with no manifest,
+  // which listBackups already skips.
+  await writeFile(join(dir, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
+}
+
+async function captureNode(
+  originalPath: string,
+  backupPath: string,
+  entries: BackupEntry[],
+): Promise<void> {
+  let info: Stats;
+  try {
+    info = await lstat(originalPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    entries.push({ originalPath, backupPath, existedBefore: false });
+    return;
+  }
+  const mode = info.mode & 0o7777;
+  const mtime = info.mtime.toISOString();
+  const entry: BackupEntry = { originalPath, backupPath, existedBefore: true, mode, mtime };
+
+  if (info.isSymbolicLink()) {
+    const target = await readlink(originalPath);
+    await symlink(target, backupPath);
+    entries.push({ ...entry, kind: "symlink", target });
+    return;
+  }
+  if (info.isDirectory()) {
+    await mkdir(backupPath, { recursive: true });
+    entries.push({ ...entry, kind: "dir" });
+    for (const name of (await readdir(originalPath)).sort()) {
+      await captureNode(join(originalPath, name), join(backupPath, name), entries);
+    }
+    // After the children: a read-only mode would block writing into it.
+    await chmod(backupPath, mode);
+    return;
+  }
+  await copyFile(originalPath, backupPath);
+  await chmod(backupPath, mode);
+  entries.push({
+    ...entry,
+    kind: "file",
+    digest: createHash("sha256")
+      .update(await readFile(backupPath))
+      .digest("hex"),
+  });
 }
