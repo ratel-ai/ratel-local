@@ -211,8 +211,8 @@ describe("runDaemon", () => {
       });
       expect(logsResponse.status).toBe(200);
       expect(cloudFetch).toHaveBeenCalledTimes(2);
-      // The env pair names one URL, so logs take the protocol path on its origin.
-      expect(String(cloudFetch.mock.calls[1]?.[0])).toBe("https://cloud.example.test/api/v1/logs");
+      // The env pair names one URL, so logs swap the trailing segment of its path.
+      expect(String(cloudFetch.mock.calls[1]?.[0])).toBe("https://cloud.example.test/otlp/v1/logs");
       expect(Buffer.from((cloudFetch.mock.calls[1]?.[1]?.body as Uint8Array) ?? [])).toEqual(
         logPayload,
       );

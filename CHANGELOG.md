@@ -27,8 +27,6 @@ All notable changes to this package are documented here. The format is based on 
   whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
 - Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with
   `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
-- Made a `RATEL_CLOUD_OTLP_TRACES_ENDPOINT` on a non-protocol path stop moving the log route with it: logs now ride the
-  origin the traces endpoint names, at `/api/v1/logs`.
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
   any other value disables, and a flag left out keeps whatever the installed service already says.
 

@@ -13,7 +13,6 @@ import { secretFreeHttpsUrl } from "./url.js";
 
 /** Paths are the protocol, not a setting: only the deployment they sit on varies. */
 export const CLOUD_TRACES_PATH = "/api/v1/traces";
-export const CLOUD_LOGS_PATH = "/api/v1/logs";
 export const DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT = `${DEFAULT_CLOUD_BASE_URL}${CLOUD_TRACES_PATH}`;
 
 /**
@@ -35,14 +34,25 @@ export function cloudTraceSettingsPath(homeDir: string): string {
   return join(homeDir, ".ratel", "cloud-traces.json");
 }
 
-/** Logs ride the deployment the traces endpoint names; only that endpoint is stored. */
+/** Logs sit beside the traces endpoint; only that endpoint is stored. */
 export function cloudTraceRelayOptions(settings: CloudTraceSettings): CloudOtlpTraceRelayOptions {
   const traces = secretFreeHttpsUrl(settings.endpoint, "Cloud OTLP trace endpoint");
   return cloudOtlpTraceRelayOptions({
     endpoint: traces.toString(),
-    logsEndpoint: new URL(CLOUD_LOGS_PATH, traces),
+    logsEndpoint: deriveCloudOtlpLogsEndpoint(traces),
     apiKey: settings.apiKey,
   });
+}
+
+/** Swaps the trailing `/traces` for `/logs`, so a path prefix survives. */
+export function deriveCloudOtlpLogsEndpoint(traceEndpoint: URL): URL {
+  const match = /\/traces(\/?)$/.exec(traceEndpoint.pathname);
+  if (!match) {
+    throw new Error("Ratel Cloud OTLP trace endpoint path must end with /traces");
+  }
+  const logsEndpoint = new URL(traceEndpoint);
+  logsEndpoint.pathname = `${traceEndpoint.pathname.slice(0, match.index)}/logs${match[1]}`;
+  return logsEndpoint;
 }
 
 export function cloudOtlpRelayOptionsFromEnv(

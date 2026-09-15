@@ -39,9 +39,27 @@ describe("Cloud OTLP trace relay configuration", () => {
       }),
     ).toMatchObject({
       endpoint: new URL(CLOUD_ENDPOINT),
-      logsEndpoint: new URL("https://cloud.example.test/api/v1/logs"),
+      logsEndpoint: new URL("https://cloud.example.test/otlp/v1/logs"),
       apiKey: CLOUD_SECRET,
     });
+  });
+
+  it("keeps a path prefix when it derives the log endpoint, and refuses a path it cannot", () => {
+    expect(
+      cloudOtlpRelayOptionsFromEnv({
+        RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://proxy.example.test/ratel/api/v1/traces",
+        RATEL_API_KEY: CLOUD_SECRET,
+      }),
+    ).toMatchObject({
+      logsEndpoint: new URL("https://proxy.example.test/ratel/api/v1/logs"),
+    });
+
+    expect(() =>
+      cloudOtlpRelayOptionsFromEnv({
+        RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/collect",
+        RATEL_API_KEY: CLOUD_SECRET,
+      }),
+    ).toThrow(/must end with \/traces/);
   });
 
   it("requires a secret-free HTTPS Cloud endpoint", () => {
