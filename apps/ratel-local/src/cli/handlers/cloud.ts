@@ -150,7 +150,6 @@ async function list(ctx: HandlerCtx, settings: CloudSettings): Promise<void> {
   if (!settings.profiles[resolved.profile]) {
     ctx.log(`  warning: no profile named "${resolved.profile}" is stored, so nothing resolves.`);
   }
-  ctx.log('  Traces use their own key; run "ratel-local traces status".');
 }
 
 async function status(ctx: HandlerCtx, settings: CloudSettings): Promise<void> {

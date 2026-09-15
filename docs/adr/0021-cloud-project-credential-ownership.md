@@ -141,7 +141,6 @@ acme  (cloud.profile)
 personal  (default)
 catalog https://cloud.ratel.sh/api/v1/catalog         default
 Cloud skills here: "acme" (cloud.profile in /repo/.ratel/config.json)
-  Traces use their own key; run "ratel-local traces status".
 ```
 
 ## Configuration surface

@@ -205,7 +205,6 @@ describe("cloud list bindings", () => {
     expect(printed).toContain(
       'Cloud skills here: "acme" (cloud.profile in /repo/.ratel/config.json)',
     );
-    expect(printed).toContain("Traces use their own key");
   });
 
   it("falls back to the store default when no scope names a profile", async () => {
@@ -214,7 +213,6 @@ describe("cloud list bindings", () => {
     await runCloud(ctx, { store: store(TWO_PROFILES) });
 
     expect(output.join("\n")).toContain('Cloud skills here: "personal" (store default)');
-    expect(output.join("\n")).not.toContain("Traces do not follow");
   });
 
   it("survives a config broken by something else entirely", async () => {
@@ -268,7 +266,6 @@ describe("cloud status", () => {
     expect(printed).toMatch(/catalog\s+https:\/\/cloud\.ratel\.sh\/api\/v1\/catalog\s+default/);
     expect(printed).toContain("state ready");
     expect(printed).not.toContain("rtl_");
-    expect(printed).not.toContain("Traces use their own key");
   });
 
   it("falls back to the store default when nothing selects a profile", async () => {
