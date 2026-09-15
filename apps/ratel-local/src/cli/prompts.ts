@@ -33,7 +33,7 @@ export interface PromptAdapter {
   spinner(): SpinnerHandle;
   isCancel(value: unknown): boolean;
   cancel(message?: string): void;
-  /** False when stdin is a pipe, a file, or CI. */
+  /** False when stdin is not a terminal: a pipe, a file, or most CI runners. */
   canPrompt(): boolean;
 }
 
