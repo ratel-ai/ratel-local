@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isPlainObject } from "@ratel-ai/ratel-local-core";
 import {
   CLOUD_API_KEY_ENV,
   CLOUD_OTLP_TRACES_ENDPOINT_ENV,
@@ -82,7 +83,7 @@ export class CloudTraceSettingsStore implements CloudTraceSettingsStoreLike {
       throw new Error("Ratel Cloud trace settings are not valid JSON");
     }
     if (
-      !isRecord(value) ||
+      !isPlainObject(value) ||
       typeof value.endpoint !== "string" ||
       typeof value.apiKey !== "string"
     ) {
@@ -114,8 +115,4 @@ export class CloudTraceSettingsStore implements CloudTraceSettingsStoreLike {
 function validatedSettings(settings: CloudTraceSettings): CloudTraceSettings {
   const validated = cloudTraceRelayOptions(settings);
   return { endpoint: validated.endpoint.toString(), apiKey: validated.apiKey };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
