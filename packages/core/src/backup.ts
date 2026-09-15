@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import {
   chmod,
@@ -8,6 +8,7 @@ import {
   readdir,
   readFile,
   readlink,
+  rename,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -34,6 +35,8 @@ export interface BackupEntry {
 }
 
 export interface BackupManifest {
+  /** Directory name under ~/.ratel/backups/. */
+  id: string;
   createdAt: string;
   action: "import" | "add" | "remove" | "edit" | "link" | "migrate" | "duplicate" | "cloud-update";
   source?: string;
@@ -56,6 +59,11 @@ function safeStamp(d: Date): string {
   return d.toISOString().replace(/:/g, "-");
 }
 
+/** Suffixed: two captures in the same millisecond must not share a directory. */
+function snapshotId(now: () => Date): string {
+  return `${safeStamp(now())}-${randomUUID().slice(0, 8)}`;
+}
+
 function backupFileName(originalPath: string): string {
   const hash = createHash("sha1").update(originalPath).digest("hex").slice(0, 12);
   return `${hash}-${basename(originalPath)}`;
@@ -66,7 +74,8 @@ export function startBackup(
   fs: BackupFs,
   now: () => Date = () => new Date(),
 ): BackupSession {
-  const dir = join(backupsRoot(env), safeStamp(now()));
+  const id = snapshotId(now);
+  const dir = join(backupsRoot(env), id);
   const captured = new Map<string, BackupEntry>();
   let dirCreated = false;
 
@@ -92,6 +101,7 @@ export function startBackup(
     async finalize(action) {
       await ensureDir();
       const manifest: BackupManifest = {
+        id,
         createdAt: now().toISOString(),
         action,
         entries: Array.from(captured.values()),
@@ -130,7 +140,8 @@ export async function captureSnapshot(
   request: SnapshotRequest,
   now: () => Date = () => new Date(),
 ): Promise<BackupManifest> {
-  const dir = join(backupsRoot(env), safeStamp(now()));
+  const id = snapshotId(now);
+  const dir = join(backupsRoot(env), id);
   await mkdir(dir, { recursive: true });
   const entries: BackupEntry[] = [];
   const seen = new Set<string>();
@@ -140,14 +151,18 @@ export async function captureSnapshot(
     await captureNode(originalPath, join(dir, backupFileName(originalPath)), entries);
   }
   const manifest: BackupManifest = {
+    id,
     createdAt: now().toISOString(),
     action: request.action,
     ...(request.source === undefined ? {} : { source: request.source }),
     entries,
   };
-  // Written last: an interrupted capture leaves a directory with no manifest,
-  // which listBackups already skips.
-  await writeFile(join(dir, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
+  // Written last: an interrupted capture leaves directory
+  // without manifest, which listBackups skips.
+  const manifestPath = join(dir, MANIFEST);
+  const temporaryPath = `${manifestPath}.tmp-${randomUUID()}`;
+  await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await rename(temporaryPath, manifestPath);
   return manifest;
 }
 
@@ -180,7 +195,6 @@ async function captureNode(
     for (const name of (await readdir(originalPath)).sort()) {
       await captureNode(join(originalPath, name), join(backupPath, name), entries);
     }
-    // After the children: a read-only mode would block writing into it.
     await chmod(backupPath, mode);
     return;
   }

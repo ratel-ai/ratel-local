@@ -91,6 +91,20 @@ describe("startBackup + finalize", () => {
     expect(fs.files.get(m.entries[0].backupPath)).toBe("first");
   });
 
+  it("names the manifest id after its own directory", async () => {
+    const fs = new MemFs();
+    const session = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
+    const m = await session.finalize("add");
+    expect(session.dir).toBe(`/home/u/.ratel/backups/${m.id}`);
+  });
+
+  it("gives two sessions started in the same instant distinct directories", async () => {
+    const fs = new MemFs();
+    const first = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
+    const second = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
+    expect(first.dir).not.toBe(second.dir);
+  });
+
   it("uses a filesystem-safe ISO timestamp (no colons) for the dir name", async () => {
     const fs = new MemFs();
     const session = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
@@ -220,6 +234,32 @@ describe("captureSnapshot", () => {
     expect(manifest.entries).toEqual([
       { originalPath: join(root, "gone"), backupPath: expect.any(String), existedBefore: false },
     ]);
+  });
+
+  it("addresses a snapshot by an id unique to two captures in the same instant", async () => {
+    const tree = await buildTree();
+    const at = () => new Date("2026-05-03T12:00:00Z");
+    const first = await captureSnapshot({ homeDir: home }, { action: "import", paths: [tree] }, at);
+    const second = await captureSnapshot(
+      { homeDir: home },
+      { action: "import", paths: [tree] },
+      at,
+    );
+
+    expect(first.id).not.toBe(second.id);
+    for (const m of [first, second]) {
+      expect(dirname(m.entries[0].backupPath)).toBe(join(home, ".ratel", "backups", m.id));
+      await expect(
+        readFile(join(home, ".ratel", "backups", m.id, "manifest.json"), "utf8"),
+      ).resolves.toContain(m.id);
+    }
+  });
+
+  it("leaves no partial manifest behind: it is renamed into place", async () => {
+    const tree = await buildTree();
+    const manifest = await captureSnapshot({ homeDir: home }, { action: "import", paths: [tree] });
+    const dir = join(home, ".ratel", "backups", manifest.id);
+    expect((await readdir(dir)).filter((n) => n.includes(".tmp-"))).toEqual([]);
   });
 
   it("writes the manifest last, so an interrupted capture has none to find", async () => {
