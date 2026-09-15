@@ -25,6 +25,17 @@ describe("runDoctor", () => {
     expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
   });
 
+  it("counts an unreadable Cloud store as an issue", async () => {
+    const homeDir = await temporaryHome();
+    const logs: string[] = [];
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await writeFile(join(homeDir, ".ratel", "cloud.json"), JSON.stringify({ profiles: 12 }));
+
+    await expect(runDoctor(context(homeDir, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    expect(logs.some((line) => line.startsWith("[error] cloud_settings_unreadable"))).toBe(true);
+  });
+
   it("recovers an incomplete mutation before reading configuration snapshots", async () => {
     const homeDir = await temporaryHome();
     const controlDir = join(homeDir, ".ratel");

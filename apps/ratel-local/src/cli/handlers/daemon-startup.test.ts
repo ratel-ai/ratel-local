@@ -97,13 +97,19 @@ describe("daemon startup budget", () => {
         flags: { open: false, telemetry: "off", port: String(port) },
       } as ParsedArgs,
       ctx,
-      { processEnv: { [CLOUD_CATALOG_FEATURE_ENV]: "1", RATEL_API_KEY: "rtl_repro" } },
+      {
+        processEnv: {
+          [CLOUD_CATALOG_FEATURE_ENV]: "1",
+          RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/otlp/v1/traces",
+          RATEL_API_KEY: "rtl_repro",
+        },
+      },
       () => {},
       {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         cloudCatalogFetch: catalogFetch as unknown as typeof fetch,
-        cloudTraceSettingsStore: { load: async () => undefined, save: async () => {} },
+        cloudSettingsStore: { load: async () => undefined, save: async () => {} },
         preparedChanges: createTestPreparedChanges(fs),
       },
     );

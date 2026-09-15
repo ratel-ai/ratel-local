@@ -1,60 +1,84 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { cloudOtlpTraceRelayOptions } from "./otlp-trace-relay.js";
+import { isPlainObject } from "@ratel-ai/ratel-local-core";
+import { headerSafeSecret } from "./header-safe-secret.js";
+import { secretFreeHttpsUrl } from "./url.js";
 
-export const DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT = "https://cloud.ratel.sh/api/v1/traces";
+/** The deployment every install talks to unless `baseUrl` says otherwise. */
+export const DEFAULT_CLOUD_BASE_URL = "https://cloud.ratel.sh";
+/** Paths are the protocol, not a setting: only the deployment they sit on varies. */
+export const CLOUD_CATALOG_PATH = "/api/v1/catalog";
 
-export interface CloudTraceSettings {
-  endpoint: string;
+export interface CloudProfile {
   apiKey: string;
 }
 
-export interface CloudTraceSettingsStoreLike {
-  load(): Promise<CloudTraceSettings | undefined>;
-  save(settings: CloudTraceSettings): Promise<void>;
+export interface CloudSettings {
+  /** The deployment. Origin only; a path prefix needs the three explicit endpoints. */
+  baseUrl?: string;
+  /** Full override, for a prefix or a catalog aimed elsewhere. */
+  catalogEndpoint?: string;
+  default?: string;
+  profiles: Record<string, CloudProfile>;
 }
 
-export function cloudTraceSettingsPath(homeDir: string): string {
-  return join(homeDir, ".ratel", "cloud-traces.json");
+export interface CloudEndpoints {
+  catalog: URL;
 }
 
-export class CloudTraceSettingsStore implements CloudTraceSettingsStoreLike {
+/** The override, else the deployment's path. One rule, no derivation. */
+export function cloudEndpoints(settings?: CloudSettings): CloudEndpoints {
+  const base = settings?.baseUrl ?? DEFAULT_CLOUD_BASE_URL;
+  return {
+    catalog: settings?.catalogEndpoint
+      ? new URL(settings.catalogEndpoint)
+      : new URL(CLOUD_CATALOG_PATH, base),
+  };
+}
+
+export interface CloudSettingsStoreLike {
+  load(): Promise<CloudSettings | undefined>;
+  save(settings: CloudSettings): Promise<void>;
+}
+
+/** Unknown name is an error, never a silent fall back to `default` (ADR-0021). */
+export function resolveCloudCredential(
+  settings: CloudSettings,
+  selection: { profile?: string; source: string },
+): string | undefined {
+  const name = selection.profile ?? settings.default;
+  if (!name) return undefined;
+  const profile = settings.profiles[name];
+  if (!profile) {
+    const known = Object.keys(settings.profiles).sort().join(", ") || "none";
+    throw new Error(
+      `Cloud profile ${JSON.stringify(name)} (${selection.source}) is not in cloud.json; known profiles: ${known}`,
+    );
+  }
+  return profile.apiKey;
+}
+
+export function cloudSettingsPath(homeDir: string): string {
+  return join(homeDir, ".ratel", "cloud.json");
+}
+
+export class CloudSettingsStore implements CloudSettingsStoreLike {
   constructor(private readonly path: string) {}
 
-  async load(): Promise<CloudTraceSettings | undefined> {
-    let raw: string;
-    try {
-      raw = await readFile(this.path, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
-
-    let value: unknown;
-    try {
-      value = JSON.parse(raw);
-    } catch {
-      throw new Error("Ratel Cloud trace settings are not valid JSON");
-    }
-    if (
-      !isRecord(value) ||
-      typeof value.endpoint !== "string" ||
-      typeof value.apiKey !== "string"
-    ) {
-      throw new Error("Ratel Cloud trace settings are malformed");
-    }
-    return validatedSettings({ endpoint: value.endpoint, apiKey: value.apiKey });
+  async load(): Promise<CloudSettings | undefined> {
+    const current = await readJsonFile(this.path);
+    return current === undefined ? undefined : validated(parseSettings(current));
   }
 
-  async save(settings: CloudTraceSettings): Promise<void> {
-    const validated = validatedSettings(settings);
+  async save(settings: CloudSettings): Promise<void> {
+    const next = validated(settings);
     const directory = dirname(this.path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await chmod(directory, 0o700);
     const temporaryPath = `${this.path}.${randomUUID()}.tmp`;
     try {
-      await writeFile(temporaryPath, `${JSON.stringify(validated, null, 2)}\n`, {
+      await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, {
         encoding: "utf8",
         mode: 0o600,
         flag: "wx",
@@ -67,14 +91,61 @@ export class CloudTraceSettingsStore implements CloudTraceSettingsStoreLike {
   }
 }
 
-function validatedSettings(settings: CloudTraceSettings): CloudTraceSettings {
-  const validated = cloudOtlpTraceRelayOptions({
-    endpoint: settings.endpoint,
-    apiKey: settings.apiKey,
+async function readJsonFile(path: string): Promise<unknown> {
+  const raw = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
   });
-  return { endpoint: validated.endpoint.toString(), apiKey: validated.apiKey };
+  if (raw === undefined) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(`Ratel Cloud settings at ${path} are not valid JSON`);
+  }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function parseSettings(value: unknown): CloudSettings {
+  if (!isPlainObject(value) || !isPlainObject(value.profiles)) {
+    throw new Error("Ratel Cloud settings are malformed");
+  }
+  const profiles: Record<string, CloudProfile> = {};
+  for (const [name, profile] of Object.entries(value.profiles)) {
+    if (!isPlainObject(profile) || typeof profile.apiKey !== "string") {
+      throw new Error(`Ratel Cloud profile ${JSON.stringify(name)} is malformed`);
+    }
+    profiles[name] = { apiKey: profile.apiKey };
+  }
+  const url = (key: "baseUrl" | "catalogEndpoint") =>
+    typeof value[key] === "string" && value[key] !== "" ? { [key]: value[key] } : {};
+  return {
+    ...url("baseUrl"),
+    ...url("catalogEndpoint"),
+    ...(typeof value.default === "string" && value.default !== ""
+      ? { default: value.default }
+      : {}),
+    profiles,
+  };
+}
+
+function validated(settings: CloudSettings): CloudSettings {
+  if (settings.default !== undefined && !settings.profiles[settings.default]) {
+    throw new Error(
+      `Ratel Cloud default profile ${JSON.stringify(settings.default)} is not defined`,
+    );
+  }
+  for (const [name, { apiKey }] of Object.entries(settings.profiles)) {
+    headerSafeSecret(apiKey, `Cloud profile ${name} API key`);
+  }
+  const checked = { ...settings };
+  for (const key of ["catalogEndpoint"] as const) {
+    const value = checked[key];
+    if (value !== undefined)
+      checked[key] = secretFreeHttpsUrl(value, `Ratel Cloud ${key}`).toString();
+  }
+  // Stored as an origin because that is all of it the paths are joined to: a
+  // prefix written here would be dropped at use, so it is dropped on the way in.
+  if (checked.baseUrl !== undefined) {
+    checked.baseUrl = secretFreeHttpsUrl(checked.baseUrl, "Ratel Cloud baseUrl").origin;
+  }
+  return checked;
 }

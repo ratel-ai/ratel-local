@@ -177,11 +177,45 @@ immutable gateway generation. See the [retrieval configuration and preflight
 guide](docs/retrieval.md) for local, Hugging Face, Ollama, and
 OpenAI-compatible embedding sources plus privacy and memory guidance.
 
+### Connect a Ratel Cloud account
+
+Cloud skill-catalog credentials are stored as named profiles in
+`~/.ratel/cloud.json`, readable only by you and never inside a repository:
+
+```bash
+ratel-local cloud add personal   # masked prompt for the key; needs a terminal
+ratel-local cloud list           # stored profiles, and which one applies here
+ratel-local cloud status         # this directory's resolved profile and state
+```
+
+Create a key at <https://cloud.ratel.sh/settings>. The first profile you store
+becomes the default, so a single account needs nothing further. To take one
+project's skills from a different account:
+
+```bash
+ratel-local cloud use acme --scope project
+```
+
+That writes `cloud.profile` into the project config `/path/to/project/.ratel/config.json`,
+the file stores a profile name (never a key), so it stays safe to commit
+and your team inherits the binding by cloning. Reconnect the agent afterwards.
+
+Check a stored key with `ratel-local cloud test <profile>` (reachability and
+authorization are reported separately). Remove one with
+`ratel-local cloud remove <profile>`; the command refuses while this directory's
+user/project/local configs still select it unless you pass `--force`. For a
+machine-local switch that is not committed, use
+`ratel-local cloud use <profile> --scope local`.
+
+Telemetry is separate and keeps its own single key in `~/.ratel/cloud-traces.json`
+or in `RATEL_API_KEY`: an agent's exporter is configured once per machine, so
+traces and logs go to one Cloud project regardless of `cloud.profile`.
+
 ### Experimental Cloud telemetry
 
 Native Claude Code and Codex telemetry relay plus Ratel runtime trace export
-ship dark. Enable the daemon-wide feature explicitly before configuring an API
-key or native exporter:
+ship dark. Enable the daemon-wide feature explicitly before configuring a
+native exporter:
 
 ```bash
 # New installation
@@ -196,9 +230,10 @@ RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
 ratel-local traces status
 ```
 
-Only the exact value `1` enables the feature; any other value disables it. The
-setting is persisted into the installed launchd or systemd service, and omitting
-the variable leaves an installed daemon unchanged. See the [Cloud OTLP relay and native exporter setup
+Only the exact value `1` enables a daemon feature flag; any other value disables
+it. Flags are persisted into the installed launchd or systemd service, and a
+flag you leave out of the environment keeps whatever the service already says.
+See the [Cloud OTLP relay and native exporter setup
 contract](docs/cloud-otlp-relay.md) for privacy levels, precedence, failure
 behavior, and rollback instructions.
 
@@ -219,11 +254,11 @@ RATEL_FEATURE_CLOUD_CATALOG=1 ratel-local daemon restart
 RATEL_FEATURE_CLOUD_CATALOG=0 ratel-local daemon restart
 ```
 
-The flag follows same flag semantics as Cloud telemetry above, and the two are independent.
+The flag follows the same semantics as Cloud telemetry above, and the two are independent.
 
-The catalog reuses the credential the trace relay stores in
-`~/.ratel/cloud-traces.json`, read on every pull, so a rotated key applies
-without a restart.
+The catalog pulls with the Cloud profile this directory resolves to, stored in
+`~/.ratel/cloud.json` and read on every pull, so a rotated key applies without a
+restart.
 
 A local skill with the same id wins, and the shadowed Cloud one is reported as a
 warning in the daemon UI. An unreachable or stale catalog is a warning too, never

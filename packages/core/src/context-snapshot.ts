@@ -74,7 +74,10 @@ export interface ContextSnapshotResolverOptions {
   /** Daemon environment used to resolve MCP URL placeholders. Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
   /** Injected catalog pull; this module does no network I/O. */
-  cloudCatalog?: (context: RuntimeContextRef) => Promise<CloudCatalogPullResult | undefined>;
+  cloudCatalog?: (
+    context: RuntimeContextRef,
+    profile?: string,
+  ) => Promise<CloudCatalogPullResult | undefined>;
 }
 
 export interface CloudCatalogPullResult {
@@ -137,8 +140,8 @@ export function createContextSnapshotResolver(
   return {
     async resolve(context) {
       let pulled: Promise<CloudCatalogPull> | undefined;
-      const pullCloudCatalog = () =>
-        (pulled ??= pullCloudCatalogOnce(options.cloudCatalog, context));
+      const pullCloudCatalog = (profile?: string) =>
+        (pulled ??= pullCloudCatalogOnce(options.cloudCatalog, context, profile));
       const projectRoot = await resolveProjectRoot(context, options.projectRegistry);
       const targets = documentTargets(options.homeDir, context, projectRoot);
       if (projectRoot) {
@@ -195,8 +198,9 @@ export function createContextSnapshotResolver(
         const oauthStoreRevisions = await readOAuthStoreRevisions(mcpEntries);
         const confirmedOAuthStoreRevisions = await readOAuthStoreRevisions(mcpEntries);
         if (!sameOAuthStoreRevisions(oauthStoreRevisions, confirmedOAuthStoreRevisions)) continue;
-        const retrieval = mergeConfigs(documents.map(({ config }) => config)).retrieval;
-        const cloud = await pullCloudCatalog();
+        const merged = mergeConfigs(documents.map(({ config }) => config));
+        const retrieval = merged.retrieval;
+        const cloud = await pullCloudCatalog(merged.cloud?.profile);
         const composed = composeSkills(skills.effectiveSkills, cloud.catalog?.skills ?? []);
         const diagnostics: Diagnostic[] = [
           ...cloudDiagnostics(cloud, composed.shadowed),
@@ -457,10 +461,11 @@ function cloudDiagnostics(cloud: CloudCatalogPull, shadowed: string[]): Diagnost
 async function pullCloudCatalogOnce(
   pull: ContextSnapshotResolverOptions["cloudCatalog"],
   context: RuntimeContextRef,
+  profile?: string,
 ): Promise<CloudCatalogPull> {
   if (!pull) return {};
   try {
-    const result = await pull(context);
+    const result = await pull(context, profile);
     return result ? { catalog: result.catalog, degraded: result.degraded } : {};
   } catch (error) {
     return { error: (error as Error).message };

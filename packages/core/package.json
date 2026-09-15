@@ -8,6 +8,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./json": {
+      "types": "./src/json.ts",
+      "default": "./src/json.ts"
+    },
     "./agent-import-workflow": {
       "types": "./src/agent-import-workflow.ts",
       "default": "./src/agent-import-workflow.ts"
