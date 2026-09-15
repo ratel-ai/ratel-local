@@ -1,15 +1,18 @@
 export const CLOUD_TELEMETRY_FEATURE_ENV = "RATEL_FEATURE_CLOUD_TELEMETRY";
 export const CLOUD_CATALOG_FEATURE_ENV = "RATEL_FEATURE_CLOUD_CATALOG";
+export const SKILL_STORAGE_FEATURE_ENV = "RATEL_FEATURE_SKILL_STORAGE";
 
 /** Every daemon-wide flag an installed service may carry. */
 export const SERVICE_FEATURE_FLAG_ENVS = [
   CLOUD_TELEMETRY_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
+  SKILL_STORAGE_FEATURE_ENV,
 ] as const;
 
 export interface FeatureFlags {
   cloudTelemetry: boolean;
   cloudCatalog: boolean;
+  skillStorage: boolean;
 }
 
 /** The flags an operator named explicitly, keyed by environment variable. */
@@ -25,14 +28,18 @@ export function featureFlagsFromEnv(env: NodeJS.ProcessEnv): FeatureFlags {
   return {
     cloudTelemetry: env[CLOUD_TELEMETRY_FEATURE_ENV] === "1",
     cloudCatalog: env[CLOUD_CATALOG_FEATURE_ENV] === "1",
+    skillStorage: env[SKILL_STORAGE_FEATURE_ENV] === "1",
   };
 }
 
 /** Only enabled flags reach the service file; absence means off. */
-export function featureFlagServiceEnvironment(flags: FeatureFlags): Record<string, string> {
+export function featureFlagServiceEnvironment(
+  flags: Partial<FeatureFlags>,
+): Record<string, string> {
   return {
     ...(flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {}),
     ...(flags.cloudCatalog ? { [CLOUD_CATALOG_FEATURE_ENV]: "1" } : {}),
+    ...(flags.skillStorage ? { [SKILL_STORAGE_FEATURE_ENV]: "1" } : {}),
   };
 }
 

@@ -26,6 +26,7 @@ import {
   type TransportFactory,
 } from "@ratel-ai/ratel-local-core";
 import { type AgentPluginInstaller, createRatelAgentPluginInstaller } from "../agent-plugin.js";
+import { featureFlagsFromEnv } from "../feature-flags.js";
 import { ArgError, type ParsedArgs, parseArgs } from "./args.js";
 import { daemonLoopbackUrl, requestRunningDaemon, requireDaemonJson } from "./daemon-api.js";
 import { BACKUP_USAGE, runBackup } from "./handlers/backup.js";
@@ -174,6 +175,7 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     fs: options.fs ?? nodeFs,
     log,
     prompts: options.prompts ?? silentPromptAdapter(),
+    featureFlags: featureFlagsFromEnv(process.env),
     installAgentPlugin:
       options.installAgentPlugin ??
       createRatelAgentPluginInstaller({

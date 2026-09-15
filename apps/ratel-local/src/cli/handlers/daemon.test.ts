@@ -12,7 +12,11 @@ import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core"
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import { connectorHeaders } from "../../daemon/access.js";
-import { CLOUD_CATALOG_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
+import {
+  CLOUD_CATALOG_FEATURE_ENV,
+  CLOUD_TELEMETRY_FEATURE_ENV,
+  SKILL_STORAGE_FEATURE_ENV,
+} from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
@@ -1014,6 +1018,31 @@ describe("runDaemon", () => {
     ]);
     expect(progress).toEqual(["start:Setting up Ratel Local…", "stop:Ratel Local is ready"]);
     expect(logs).toEqual([]);
+  });
+
+  it("carries the Skill storage flag through install and reinstall", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    const install = async () =>
+      runDaemon(
+        daemonArgs({ verb: "install", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [SKILL_STORAGE_FEATURE_ENV]: "1", PATH: "/usr/bin" } },
+        () => {},
+        {
+          platform: "darwin",
+          executablePath: "/opt/bin/ratel-local",
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+    await install();
+    expect(fs.files.get(paths.plist)).toContain(`<key>${SKILL_STORAGE_FEATURE_ENV}</key>`);
+    await install();
+    expect(fs.files.get(paths.plist)).toContain(`<key>${SKILL_STORAGE_FEATURE_ENV}</key>`);
   });
 
   it("keeps restart visibly active with friendly lifecycle copy", async () => {
