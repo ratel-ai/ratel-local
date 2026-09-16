@@ -1,6 +1,8 @@
+import { SKILL_STORAGE_FEATURE_ENV } from "@ratel-ai/ratel-local-core";
+
 export const CLOUD_TELEMETRY_FEATURE_ENV = "RATEL_FEATURE_CLOUD_TELEMETRY";
 export const CLOUD_CATALOG_FEATURE_ENV = "RATEL_FEATURE_CLOUD_CATALOG";
-export const SKILL_STORAGE_FEATURE_ENV = "RATEL_FEATURE_SKILL_STORAGE";
+export { SKILL_STORAGE_FEATURE_ENV };
 
 /** Every daemon-wide flag an installed service may carry. */
 export const SERVICE_FEATURE_FLAG_ENVS = [

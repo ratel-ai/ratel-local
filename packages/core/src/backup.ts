@@ -13,6 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { skillStorageEnabled } from "./feature-flags.js";
 import type { HierarchyEnv } from "./hierarchy.js";
 
 export interface BackupFs {
@@ -164,6 +165,19 @@ export async function captureSnapshot(
   await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`);
   await rename(temporaryPath, manifestPath);
   return manifest;
+}
+
+/** Snapshot when the new Skill filesystem is on, flat per-file copies otherwise. */
+export async function captureOperationBackup(
+  env: HierarchyEnv,
+  fs: BackupFs,
+  request: SnapshotRequest,
+  processEnv: NodeJS.ProcessEnv = process.env,
+): Promise<BackupManifest> {
+  if (skillStorageEnabled(processEnv)) return captureSnapshot(env, request);
+  const session = startBackup(env, fs);
+  for (const path of request.paths) await session.capture(path);
+  return session.finalize(request.action);
 }
 
 async function captureNode(

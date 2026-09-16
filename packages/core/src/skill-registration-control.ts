@@ -1,9 +1,10 @@
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { startBackup } from "./backup.js";
+import { captureSnapshot, startBackup } from "./backup.js";
 import type { ConfigControlPlane } from "./config-control-plane.js";
 import type { DocumentRevision, RatelScopeRef, RuntimeContextRef } from "./context.js";
 import type { ContextSnapshotResolver } from "./context-snapshot.js";
+import { skillStorageEnabled } from "./feature-flags.js";
 import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
 import type { SkillSource } from "./lib/config.js";
@@ -713,6 +714,18 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         },
       },
       captureBackup: async () => {
+        const action =
+          input.action === "create" || input.action === "add-scope"
+            ? "add"
+            : input.action === "remove"
+              ? "remove"
+              : "edit";
+        if (skillStorageEnabled()) {
+          return captureSnapshot(
+            { homeDir: this.options.homeDir },
+            { action, paths: input.operations.map((operation) => operation.path) },
+          );
+        }
         const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
         for (const operation of input.operations) {
           if (operation.kind === "delete-artifact") {
@@ -721,13 +734,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
             await backup.capture(operation.path);
           }
         }
-        return backup.finalize(
-          input.action === "create" || input.action === "add-scope"
-            ? "add"
-            : input.action === "remove"
-              ? "remove"
-              : "edit",
-        );
+        return backup.finalize(action);
       },
       result: { action: input.action, target: input.target, id: input.id },
     });

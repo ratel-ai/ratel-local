@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BackupEntry, BackupManifest } from "./backup.js";
-import { captureSnapshot, listBackups, startBackup } from "./backup.js";
+import { captureOperationBackup, captureSnapshot, listBackups, startBackup } from "./backup.js";
 
 const HOME = "/home/u";
 
@@ -109,6 +109,23 @@ describe("startBackup + finalize", () => {
     const fs = new MemFs();
     const session = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
     expect(session.dir).not.toContain(":");
+  });
+});
+
+describe("captureOperationBackup", () => {
+  it("keeps the per-file copies while the Skill filesystem flag is off", async () => {
+    const fs = new MemFs();
+    fs.files.set("/a.json", "A");
+
+    const manifest = await captureOperationBackup(
+      { homeDir: HOME },
+      fs,
+      { action: "import", paths: ["/a.json"] },
+      {},
+    );
+
+    expect(manifest.entries[0].kind).toBeUndefined();
+    expect(fs.files.get(manifest.entries[0].backupPath)).toBe("A");
   });
 });
 
@@ -224,6 +241,24 @@ describe("captureSnapshot", () => {
 
     expect(manifest.entries.some((e) => e.originalPath.includes("secret.txt"))).toBe(false);
     await expect(readdir(join(tree, "link"))).resolves.toEqual(["secret.txt"]);
+  });
+
+  it("captures the tree through captureOperationBackup once the flag is on", async () => {
+    const tree = await buildTree();
+
+    const manifest = await captureOperationBackup(
+      { homeDir: home },
+      new MemFs(),
+      {
+        action: "import",
+        paths: [tree],
+      },
+      { RATEL_FEATURE_SKILL_STORAGE: "1" },
+    );
+
+    const link = byPath(manifest, join(tree, "link"));
+    expect(link.kind).toBe("symlink");
+    expect(byPath(manifest, join(tree, "run.sh")).mode).toBe(0o755);
   });
 
   it("records a missing path instead of failing", async () => {

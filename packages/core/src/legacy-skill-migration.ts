@@ -1,6 +1,6 @@
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { startBackup } from "./backup.js";
+import { captureOperationBackup } from "./backup.js";
 import type { ConfigControlPlane } from "./config-control-plane.js";
 import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
@@ -179,12 +179,11 @@ export async function prepareLegacySkillMigration(options: {
       diagnostics,
       files: mutation.preview.files,
     }),
-    captureBackup: async () => {
-      const backup = startBackup({ homeDir: options.homeDir }, nodeFs);
-      await backup.capture(current.path);
-      await backup.capture(manifestPath);
-      return backup.finalize("import");
-    },
+    captureBackup: () =>
+      captureOperationBackup({ homeDir: options.homeDir }, nodeFs, {
+        action: "migrate",
+        paths: [current.path, manifestPath],
+      }),
     result: { migrated, diagnostics },
   });
 }
