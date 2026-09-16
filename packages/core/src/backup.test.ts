@@ -152,6 +152,18 @@ describe("listBackups", () => {
     expect(list[1].action).toBe("import");
   });
 
+  it("gives a manifest written before ids its directory name", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      "/home/u/.ratel/backups/2026-05-01T10-00-00.000Z/manifest.json",
+      JSON.stringify({ createdAt: "2026-05-01T10:00:00.000Z", action: "add", entries: [] }),
+    );
+
+    const list = await listBackups({ homeDir: HOME }, fs);
+
+    expect(list[0].id).toBe("2026-05-01T10-00-00.000Z");
+  });
+
   it("ignores backup directories that have no manifest", async () => {
     const fs = new MemFs();
     fs.files.set("/home/u/.ratel/backups/abandoned/something.txt", "x");
