@@ -173,6 +173,7 @@ export async function prepareLegacySkillMigration(options: {
     kind: "skill.legacy-migration",
     operations,
     affectedContexts: [{ kind: "global" }],
+    skillIds: migrated,
     buildPreview: (mutation) => ({
       migrated,
       diagnostics,

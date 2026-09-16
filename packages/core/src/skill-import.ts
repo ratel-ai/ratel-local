@@ -293,6 +293,10 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
       kind: "skill.import",
       operations: [...configOperations, ...hostPolicyOperations, ...copyOperations],
       affectedContexts: contextsForSelections(appliedSelections),
+      skillIds: appliedSelections.flatMap((selection) => {
+        const candidate = candidateById.get(selection.candidateId);
+        return candidate ? [candidate.id] : [];
+      }),
       buildPreview: (mutation) => {
         for (const target of documents.values()) {
           const previewRevision = mutation.baseRevisions[target.path];

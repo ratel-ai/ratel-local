@@ -117,6 +117,8 @@ export interface CommitMutationOptions {
     | Promise<MutationJournalAnnotation>;
   /** Recheck path/ownership invariants immediately before publishing each artifact. */
   operationPrecondition?: (operation: MutationOperation, index: number) => void | Promise<void>;
+  /** Skills this transaction owns; a concurrent transaction on any of them is rejected. */
+  skillIds?: readonly string[];
 }
 
 export interface MutationCommit {
@@ -157,7 +159,8 @@ export interface MutationEngine {
 export type MutationConflictReason =
   | "digest_mismatch"
   | "revision_conflict"
-  | "transaction_conflict";
+  | "transaction_conflict"
+  | "skill_busy";
 
 /** Maps directly to HTTP 409 without coupling the core package to an HTTP framework. */
 export class MutationConflictError extends Error {
@@ -216,6 +219,7 @@ export interface MutationJournalV1 extends MutationJournalAnnotation {
   version: 1;
   transactionId: string;
   status: "prepared" | "applying" | "committed";
+  skillIds?: string[];
   entries: MutationJournalEntryV1[];
 }
 
@@ -366,6 +370,7 @@ export class FilesystemMutationEngine implements MutationEngine {
 
   async commit(plan: PreparedMutation, options: CommitMutationOptions): Promise<MutationCommit> {
     this.validateDigest(plan, options.digest);
+    await this.assertSkillsIdle(options.skillIds ?? []);
 
     return this.withLock(async () => {
       await this.recoverUnlocked();
@@ -534,6 +539,7 @@ export class FilesystemMutationEngine implements MutationEngine {
       version: 1,
       transactionId: plan.id,
       status: "prepared",
+      ...(options.skillIds?.length ? { skillIds: [...options.skillIds] } : {}),
       entries: plan.operations.map((operation, index) => ({
         artifactKind:
           operation.kind === "delete-artifact"
@@ -672,13 +678,36 @@ export class FilesystemMutationEngine implements MutationEngine {
     }
   }
 
+  private async assertSkillsIdle(skillIds: readonly string[]): Promise<void> {
+    if (skillIds.length === 0) return;
+    const locked = await lockfile
+      .check(this.options.controlDir, {
+        ...LOCK_OPTIONS,
+        lockfilePath: this.lockPath,
+      })
+      .catch(() => false);
+    if (!locked) return;
+    const names = (await readdir(this.transactionsDir).catch(() => []))
+        .filter((name: string) => name.endsWith(".json"));
+        
+    for (const name of names) {
+      const journal = await readJournal(join(this.transactionsDir, name)).catch(() => null);
+      const busy = journal?.skillIds?.find((id) => skillIds.includes(id));
+      if (busy === undefined) continue;
+      throw new MutationConflictError(
+        "skill_busy",
+        `skill ${busy} is already being changed by transaction ${journal?.transactionId}`,
+      );
+    }
+  }
+
   private async recoverUnlocked(): Promise<MutationRecoveryResult> {
     await mkdir(this.transactionsDir, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
     await chmod(this.transactionsDir, PRIVATE_DIRECTORY_MODE);
     const recovered: RecoveredTransaction[] = [];
     const finalized: string[] = [];
     const names = (await readdir(this.transactionsDir))
-      .filter((name) => name.endsWith(".json"))
+      .filter((name: string) => name.endsWith(".json"))
       .sort();
 
     for (const name of names) {

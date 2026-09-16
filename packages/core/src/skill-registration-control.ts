@@ -665,6 +665,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       kind: `skill.${input.action}`,
       operations: input.operations,
       affectedContexts: [contextForTarget(input.target)],
+      skillIds: [input.id],
       buildPreview: (mutation) => {
         input.verifyPreview(mutation);
         return {
