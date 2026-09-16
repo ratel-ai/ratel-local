@@ -5,6 +5,34 @@ All notable changes to this package are documented here. The format is based on 
 ## [Unreleased]
 
 ### Added
+- Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
+  `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills
+  come from; `list` shows what is stored and which profile resolves here. A running daemon picks up a stored key without a restart.
+- Added `ratel-local cloud status|test|remove`: `status` prints this directory's resolved profile, source, catalog endpoint,
+  and ready/error/none state (files only; a missing selected profile fails with the selecting file and a `cloud add` remedy);
+  `test` performs one authenticated catalog GET and reports reachability and credential validity separately; `remove` deletes
+  a stored profile, clears the store default when that profile was it, and refuses while this directory's user/project/local
+  configs still select it unless `--force` is passed.
+- Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
+  `cloud.apiKey` is rejected.
+- Added per-profile credentials to the Cloud skill catalog: a pull uses the profile the directory resolves to, and a
+  directory naming a profile the store does not define fails instead of falling back to another account.
+- Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
+  unreadable store, a stored key other users can read, and a scope too broken to say which profile it selects.
+
+### Changed
+- Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load
+  whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
+- Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with
+  `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
+- Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
+  any other value disables, and a flag left out keeps whatever the installed service already says.
+
+### Fixed
+- Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that
+  variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
+  keeps the stored key and refuses the save when there is none to keep.
+
 - Added the off-by-default `RATEL_FEATURE_SKILL_STORAGE=1` daemon flag, the gate
   for the new Skill filesystem and host behavior. Nothing reads it yet.
 

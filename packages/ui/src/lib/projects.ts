@@ -1,3 +1,5 @@
+import { isPlainObject } from "@ratel-ai/ratel-local-core/json";
+
 export interface ProjectView {
   id: string;
   canonicalRoot: string;
@@ -15,19 +17,19 @@ export interface ProjectView {
 export function projectsFromResponse(body: unknown): ProjectView[] {
   const input = Array.isArray(body)
     ? body
-    : isRecord(body) && Array.isArray(body.projects)
+    : isPlainObject(body) && Array.isArray(body.projects)
       ? body.projects
       : [];
 
   return input.flatMap((item) => {
-    const id = isRecord(item)
+    const id = isPlainObject(item)
       ? typeof item.projectId === "string"
         ? item.projectId
         : typeof item.id === "string"
           ? item.id
           : null
       : null;
-    if (!isRecord(item) || id === null || typeof item.canonicalRoot !== "string") {
+    if (!isPlainObject(item) || id === null || typeof item.canonicalRoot !== "string") {
       return [];
     }
 
@@ -54,8 +56,4 @@ export function projectLabel(project: ProjectView): string {
   if (project.displayName?.trim()) return project.displayName;
   const segments = project.canonicalRoot.split("/").filter(Boolean);
   return segments.at(-1) ?? project.id;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

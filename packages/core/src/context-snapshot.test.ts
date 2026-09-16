@@ -254,14 +254,16 @@ describe("ContextSnapshotResolver", () => {
   });
 
   it("pulls the Cloud catalog once per resolve, and again on the next one", async () => {
+    // The memo lives inside `resolve`. Hoisting it would make a published
+    // change invisible until the daemon restarted.
     const { homeDir, project } = await fixture();
     const registry = createProjectRegistry({ homeDir });
-    const pulls: unknown[] = [];
+    const pulls: Array<string | undefined> = [];
     const resolver = createContextSnapshotResolver({
       homeDir,
       projectRegistry: registry,
-      cloudCatalog: async () => {
-        pulls.push(null);
+      cloudCatalog: async (_context, profile) => {
+        pulls.push(profile);
         return { catalog: { catalogVersion: `v${pulls.length}`, skills: [] } };
       },
     });
@@ -280,7 +282,7 @@ describe("ContextSnapshotResolver", () => {
       homeDir,
       projectRegistry: createProjectRegistry({ homeDir }),
       cloudCatalog: async () => {
-        throw new Error("Cloud catalog auth failed: HTTP 401");
+        throw new Error('Cloud profile "acme" (cloud.profile) is not in cloud.json');
       },
     });
 
@@ -288,7 +290,7 @@ describe("ContextSnapshotResolver", () => {
 
     const failed = snapshot.diagnostics.find((d) => d.code === "cloud-catalog-unavailable");
     expect(failed?.severity).toBe("warning");
-    expect(failed?.message).toContain("HTTP 401");
+    expect(failed?.message).toContain('"acme" (cloud.profile)');
     expect(snapshot.skills.effectiveSkills).toEqual([]);
   });
 
@@ -308,6 +310,7 @@ describe("ContextSnapshotResolver", () => {
     const stale = snapshot.diagnostics.find((d) => d.code === "cloud-catalog-degraded");
     expect(stale?.severity).toBe("warning");
     expect(stale?.message).toContain("aborted due to timeout");
+    // Degraded is not unavailable: the cached catalog is still in use.
     expect(
       snapshot.diagnostics.find((d) => d.code === "cloud-catalog-unavailable"),
     ).toBeUndefined();

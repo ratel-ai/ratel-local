@@ -74,6 +74,9 @@ export interface ConfigControlPlane {
   mutateServer(
     request: ScopedServerMutationRequest,
   ): Promise<PreparedChangeCommit<ServerMutationResult>>;
+  mutateCloud(
+    request: ScopedCloudMutationRequest,
+  ): Promise<PreparedChangeCommit<CloudMutationResult>>;
   mutateRetrieval(
     request: ScopedRetrievalMutationRequest,
   ): Promise<PreparedChangeCommit<RetrievalMutationResult>>;
@@ -90,6 +93,18 @@ export interface ServerMutationResult {
   action: ServerMutationAction;
   target: RatelScopeRef;
   name: string;
+}
+
+export interface ScopedCloudMutationRequest {
+  target: RatelScopeRef;
+  expectedRevision?: DocumentRevision;
+  /** The stored profile this scope selects. A name, never a credential. */
+  profile: string;
+}
+
+export interface CloudMutationResult {
+  target: RatelScopeRef;
+  profile: string;
 }
 
 export interface RetrievalMutationReview {
@@ -352,16 +367,25 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
     return this.preparedChanges.commit(change.changeId);
   }
 
-  async prepareRetrievalMutation(
-    request: ScopedRetrievalMutationRequest,
-  ): Promise<PreparedChange<RetrievalMutationReview>> {
-    if (request.action === "configure" && request.retrieval === undefined) {
-      throw new MutationValidationError("configure requires a retrieval configuration");
-    }
+  /**
+   * Write one top-level section of a scoped config document. Every section
+   * mutation shares the same machinery — revision conflict, `parseConfig`
+   * validation, the local Git exclude, path invariants and a backup — so only
+   * the section it writes and its labels differ.
+   */
+  private async prepareSectionMutation<Result extends object>(input: {
+    target: RatelScopeRef;
+    expectedRevision?: DocumentRevision;
+    kind: string;
+    label: string;
+    removes: boolean;
+    apply: (document: RatelConfigDocument) => void;
+    result: Result;
+  }): Promise<PreparedChange<Result & { files: MutationPreview["files"] }>> {
     let localGitOperation: { kind: "replace-file"; path: string; contents: string } | undefined;
     let localGitRevision: DocumentRevision | undefined;
-    if (request.target.scope === "local" && this.options.localGitExcludeManager) {
-      const project = await this.resolveAvailableProject(request.target.projectId);
+    if (input.target.scope === "local" && this.options.localGitExcludeManager) {
+      const project = await this.resolveAvailableProject(input.target.projectId);
       const preview = await this.options.localGitExcludeManager.preview(project.canonicalRoot);
       if (preview.changed) {
         localGitOperation = {
@@ -373,26 +397,22 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
       }
     }
 
-    const current = await this.read(request.target);
+    const current = await this.read(input.target);
     if (
-      request.expectedRevision !== undefined &&
-      request.expectedRevision !== current.documentRevision
+      input.expectedRevision !== undefined &&
+      input.expectedRevision !== current.documentRevision
     ) {
       throw new MutationConflictError(
         "revision_conflict",
         `document changed before preview: ${current.path}`,
         current.path,
-        request.expectedRevision,
+        input.expectedRevision,
         current.documentRevision,
       );
     }
 
     const document: RatelConfigDocument = { ...current.document };
-    if (request.action === "reset") {
-      delete document.retrieval;
-    } else {
-      document.retrieval = request.retrieval;
-    }
+    input.apply(document);
     try {
       parseConfig(document);
     } catch (error) {
@@ -411,20 +431,15 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
       ...(localGitOperation ? [localGitOperation] : []),
     ];
     const projectRootsByPath = new Map<string, string>();
-    if (request.target.scope !== "user") {
-      const project = await this.resolveAvailableProject(request.target.projectId);
+    if (input.target.scope !== "user") {
+      const project = await this.resolveAvailableProject(input.target.projectId);
       projectRootsByPath.set(current.path, project.canonicalRoot);
     }
     const allowedPaths = new Set(operations.map(({ path }) => path));
-    const result: RetrievalMutationResult = {
-      action: request.action,
-      target: request.target,
-      ...(request.retrieval ? { retrieval: request.retrieval } : {}),
-    };
     return this.preparedChanges.prepare({
-      kind: `retrieval.${request.action}`,
+      kind: input.kind,
       operations,
-      affectedContexts: [contextForTarget(request.target)],
+      affectedContexts: [contextForTarget(input.target)],
       buildPreview: (mutation) => {
         const previewRevision = mutation.baseRevisions[current.path];
         if (previewRevision !== current.documentRevision) {
@@ -438,8 +453,7 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
         }
         if (
           localGitOperation &&
-          localGitRevision !== undefined &&
-          mutation.baseRevisions[localGitOperation.path] !== localGitRevision
+          localGitRevision !== mutation.baseRevisions[localGitOperation.path]
         ) {
           throw new MutationConflictError(
             "revision_conflict",
@@ -449,10 +463,7 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
             mutation.baseRevisions[localGitOperation.path],
           );
         }
-        return {
-          ...result,
-          files: mutation.preview.files,
-        };
+        return { ...input.result, files: mutation.preview.files };
       },
       invariants: {
         precondition: async () => {
@@ -464,7 +475,7 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
           if (!allowedPaths.has(operation.path)) {
             throw new MutationConflictError(
               "digest_mismatch",
-              `retrieval mutation contains an unexpected path: ${operation.path}`,
+              `${input.label} mutation contains an unexpected path: ${operation.path}`,
             );
           }
           const projectRoot = projectRootsByPath.get(operation.path);
@@ -474,9 +485,54 @@ class FilesystemConfigControlPlane implements ConfigControlPlane {
       captureBackup: async () => {
         const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
         for (const { path } of operations) await backup.capture(path);
-        return backup.finalize(request.action === "reset" ? "remove" : "edit");
+        return backup.finalize(input.removes ? "remove" : "edit");
       },
-      result,
+      result: input.result,
+    });
+  }
+
+  async mutateCloud(
+    request: ScopedCloudMutationRequest,
+  ): Promise<PreparedChangeCommit<CloudMutationResult>> {
+    const change = await this.prepareSectionMutation<CloudMutationResult>({
+      target: request.target,
+      ...(request.expectedRevision !== undefined
+        ? { expectedRevision: request.expectedRevision }
+        : {}),
+      kind: "cloud.use",
+      label: "cloud",
+      removes: false,
+      apply: (document) => {
+        document.cloud = { profile: request.profile };
+      },
+      result: { target: request.target, profile: request.profile },
+    });
+    return this.preparedChanges.commit(change.changeId);
+  }
+
+  async prepareRetrievalMutation(
+    request: ScopedRetrievalMutationRequest,
+  ): Promise<PreparedChange<RetrievalMutationReview>> {
+    if (request.action === "configure" && request.retrieval === undefined) {
+      throw new MutationValidationError("configure requires a retrieval configuration");
+    }
+    return this.prepareSectionMutation<RetrievalMutationResult>({
+      target: request.target,
+      ...(request.expectedRevision !== undefined
+        ? { expectedRevision: request.expectedRevision }
+        : {}),
+      kind: `retrieval.${request.action}`,
+      label: "retrieval",
+      removes: request.action === "reset",
+      apply: (document) => {
+        if (request.action === "reset") delete document.retrieval;
+        else document.retrieval = request.retrieval;
+      },
+      result: {
+        action: request.action,
+        target: request.target,
+        ...(request.retrieval ? { retrieval: request.retrieval } : {}),
+      },
     });
   }
 
