@@ -6,6 +6,7 @@ import {
   createMutationEngine,
   createPreparedChangeCoordinator,
   createProjectRegistry,
+  describeRecoveredTransaction,
   InvalidContextSnapshotError,
   inventoryLegacyOAuthStores,
   prepareLegacySkillMigration,
@@ -32,7 +33,14 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
   const controlDir = join(ctx.env.homeDir, ".ratel");
   let mutationEngine: Awaited<ReturnType<typeof createMutationEngine>>;
   try {
-    mutationEngine = await createMutationEngine({ controlDir });
+    mutationEngine = await createMutationEngine({
+      controlDir,
+      onRecovery: ({ recovered }) => {
+        for (const transaction of recovered) {
+          ctx.log(`[ok] mutation_recovery: ${describeRecoveredTransaction(transaction)}`);
+        }
+      },
+    });
   } catch (error) {
     ctx.log(
       `[error] mutation_recovery_failed: ${(error as Error).message}. Action: inspect ${join(controlDir, "transactions")} and repair or restore the reported journal before retrying.`,

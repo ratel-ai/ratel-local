@@ -17,6 +17,7 @@ import {
   documentRevision,
   MutationConflictError,
   type MutationJournalV1,
+  type MutationRecoveryResult,
 } from "./mutation-engine.js";
 
 describe("MutationEngine", () => {
@@ -230,6 +231,8 @@ describe("MutationEngine", () => {
       version: 1,
       transactionId: "crashed",
       status: "applying",
+      kind: "skill.import",
+      snapshotId: "2026-05-03T12-00-00.000Z-abcd1234",
       entries: [
         {
           path: targetPath,
@@ -245,8 +248,22 @@ describe("MutationEngine", () => {
       `${JSON.stringify(journal)}\n`,
     );
 
-    await createMutationEngine({ controlDir });
+    const recoveries: MutationRecoveryResult[] = [];
+    await createMutationEngine({ controlDir, onRecovery: (r) => void recoveries.push(r) });
 
+    expect(recoveries).toEqual([
+      {
+        recovered: [
+          {
+            kind: "skill.import",
+            snapshotId: "2026-05-03T12-00-00.000Z-abcd1234",
+            transactionId: "crashed",
+            paths: [targetPath],
+          },
+        ],
+        finalized: [],
+      },
+    ]);
     expect(await readFile(targetPath, "utf8")).toBe("before");
     await expect(readFile(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(controlDir, "transactions", "crashed.json"))).rejects.toMatchObject({

@@ -171,6 +171,10 @@ class InMemoryPreparedChangeCoordinator implements PreparedChangeCoordinator {
             throw new PreparedChangeCancelledDuringCommit();
           }
           backupManifest = (await stored.captureBackup?.()) ?? null;
+          return {
+            kind: stored.kind,
+            ...(backupManifest === null ? {} : { snapshotId: backupManifest.id }),
+          };
         },
         operationPrecondition: stored.invariants?.operationPrecondition,
       });
