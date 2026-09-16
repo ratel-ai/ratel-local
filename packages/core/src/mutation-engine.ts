@@ -687,9 +687,9 @@ export class FilesystemMutationEngine implements MutationEngine {
       })
       .catch(() => false);
     if (!locked) return;
-    const names = (await readdir(this.transactionsDir).catch(() => []))
-        .filter((name: string) => name.endsWith(".json"));
-        
+    const names = (await readdir(this.transactionsDir).catch(() => [])).filter((name: string) =>
+      name.endsWith(".json"),
+    );
     for (const name of names) {
       const journal = await readJournal(join(this.transactionsDir, name)).catch(() => null);
       const busy = journal?.skillIds?.find((id) => skillIds.includes(id));
