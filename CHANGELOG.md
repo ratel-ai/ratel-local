@@ -33,6 +33,9 @@ All notable changes to this package are documented here. The format is based on 
   variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
   keeps the stored key and refuses the save when there is none to keep.
 
+- Added the off-by-default `RATEL_FEATURE_SKILL_STORAGE=1` daemon flag, the gate
+  for the new Skill filesystem and host behavior. Nothing reads it yet.
+
 ## [0.9.0] - 2026-09-04
 
 ### Added
