@@ -51,11 +51,18 @@ readers", which is exactly what the fused model cannot express.
   what a platform that cannot create the symlink offers, as an explicit choice
   rather than a silent fallback.
 - Store the real path of the content in every registration, including a managed
-  copy under `~/.ratel/skills/<id>`. One field answers where the files are for
-  every origin.
-- Keep Cloud replicas read-only locally. The only local conversion is an explicit
-  detach that preserves the id, the links, and the exposure settings, and
-  disables synchronization.
+  copy or a Cloud replica. One field answers where the files are for every origin.
+- Keep Cloud replicas read-only locally, and store them per credential profile at
+  `~/.ratel/cloud/<profile>/skills/<id>`, never under `~/.ratel/skills`. A
+  profile carries exactly one Cloud project, so two projects that publish the
+  same id arrive through two profiles and land in two directories. A profile is
+  selected per directory, so a replica is active only in a context whose resolved
+  profile is the one it was fetched with. Its registration stays in the
+  machine-local user configuration, keyed by profile and id, because revisions
+  and snapshot references do not belong in a committed project file.
+- Allow one local conversion of a Cloud replica: an explicit detach that preserves
+  the id, the path, the links, and the exposure settings, and disables
+  synchronization.
 - Make every import, migration, duplication, detach, and update one journaled
   transaction with a complete snapshot captured first, under ADR 0009.
 - On Windows, fail an operation whose symlink cannot be created, name the
@@ -72,6 +79,10 @@ readers", which is exactly what the fused model cannot express.
 - The symlinks ADR 0011 forbade return, but under scoped registrations and a
   journaled transaction instead of a separate manifest. The split ownership that
   motivated their removal does not return with them.
+- A Cloud Skill is visible only where its profile applies. Native host roots have
+  no notion of directory, so exposing a Cloud replica natively makes it visible in
+  every session of that host, and two replicas sharing an id cannot both be
+  exposed.
 - Deleting `~/.ratel/skills/<id>` outside Ratel leaves a dangling symlink in the
   host directory. Diagnostics have to report it and restore has to repair it.
 - Windows without the symlink privilege cannot take over a native global Skill. It
