@@ -122,7 +122,7 @@ export async function listBackups(env: HierarchyEnv, fs: BackupFs): Promise<Back
     if (text === null) continue;
     try {
       // Manifests written before the id existed take it from their directory.
-      manifests.push({ name, manifest: { id: name, ...(JSON.parse(text) as BackupManifest) } });
+      manifests.push({ name, manifest: { ...(JSON.parse(text) as BackupManifest), id: name } });
     } catch {
       // ignore unreadable manifest
     }
