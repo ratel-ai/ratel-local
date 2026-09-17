@@ -43,12 +43,17 @@ export interface SkillRegistrationDiagnostic {
   severity?: "warning" | "error";
 }
 
+/** Mirrors the daemon's SkillRegistrationView wire shape from core. */
 export interface SkillRegistrationView extends SkillRegistrationSummary {
   id: string;
   source: string;
   configuredPath?: string;
   canonicalPath?: string;
   diagnostics?: SkillRegistrationDiagnostic[];
+  origin?: "local-managed" | "reference" | "cloud-managed" | "cloud-detached";
+  storage?: { kind: "managed-copy" | "external" | "cloud-replica"; path: string };
+  availability?: "available" | "not-found" | "invalid" | "inaccessible";
+  sync?: "synced" | "conflict" | "disabled";
 }
 
 export interface SkillRegistrationGroup {

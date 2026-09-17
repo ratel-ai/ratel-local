@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { daemonLoopbackUrl, requestRunningDaemon } from "./daemon-api.js";
+import { daemonLoopbackUrl, daemonSkillStorage, requestRunningDaemon } from "./daemon-api.js";
 import { daemonPaths } from "./handlers/daemon.js";
 import type { HandlerCtx } from "./handlers/types.js";
 import { silentPromptAdapter } from "./prompts.js";
@@ -52,6 +52,24 @@ describe("requestRunningDaemon", () => {
 
     await expect(requestRunningDaemon(ctx, "/api/projects")).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("daemonSkillStorage", () => {
+  it("returns true when daemon status reports skillStorage", async () => {
+    await expect(
+      daemonSkillStorage(async () => Response.json({ skillStorage: true }, { status: 200 })),
+    ).resolves.toBe(true);
+  });
+
+  it("returns false when daemon status reports skillStorage off", async () => {
+    await expect(
+      daemonSkillStorage(async () => Response.json({ skillStorage: false }, { status: 200 })),
+    ).resolves.toBe(false);
+  });
+
+  it("returns undefined when the daemon is unreachable", async () => {
+    await expect(daemonSkillStorage(async () => null)).resolves.toBeUndefined();
   });
 });
 

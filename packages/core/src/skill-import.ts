@@ -1,7 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, sep } from "node:path";
+import { basename, isAbsolute, relative, sep } from "node:path";
 import { captureOperationBackup } from "./backup.js";
 import type { DocumentRevision, RatelScopeRef, RuntimeContextRef } from "./context.js";
+import { skillStorageEnabled } from "./feature-flags.js";
 import { ratelConfigPath } from "./hierarchy.js";
 import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
@@ -36,6 +37,11 @@ import {
 } from "./skill-discovery.js";
 import { prepareSkillHostPolicy, type SkillHostPolicy } from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
+import {
+  configuredSkillStoragePath,
+  persistedCopyPathForWrite,
+  skillEntryForWrite,
+} from "./skill-registration.js";
 
 export type SkillImportMode = "reference" | "copy";
 
@@ -95,6 +101,8 @@ export interface SkillImportControlPlaneOptions {
   discovery: SkillDiscovery;
   preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
+  /** When set, overrides skillStorageEnabled() for persisting origin/path. */
+  persistDimensions?: boolean;
 }
 
 export interface SkillImportControlPlane {
@@ -530,25 +538,38 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     hostPolicy: SkillHostPolicy | undefined,
   ): Promise<SkillEntry> {
     const source = configuredSource(candidate.source);
+    const persist = this.options.persistDimensions ?? skillStorageEnabled();
     if (target.mode === "copy") {
-      return {
-        mode: "copy",
+      const entry = {
+        mode: "copy" as const,
         source,
         copiedFrom: { source: candidate.source, id: candidate.id },
         ...(hostPolicy ? { hostPolicy } : {}),
       };
+      if (!persist) return entry;
+      return skillEntryForWrite({
+        ...entry,
+        path: persistedCopyPathForWrite(
+          target.scopeRef,
+          this.options.homeDir,
+          projectRoot,
+          candidate.id,
+        ),
+      });
     }
 
     if (target.scopeRef.scope === "user") {
       if (candidate.context.kind !== "global") {
         throw invalidReference(candidate, target.scopeRef);
       }
-      return {
-        mode: "reference",
+      const entry = {
+        mode: "reference" as const,
         path: candidate.canonicalPath,
         source,
         ...(hostPolicy ? { hostPolicy } : {}),
       };
+      if (!persist) return entry;
+      return skillEntryForWrite(entry);
     }
 
     if (
@@ -567,7 +588,9 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     ) {
       throw invalidReference(candidate, target.scopeRef);
     }
-    return { mode: "reference", path: configuredPath, source };
+    const entry = { mode: "reference" as const, path: configuredPath, source };
+    if (!persist) return entry;
+    return skillEntryForWrite(entry);
   }
 }
 
@@ -661,14 +684,13 @@ function copyTargetPath(
   projectRoot: string | undefined,
   id: string,
 ): string {
-  assertSafeSkillId(id);
-  if (scopeRef.scope === "user") return join(homeDir, ".ratel", "skills", id);
-  if (!projectRoot) {
-    throw new SkillImportValidationError(`${formatScope(scopeRef)} has no registered project root`);
-  }
-  return scopeRef.scope === "project"
-    ? join(projectRoot, ".ratel", "skills", id)
-    : join(projectRoot, ".ratel", "skills.local", id);
+  return configuredSkillStoragePath({
+    homeDir,
+    ...(projectRoot ? { projectRoot } : {}),
+    scopeRef,
+    id,
+    mode: "copy",
+  });
 }
 
 async function validateAdoptions(revisions: ReadonlyMap<string, DocumentRevision>): Promise<void> {

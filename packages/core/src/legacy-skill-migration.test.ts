@@ -1,9 +1,18 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createConfigControlPlane } from "./config-control-plane.js";
-import { migrateLegacySkillLinks } from "./legacy-skill-migration.js";
+import { migrateLegacySkillLinks, prepareLegacySkillMigration } from "./legacy-skill-migration.js";
 import { createMutationEngine } from "./mutation-engine.js";
 import { createPreparedChangeCoordinator } from "./prepared-change-coordinator.js";
 import { createProjectRegistry } from "./project-registry.js";
@@ -128,5 +137,71 @@ describe("legacy skill migration", () => {
     expect((await lstat(managed)).isSymbolicLink()).toBe(true);
     expect(await readFile(unrelated, "utf8")).toBe("do not trust this path\n");
     expect(await readFile(manifestPath, "utf8")).toContain(unrelated);
+  });
+
+  it("writes origin path and hostPolicy when persistDimensions is true", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-legacy-skill-"));
+    homes.push(homeDir);
+    const native = join(homeDir, ".claude", "skills", "review");
+    const managed = join(homeDir, ".ratel", "skills", "review");
+    const manifestPath = join(homeDir, ".ratel", "skill-manifest.json");
+    const configPath = join(homeDir, ".ratel", "config.json");
+    const before = "---\nname: review\ndescription: Review\n---\n\nBody\n";
+    const after =
+      "---\nname: review\ndescription: Review\ndisable-model-invocation: true\n---\n\nBody\n";
+    await mkdir(native, { recursive: true });
+    await mkdir(join(homeDir, ".ratel", "skills"), { recursive: true });
+    await writeFile(join(native, "SKILL.md"), after);
+    await symlink(native, managed);
+    await writeFile(configPath, '{"skills":{"entries":{}}}\n');
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        version: 1,
+        managed: [
+          {
+            id: "review",
+            mode: "linked",
+            originalPath: native,
+            linkPath: managed,
+            source: "claude",
+            metadataPatch: [{ path: join(native, "SKILL.md"), before, after }],
+          },
+        ],
+      })}\n`,
+    );
+    const preparedChanges = createPreparedChangeCoordinator({
+      mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
+    });
+    const configControlPlane = await createConfigControlPlane({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+      preparedChanges,
+    });
+
+    const change = await prepareLegacySkillMigration({
+      homeDir,
+      configControlPlane,
+      preparedChanges,
+      persistDimensions: true,
+    });
+    expect(change).not.toBeNull();
+    if (!change) throw new Error("expected a migration change");
+    await preparedChanges.commit(change.changeId);
+
+    const nativeRealPath = await realpath(native);
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+      skills: {
+        entries: {
+          review: {
+            mode: "reference",
+            origin: "reference",
+            path: nativeRealPath,
+            source: "claude",
+            hostPolicy: { mode: "manual-only", source: "claude" },
+          },
+        },
+      },
+    });
   });
 });

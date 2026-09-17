@@ -24,10 +24,16 @@ import {
   type SkillRegistrationCommit,
   type SkillRegistrationControlPlane,
   type SkillRegistrationReview,
+  skillStorageEnabled,
 } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import type { FlagValue } from "../args.js";
-import { type DaemonApiRequest, requestRunningDaemon, requireDaemonJson } from "../daemon-api.js";
+import {
+  type DaemonApiRequest,
+  daemonSkillStorage,
+  requestRunningDaemon,
+  requireDaemonJson,
+} from "../daemon-api.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import {
   type HookScope,
@@ -148,7 +154,10 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
             "skill discovery came from the daemon, but the daemon disappeared before preview",
           );
         }
-        control = options.importControlPlane ?? (await createImportControlPlane(ctx, runtime));
+        const persistDimensions = await resolveSkillStorageFlag(ctx, options);
+        control =
+          options.importControlPlane ??
+          (await createImportControlPlane(ctx, runtime, persistDimensions));
         change = await control.prepare(selections, { duplicateStrategy: "keep-first" });
       }
       if (dryRun) {
@@ -225,8 +234,10 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           "skill add-scope preparation",
         );
       } else {
+        const persistDimensions = await resolveSkillStorageFlag(ctx, options);
         control =
-          options.registrationControlPlane ?? (await createRegistrationControlPlane(ctx, runtime));
+          options.registrationControlPlane ??
+          (await createRegistrationControlPlane(ctx, runtime, persistDimensions));
         change = await control.prepareAddScope(request);
       }
       if (dryRun) {
@@ -285,7 +296,12 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         deleteOwnedCopy: verb === "remove",
       };
       const control =
-        options.registrationControlPlane ?? (await createRegistrationControlPlane(ctx, runtime));
+        options.registrationControlPlane ??
+        (await createRegistrationControlPlane(
+          ctx,
+          runtime,
+          await resolveSkillStorageFlag(ctx, options),
+        ));
       if (dryRun) {
         const change = await control.prepareRemove(request);
         ctx.log(`would update ${change.preview.files.map(({ path }) => path).join(", ")}`);
@@ -325,7 +341,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
     }
 
     case "list": {
-      const runtime = createSkillReadRuntime(ctx, options);
+      const includeDimensions = await resolveSkillStorageFlag(ctx, options);
+      const runtime = createSkillReadRuntime(ctx, options, includeDimensions);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         undefined,
@@ -567,6 +584,7 @@ interface SkillReadRuntime {
 async function createRegistrationControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
+  persistDimensions?: boolean,
 ): Promise<SkillRegistrationControlPlane> {
   const preparedChanges =
     ctx.preparedChanges ??
@@ -587,12 +605,14 @@ async function createRegistrationControlPlane(
     snapshotResolver: runtime.resolver,
     preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
+    ...(persistDimensions !== undefined ? { persistDimensions } : {}),
   });
 }
 
 async function createImportControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
+  persistDimensions?: boolean,
 ): Promise<SkillImportControlPlane> {
   const preparedChanges =
     ctx.preparedChanges ??
@@ -607,14 +627,32 @@ async function createImportControlPlane(
     discovery: runtime.discovery,
     preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
+    ...(persistDimensions !== undefined ? { persistDimensions } : {}),
   });
 }
 
-function createSkillReadRuntime(ctx: HandlerCtx, options: SkillHandlerOptions): SkillReadRuntime {
+async function resolveSkillStorageFlag(
+  ctx: HandlerCtx,
+  options: SkillHandlerOptions,
+): Promise<boolean> {
+  const daemonRequest =
+    options.daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
+  return (await daemonSkillStorage(daemonRequest)) ?? skillStorageEnabled();
+}
+
+function createSkillReadRuntime(
+  ctx: HandlerCtx,
+  options: SkillHandlerOptions,
+  includeDimensions = false,
+): SkillReadRuntime {
   const registry = options.registry ?? createProjectRegistry({ homeDir: ctx.env.homeDir });
   const resolver =
     options.resolver ??
-    createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry: registry });
+    createContextSnapshotResolver({
+      homeDir: ctx.env.homeDir,
+      projectRegistry: registry,
+      ...(includeDimensions ? { includeDimensions: true } : {}),
+    });
   const discovery =
     options.discovery ??
     createSkillDiscovery({

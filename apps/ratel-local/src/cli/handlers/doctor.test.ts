@@ -2,8 +2,9 @@ import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProjectRegistry, type MutationJournalV1, nodeFs } from "@ratel-ai/ratel-local-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { silentPromptAdapter } from "../prompts.js";
+import { daemonPaths } from "./daemon.js";
 import { DoctorFailure, runDoctor } from "./doctor.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -286,6 +287,66 @@ describe("runDoctor", () => {
         },
       },
     });
+  });
+
+  it("writes origin when doctor --fix learns skillStorage from the daemon", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    const homeDir = await temporaryHome();
+    const native = join(homeDir, ".claude", "skills", "review");
+    const managed = join(homeDir, ".ratel", "skills", "review");
+    const manifestPath = join(homeDir, ".ratel", "skill-manifest.json");
+    const configPath = join(homeDir, ".ratel", "config.json");
+    const before = "---\nname: review\ndescription: Review\n---\n";
+    const after = "---\nname: review\ndescription: Review\ndisable-model-invocation: true\n---\n";
+    await mkdir(native, { recursive: true });
+    await mkdir(join(homeDir, ".ratel", "skills"), { recursive: true });
+    await writeFile(join(native, "SKILL.md"), after);
+    await symlink(native, managed);
+    await writeFile(
+      manifestPath,
+      `${JSON.stringify({
+        version: 1,
+        managed: [
+          {
+            id: "review",
+            mode: "linked",
+            originalPath: native,
+            source: "claude",
+            metadataPatch: [{ path: join(native, "SKILL.md"), before, after }],
+          },
+        ],
+      })}\n`,
+    );
+    await writeFile(daemonPaths(homeDir).state, JSON.stringify({ port: 5731 }));
+    await writeFile(join(homeDir, ".ratel", "daemon-token"), "daemon-test-token");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/daemon/status")) {
+        return Response.json({ skillStorage: true });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const logs: string[] = [];
+    try {
+      await runDoctor(context(homeDir, logs, true));
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        skills: {
+          entries: {
+            review: {
+              mode: "reference",
+              origin: "reference",
+              source: "claude",
+              hostPolicy: { mode: "manual-only", source: "claude" },
+            },
+          },
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
   });
 
   async function temporaryHome(): Promise<string> {
