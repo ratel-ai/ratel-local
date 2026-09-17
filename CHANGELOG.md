@@ -32,7 +32,7 @@ All notable changes to this package are documented here. The format is based on 
   `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
   any other value disables, and a flag left out keeps whatever the installed service already says.
-- With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first. 
+- With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first.
   Deletion used to list directories as regular files, dropping symlinks, modes and binaries. Flag off keeps per-file capture.
 - Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead
   of a fixed line and silence.
@@ -40,9 +40,9 @@ All notable changes to this package are documented here. The format is based on 
   transaction whose lock is gone is still rolled back as a crash, not busy.
 
 ### Fixed
-- Fixed concurrent `ratel-local cloud add` and `cloud remove` dropping other profiles in `~/.ratel/cloud.json`: 
-  each write waits for a file lock, then re-reads, so the first profile that lands keeps `default` and neither 
-  save overwrites the other.
+- Fixed concurrent `ratel-local cloud add` and `cloud remove` dropping other profiles in `~/.ratel/cloud.json`:
+  each write waits for a file lock, then re-reads, so the first profile that lands keeps `default` and neither save
+  overwrites the other.
 - Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that
   variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
   keeps the stored key and refuses the save when there is none to keep.
