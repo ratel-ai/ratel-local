@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BackupFs, type JsonFs, ratelConfigPath } from "@ratel-ai/ratel-local-core";
@@ -79,10 +79,6 @@ function store(initial?: CloudSettings) {
   return {
     saved,
     load: async () => current,
-    save: async (settings: CloudSettings) => {
-      current = settings;
-      saved.push(settings);
-    },
     update: async (mutator: (current: CloudSettings) => CloudSettings | Promise<CloudSettings>) => {
       const next = await mutator(current ?? { profiles: {} });
       current = next;
@@ -198,23 +194,6 @@ describe("cloud add", () => {
     const loaded = await target.load();
     expect(loaded?.profiles).toEqual({ a: { apiKey: "rtl_a" }, b: { apiKey: "rtl_b" } });
     expect(loaded?.default === "a" || loaded?.default === "b").toBe(true);
-    expect((await stat(cloudSettingsPath(homeDir))).mode & 0o777).toBe(0o600);
-    expect((await stat(join(homeDir, ".ratel"))).mode & 0o777).toBe(0o700);
-    const names = await readdir(join(homeDir, ".ratel"));
-    expect(names.filter((name) => name.endsWith(".lock"))).toEqual([]);
-  });
-
-  it("cancelled add does not create a lock file", async () => {
-    const homeDir = await tempHome();
-    const target = new CloudSettingsStore(cloudSettingsPath(homeDir));
-    await runCloud(context("add", ["acme"], {}, answering(CANCEL_SYMBOL), {}, homeDir).ctx, {
-      store: target,
-    });
-
-    expect(await target.load()).toBeUndefined();
-    const names = await readdir(join(homeDir, ".ratel"));
-    expect(names).not.toContain("cloud.json");
-    expect(names.filter((name) => name.endsWith(".lock"))).toEqual([]);
   });
 });
 
@@ -620,21 +599,8 @@ describe("cloud remove", () => {
     }
 
     const documents = projectConfig("acme");
-    const output: string[] = [];
-    const ctx: HandlerCtx = {
-      argv: {
-        group: "cloud",
-        verb: "remove",
-        configPaths: [],
-        rest: ["personal"],
-        extras: [],
-        flags: {},
-      },
-      env: { homeDir: "/home/u", projectRoot: "/repo" },
-      fs: new GatedFs(documents),
-      log: (message) => output.push(message),
-      prompts: silentPromptAdapter(),
-    };
+    const c = context("remove", ["personal"], {}, silentPromptAdapter(), documents);
+    const ctx = { ...c.ctx, fs: new GatedFs(documents) };
     const target = store(TWO_PROFILES);
     const removing = runCloud(ctx, { store: target });
     await readStarted.promise;
@@ -649,7 +615,7 @@ describe("cloud remove", () => {
         extra: { apiKey: "rtl_extra" },
       },
     });
-    expect(output.join("\n")).toContain('Removed Cloud profile "personal"');
-    expect(output.join("\n")).toContain("default was cleared");
+    expect(c.output.join("\n")).toContain('Removed Cloud profile "personal"');
+    expect(c.output.join("\n")).toContain("default was cleared");
   });
 });

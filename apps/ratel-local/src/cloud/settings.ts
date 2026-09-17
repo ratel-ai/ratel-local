@@ -6,9 +6,6 @@ import lockfile from "proper-lockfile";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
 
-const DIR_MODE = 0o700;
-const FILE_MODE = 0o600;
-
 const LOCK_OPTS = {
   realpath: false,
   retries: { retries: 200, factor: 1, minTimeout: 25, maxTimeout: 200 },
@@ -49,8 +46,7 @@ export function cloudEndpoints(settings?: CloudSettings): CloudEndpoints {
 
 export interface CloudSettingsStoreLike {
   load(): Promise<CloudSettings | undefined>;
-  save(settings: CloudSettings): Promise<void>;
-  /** Reads, changes and writes under a file lock. The mutator must not prompt, read other files, or call save/update. */
+  /** Reads, changes and writes under a file lock. The mutator must not prompt, read other files, or call update. */
   update(
     mutator: (current: CloudSettings) => CloudSettings | Promise<CloudSettings>,
   ): Promise<CloudSettings>;
@@ -85,27 +81,17 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
     return current === undefined ? undefined : validated(parseSettings(current));
   }
 
-  async save(settings: CloudSettings): Promise<void> {
-    await this.withLock(() => this.writeUnlocked(settings));
-  }
-
   async update(
     mutator: (current: CloudSettings) => CloudSettings | Promise<CloudSettings>,
   ): Promise<CloudSettings> {
-    return this.withLock(async () => {
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.path), 0o700);
+    const release = await lockfile.lock(this.path, LOCK_OPTS);
+    try {
       const current = (await this.load()) ?? { profiles: {} };
       const next = await mutator(current);
       await this.writeUnlocked(next);
       return next;
-    });
-  }
-
-  private async withLock<T>(fn: () => Promise<T>): Promise<T> {
-    await mkdir(dirname(this.path), { recursive: true, mode: DIR_MODE });
-    await chmod(dirname(this.path), DIR_MODE);
-    const release = await lockfile.lock(this.path, LOCK_OPTS);
-    try {
-      return await fn();
     } finally {
       await release().catch(() => undefined);
     }
@@ -117,11 +103,11 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
     try {
       await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, {
         encoding: "utf8",
-        mode: FILE_MODE,
+        mode: 0o600,
         flag: "wx",
       });
       await rename(temporaryPath, this.path);
-      await chmod(this.path, FILE_MODE);
+      await chmod(this.path, 0o600);
     } finally {
       await rm(temporaryPath, { force: true });
     }

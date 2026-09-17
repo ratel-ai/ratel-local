@@ -43,11 +43,11 @@ async function expectNoLockFile(homeDir: string): Promise<void> {
 describe("Cloud settings store", () => {
   it("persists profiles with user-only permissions", async () => {
     const homeDir = await homeWithRatelDir();
-    await store(homeDir).save({
+    await store(homeDir).update(() => ({
       catalogEndpoint: CATALOG,
       default: "personal",
       profiles: { personal: { apiKey: "rtl_personal" }, acme: { apiKey: "rtl_acme" } },
-    });
+    }));
 
     const path = cloudSettingsPath(homeDir);
     expect((await stat(path)).mode & 0o777).toBe(0o600);
@@ -74,16 +74,22 @@ describe("Cloud settings store", () => {
     });
     await expect(store(homeDir).load()).rejects.toThrow(/malformed/);
 
+    // update loads first, so a fresh store: validation still runs on the write path.
+    const writable = await homeWithRatelDir();
     // A default nobody defines would resolve to nothing at startup.
     await expect(
-      store(homeDir).save({ catalogEndpoint: CATALOG, default: "absent", profiles: {} }),
+      store(writable).update(() => ({
+        catalogEndpoint: CATALOG,
+        default: "absent",
+        profiles: {},
+      })),
     ).rejects.toThrow(/default profile "absent" is not defined/);
 
     await expect(
-      store(homeDir).save({
+      store(writable).update(() => ({
         catalogEndpoint: "http://cloud.example.test/api/v1/catalog",
         profiles: { a: { apiKey: "rtl_a" } },
-      }),
+      })),
     ).rejects.toThrow(/HTTPS/);
   });
 

@@ -360,9 +360,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         cloudCatalogFetch: catalogFetch,
-        cloudSettingsStore: {
-          load: async () => undefined,
-        },
+        cloudSettingsStore: { load: async () => undefined },
       },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
@@ -466,9 +464,7 @@ describe("runDaemon", () => {
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
         cloudCatalogFetch,
-        cloudSettingsStore: {
-          load: async () => stored,
-        },
+        cloudSettingsStore: { load: async () => stored },
       },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
@@ -673,9 +669,7 @@ describe("runDaemon", () => {
         ensureToken: async () => "daemon-test-token",
         configureRatelTelemetry,
         cloudCatalogFetch,
-        cloudSettingsStore: {
-          load,
-        },
+        cloudSettingsStore: { load },
       },
     );
     const daemonUrl = daemonUrlFromLogs(logs);
