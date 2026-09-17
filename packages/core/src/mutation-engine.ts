@@ -101,13 +101,24 @@ export interface PreparedMutation {
   preview: MutationPreview;
 }
 
+export interface MutationJournalAnnotation {
+  kind?: string;
+  snapshotId?: string;
+}
+
 export interface CommitMutationOptions {
   /** Internal digest of the prepared mutation. */
   digest: string;
-  /** Internal control-plane invariant checked while the cross-process lock is held. */
-  precondition?: () => void | Promise<void>;
+  /** Runs while the cross-process lock is held. What it returns is journaled. */
+  precondition?: () =>
+    | void
+    | MutationJournalAnnotation
+    | Promise<void>
+    | Promise<MutationJournalAnnotation>;
   /** Recheck path/ownership invariants immediately before publishing each artifact. */
   operationPrecondition?: (operation: MutationOperation, index: number) => void | Promise<void>;
+  /** Skills this transaction owns; a concurrent transaction on any of them is rejected. */
+  skillIds?: readonly string[];
 }
 
 export interface MutationCommit {
@@ -126,10 +137,16 @@ export interface MutationEngineOptions {
   controlDir: string;
   hooks?: MutationEngineHooks;
   idFactory?: () => string;
+  onRecovery?: (result: MutationRecoveryResult) => void | Promise<void>;
+}
+
+export interface RecoveredTransaction extends MutationJournalAnnotation {
+  transactionId: string;
+  paths: string[];
 }
 
 export interface MutationRecoveryResult {
-  recovered: string[];
+  recovered: RecoveredTransaction[];
   finalized: string[];
 }
 
@@ -142,7 +159,8 @@ export interface MutationEngine {
 export type MutationConflictReason =
   | "digest_mismatch"
   | "revision_conflict"
-  | "transaction_conflict";
+  | "transaction_conflict"
+  | "skill_busy";
 
 /** Maps directly to HTTP 409 without coupling the core package to an HTTP framework. */
 export class MutationConflictError extends Error {
@@ -197,10 +215,11 @@ export interface MutationJournalEntryV1 {
 }
 
 /** Exported so doctor/recovery tooling can inspect journals without private schema knowledge. */
-export interface MutationJournalV1 {
+export interface MutationJournalV1 extends MutationJournalAnnotation {
   version: 1;
   transactionId: string;
   status: "prepared" | "applying" | "committed";
+  skillIds?: string[];
   entries: MutationJournalEntryV1[];
 }
 
@@ -216,11 +235,18 @@ export function documentRevision(bytes: string | Uint8Array): DocumentRevision {
   return `rev_${createHash("sha256").update(bytes).digest("base64url")}` as DocumentRevision;
 }
 
+export function describeRecoveredTransaction(transaction: RecoveredTransaction): string {
+  const snapshot =
+    transaction.snapshotId === undefined ? "" : `, snapshot ${transaction.snapshotId}`;
+  const what = transaction.kind ?? "transaction";
+  return `rolled back ${what} ${transaction.transactionId}: ${transaction.paths.join(", ")}${snapshot}`;
+}
+
 export async function createMutationEngine(
   options: MutationEngineOptions,
 ): Promise<MutationEngine> {
   const engine = new FilesystemMutationEngine(options);
-  await engine.recover();
+  await options.onRecovery?.(await engine.recover());
   return engine;
 }
 
@@ -344,12 +370,13 @@ export class FilesystemMutationEngine implements MutationEngine {
 
   async commit(plan: PreparedMutation, options: CommitMutationOptions): Promise<MutationCommit> {
     this.validateDigest(plan, options.digest);
+    await this.assertSkillsIdle(options.skillIds ?? []);
 
     return this.withLock(async () => {
       await this.recoverUnlocked();
       await this.validateBaseRevisions(plan);
-      await options.precondition?.();
-      return this.commitUnlocked(plan, options);
+      const annotation = (await options.precondition?.()) ?? {};
+      return this.commitUnlocked(plan, options, annotation);
     });
   }
 
@@ -497,6 +524,7 @@ export class FilesystemMutationEngine implements MutationEngine {
   private async commitUnlocked(
     plan: PreparedMutation,
     options: CommitMutationOptions,
+    annotation: MutationJournalAnnotation,
   ): Promise<MutationCommit> {
     const journalPath = this.journalPath(plan.id);
     if (await pathExists(journalPath)) {
@@ -507,9 +535,11 @@ export class FilesystemMutationEngine implements MutationEngine {
     }
 
     const journal: MutationJournalV1 = {
+      ...annotation,
       version: 1,
       transactionId: plan.id,
       status: "prepared",
+      ...(options.skillIds?.length ? { skillIds: [...options.skillIds] } : {}),
       entries: plan.operations.map((operation, index) => ({
         artifactKind:
           operation.kind === "delete-artifact"
@@ -648,13 +678,36 @@ export class FilesystemMutationEngine implements MutationEngine {
     }
   }
 
+  private async assertSkillsIdle(skillIds: readonly string[]): Promise<void> {
+    if (skillIds.length === 0) return;
+    const locked = await lockfile
+      .check(this.options.controlDir, {
+        ...LOCK_OPTIONS,
+        lockfilePath: this.lockPath,
+      })
+      .catch(() => false);
+    if (!locked) return;
+    const names = (await readdir(this.transactionsDir).catch(() => [])).filter((name: string) =>
+      name.endsWith(".json"),
+    );
+    for (const name of names) {
+      const journal = await readJournal(join(this.transactionsDir, name)).catch(() => null);
+      const busy = journal?.skillIds?.find((id) => skillIds.includes(id));
+      if (busy === undefined) continue;
+      throw new MutationConflictError(
+        "skill_busy",
+        `skill ${busy} is already being changed by transaction ${journal?.transactionId}`,
+      );
+    }
+  }
+
   private async recoverUnlocked(): Promise<MutationRecoveryResult> {
     await mkdir(this.transactionsDir, { recursive: true, mode: PRIVATE_DIRECTORY_MODE });
     await chmod(this.transactionsDir, PRIVATE_DIRECTORY_MODE);
-    const recovered: string[] = [];
+    const recovered: RecoveredTransaction[] = [];
     const finalized: string[] = [];
     const names = (await readdir(this.transactionsDir))
-      .filter((name) => name.endsWith(".json"))
+      .filter((name: string) => name.endsWith(".json"))
       .sort();
 
     for (const name of names) {
@@ -667,7 +720,12 @@ export class FilesystemMutationEngine implements MutationEngine {
         } else {
           await this.rollbackJournal(journal);
           await rm(journalPath, { force: true });
-          recovered.push(journal.transactionId);
+          recovered.push({
+            ...(journal.kind === undefined ? {} : { kind: journal.kind }),
+            ...(journal.snapshotId === undefined ? {} : { snapshotId: journal.snapshotId }),
+            transactionId: journal.transactionId,
+            paths: journal.entries.map((entry) => entry.path),
+          });
         }
       } catch (error) {
         throw new MutationRecoveryError(

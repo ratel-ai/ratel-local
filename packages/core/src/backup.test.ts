@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { listBackups, startBackup } from "./backup.js";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { BackupEntry, BackupManifest } from "./backup.js";
+import { captureOperationBackup, captureSnapshot, listBackups, startBackup } from "./backup.js";
 
 const HOME = "/home/u";
 
@@ -86,10 +91,41 @@ describe("startBackup + finalize", () => {
     expect(fs.files.get(m.entries[0].backupPath)).toBe("first");
   });
 
+  it("names the manifest id after its own directory", async () => {
+    const fs = new MemFs();
+    const session = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
+    const m = await session.finalize("add");
+    expect(session.dir).toBe(`/home/u/.ratel/backups/${m.id}`);
+  });
+
+  it("gives two sessions started in the same instant distinct directories", async () => {
+    const fs = new MemFs();
+    const first = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
+    const second = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
+    expect(first.dir).not.toBe(second.dir);
+  });
+
   it("uses a filesystem-safe ISO timestamp (no colons) for the dir name", async () => {
     const fs = new MemFs();
     const session = startBackup({ homeDir: HOME }, fs, () => stableNow(0));
     expect(session.dir).not.toContain(":");
+  });
+});
+
+describe("captureOperationBackup", () => {
+  it("keeps the per-file copies while the Skill filesystem flag is off", async () => {
+    const fs = new MemFs();
+    fs.files.set("/a.json", "A");
+
+    const manifest = await captureOperationBackup(
+      { homeDir: HOME },
+      fs,
+      { action: "import", paths: ["/a.json"] },
+      {},
+    );
+
+    expect(manifest.entries[0].kind).toBeUndefined();
+    expect(fs.files.get(manifest.entries[0].backupPath)).toBe("A");
   });
 });
 
@@ -116,9 +152,173 @@ describe("listBackups", () => {
     expect(list[1].action).toBe("import");
   });
 
+  it("gives a manifest written before ids its directory name", async () => {
+    const fs = new MemFs();
+    fs.files.set(
+      "/home/u/.ratel/backups/2026-05-01T10-00-00.000Z/manifest.json",
+      JSON.stringify({ createdAt: "2026-05-01T10:00:00.000Z", action: "add", entries: [] }),
+    );
+
+    const list = await listBackups({ homeDir: HOME }, fs);
+
+    expect(list[0].id).toBe("2026-05-01T10-00-00.000Z");
+  });
+
   it("ignores backup directories that have no manifest", async () => {
     const fs = new MemFs();
     fs.files.set("/home/u/.ratel/backups/abandoned/something.txt", "x");
     expect(await listBackups({ homeDir: HOME }, fs)).toEqual([]);
+  });
+});
+
+describe("captureSnapshot", () => {
+  let root: string;
+  let home: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "ratel-snapshot-"));
+    home = join(root, "home");
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const BINARY = Buffer.from([0x00, 0xff, 0x1b, 0x00, 0x7f, 0xc3, 0x28]);
+
+  async function buildTree(): Promise<string> {
+    const tree = join(root, "tree");
+    const outside = join(root, "outside");
+    await mkdir(join(tree, "nested"), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(tree, "nested", "inner.txt"), "inner\n");
+    await writeFile(join(tree, "run.sh"), "#!/bin/sh\necho hi\n", { mode: 0o755 });
+    await writeFile(join(tree, "blob.bin"), BINARY);
+    await writeFile(join(outside, "secret.txt"), "not mine\n");
+    await symlink(outside, join(tree, "link"));
+    return tree;
+  }
+
+  const byPath = (m: BackupManifest, p: string) =>
+    m.entries.find((e) => e.originalPath === p) as BackupEntry;
+
+  it("reproduces a nested dir, a symlink, an executable and a binary file", async () => {
+    const tree = await buildTree();
+    const manifest = await captureSnapshot({ homeDir: home }, { action: "import", paths: [tree] });
+
+    const dir = byPath(manifest, tree);
+    expect(dir.kind).toBe("dir");
+
+    const nested = byPath(manifest, join(tree, "nested", "inner.txt"));
+    expect(nested.kind).toBe("file");
+    expect(await readFile(nested.backupPath, "utf8")).toBe("inner\n");
+
+    const exec = byPath(manifest, join(tree, "run.sh"));
+    expect(exec.mode).toBe(0o755);
+    expect((await lstat(exec.backupPath)).mode & 0o7777).toBe(0o755);
+
+    const blob = byPath(manifest, join(tree, "blob.bin"));
+    expect(await readFile(blob.backupPath)).toEqual(BINARY);
+    expect(blob.digest).toBe(createHash("sha256").update(BINARY).digest("hex"));
+
+    const link = byPath(manifest, join(tree, "link"));
+    expect(link.kind).toBe("symlink");
+    expect(link.target).toBe(join(root, "outside"));
+    expect((await lstat(link.backupPath)).isSymbolicLink()).toBe(true);
+  });
+
+  it("records every captured entry with its type and digest", async () => {
+    const tree = await buildTree();
+    const manifest = await captureSnapshot({ homeDir: home }, { action: "import", paths: [tree] });
+
+    expect(manifest.entries.map((e) => e.originalPath).sort()).toEqual(
+      [
+        tree,
+        join(tree, "blob.bin"),
+        join(tree, "link"),
+        join(tree, "nested"),
+        join(tree, "nested", "inner.txt"),
+        join(tree, "run.sh"),
+      ].sort(),
+    );
+    for (const entry of manifest.entries) {
+      expect(entry.kind).toBeDefined();
+      expect(entry.digest === undefined).toBe(entry.kind !== "file");
+    }
+  });
+
+  it("captures a symlink as a link without walking its target", async () => {
+    const tree = await buildTree();
+    const manifest = await captureSnapshot({ homeDir: home }, { action: "import", paths: [tree] });
+
+    expect(manifest.entries.some((e) => e.originalPath.includes("secret.txt"))).toBe(false);
+    await expect(readdir(join(tree, "link"))).resolves.toEqual(["secret.txt"]);
+  });
+
+  it("captures the tree through captureOperationBackup once the flag is on", async () => {
+    const tree = await buildTree();
+
+    const manifest = await captureOperationBackup(
+      { homeDir: home },
+      new MemFs(),
+      {
+        action: "import",
+        paths: [tree],
+      },
+      { RATEL_FEATURE_SKILL_STORAGE: "1" },
+    );
+
+    const link = byPath(manifest, join(tree, "link"));
+    expect(link.kind).toBe("symlink");
+    expect(byPath(manifest, join(tree, "run.sh")).mode).toBe(0o755);
+  });
+
+  it("records a missing path instead of failing", async () => {
+    const manifest = await captureSnapshot(
+      { homeDir: home },
+      { action: "remove", paths: [join(root, "gone")] },
+    );
+    expect(manifest.entries).toEqual([
+      { originalPath: join(root, "gone"), backupPath: expect.any(String), existedBefore: false },
+    ]);
+  });
+
+  it("addresses a snapshot by an id unique to two captures in the same instant", async () => {
+    const tree = await buildTree();
+    const at = () => new Date("2026-05-03T12:00:00Z");
+    const first = await captureSnapshot({ homeDir: home }, { action: "import", paths: [tree] }, at);
+    const second = await captureSnapshot(
+      { homeDir: home },
+      { action: "import", paths: [tree] },
+      at,
+    );
+
+    expect(first.id).not.toBe(second.id);
+    for (const m of [first, second]) {
+      expect(dirname(m.entries[0].backupPath)).toBe(join(home, ".ratel", "backups", m.id));
+      await expect(
+        readFile(join(home, ".ratel", "backups", m.id, "manifest.json"), "utf8"),
+      ).resolves.toContain(m.id);
+    }
+  });
+
+  it("leaves no partial manifest behind: it is renamed into place", async () => {
+    const tree = await buildTree();
+    const manifest = await captureSnapshot({ homeDir: home }, { action: "import", paths: [tree] });
+    const dir = join(home, ".ratel", "backups", manifest.id);
+    expect((await readdir(dir)).filter((n) => n.includes(".tmp-"))).toEqual([]);
+  });
+
+  it("writes the manifest last, so an interrupted capture has none to find", async () => {
+    const tree = await buildTree();
+    await rm(join(tree, "nested"), { recursive: true });
+    await symlink("/nowhere/at/all", join(tree, "nested")); // dangling, still captured
+    const manifest = await captureSnapshot(
+      { homeDir: home },
+      { action: "import", paths: [tree], source: "/some/origin" },
+    );
+    expect(manifest.source).toBe("/some/origin");
+    const dir = dirname(manifest.entries[0].backupPath);
+    expect(JSON.parse(await readFile(join(dir, "manifest.json"), "utf8"))).toEqual(manifest);
   });
 });

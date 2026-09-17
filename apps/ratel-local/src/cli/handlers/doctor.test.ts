@@ -51,6 +51,8 @@ describe("runDoctor", () => {
       version: 1,
       transactionId,
       status: "applying",
+      kind: "skill.import",
+      snapshotId: "2026-01-01T00-00-00.000Z-snapshot",
       entries: [
         {
           artifactKind: "file",
@@ -69,6 +71,9 @@ describe("runDoctor", () => {
     await runDoctor(context(homeDir, logs));
 
     expect(await readFile(configPath, "utf8")).toBe('{"mcpServers":{}}\n');
+    expect(logs).toContain(
+      `[ok] mutation_recovery: rolled back skill.import ${transactionId}: ${configPath}, snapshot 2026-01-01T00-00-00.000Z-snapshot`,
+    );
     expect(logs).toContain("[ok] context_global: resolved global context");
   });
 

@@ -14,6 +14,7 @@ import {
   createSkillDiscovery,
   createSkillImportControlPlane,
   createSkillRegistrationControlPlane,
+  describeRecoveredTransaction,
   getAgentTraceStatus,
   loopbackTraceEndpoint,
   migrateLegacyOAuthStores,
@@ -478,7 +479,14 @@ export async function runDaemonServer(
   const useResolvedControlPlane =
     options.readConfig === undefined && (isAutoConfig(parsed) || parsed.configPaths.length === 0);
   const mutationEngine = useResolvedControlPlane
-    ? await createMutationEngine({ controlDir: join(ctx.env.homeDir, ".ratel") })
+    ? await createMutationEngine({
+        controlDir: join(ctx.env.homeDir, ".ratel"),
+        onRecovery: ({ recovered }) => {
+          for (const transaction of recovered) {
+            log(`[ratel] ${describeRecoveredTransaction(transaction)}`);
+          }
+        },
+      })
     : undefined;
   let publishPreparedContexts: (contexts: readonly RuntimeContextRef[]) => Promise<void> =
     async () => {};

@@ -11,12 +11,14 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createMutationEngine,
   documentRevision,
   MutationConflictError,
   type MutationJournalV1,
+  type MutationRecoveryResult,
 } from "./mutation-engine.js";
 
 describe("MutationEngine", () => {
@@ -219,6 +221,83 @@ describe("MutationEngine", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects a second operation on a skill another transaction is changing", async () => {
+    const engine = await createMutationEngine({ controlDir });
+    const plan = await engine.prepare([
+      { kind: "replace-file", path: join(root, "config.json"), contents: "planned" },
+    ]);
+    await writeInFlightJournal(["alpha"]);
+    const release = await lockfile.lock(controlDir, {
+      realpath: false,
+      lockfilePath: join(controlDir, "mutation.lock"),
+    });
+
+    try {
+      await expect(
+        engine.commit(plan, { digest: plan.digest, skillIds: ["alpha", "beta"] }),
+      ).rejects.toMatchObject({
+        reason: "skill_busy",
+        message: "skill alpha is already being changed by transaction in-flight",
+      });
+    } finally {
+      await release();
+    }
+  });
+
+  it("queues rather than rejects when the in-flight transaction holds other skills", async () => {
+    const target = join(root, "config.json");
+    const engine = await createMutationEngine({ controlDir });
+    const plan = await engine.prepare([
+      { kind: "replace-file", path: target, contents: "planned" },
+    ]);
+    await writeInFlightJournal(["alpha"]);
+    const release = await lockfile.lock(controlDir, {
+      realpath: false,
+      lockfilePath: join(controlDir, "mutation.lock"),
+    });
+
+    const committing = engine.commit(plan, { digest: plan.digest, skillIds: ["beta"] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await release();
+    await committing;
+
+    expect(await readFile(target, "utf8")).toBe("planned");
+  });
+
+  it("treats an orphaned journal as a crash to recover, not as an operation in flight", async () => {
+    const target = join(root, "config.json");
+    const engine = await createMutationEngine({ controlDir });
+    const plan = await engine.prepare([
+      { kind: "replace-file", path: target, contents: "planned" },
+    ]);
+    await writeInFlightJournal(["alpha"]);
+
+    await engine.commit(plan, { digest: plan.digest, skillIds: ["alpha"] });
+
+    expect(await readFile(target, "utf8")).toBe("planned");
+  });
+
+  it("records the skills a transaction owns in its journal", async () => {
+    let journal: MutationJournalV1 | undefined;
+    const engine = await createMutationEngine({
+      controlDir,
+      idFactory: () => "owned",
+      hooks: {
+        beforeApplyOperation: async () => {
+          const text = await readFile(join(controlDir, "transactions", "owned.json"), "utf8");
+          journal = JSON.parse(text) as MutationJournalV1;
+        },
+      },
+    });
+    const plan = await engine.prepare([
+      { kind: "replace-file", path: join(root, "config.json"), contents: "planned" },
+    ]);
+
+    await engine.commit(plan, { digest: plan.digest, skillIds: ["alpha"] });
+
+    expect(journal?.skillIds).toEqual(["alpha"]);
+  });
+
   it("recovers an incomplete journal when a new engine starts", async () => {
     const targetPath = join(root, "config.json");
     const stagePath = `${targetPath}.ratel-stage-crashed-0`;
@@ -230,6 +309,8 @@ describe("MutationEngine", () => {
       version: 1,
       transactionId: "crashed",
       status: "applying",
+      kind: "skill.import",
+      snapshotId: "2026-05-03T12-00-00.000Z-abcd1234",
       entries: [
         {
           path: targetPath,
@@ -245,14 +326,43 @@ describe("MutationEngine", () => {
       `${JSON.stringify(journal)}\n`,
     );
 
-    await createMutationEngine({ controlDir });
+    const recoveries: MutationRecoveryResult[] = [];
+    await createMutationEngine({ controlDir, onRecovery: (r) => void recoveries.push(r) });
 
+    expect(recoveries).toEqual([
+      {
+        recovered: [
+          {
+            kind: "skill.import",
+            snapshotId: "2026-05-03T12-00-00.000Z-abcd1234",
+            transactionId: "crashed",
+            paths: [targetPath],
+          },
+        ],
+        finalized: [],
+      },
+    ]);
     expect(await readFile(targetPath, "utf8")).toBe("before");
     await expect(readFile(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(controlDir, "transactions", "crashed.json"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
+
+  async function writeInFlightJournal(skillIds: string[]): Promise<void> {
+    const journal: MutationJournalV1 = {
+      version: 1,
+      transactionId: "in-flight",
+      status: "applying",
+      skillIds,
+      entries: [],
+    };
+    await mkdir(join(controlDir, "transactions"), { recursive: true });
+    await writeFile(
+      join(controlDir, "transactions", "in-flight.json"),
+      `${JSON.stringify(journal)}\n`,
+    );
+  }
 
   it("copies a validated directory and config file in one recoverable transaction", async () => {
     const source = join(root, "native-skill");
