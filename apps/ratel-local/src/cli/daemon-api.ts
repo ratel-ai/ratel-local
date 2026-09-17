@@ -59,6 +59,17 @@ export function daemonLoopbackUrl(stateText: string): string | null {
   return `http://127.0.0.1:${state.port}`;
 }
 
+export async function daemonSkillStorage(request: DaemonApiRequest): Promise<boolean | undefined> {
+  const response = await request("/api/daemon/status");
+  if (!response) return undefined;
+  try {
+    const body = (await response.json()) as { skillStorage?: unknown };
+    return body.skillStorage === true;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function requireDaemonJson<T>(response: Response, operation: string): Promise<T> {
   const body = (await response.json().catch(() => null)) as
     | ({ error?: unknown } & Record<string, unknown>)

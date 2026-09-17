@@ -113,6 +113,59 @@ describe("scoped skill response", () => {
   });
 
   it("groups every configured registration state by project scope", () => {
+    const registrations = [
+      {
+        id: "shared",
+        source: "claude",
+        scopeRef: { scope: "user" as const },
+        ref: {
+          scopeRef: { scope: "user" as const },
+          id: "shared",
+          kind: "entry" as const,
+          configuredPath: "/home/u/.claude/skills/shared",
+        },
+        mode: "reference" as const,
+        state: "shadowed" as const,
+        editable: false,
+        origin: "reference" as const,
+        storage: { kind: "external" as const, path: "/home/u/.claude/skills/shared" },
+        availability: "available" as const,
+      },
+      {
+        id: "shared",
+        source: "claude",
+        scopeRef: { scope: "project" as const, projectId: "prj_1" },
+        ref: {
+          scopeRef: { scope: "project" as const, projectId: "prj_1" },
+          id: "shared",
+          kind: "entry" as const,
+          configuredPath: "shared",
+        },
+        mode: "copy" as const,
+        state: "effective" as const,
+        editable: true,
+        origin: "local-managed" as const,
+        storage: { kind: "managed-copy" as const, path: "/repo/.ratel/skills/shared" },
+        availability: "available" as const,
+      },
+      {
+        id: "broken",
+        source: "unknown",
+        scopeRef: { scope: "local" as const, projectId: "prj_1" },
+        ref: {
+          scopeRef: { scope: "local" as const, projectId: "prj_1" },
+          id: "broken",
+          kind: "entry" as const,
+          configuredPath: "missing",
+        },
+        mode: "reference" as const,
+        state: "invalid" as const,
+        editable: false,
+        origin: "reference" as const,
+        storage: { kind: "external" as const, path: "missing" },
+        availability: "not-found" as const,
+      },
+    ];
     const response = {
       managedDir: "",
       nativeDir: "",
@@ -120,50 +173,7 @@ describe("scoped skill response", () => {
       managed: [],
       available: [],
       problems: [],
-      registrations: [
-        {
-          id: "shared",
-          source: "claude",
-          scopeRef: { scope: "user" as const },
-          ref: {
-            scopeRef: { scope: "user" as const },
-            id: "shared",
-            kind: "entry" as const,
-            configuredPath: "/home/u/.claude/skills/shared",
-          },
-          mode: "reference" as const,
-          state: "shadowed" as const,
-          editable: false,
-        },
-        {
-          id: "shared",
-          source: "claude",
-          scopeRef: { scope: "project" as const, projectId: "prj_1" },
-          ref: {
-            scopeRef: { scope: "project" as const, projectId: "prj_1" },
-            id: "shared",
-            kind: "entry" as const,
-            configuredPath: "shared",
-          },
-          mode: "copy" as const,
-          state: "effective" as const,
-          editable: true,
-        },
-        {
-          id: "broken",
-          source: "unknown",
-          scopeRef: { scope: "local" as const, projectId: "prj_1" },
-          ref: {
-            scopeRef: { scope: "local" as const, projectId: "prj_1" },
-            id: "broken",
-            kind: "entry" as const,
-            configuredPath: "missing",
-          },
-          mode: "reference" as const,
-          state: "invalid" as const,
-          editable: false,
-        },
-      ],
+      registrations,
     };
 
     expect(
@@ -182,6 +192,9 @@ describe("scoped skill response", () => {
         registrations: [expect.objectContaining({ id: "broken", state: "invalid" })],
       },
     ]);
+    expect(registrations[0]?.origin).toBe("reference");
+    expect(registrations[0]?.storage?.kind).toBe("external");
+    expect(registrations[0]?.availability).toBe("available");
   });
 });
 

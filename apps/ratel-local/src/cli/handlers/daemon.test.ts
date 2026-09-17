@@ -9,7 +9,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
-import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
+import {
+  createContextSnapshotResolver,
+  createProjectRegistry,
+  projectIdFromCanonicalRoot,
+} from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudSettings } from "../../cloud/settings.js";
 import type { CloudTraceSettings } from "../../cloud/trace-settings.js";
@@ -759,6 +763,126 @@ describe("runDaemon", () => {
       expect(configureRatelTelemetry).not.toHaveBeenCalled();
     } finally {
       await result.shutdown?.();
+    }
+  });
+
+  it("attaches skill dimensions on /api/skills when skillStorage is enabled", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-skill-dims-"));
+    const skillDir = join(homeDir, ".ratel", "skills", "review");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, "SKILL.md"),
+      "---\nname: review\ndescription: Review skill\n---\nbody\n",
+    );
+    await writeFile(
+      join(skillDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "review" })}\n`,
+    );
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({
+        skills: { entries: { review: { mode: "copy", source: "ratel" } }, dirs: [] },
+      })}\n`,
+    );
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const result = await runDaemon(
+      daemonArgs({ configPaths: [], flags: { open: false, telemetry: "off", port: "0" } }),
+      makeCtx(fs, { homeDir }),
+      {
+        processEnv: { [SKILL_STORAGE_FEATURE_ENV]: "1" },
+        readConfig: async () => ({ mcpServers: {} }),
+      },
+      (message) => logs.push(message),
+      { open: () => {}, ensureToken: async () => "daemon-test-token" },
+    );
+    try {
+      const expected = (
+        await createContextSnapshotResolver({
+          homeDir,
+          projectRegistry: createProjectRegistry({ homeDir }),
+          includeDimensions: true,
+        }).resolve({ kind: "global" })
+      ).skills.registrations;
+      const daemonUrl = daemonUrlFromLogs(logs);
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const response = await fetch(new URL("/api/skills", uiUrl), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { registrations: typeof expected };
+      expect(body.registrations).toHaveLength(1);
+      expect(body.registrations[0]).toMatchObject({
+        id: "review",
+        origin: expected[0]?.origin,
+        storage: expected[0]?.storage,
+        availability: expected[0]?.availability,
+      });
+    } finally {
+      await result.shutdown?.();
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits skill dimensions on /api/skills when skillStorage is disabled", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-skill-off-"));
+    const skillDir = join(homeDir, ".ratel", "skills", "review");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, "SKILL.md"),
+      "---\nname: review\ndescription: Review skill\n---\nbody\n",
+    );
+    await writeFile(
+      join(skillDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "review" })}\n`,
+    );
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({
+        skills: { entries: { review: { mode: "copy", source: "ratel" } }, dirs: [] },
+      })}\n`,
+    );
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const result = await runDaemon(
+      daemonArgs({ configPaths: [], flags: { open: false, telemetry: "off", port: "0" } }),
+      makeCtx(fs, { homeDir }),
+      { readConfig: async () => ({ mcpServers: {} }) },
+      (message) => logs.push(message),
+      { open: () => {}, ensureToken: async () => "daemon-test-token" },
+    );
+    try {
+      const daemonUrl = daemonUrlFromLogs(logs);
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const response = await fetch(new URL("/api/skills", uiUrl), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { registrations: Array<Record<string, unknown>> };
+      expect(body.registrations).toHaveLength(1);
+      const registration = body.registrations[0];
+      expect(registration).toBeDefined();
+      if (!registration) throw new Error("expected a registration");
+      expect(Object.keys(registration)).toEqual([
+        "ref",
+        "id",
+        "mode",
+        "source",
+        "scopeRef",
+        "configuredPath",
+        "canonicalPath",
+        "state",
+        "editable",
+        "diagnostics",
+      ]);
+      expect(registration.origin).toBeUndefined();
+      expect(registration.storage).toBeUndefined();
+      expect(registration.availability).toBeUndefined();
+    } finally {
+      await result.shutdown?.();
+      await rm(homeDir, { recursive: true, force: true });
     }
   });
 

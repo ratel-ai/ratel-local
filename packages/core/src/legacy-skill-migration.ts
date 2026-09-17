@@ -2,9 +2,10 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { captureOperationBackup } from "./backup.js";
 import type { ConfigControlPlane } from "./config-control-plane.js";
+import { skillStorageEnabled } from "./feature-flags.js";
 import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
-import { parseConfig, type SkillEntry } from "./lib/config.js";
+import { parseConfig } from "./lib/config.js";
 import type { MutationInputOperation, MutationPreview } from "./mutation-engine.js";
 import type {
   PreparedChange,
@@ -13,6 +14,7 @@ import type {
 } from "./prepared-change-coordinator.js";
 import { type NativeSkillSource, skillHostPolicyFromLegacyPatch } from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
+import { skillEntryForWrite } from "./skill-registration.js";
 
 interface LegacyMetadataPatch {
   path: string;
@@ -59,6 +61,8 @@ export async function prepareLegacySkillMigration(options: {
   homeDir: string;
   configControlPlane: ConfigControlPlane;
   preparedChanges: PreparedChangeCoordinator;
+  /** When set, overrides skillStorageEnabled() for persisting origin/path. */
+  persistDimensions?: boolean;
 }): Promise<PreparedChange<LegacySkillMigrationReview> | null> {
   const manifestPath = join(options.homeDir, ".ratel", "skill-manifest.json");
   const manifest = await readLegacyManifest(manifestPath);
@@ -124,16 +128,21 @@ export async function prepareLegacySkillMigration(options: {
       if ((await realpath(entry.originalPath)) !== (await realpath(nativePath))) {
         throw new Error("recorded original path does not match the native skill");
       }
-      entries[entry.id] = {
-        mode: "reference",
-        path: await realpath(nativePath),
-        source: source === "claude" ? "claude" : "codex",
+      const nativeRealPath = await realpath(nativePath);
+      const baseEntry = {
+        mode: "reference" as const,
+        path: nativeRealPath,
+        source: source === "claude" ? ("claude" as const) : ("codex" as const),
         hostPolicy: skillHostPolicyFromLegacyPatch({
           source,
           before: metadataPatch.before,
           created: metadataPatch.created,
         }),
-      } satisfies SkillEntry;
+      };
+      entries[entry.id] =
+        (options.persistDimensions ?? skillStorageEnabled())
+          ? skillEntryForWrite(baseEntry)
+          : baseEntry;
       operations.push({
         kind: "delete-artifact",
         path: linkPath,

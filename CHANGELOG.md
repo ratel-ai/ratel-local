@@ -26,6 +26,8 @@ All notable changes to this package are documented here. The format is based on 
   unreadable store, a stored key other users can read, and a scope too broken to say which profile it selects.
 
 ### Changed
+- With `RATEL_FEATURE_SKILL_STORAGE=1`, skill registration JSON includes `origin`, `storage`, and
+  `availability` (and optional `sync`) on configured views.
 - Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load
   whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
 - Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with

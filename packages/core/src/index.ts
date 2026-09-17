@@ -31,6 +31,7 @@ export * from "./skill-discovery.js";
 export * from "./skill-document.js";
 export * from "./skill-id.js";
 export * from "./skill-import.js";
+export * from "./skill-registration.js";
 export * from "./skill-registration-control.js";
 export * from "./statusline.js";
 export * from "./telemetry.js";
