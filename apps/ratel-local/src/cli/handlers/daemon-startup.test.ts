@@ -109,7 +109,7 @@ describe("daemon startup budget", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         cloudCatalogFetch: catalogFetch as unknown as typeof fetch,
-        cloudSettingsStore: { load: async () => undefined, save: async () => {} },
+        cloudSettingsStore: { load: async () => undefined },
         preparedChanges: createTestPreparedChanges(fs),
       },
     );

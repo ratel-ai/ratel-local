@@ -2,8 +2,15 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isPlainObject } from "@ratel-ai/ratel-local-core";
+import lockfile from "proper-lockfile";
 import { headerSafeSecret } from "./header-safe-secret.js";
 import { secretFreeHttpsUrl } from "./url.js";
+
+const LOCK_OPTS = {
+  realpath: false,
+  retries: { retries: 200, factor: 1, minTimeout: 25, maxTimeout: 200 },
+  stale: 10_000,
+} as const;
 
 /** The deployment every install talks to unless `baseUrl` says otherwise. */
 export const DEFAULT_CLOUD_BASE_URL = "https://cloud.ratel.sh";
@@ -39,7 +46,10 @@ export function cloudEndpoints(settings?: CloudSettings): CloudEndpoints {
 
 export interface CloudSettingsStoreLike {
   load(): Promise<CloudSettings | undefined>;
-  save(settings: CloudSettings): Promise<void>;
+  /** Reads, changes and writes under a file lock. The mutator must not prompt, read other files, or call update. */
+  update(
+    mutator: (current: CloudSettings) => CloudSettings | Promise<CloudSettings>,
+  ): Promise<CloudSettings>;
 }
 
 /** Unknown name is an error, never a silent fall back to `default` (ADR-0021). */
@@ -71,11 +81,24 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
     return current === undefined ? undefined : validated(parseSettings(current));
   }
 
-  async save(settings: CloudSettings): Promise<void> {
+  async update(
+    mutator: (current: CloudSettings) => CloudSettings | Promise<CloudSettings>,
+  ): Promise<CloudSettings> {
+    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.path), 0o700);
+    const release = await lockfile.lock(this.path, LOCK_OPTS);
+    try {
+      const current = (await this.load()) ?? { profiles: {} };
+      const next = await mutator(current);
+      await this.writeUnlocked(next);
+      return next;
+    } finally {
+      await release().catch(() => undefined);
+    }
+  }
+
+  private async writeUnlocked(settings: CloudSettings): Promise<void> {
     const next = validated(settings);
-    const directory = dirname(this.path);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    await chmod(directory, 0o700);
     const temporaryPath = `${this.path}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, {

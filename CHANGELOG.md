@@ -29,6 +29,9 @@ All notable changes to this package are documented here. The format is based on 
   any other value disables, and a flag left out keeps whatever the installed service already says.
 
 ### Fixed
+- Fixed concurrent `ratel-local cloud add` and `cloud remove` dropping other profiles in
+  `~/.ratel/cloud.json`: each write waits for a file lock, then re-reads, so the first
+  profile that lands keeps `default` and neither save overwrites the other.
 - Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that
   variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
   keeps the stored key and refuses the save when there is none to keep.

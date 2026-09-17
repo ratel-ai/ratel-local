@@ -1,10 +1,32 @@
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type BackupFs, type JsonFs, ratelConfigPath } from "@ratel-ai/ratel-local-core";
-import { describe, expect, it, vi } from "vitest";
-import type { CloudSettings } from "../../cloud/settings.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { type CloudSettings, CloudSettingsStore, cloudSettingsPath } from "../../cloud/settings.js";
 import { CANCEL_SYMBOL, silentPromptAdapter } from "../prompts.js";
 import { runCloud } from "./cloud.js";
 import type { CliCloudMutationRequest, HandlerCtx } from "./types.js";
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+const tempHomes: string[] = [];
+
+afterAll(async () => {
+  await Promise.all(tempHomes.map((home) => rm(home, { recursive: true, force: true })));
+});
+
+async function tempHome(): Promise<string> {
+  const homeDir = await mkdtemp(join(tmpdir(), "ratel-cloud-cli-"));
+  tempHomes.push(homeDir);
+  await mkdir(join(homeDir, ".ratel"), { recursive: true, mode: 0o700 });
+  return homeDir;
+}
 class MemFs implements BackupFs, JsonFs {
   constructor(private readonly documents: Record<string, unknown> = {}) {}
   async read(path: string) {
@@ -29,11 +51,12 @@ function context(
   flags: Record<string, string | boolean | string[]> = {},
   prompts = silentPromptAdapter(),
   documents: Record<string, unknown> = {},
+  homeDir = "/home/u",
 ) {
   const output: string[] = [];
   const ctx: HandlerCtx = {
     argv: { group: "cloud", verb, configPaths: [], rest, extras: [], flags },
-    env: { homeDir: "/home/u", projectRoot: "/repo" },
+    env: { homeDir, projectRoot: "/repo" },
     fs: new MemFs(documents),
     log: (message) => output.push(message),
     prompts,
@@ -52,11 +75,15 @@ function piped(answer: string | symbol) {
 
 function store(initial?: CloudSettings) {
   const saved: CloudSettings[] = [];
+  let current = initial;
   return {
     saved,
-    load: async () => initial,
-    save: async (settings: CloudSettings) => {
-      saved.push(settings);
+    load: async () => current,
+    update: async (mutator: (current: CloudSettings) => CloudSettings | Promise<CloudSettings>) => {
+      const next = await mutator(current ?? { profiles: {} });
+      current = next;
+      saved.push(next);
+      return next;
     },
   };
 }
@@ -126,6 +153,47 @@ describe("cloud add", () => {
   it("requires a profile name", async () => {
     const { ctx } = context("add", []);
     await expect(runCloud(ctx, { store: store() })).rejects.toThrow(/requires a profile name/);
+  });
+
+  it("keeps a profile stored while this add was prompting", async () => {
+    const slowPassword = deferred<string>();
+    const slowPrompts = {
+      ...silentPromptAdapter(),
+      canPrompt: () => true,
+      password: async () => slowPassword.promise,
+    };
+    const slow = context("add", ["slow"], {}, slowPrompts);
+    const target = store();
+    const slowRun = runCloud(slow.ctx, { store: target });
+
+    const fast = context("add", ["fast"], {}, answering("rtl_fast"));
+    await runCloud(fast.ctx, { store: target });
+    expect(fast.output.join("\n")).toContain('"fast" is the default profile');
+
+    slowPassword.resolve("rtl_slow");
+    await slowRun;
+
+    expect(target.saved.at(-1)).toEqual({
+      default: "fast",
+      profiles: {
+        fast: { apiKey: "rtl_fast" },
+        slow: { apiKey: "rtl_slow" },
+      },
+    });
+    expect(slow.output.join("\n")).toContain("ratel-local cloud use slow");
+  });
+
+  it("two adds that finish together both land", async () => {
+    const homeDir = await tempHome();
+    const target = new CloudSettingsStore(cloudSettingsPath(homeDir));
+    await Promise.all([
+      runCloud(context("add", ["a"], {}, answering("rtl_a"), {}, homeDir).ctx, { store: target }),
+      runCloud(context("add", ["b"], {}, answering("rtl_b"), {}, homeDir).ctx, { store: target }),
+    ]);
+
+    const loaded = await target.load();
+    expect(loaded?.profiles).toEqual({ a: { apiKey: "rtl_a" }, b: { apiKey: "rtl_b" } });
+    expect(loaded?.default === "a" || loaded?.default === "b").toBe(true);
   });
 });
 
@@ -513,5 +581,41 @@ describe("cloud remove", () => {
 
     await expect(runCloud(ctx, { store: target })).rejects.toThrow(/config\.local\.json/);
     expect(target.saved).toEqual([]);
+  });
+
+  it("keeps a profile added while this remove was scanning scopes", async () => {
+    const projectPath = ratelConfigPath("project", { homeDir: "/home/u", projectRoot: "/repo" });
+    const holdRead = deferred();
+    const readStarted = deferred();
+
+    class GatedFs extends MemFs {
+      override async read(path: string) {
+        if (path === projectPath) {
+          readStarted.resolve();
+          await holdRead.promise;
+        }
+        return super.read(path);
+      }
+    }
+
+    const documents = projectConfig("acme");
+    const c = context("remove", ["personal"], {}, silentPromptAdapter(), documents);
+    const ctx = { ...c.ctx, fs: new GatedFs(documents) };
+    const target = store(TWO_PROFILES);
+    const removing = runCloud(ctx, { store: target });
+    await readStarted.promise;
+
+    await runCloud(context("add", ["extra"], {}, answering("rtl_extra")).ctx, { store: target });
+    holdRead.resolve();
+    await removing;
+
+    expect(target.saved.at(-1)).toEqual({
+      profiles: {
+        acme: { apiKey: "rtl_acme" },
+        extra: { apiKey: "rtl_extra" },
+      },
+    });
+    expect(c.output.join("\n")).toContain('Removed Cloud profile "personal"');
+    expect(c.output.join("\n")).toContain("default was cleared");
   });
 });

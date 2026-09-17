@@ -184,7 +184,7 @@ interface DaemonHandlerDeps {
   cloudOtlpFetch?: typeof fetch;
   cloudCatalogFetch?: typeof fetch;
   configureRatelTelemetry?: ConfigureRatelTelemetry;
-  cloudSettingsStore?: CloudSettingsStoreLike;
+  cloudSettingsStore?: Pick<CloudSettingsStoreLike, "load">;
   cloudTraceSettingsStore?: CloudTraceSettingsStoreLike;
   lifecycleProgress?: boolean;
 }
