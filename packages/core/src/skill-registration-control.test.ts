@@ -23,7 +23,10 @@ describe("SkillRegistrationControlPlane", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  async function fixture(entries: Record<string, unknown>) {
+  async function fixture(
+    entries: Record<string, unknown>,
+    options: { persistDimensions?: boolean } = {},
+  ) {
     const configPath = join(homeDir, ".ratel", "config.json");
     await writeFile(configPath, `${JSON.stringify({ skills: { entries, dirs: [] } }, null, 2)}\n`);
     const registry = createProjectRegistry({ homeDir });
@@ -44,6 +47,9 @@ describe("SkillRegistrationControlPlane", () => {
         configControlPlane,
         snapshotResolver,
         preparedChanges,
+        ...(options.persistDimensions !== undefined
+          ? { persistDimensions: options.persistDimensions }
+          : {}),
       }),
     };
   }
@@ -452,5 +458,188 @@ describe("SkillRegistrationControlPlane", () => {
       reason: "copy_still_referenced",
     });
     expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
+  });
+
+  it("persists origin and path when persistDimensions is true", async () => {
+    const { control, configPath } = await fixture({}, { persistDimensions: true });
+
+    await control.create({
+      target: { scope: "user" },
+      id: "authored",
+      description: "Authored in Ratel",
+      tags: [],
+      body: "Body",
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: {
+        entries: {
+          authored: {
+            mode: "copy",
+            origin: "local-managed",
+            path: join(homeDir, ".ratel", "skills", "authored"),
+            source: "ratel",
+          },
+        },
+        dirs: [],
+      },
+    });
+  });
+
+  it("deletes the persisted copy path, not a re-derived sibling", async () => {
+    const derived = join(homeDir, ".ratel", "skills", "relocated");
+    const persisted = join(homeDir, ".ratel", "skills-alt", "relocated");
+    await mkdir(derived, { recursive: true });
+    await writeFile(join(derived, "SKILL.md"), "derived\n");
+    await mkdir(persisted, { recursive: true });
+    await writeFile(
+      join(persisted, "SKILL.md"),
+      "---\nname: relocated\ndescription: relocated\n---\n\nBody\n",
+    );
+    await writeFile(
+      join(persisted, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "relocated" })}\n`,
+    );
+    const { control } = await fixture(
+      {
+        relocated: {
+          mode: "copy",
+          origin: "local-managed",
+          path: persisted,
+          source: "ratel",
+        },
+      },
+      { persistDimensions: true },
+    );
+
+    await control.remove({
+      target: { scope: "user" },
+      id: "relocated",
+      deleteOwnedCopy: true,
+    });
+
+    expect(await readFile(join(derived, "SKILL.md"), "utf8")).toBe("derived\n");
+    await expect(readFile(join(persisted, "SKILL.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("edits SKILL.md under the persisted path, not a re-derived sibling", async () => {
+    const derived = join(homeDir, ".ratel", "skills", "relocated");
+    const persisted = join(homeDir, ".ratel", "skills-alt", "relocated");
+    await mkdir(derived, { recursive: true });
+    await writeFile(join(derived, "SKILL.md"), "derived\n");
+    await mkdir(persisted, { recursive: true });
+    const original = "---\nname: relocated\ndescription: old\n---\n\nBody\n";
+    await writeFile(join(persisted, "SKILL.md"), original);
+    await writeFile(
+      join(persisted, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "relocated" })}\n`,
+    );
+    const { control } = await fixture(
+      {
+        relocated: {
+          mode: "copy",
+          origin: "local-managed",
+          path: persisted,
+          source: "ratel",
+        },
+      },
+      { persistDimensions: true },
+    );
+
+    await control.edit({
+      target: { scope: "user" },
+      id: "relocated",
+      description: "new description",
+      tags: [],
+      body: "Updated body",
+      expectedRevision: documentRevision(original),
+    });
+
+    expect(await readFile(join(derived, "SKILL.md"), "utf8")).toBe("derived\n");
+    const updated = await readFile(join(persisted, "SKILL.md"), "utf8");
+    expect(updated).toContain('description: "new description"');
+    expect(updated).toContain("Updated body");
+  });
+
+  it("persists relative path when add-scope copies into project scope with persistDimensions", async () => {
+    const projectA = join(root, "scope-a");
+    const projectB = join(root, "scope-b");
+    const source = join(projectA, ".agents", "skills", "demo");
+    await mkdir(source, { recursive: true });
+    await mkdir(join(projectA, ".ratel"), { recursive: true });
+    await mkdir(projectB, { recursive: true });
+    await writeFile(join(source, "SKILL.md"), "---\nname: demo\ndescription: demo\n---\n\nBody\n");
+    await writeFile(
+      join(projectA, ".ratel", "config.json"),
+      `${JSON.stringify({
+        skills: {
+          entries: {
+            demo: { mode: "reference", path: ".agents/skills/demo", source: "codex" },
+          },
+          dirs: [],
+        },
+      })}\n`,
+    );
+    const registry = createProjectRegistry({ homeDir });
+    const registeredA = await registry.registerRoot(projectA);
+    const registeredB = await registry.registerRoot(projectB);
+    const mutationEngine = await createMutationEngine({ controlDir: join(homeDir, ".ratel") });
+    const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
+    const control = createSkillRegistrationControlPlane({
+      homeDir,
+      projectRegistry: registry,
+      configControlPlane: await createConfigControlPlane({
+        homeDir,
+        projectRegistry: registry,
+        preparedChanges,
+      }),
+      snapshotResolver: createContextSnapshotResolver({ homeDir, projectRegistry: registry }),
+      preparedChanges,
+      persistDimensions: true,
+    });
+
+    await control.addScope({
+      context: { kind: "project", projectId: registeredA.id },
+      target: { scope: "project", projectId: registeredB.id },
+      id: "demo",
+      mode: "copy",
+    });
+
+    expect(
+      JSON.parse(await readFile(join(projectB, ".ratel", "config.json"), "utf8")),
+    ).toMatchObject({
+      skills: {
+        entries: {
+          demo: {
+            mode: "copy",
+            origin: "local-managed",
+            path: ".ratel/skills/demo",
+            source: "codex",
+          },
+        },
+      },
+    });
+  });
+
+  it("does not rewrite config bytes on snapshot resolve", async () => {
+    const original = `${JSON.stringify(
+      {
+        skills: {
+          entries: { demo: { mode: "copy", source: "ratel" } },
+          dirs: [],
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    const configPath = join(homeDir, ".ratel", "config.json");
+    await writeFile(configPath, original);
+    await putOwnedCopy("demo");
+    const registry = createProjectRegistry({ homeDir });
+    const resolver = createContextSnapshotResolver({ homeDir, projectRegistry: registry });
+    await resolver.resolve({ kind: "global" });
+    expect(await readFile(configPath, "utf8")).toBe(original);
   });
 });

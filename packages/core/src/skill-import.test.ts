@@ -27,7 +27,7 @@ async function putSkill(path: string, id: string, body = "Instructions") {
   );
 }
 
-async function fixture() {
+async function fixture(options: { persistDimensions?: boolean } = {}) {
   const homeDir = await mkdtemp(join(tmpdir(), "ratel-skill-import-home-"));
   const projectA = await mkdtemp(join(tmpdir(), "ratel-skill-import-a-"));
   const projectB = await mkdtemp(join(tmpdir(), "ratel-skill-import-b-"));
@@ -46,6 +46,9 @@ async function fixture() {
     projectRegistry,
     discovery,
     preparedChanges,
+    ...(options.persistDimensions !== undefined
+      ? { persistDimensions: options.persistDimensions }
+      : {}),
   });
 
   return {
@@ -448,5 +451,109 @@ describe("SkillImportControlPlane", () => {
     await expect(readFile(join(outside, "config.json"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("persists relative path and origin when importing a project copy with persistDimensions", async () => {
+    const f = await fixture({ persistDimensions: true });
+    const source = join(f.projectA, ".agents", "skills", "demo");
+    await putSkill(source, "demo");
+    const candidate = (await f.discovery.discover({ kind: "project", projectRoot: f.projectA }))
+      .candidates[0];
+
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: candidate.candidateId,
+        targets: [{ scopeRef: projectScope(f.projectBId), mode: "copy" }],
+      },
+    ]);
+    await f.controlPlane.commit(plan.changeId);
+
+    expect(await readJson(join(f.projectB, ".ratel", "config.json"))).toMatchObject({
+      skills: {
+        entries: {
+          demo: {
+            mode: "copy",
+            origin: "local-managed",
+            path: ".ratel/skills/demo",
+            source: "codex",
+            copiedFrom: { source: "codex-current", id: "demo" },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps hostPolicy and adds origin when importing a reference with persistDimensions", async () => {
+    const f = await fixture({ persistDimensions: true });
+    await putSkill(join(f.homeDir, ".claude", "skills", "review"), "review");
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "review",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: candidate.candidateId,
+        targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+      },
+    ]);
+    await f.controlPlane.commit(plan.changeId);
+
+    expect(await readJson(join(f.homeDir, ".ratel", "config.json"))).toMatchObject({
+      skills: {
+        entries: {
+          review: {
+            mode: "reference",
+            origin: "reference",
+            path: candidate.canonicalPath,
+            source: "claude",
+            hostPolicy: { mode: "manual-only", source: "claude" },
+          },
+        },
+      },
+    });
+  });
+
+  it("leaves sibling entries byte-identical when persistDimensions writes a new entry", async () => {
+    const f = await fixture({ persistDimensions: true });
+    const userConfigPath = join(f.homeDir, ".ratel", "config.json");
+    const sibling = {
+      mode: "reference" as const,
+      path: "/opt/existing",
+      source: "unknown" as const,
+      future: { keep: true },
+    };
+    await mkdir(join(f.homeDir, ".ratel"), { recursive: true });
+    await writeFile(
+      userConfigPath,
+      `${JSON.stringify(
+        {
+          skills: {
+            entries: { existing: sibling },
+            dirs: [],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await putSkill(join(f.homeDir, ".claude", "skills", "new-skill"), "new-skill");
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "new-skill",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: candidate.candidateId,
+        targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+      },
+    ]);
+    await f.controlPlane.commit(plan.changeId);
+
+    const document = await readJson(userConfigPath);
+    expect((document.skills as { entries: Record<string, unknown> }).entries.existing).toEqual(
+      sibling,
+    );
   });
 });

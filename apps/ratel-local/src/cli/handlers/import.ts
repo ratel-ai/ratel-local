@@ -33,10 +33,12 @@ import {
   ratelConfigPath,
   type SkillImportControlPlane,
   type SupportedAgentHostKind,
+  skillStorageEnabled,
   startBackup,
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core";
 import { ArgError } from "../args.js";
+import { daemonSkillStorage, requestRunningDaemon } from "../daemon-api.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import { defaultSkillPaths, type SkillPaths } from "../skills/paths.js";
 import { runLink } from "./link.js";
@@ -125,8 +127,12 @@ export async function runImport(
   }
 
   const skillPaths = opts.skillPaths ?? defaultSkillPaths(ctx.env.homeDir);
+  const persistDimensions =
+    (await daemonSkillStorage((path, init) => requestRunningDaemon(ctx, path, init))) ??
+    skillStorageEnabled();
   const skillRuntime = await createScopedSkillImportRuntime(skillPaths, {
     source: resolveSkillSource(opts.agentKind, agentState),
+    persistDimensions,
   });
   const skillPreview = skillRuntime.preview;
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
@@ -580,7 +586,7 @@ function skillSourceForAgentKind(kind: string | undefined): "claude" | "codex" |
 
 async function createScopedSkillImportRuntime(
   paths: SkillPaths,
-  opts: { source?: "claude" | "codex" },
+  opts: { source?: "claude" | "codex"; persistDimensions?: boolean },
 ): Promise<ScopedSkillImportRuntime> {
   const homeDir = dirname(dirname(paths.nativeDir));
   const discovery = createSkillDiscovery({ homeDir });
@@ -623,6 +629,9 @@ async function createScopedSkillImportRuntime(
           projectRegistry,
           discovery,
           preparedChanges,
+          ...(opts.persistDimensions !== undefined
+            ? { persistDimensions: opts.persistDimensions }
+            : {}),
         })
       : null,
     preview: {

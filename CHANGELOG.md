@@ -23,6 +23,7 @@ All notable changes to this package are documented here. The format is based on 
 - Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
 - Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables, any other value disables, and a flag left out keeps whatever the installed service already says.
+- With `RATEL_FEATURE_SKILL_STORAGE=1`, skill registration JSON includes `origin`, `storage`, and `availability` (and optional `sync`) on configured views.
 - With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first. Deletion used to list directories as regular files, dropping symlinks, modes and binaries. Flag off keeps per-file capture.
 - Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead of a fixed line and silence.
 - A concurrent Skill change fails immediately with `skill_busy` instead of waiting on the mutation lock. An interrupted transaction whose lock is gone is still rolled back as a crash, not busy.

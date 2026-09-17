@@ -1,5 +1,5 @@
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { captureSnapshot, startBackup } from "./backup.js";
 import type { ConfigControlPlane } from "./config-control-plane.js";
 import type { DocumentRevision, RatelScopeRef, RuntimeContextRef } from "./context.js";
@@ -32,6 +32,11 @@ import { planSkillCopyMaterialization } from "./skill-copy-adoption.js";
 import { rewriteSkillDocument, stripBundledResourceIndex } from "./skill-document.js";
 import { prepareSkillHostPolicyRestore } from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
+import {
+  configuredSkillStoragePath,
+  persistedCopyPathForWrite,
+  skillEntryForWrite,
+} from "./skill-registration.js";
 
 export interface RemoveSkillRegistrationRequest {
   target: RatelScopeRef;
@@ -71,6 +76,8 @@ export interface SkillRegistrationControlPlaneOptions {
   snapshotResolver: ContextSnapshotResolver;
   preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
+  /** When set, overrides skillStorageEnabled() for persisting origin/path. */
+  persistDimensions?: boolean;
 }
 
 export interface SkillRegistrationControlPlane {
@@ -200,7 +207,18 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       throw new SkillRegistrationValidationError("invalid_registration", (error as Error).message);
     }
 
-    entries[request.id] = { mode: "copy", source: "ratel" } satisfies SkillEntry;
+    entries[request.id] = this.persistDimensions()
+      ? skillEntryForWrite({
+          mode: "copy",
+          path: persistedCopyPathForWrite(
+            request.target,
+            this.options.homeDir,
+            projectRoot,
+            request.id,
+          ),
+          source: "ratel",
+        })
+      : ({ mode: "copy", source: "ratel" } satisfies SkillEntry);
     skills.entries = entries;
     document.skills = skills;
     try {
@@ -342,18 +360,33 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     const operations: MutationInputOperation[] = [];
     let adoptedCopy: { path: string; revision: DocumentRevision } | undefined;
     if (request.mode === "reference") {
-      entries[request.id] = {
-        mode: "reference",
-        path: referencePathForTarget(request.target, projectRoot, canonicalSource),
-        source,
-      } satisfies SkillEntry;
+      const path = referencePathForTarget(request.target, projectRoot, canonicalSource);
+      entries[request.id] = this.persistDimensions()
+        ? skillEntryForWrite({
+            mode: "reference",
+            path,
+            source,
+          })
+        : ({ mode: "reference", path, source } satisfies SkillEntry);
     } else {
-      entries[request.id] = {
-        mode: "copy",
-        source,
-        copiedFrom: { source: sourceRegistration.source, id: request.id },
-      } satisfies SkillEntry;
       const targetPath = await this.ownedCopyPath(request.target, request.id);
+      entries[request.id] = this.persistDimensions()
+        ? skillEntryForWrite({
+            mode: "copy",
+            path: persistedCopyPathForWrite(
+              request.target,
+              this.options.homeDir,
+              projectRoot,
+              request.id,
+            ),
+            source,
+            copiedFrom: { source: sourceRegistration.source, id: request.id },
+          })
+        : ({
+            mode: "copy",
+            source,
+            copiedFrom: { source: sourceRegistration.source, id: request.id },
+          } satisfies SkillEntry);
       const materialization = await planSkillCopyMaterialization({
         sourcePath: canonicalSource,
         targetPath,
@@ -475,7 +508,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         `skill registration ${JSON.stringify(request.id)} is a reference and is read-only`,
       );
     }
-    const copyPath = await this.ownedCopyPath(request.target, request.id);
+    const copyPath = await this.ownedCopyPath(request.target, request.id, registration);
     await assertOwnedCopy(copyPath, request.id);
     await this.assertNoReverseReferences(copyPath, request.target, request.id);
     const skillPath = join(copyPath, "SKILL.md");
@@ -592,7 +625,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     }
     let deletion: { copyPath: string; removedTarget: RatelScopeRef; removedId: string } | undefined;
     if (request.deleteOwnedCopy && registration.mode === "copy") {
-      const copyPath = await this.ownedCopyPath(request.target, request.id);
+      const copyPath = await this.ownedCopyPath(request.target, request.id, registration);
       await assertOwnedCopy(copyPath, request.id);
       await this.assertNoReverseReferences(copyPath, request.target, request.id);
       operations.push({ kind: "delete-artifact", path: copyPath });
@@ -740,18 +773,29 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     });
   }
 
-  private async ownedCopyPath(target: RatelScopeRef, id: string): Promise<string> {
+  private persistDimensions(): boolean {
+    return this.options.persistDimensions ?? skillStorageEnabled();
+  }
+
+  private async ownedCopyPath(
+    target: RatelScopeRef,
+    id: string,
+    entry?: SkillEntry,
+  ): Promise<string> {
     validateRegistrationId(id);
-    if (target.scope === "user") {
-      return derivedOwnedCopyPath(join(this.options.homeDir, ".ratel", "skills"), id);
-    }
-    const project = await this.options.projectRegistry.resolve(target.projectId);
-    const copyRoot =
-      target.scope === "project"
-        ? join(project.canonicalRoot, ".ratel", "skills")
-        : join(project.canonicalRoot, ".ratel", "skills.local");
-    const path = derivedOwnedCopyPath(copyRoot, id);
-    await assertSafeProjectControlPath(project.canonicalRoot, path);
+    const projectRoot =
+      target.scope === "user"
+        ? undefined
+        : (await this.options.projectRegistry.resolve(target.projectId)).canonicalRoot;
+    const path = configuredSkillStoragePath({
+      homeDir: this.options.homeDir,
+      ...(projectRoot ? { projectRoot } : {}),
+      scopeRef: target,
+      id,
+      mode: entry?.mode ?? "copy",
+      ...(entry?.path ? { path: entry.path } : {}),
+    });
+    if (projectRoot) await assertSafeProjectControlPath(projectRoot, path);
     return path;
   }
 
@@ -826,17 +870,6 @@ async function artifactExists(path: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-}
-
-function derivedOwnedCopyPath(copyRoot: string, id: string): string {
-  const path = join(copyRoot, id);
-  if (dirname(path) !== copyRoot) {
-    throw new SkillRegistrationValidationError(
-      "invalid_registration",
-      "owned skill copy must remain directly below its designated copy root",
-    );
-  }
-  return path;
 }
 
 function referencePathForTarget(

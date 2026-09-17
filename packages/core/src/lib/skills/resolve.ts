@@ -5,6 +5,17 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
 import type { RatelScopeRef } from "../../context.js";
 import { isSafeSkillId } from "../../skill-id.js";
+import {
+  availabilityFromResolveFailure,
+  configuredSkillStoragePath,
+  originFromEntry,
+  type SkillAvailability,
+  type SkillOrigin,
+  type SkillStorage,
+  type SkillSyncState,
+  skillStorageFrom,
+  syncFromOrigin,
+} from "../../skill-registration.js";
 import type { SkillsConfig } from "../config.js";
 import { isDirectoryEntry } from "../fs.js";
 import { loadSkillBundle } from "./load.js";
@@ -44,6 +55,10 @@ export interface SkillRegistrationView {
   shadowedBy?: SkillRegistrationRef;
   duplicateOf?: SkillRegistrationRef;
   diagnostics: SkillDiagnostic[];
+  origin?: SkillOrigin;
+  storage?: SkillStorage;
+  availability?: SkillAvailability;
+  sync?: SkillSyncState;
 }
 
 export interface ResolvedSkillCatalog {
@@ -58,6 +73,8 @@ export interface ResolveConfiguredSkillsInput {
   homeDir: string;
   projectRoot?: string;
   scopes: SkillScopeConfig[];
+  /** When true, attach origin/storage/availability (and optional sync). Defaults to false. */
+  includeDimensions?: boolean;
 }
 
 interface ValidCandidate {
@@ -72,6 +89,7 @@ interface ValidCandidate {
 export async function resolveConfiguredSkills(
   input: ResolveConfiguredSkillsInput,
 ): Promise<ResolvedSkillCatalog> {
+  const includeDimensions = input.includeDimensions === true;
   const registrations: SkillRegistrationView[] = [];
   const diagnostics: SkillDiagnostic[] = [];
   const candidates: ValidCandidate[] = [];
@@ -106,6 +124,7 @@ export async function resolveConfiguredSkills(
           state: "effective",
           editable: entry.mode === "copy" && (await hasMatchingCopyMarker(canonicalPath, id)),
           diagnostics: [],
+          ...dimensionFields(includeDimensions, entry, configuredPath, "available"),
         };
         registrations.push(registration);
         candidates.push({
@@ -134,6 +153,9 @@ export async function resolveConfiguredSkills(
           path: configuredPath,
         };
         diagnostics.push(diagnostic);
+        const availability = includeDimensions
+          ? await availabilityFromResolveFailure(error, configuredPath)
+          : undefined;
         registrations.push({
           ref,
           id,
@@ -144,6 +166,7 @@ export async function resolveConfiguredSkills(
           state: "invalid",
           editable: false,
           diagnostics: [diagnostic],
+          ...dimensionFields(includeDimensions, entry, configuredPath, availability),
         });
       }
     }
@@ -212,6 +235,12 @@ export async function resolveConfiguredSkills(
             state: "effective",
             editable: false,
             diagnostics: [],
+            ...dimensionFields(
+              includeDimensions,
+              { mode: "reference" },
+              configuredPath,
+              "available",
+            ),
           };
           registrations.push(registration);
           candidates.push({
@@ -237,6 +266,9 @@ export async function resolveConfiguredSkills(
             configuredPath,
           };
           diagnostics.push(diagnostic);
+          const availability = includeDimensions
+            ? await availabilityFromResolveFailure(error, configuredPath)
+            : undefined;
           registrations.push({
             ref,
             id,
@@ -247,6 +279,12 @@ export async function resolveConfiguredSkills(
             state: "invalid",
             editable: false,
             diagnostics: [diagnostic],
+            ...dimensionFields(
+              includeDimensions,
+              { mode: "reference" },
+              configuredPath,
+              availability,
+            ),
           });
         }
       }
@@ -329,21 +367,31 @@ function configuredSkillPath(
   id: string,
   entry: NonNullable<SkillsConfig["entries"]>[string],
 ): string {
-  if (!isSafeSkillId(id)) throw new Error(`unsafe skill registration id: ${JSON.stringify(id)}`);
-  if (entry.mode === "copy") {
-    if (ref.scope === "user") return join(input.homeDir, ".ratel", "skills", id);
-    const root = requiredProjectRoot(input, ref);
-    return ref.scope === "project"
-      ? join(root, ".ratel", "skills", id)
-      : join(root, ".ratel", "skills.local", id);
-  }
-  if (ref.scope !== "user" && isAbsolute(entry.path)) {
-    throw new Error(`${ref.scope} skill reference paths must be relative to the project root`);
-  }
-  if (isAbsolute(entry.path)) return entry.path;
-  const base =
-    ref.scope === "user" ? join(input.homeDir, ".ratel") : requiredProjectRoot(input, ref);
-  return resolve(base, entry.path);
+  return configuredSkillStoragePath({
+    homeDir: input.homeDir,
+    ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+    scopeRef: ref,
+    id,
+    mode: entry.mode,
+    ...(entry.path ? { path: entry.path } : {}),
+  });
+}
+
+function dimensionFields(
+  includeDimensions: boolean,
+  entry: { mode: "reference" | "copy"; origin?: SkillOrigin },
+  configuredPath: string,
+  availability: SkillAvailability | undefined,
+): Pick<SkillRegistrationView, "origin" | "storage" | "availability" | "sync"> {
+  if (!includeDimensions || availability === undefined) return {};
+  const origin = originFromEntry(entry);
+  const sync = syncFromOrigin(origin);
+  return {
+    origin,
+    storage: skillStorageFrom(origin, configuredPath),
+    availability,
+    ...(sync ? { sync } : {}),
+  };
 }
 
 function requiredProjectRoot(

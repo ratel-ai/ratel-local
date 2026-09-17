@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import {
   type ContextSnapshotResolver,
+  createContextSnapshotResolver,
+  createProjectRegistry,
   type ProjectId,
   ProjectNotFoundError,
   type ProjectRegistry,
@@ -503,9 +505,81 @@ describe("runSkill — snapshot-backed reads", () => {
     await runSkill(ctx, {
       registry: registry(),
       resolver: { resolve: async () => resolved },
+      daemonRequest: async () => null,
     });
 
     expect(logs).toEqual(["project-review  [project/shadowed]  .agents/skills/review"]);
+  });
+
+  it("agrees with daemon skillStorage when CLI env is unset", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    const home = await mkdtemp(join(tmpdir(), "ratel-skill-dims-"));
+    try {
+      const skillDir = join(home, ".ratel", "skills", "review");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        join(skillDir, "SKILL.md"),
+        "---\nname: review\ndescription: Review skill\n---\nbody\n",
+      );
+      await writeFile(
+        join(skillDir, ".ratel-skill.json"),
+        `${JSON.stringify({ version: 1, id: "review" })}\n`,
+      );
+      await mkdir(join(home, ".ratel"), { recursive: true });
+      await writeFile(
+        join(home, ".ratel", "config.json"),
+        `${JSON.stringify(
+          {
+            skills: {
+              entries: {
+                review: { mode: "copy", source: "ratel" },
+              },
+              dirs: [],
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const registry = createProjectRegistry({ homeDir: home });
+      const expected = (
+        await createContextSnapshotResolver({
+          homeDir: home,
+          projectRegistry: registry,
+          includeDimensions: true,
+        }).resolve({ kind: "global" })
+      ).skills.registrations;
+
+      const logs: string[] = [];
+      const ctx = listCtx((line) => logs.push(line));
+      ctx.env = { homeDir: home };
+      ctx.argv.flags = { configured: true, format: "json" };
+
+      await runSkill(ctx, {
+        registry,
+        daemonRequest: async (path) => {
+          if (path === "/api/daemon/status") {
+            return Response.json({ skillStorage: true }, { status: 200 });
+          }
+          return null;
+        },
+      });
+
+      const cliRegistrations = JSON.parse(logs.join("\n")) as typeof expected;
+      expect(cliRegistrations).toHaveLength(1);
+      expect(cliRegistrations[0]).toMatchObject({
+        id: "review",
+        origin: expected[0]?.origin,
+        storage: expected[0]?.storage,
+        availability: expected[0]?.availability,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it("lists discovered candidates without resolving the effective catalog", async () => {

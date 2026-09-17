@@ -73,6 +73,8 @@ export interface ContextSnapshotResolverOptions {
   maxReadAttempts?: number;
   /** Daemon environment used to resolve MCP URL placeholders. Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
+  /** When true, skill registrations include origin/storage/availability. Defaults to false. */
+  includeDimensions?: boolean;
   /** Injected catalog pull; this module does no network I/O. */
   cloudCatalog?: (
     context: RuntimeContextRef,
@@ -178,6 +180,7 @@ export function createContextSnapshotResolver(
           homeDir: options.homeDir,
           ...(projectRoot ? { projectRoot } : {}),
           scopes,
+          ...(options.includeDimensions ? { includeDimensions: true } : {}),
         });
         const afterReads = await Promise.all(targets.map(readDocument));
         if (!sameReadSet(reads, afterReads)) continue;
@@ -186,6 +189,7 @@ export function createContextSnapshotResolver(
           homeDir: options.homeDir,
           ...(projectRoot ? { projectRoot } : {}),
           scopes,
+          ...(options.includeDimensions ? { includeDimensions: true } : {}),
         });
         if (skills.fingerprint !== firstSkills.fingerprint) continue;
 

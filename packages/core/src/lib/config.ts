@@ -2,6 +2,7 @@ import { isAbsolute } from "node:path";
 import type { EmbeddingSpec, SearchMethod } from "@ratel-ai/sdk";
 import { isPlainObject } from "../json.js";
 import { isSafeSkillId } from "../skill-id.js";
+import { isSkillOrigin, type SkillOrigin } from "../skill-registration.js";
 
 export interface ServerEntry {
   type: string;
@@ -39,11 +40,14 @@ export type SkillEntry =
   | {
       mode: "reference";
       path: string;
+      origin?: SkillOrigin;
       source?: SkillSource;
       hostPolicy?: SkillHostPolicy;
     }
   | {
       mode: "copy";
+      path?: string;
+      origin?: SkillOrigin;
       source?: SkillSource;
       copiedFrom?: { source: string; id: string };
       hostPolicy?: SkillHostPolicy;
@@ -372,6 +376,7 @@ function parseSkillEntry(path: string, raw: unknown): SkillEntry {
   }
   const source = parseSkillSource(`${path}.source`, raw.source);
   const hostPolicy = parseSkillHostPolicy(`${path}.hostPolicy`, raw.hostPolicy);
+  const origin = parseSkillOrigin(`${path}.origin`, raw.origin);
   if (raw.mode === "reference") {
     if (typeof raw.path !== "string" || raw.path.length === 0) {
       throw new ConfigError(`\`${path}.path\` must be a non-empty string`);
@@ -379,6 +384,7 @@ function parseSkillEntry(path: string, raw: unknown): SkillEntry {
     return {
       mode: "reference",
       path: raw.path,
+      ...(origin ? { origin } : {}),
       ...(source ? { source } : {}),
       ...(hostPolicy ? { hostPolicy } : {}),
     };
@@ -397,14 +403,33 @@ function parseSkillEntry(path: string, raw: unknown): SkillEntry {
       }
       copiedFrom = { source: raw.copiedFrom.source, id: raw.copiedFrom.id };
     }
+    let entryPath: string | undefined;
+    if (raw.path !== undefined) {
+      if (typeof raw.path !== "string" || raw.path.length === 0) {
+        throw new ConfigError(`\`${path}.path\` must be a non-empty string`);
+      }
+      entryPath = raw.path;
+    }
     return {
       mode: "copy",
+      ...(entryPath ? { path: entryPath } : {}),
+      ...(origin ? { origin } : {}),
       ...(source ? { source } : {}),
       ...(copiedFrom ? { copiedFrom } : {}),
       ...(hostPolicy ? { hostPolicy } : {}),
     };
   }
   throw new ConfigError(`\`${path}.mode\` must be one of reference|copy`);
+}
+
+function parseSkillOrigin(path: string, raw: unknown): SkillOrigin | undefined {
+  if (raw === undefined) return undefined;
+  if (!isSkillOrigin(raw)) {
+    throw new ConfigError(
+      `\`${path}\` must be one of local-managed|reference|cloud-managed|cloud-detached`,
+    );
+  }
+  return raw;
 }
 
 function parseSkillHostPolicy(path: string, raw: unknown): SkillHostPolicy | undefined {
