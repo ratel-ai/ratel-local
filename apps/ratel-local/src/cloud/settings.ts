@@ -50,7 +50,7 @@ export function cloudEndpoints(settings?: CloudSettings): CloudEndpoints {
 export interface CloudSettingsStoreLike {
   load(): Promise<CloudSettings | undefined>;
   save(settings: CloudSettings): Promise<void>;
-  /** Locked RMW; do not prompt or scan other files inside the mutator. */
+  /** Reads, changes and writes under a file lock. The mutator must not prompt, read other files, or call save/update. */
   update(
     mutator: (current: CloudSettings) => CloudSettings | Promise<CloudSettings>,
   ): Promise<CloudSettings>;
@@ -102,7 +102,7 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
 
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
     await mkdir(dirname(this.path), { recursive: true, mode: DIR_MODE });
-    await chmod(dirname(this.path), DIR_MODE).catch(() => undefined);
+    await chmod(dirname(this.path), DIR_MODE);
     const release = await lockfile.lock(this.path, LOCK_OPTS);
     try {
       return await fn();
@@ -113,9 +113,6 @@ export class CloudSettingsStore implements CloudSettingsStoreLike {
 
   private async writeUnlocked(settings: CloudSettings): Promise<void> {
     const next = validated(settings);
-    const directory = dirname(this.path);
-    await mkdir(directory, { recursive: true, mode: DIR_MODE });
-    await chmod(directory, DIR_MODE);
     const temporaryPath = `${this.path}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, {

@@ -362,8 +362,6 @@ describe("runDaemon", () => {
         cloudCatalogFetch: catalogFetch,
         cloudSettingsStore: {
           load: async () => undefined,
-          save: async () => {},
-          update: async (fn) => fn({ profiles: {} }),
         },
       },
     );
@@ -470,8 +468,6 @@ describe("runDaemon", () => {
         cloudCatalogFetch,
         cloudSettingsStore: {
           load: async () => stored,
-          save: async () => {},
-          update: async (fn) => fn(stored),
         },
       },
     );
@@ -679,8 +675,6 @@ describe("runDaemon", () => {
         cloudCatalogFetch,
         cloudSettingsStore: {
           load,
-          save: async () => {},
-          update: async (fn) => fn({ profiles: {} }),
         },
       },
     );
