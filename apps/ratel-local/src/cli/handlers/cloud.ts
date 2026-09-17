@@ -49,7 +49,7 @@ export async function runCloud(
   const store = dependencies.store ?? new CloudSettingsStore(cloudSettingsPath(ctx.env.homeDir));
   const settings = (await store.load()) ?? { profiles: {} };
 
-  if (verb === "add") return add(ctx, store, settings);
+  if (verb === "add") return add(ctx, store);
   if (verb === "use") return use(ctx, settings, dependencies);
   if (verb === "list") return list(ctx, settings);
   if (verb === "status") return status(ctx, settings);
@@ -61,7 +61,6 @@ export async function runCloud(
 async function add(
   ctx: HandlerCtx,
   store: NonNullable<CloudHandlerDependencies["store"]>,
-  settings: CloudSettings,
 ): Promise<void> {
   const profile = profileArgument(ctx);
   // Asked before prompting: the adapter answers EOF with the cancel it also
@@ -82,14 +81,11 @@ async function add(
   const apiKey = typeof entered === "string" ? entered.trim() : "";
   if (!apiKey) throw new ArgError(`no API key was entered for "${profile}".`);
 
-  const next: CloudSettings = {
-    ...settings,
-    // The first profile stored becomes the default, so a single-project setup
-    // never has to think about selection at all.
-    default: settings.default ?? profile,
-    profiles: { ...settings.profiles, [profile]: { apiKey } },
-  };
-  await store.save(next);
+  const next = await store.update((current) => ({
+    ...current,
+    default: current.default ?? profile,
+    profiles: { ...current.profiles, [profile]: { apiKey } },
+  }));
   ctx.log(`Stored the Ratel Cloud key for "${profile}".`);
   if (next.default === profile) {
     ctx.log(`"${profile}" is the default profile.`);
@@ -104,12 +100,7 @@ async function use(
   dependencies: CloudHandlerDependencies,
 ): Promise<void> {
   const profile = profileArgument(ctx);
-  if (!settings.profiles[profile]) {
-    const known = Object.keys(settings.profiles).sort().join(", ") || "none";
-    throw new ArgError(
-      `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel-local cloud add ${profile}`,
-    );
-  }
+  if (!settings.profiles[profile]) throw unknownProfileError(profile, settings);
   if (!dependencies.mutateCloud) throw new Error("cloud use requires a config mutator");
   const scope = resolveScope(ctx.argv.flags.scope ?? "project");
   const { path } = await dependencies.mutateCloud({ scope, profile });
@@ -182,12 +173,7 @@ async function test(
   dependencies: CloudHandlerDependencies,
 ): Promise<void> {
   const profile = profileArgument(ctx);
-  if (!settings.profiles[profile]) {
-    const known = Object.keys(settings.profiles).sort().join(", ") || "none";
-    throw new ArgError(
-      `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel-local cloud add ${profile}`,
-    );
-  }
+  if (!settings.profiles[profile]) throw unknownProfileError(profile, settings);
   const catalog = cloudEndpoints(settings).catalog.toString();
   ctx.log(`profile "${profile}"`);
   ctx.log(`catalog ${catalog}`);
@@ -226,12 +212,7 @@ async function remove(
   settings: CloudSettings,
 ): Promise<void> {
   const profile = profileArgument(ctx);
-  if (!settings.profiles[profile]) {
-    const known = Object.keys(settings.profiles).sort().join(", ") || "none";
-    throw new ArgError(
-      `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel-local cloud add ${profile}`,
-    );
-  }
+  if (!settings.profiles[profile]) throw unknownProfileError(profile, settings);
   const force = ctx.argv.flags.force === true;
   const scopes = await scanCloudProfileScopes(ctx);
   const blockers = scopes.bindings.filter((binding) => binding.profile === profile);
@@ -241,15 +222,18 @@ async function remove(
       `refusing to remove "${profile}" while ${files} still select it. This check covers this directory's user/project/local configs only, not every project on the machine. Rerun with --force to remove anyway, or change the selection with "ratel-local cloud use".`,
     );
   }
-  const { [profile]: _removed, ...remaining } = settings.profiles;
-  const clearedDefault = settings.default === profile;
-  const next: CloudSettings = {
-    ...(settings.baseUrl ? { baseUrl: settings.baseUrl } : {}),
-    ...(settings.catalogEndpoint ? { catalogEndpoint: settings.catalogEndpoint } : {}),
-    ...(!clearedDefault && settings.default ? { default: settings.default } : {}),
-    profiles: remaining,
-  };
-  await store.save(next);
+  let clearedDefault = false;
+  await store.update((current) => {
+    if (!current.profiles[profile]) throw unknownProfileError(profile, current);
+    const { [profile]: _removed, ...remaining } = current.profiles;
+    clearedDefault = current.default === profile;
+    return {
+      ...(current.baseUrl ? { baseUrl: current.baseUrl } : {}),
+      ...(current.catalogEndpoint ? { catalogEndpoint: current.catalogEndpoint } : {}),
+      ...(!clearedDefault && current.default ? { default: current.default } : {}),
+      profiles: remaining,
+    };
+  });
   ctx.log(`Removed Cloud profile "${profile}".`);
   if (clearedDefault) {
     ctx.log("The store default was cleared; no profile was promoted in its place.");
@@ -259,6 +243,13 @@ async function remove(
       `Note: ${blockers.map((b) => b.path).join(", ")} still name "${profile}"; this check only covers this directory.`,
     );
   }
+}
+
+function unknownProfileError(profile: string, settings: CloudSettings): ArgError {
+  const known = Object.keys(settings.profiles).sort().join(", ") || "none";
+  return new ArgError(
+    `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel-local cloud add ${profile}`,
+  );
 }
 
 function resolveHere(
