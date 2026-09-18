@@ -21,6 +21,7 @@ import {
   type PreparedChangeCoordinator,
   type ProjectRegistry,
   prepareAgentTraceChange,
+  primaryRatelBin,
   type RuntimeContextRef,
   readJson,
   type SkillDiscovery,
@@ -33,22 +34,29 @@ import {
   type TelemetryHandle,
   type TelemetryInitOptions,
 } from "@ratel-ai/telemetry-otlp";
+import { CLOUD_CATALOG_TIMEOUT_MS, createCloudCatalogSource } from "../../cloud/catalog.js";
 import {
   CLOUD_API_KEY_ENV,
   type CloudOtlpTraceRelayOptions,
-  cloudOtlpRelayOptionsFromEnv,
-  cloudOtlpTraceRelayOptions,
   createCloudOtlpTraceRelayController,
   OTLP_LOGS_PATH,
   OTLP_TRACES_PATH,
 } from "../../cloud/otlp-trace-relay.js";
 import {
+  CLOUD_CATALOG_PATH,
+  CloudSettingsStore,
+  type CloudSettingsStoreLike,
+  cloudSettingsPath,
+} from "../../cloud/settings.js";
+import {
   type CloudTraceSettings,
   CloudTraceSettingsStore,
   type CloudTraceSettingsStoreLike,
+  cloudOtlpRelayOptionsFromEnv,
+  cloudTraceRelayOptions,
   cloudTraceSettingsPath,
   DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
-} from "../../cloud/settings.js";
+} from "../../cloud/trace-settings.js";
 import {
   authorizeDaemonRequest,
   DaemonAccessError,
@@ -64,13 +72,21 @@ import {
   type ResolvedGatewaySnapshot,
   type RetrievalHealthStats,
 } from "../../daemon/scoped-gateway-pool.js";
+import {
+  applyFeatureFlagsToLaunchAgentPlist,
+  applyFeatureFlagsToSystemdUserService,
+} from "../../daemon/service-file.js";
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import {
+  CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
-  cloudTelemetryOverrideFromEnv,
   type FeatureFlags,
+  featureFlagOverridesFromEnv,
   featureFlagServiceEnvironment,
   featureFlagsFromEnv,
+  SERVICE_FEATURE_FLAG_ENVS,
+  type ServiceFeatureFlagOverrides,
+  SKILL_STORAGE_FEATURE_ENV,
 } from "../../feature-flags.js";
 import { openBrowser } from "../../ui/open-browser.js";
 import { InMemoryUiSessionTokens, newSessionToken } from "../../ui/security.js";
@@ -80,6 +96,7 @@ import { buildConfiguredGateway, type ServeOptions } from "./serve.js";
 import type { HandlerCtx } from "./types.js";
 
 export const DEFAULT_DAEMON_PORT = 5731;
+export const DAEMON_STARTUP_BUDGET_MS = 5_000 + CLOUD_CATALOG_TIMEOUT_MS;
 export const DAEMON_LABEL = "ai.ratel.local.daemon";
 export const SYSTEMD_SERVICE = "ratel-local-daemon.service";
 export const DAEMON_SERVICE_ID = "ratel-local-daemon";
@@ -128,6 +145,8 @@ export interface DaemonStatusBody extends DaemonState {
   retrievalHealth?: RetrievalHealthStats;
   /** Absent on daemons older than the restart-reconfiguration support. */
   cloudTelemetry?: boolean;
+  cloudCatalog?: boolean;
+  skillStorage?: boolean;
 }
 
 interface CommandResult {
@@ -164,7 +183,9 @@ interface DaemonHandlerDeps {
   skillRegistrationControlPlane?: SkillRegistrationControlPlane;
   preparedChanges?: PreparedChangeCoordinator;
   cloudOtlpFetch?: typeof fetch;
+  cloudCatalogFetch?: typeof fetch;
   configureRatelTelemetry?: ConfigureRatelTelemetry;
+  cloudSettingsStore?: Pick<CloudSettingsStoreLike, "load">;
   cloudTraceSettingsStore?: CloudTraceSettingsStoreLike;
   lifecycleProgress?: boolean;
 }
@@ -261,7 +282,7 @@ export async function runDaemon(
       ctx,
       opts,
       {
-        start: "Restarting Ratel Local…",
+        start: "Restarting Ratel Local",
         success: "Ratel Local is ready",
         failure: "Ratel Local couldn't restart",
       },
@@ -269,10 +290,10 @@ export async function runDaemon(
         const lifecycleLog = opts.lifecycleProgress === false ? log : () => {};
         const applied = await reconfigureInstalledServiceFeatureFlags(ctx, options, opts);
         await stopDaemon(ctx, lifecycleLog, opts);
-        spinner?.message("Starting Ratel Local again…");
+        spinner?.message("Starting Ratel Local again");
         await startDaemon(parsed, ctx, options, lifecycleLog, opts, "restart");
         if (applied !== undefined) {
-          restartNote = await verifyCloudTelemetryApplied(
+          restartNote = await verifyFeatureFlagsApplied(
             await daemonPort(parsed, ctx),
             opts.probe ?? probeDaemon,
             applied,
@@ -362,47 +383,53 @@ export async function runDaemonServer(
   const projectAdmissionLock = createProjectAdmissionLock({
     controlDir: join(ctx.env.homeDir, ".ratel"),
   });
-  const snapshotResolver =
-    opts.snapshotResolver ??
-    createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry });
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
   const featureFlags = featureFlagsFromEnv(daemonProcessEnv);
   const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
+  // Cloud profiles serve the catalog; the relay keeps its own single-key store.
+  // An agent's exporter is configured once per machine, so telemetry stays on one
+  // account and a profile never moves it (ADR-0013, ADR-0015).
+  const cloudSettingsStore =
+    opts.cloudSettingsStore ?? new CloudSettingsStore(cloudSettingsPath(ctx.env.homeDir));
   const cloudTraceSettingsStore =
     opts.cloudTraceSettingsStore ??
     new CloudTraceSettingsStore(cloudTraceSettingsPath(ctx.env.homeDir));
-  let persistedCloudSettings: CloudTraceSettings | undefined;
-  if (featureFlags.cloudTelemetry) {
-    try {
-      persistedCloudSettings = await cloudTraceSettingsStore.load();
-    } catch (error) {
-      log(`[ratel] ignored invalid Cloud trace settings: ${(error as Error).message}`);
-    }
-  }
-  let environmentCloudOptions: CloudOtlpTraceRelayOptions | undefined;
+  let persistedCloudTraceSettings: CloudTraceSettings | undefined;
   try {
-    if (featureFlags.cloudTelemetry) {
-      try {
-        environmentCloudOptions = cloudOtlpRelayOptionsFromEnv(daemonProcessEnv);
-      } catch (error) {
-        log(`[ratel] ignored invalid Cloud telemetry environment: ${(error as Error).message}`);
-      }
-    }
-  } finally {
-    delete daemonProcessEnv[CLOUD_API_KEY_ENV];
+    persistedCloudTraceSettings = await cloudTraceSettingsStore.load();
+  } catch (error) {
+    log(`[ratel] ignored invalid Cloud trace settings: ${(error as Error).message}`);
   }
-  const persistedCloudOptions = persistedCloudSettings
-    ? cloudOtlpTraceRelayOptions(persistedCloudSettings)
-    : undefined;
-  let activeCloudOptions = environmentCloudOptions ?? persistedCloudOptions;
+  const environmentCloudOptions = cloudOptionsFromEnvironment(daemonProcessEnv, log);
+  let activeCloudOptions =
+    environmentCloudOptions ??
+    (persistedCloudTraceSettings ? cloudTraceRelayOptions(persistedCloudTraceSettings) : undefined);
+  /** The key on disk, which a save may keep. Memory can hold an env one. */
+  const readStoredTraceApiKey = async () =>
+    cloudTraceSettingsStore
+      .load()
+      .then((stored) => stored?.apiKey)
+      .catch((error: Error) => {
+        log(`[ratel] ignored invalid Cloud trace settings: ${error.message}`);
+        return persistedCloudTraceSettings?.apiKey;
+      });
+  /** One answer about the relay, whichever route asks. */
+  const cloudTraceStatus = () => ({
+    featureEnabled: featureFlags.cloudTelemetry,
+    configured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
+    credentialStored: environmentCloudOptions === undefined,
+    endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
+  });
   const cloudOtlpRelay = createCloudOtlpTraceRelayController(
-    activeCloudOptions ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log } : undefined,
+    featureFlags.cloudTelemetry && activeCloudOptions
+      ? { ...activeCloudOptions, fetch: opts.cloudOtlpFetch, log }
+      : undefined,
   );
   let ratelTelemetry: TelemetryHandle | undefined;
   let daemonPort = port;
   const ensureRatelTelemetry = async () => {
-    if (ratelTelemetry || !activeCloudOptions) return;
+    if (ratelTelemetry || !featureFlags.cloudTelemetry || !activeCloudOptions) return;
     try {
       ratelTelemetry = await (opts.configureRatelTelemetry ?? initializeRatelTelemetry)({
         endpoint: `http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`,
@@ -412,6 +439,24 @@ export async function runDaemonServer(
       log(`[ratel] Ratel runtime telemetry disabled: ${(error as Error).message}`);
     }
   };
+  const cloudCatalog = featureFlags.cloudCatalog
+    ? createCloudCatalogSource({
+        settings: () => cloudSettingsStore.load(),
+        environment: environmentCloudOptions && {
+          catalog: new URL(CLOUD_CATALOG_PATH, environmentCloudOptions.endpoint),
+          apiKey: environmentCloudOptions.apiKey,
+        },
+        log,
+        ...(opts.cloudCatalogFetch ? { fetch: opts.cloudCatalogFetch } : {}),
+      })
+    : undefined;
+  const snapshotResolver =
+    opts.snapshotResolver ??
+    createContextSnapshotResolver({
+      homeDir: ctx.env.homeDir,
+      projectRegistry,
+      ...(cloudCatalog ? { cloudCatalog } : {}),
+    });
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
     if (scope.resolvedContext) {
@@ -600,15 +645,21 @@ export async function runDaemonServer(
     preparedChanges,
     cloudTraceSettings: {
       featureEnabled: featureFlags.cloudTelemetry,
-      status: async () => ({
-        featureEnabled: featureFlags.cloudTelemetry,
-        configured: activeCloudOptions !== undefined,
-        endpoint: activeCloudOptions?.endpoint.toString() ?? DEFAULT_CLOUD_OTLP_TRACES_ENDPOINT,
-      }),
+      status: async () => cloudTraceStatus(),
       save: async ({ endpoint, apiKey }) => {
-        const retainedApiKey = apiKey?.trim() ? apiKey : activeCloudOptions?.apiKey;
-        if (!retainedApiKey) throw new Error("Ratel Cloud API key is required");
-        const next = cloudOtlpTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
+        // Retained from the store, never from memory: an unchanged key field must
+        // not promote a `RATEL_API_KEY` override onto disk (ADR-0013).
+        const retainedApiKey = apiKey?.trim() || (await readStoredTraceApiKey());
+        if (!retainedApiKey) {
+          throw new Error(
+            environmentCloudOptions
+              ? `this daemon uses a Ratel Cloud key from ${CLOUD_API_KEY_ENV}, which is not stored; enter a key to store one`
+              : "Ratel Cloud API key is required",
+          );
+        }
+        const next = cloudTraceRelayOptions({ endpoint, apiKey: retainedApiKey });
+        // Published only once it is on disk: a failed write must not leave the
+        // relay holding a credential nothing stored.
         await cloudTraceSettingsStore.save({
           endpoint: next.endpoint.toString(),
           apiKey: next.apiKey,
@@ -617,11 +668,7 @@ export async function runDaemonServer(
         cloudOtlpRelay.configure({ ...next, fetch: opts.cloudOtlpFetch, log });
         await ensureRatelTelemetry();
         log("[ratel] Ratel Cloud trace export configured");
-        return {
-          featureEnabled: featureFlags.cloudTelemetry,
-          configured: true,
-          endpoint: next.endpoint.toString(),
-        };
+        return cloudTraceStatus();
       },
     },
     agentTraceExporters: preparedChanges
@@ -631,7 +678,7 @@ export async function runDaemonServer(
             ...(await getAgentTraceStatus(ctx, {
               endpoint: loopbackTraceEndpoint(`http://127.0.0.1:${daemonPort}${OTLP_TRACES_PATH}`),
             })),
-            cloudConfigured: activeCloudOptions !== undefined,
+            cloudConfigured: featureFlags.cloudTelemetry && activeCloudOptions !== undefined,
             featureEnabled: featureFlags.cloudTelemetry,
           }),
           prepare: ({ action, level, hostKinds, overwrite }) =>
@@ -687,6 +734,8 @@ export async function runDaemonServer(
           activeUserGatewayCount: poolStats.activeUserGatewayCount,
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
           cloudTelemetry: featureFlags.cloudTelemetry,
+          cloudCatalog: featureFlags.cloudCatalog,
+          skillStorage: featureFlags.skillStorage,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
         });
         return true;
@@ -769,17 +818,17 @@ async function migrateDaemonOAuthStores(
       .filter(({ status }) => status === "available")
       .map(({ id }) => ({ kind: "project" as const, projectId: id })),
   ];
-  const entries = [];
-  for (const context of contexts) {
-    try {
-      entries.push(...(await resolver.resolve(context)).mcpEntries);
-    } catch (error) {
-      log(
-        `[ratel] skipped OAuth migration because a context is invalid: ${(error as Error).message}`,
-      );
-      return;
-    }
+  const resolved = await Promise.allSettled(contexts.map((context) => resolver.resolve(context)));
+  const failed = resolved.filter((result) => result.status === "rejected");
+  if (failed[0]) {
+    log(
+      `[ratel] skipped OAuth migration because ${failed.length} of ${contexts.length} contexts are invalid: ${(failed[0].reason as Error).message}`,
+    );
+    return;
   }
+  const entries = resolved.flatMap((result) =>
+    result.status === "fulfilled" ? result.value.mcpEntries : [],
+  );
   try {
     const report = await migrateLegacyOAuthStores({ homeDir, entries });
     for (const item of report.migrated) {
@@ -845,6 +894,24 @@ function scopeBuildInputs(
   };
 }
 
+/**
+ * The ADR 0013 single-run override. Consumes the key and scrubs it from the
+ * environment either way, so no subprocess can inherit it.
+ */
+function cloudOptionsFromEnvironment(
+  env: NodeJS.ProcessEnv,
+  log: (message: string) => void,
+): CloudOtlpTraceRelayOptions | undefined {
+  try {
+    return cloudOtlpRelayOptionsFromEnv(env);
+  } catch (error) {
+    log(`[ratel] ignored invalid Cloud environment: ${(error as Error).message}`);
+    return undefined;
+  } finally {
+    delete env[CLOUD_API_KEY_ENV];
+  }
+}
+
 export function daemonPaths(homeDir: string) {
   const ratelDir = join(homeDir, ".ratel");
   const logsDir = join(ratelDir, "logs");
@@ -867,7 +934,7 @@ export function createLaunchAgentPlist(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
-  featureFlags?: FeatureFlags;
+  featureFlags?: Partial<FeatureFlags>;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const args = [
@@ -882,7 +949,7 @@ export function createLaunchAgentPlist(input: {
   ];
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(input.featureFlags ?? {}),
   };
   const environmentXml = Object.entries(serviceEnvironment)
     .map(
@@ -929,7 +996,7 @@ export function createSystemdUserService(input: {
   homeDir: string;
   port: number;
   pathEnv?: string;
-  featureFlags?: FeatureFlags;
+  featureFlags?: Partial<FeatureFlags>;
 }): string {
   const paths = daemonPaths(input.homeDir);
   const command = [input.executablePath, ...(input.executableArgs ?? [])]
@@ -937,7 +1004,7 @@ export function createSystemdUserService(input: {
     .join(" ");
   const serviceEnvironment = {
     ...(input.pathEnv ? { PATH: input.pathEnv, [DAEMON_INSTALL_PATH_ENV]: input.pathEnv } : {}),
-    ...featureFlagServiceEnvironment(input.featureFlags ?? { cloudTelemetry: false }),
+    ...featureFlagServiceEnvironment(input.featureFlags ?? {}),
   };
   const environmentLines = Object.entries(serviceEnvironment)
     .map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`)
@@ -960,61 +1027,22 @@ WantedBy=default.target
 `;
 }
 
-const LAUNCH_AGENT_FLAG_ENTRY = `    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\n    <string>1</string>`;
-const LAUNCH_AGENT_FLAG_ENTRY_RE = new RegExp(
-  `\\n    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\\n    <string>[^<]*</string>`,
-);
-const EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE =
-  /\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/;
-const SYSTEMD_FLAG_LINE = `Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=1`;
-const SYSTEMD_FLAG_LINE_RE = new RegExp(`^Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=.*\\n`, "m");
-const SERVICE_SHAPE_ERROR =
-  'installed daemon service is not a Ratel Local unit; reinstall with "ratel daemon install"';
-
-export function applyCloudTelemetryToLaunchAgentPlist(plist: string, enabled: boolean): string {
-  // Drop the flag entry, then an environment dict it may have left empty. Both
-  // branches below assume the shape `createLaunchAgentPlist` emits: without the
-  // second replace, enabling twice appends a new dict beside the emptied one.
-  const stripped = plist
-    .replace(LAUNCH_AGENT_FLAG_ENTRY_RE, "")
-    .replace(EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE, "");
-  if (!enabled) return stripped;
-  const envBlock =
-    /(<key>EnvironmentVariables<\/key>\n {2}<dict>\n)([\s\S]*?)(\n {2}<\/dict>)/.exec(stripped);
-  if (envBlock?.index !== undefined) {
-    const inserted = `${envBlock[1]}${envBlock[2]}\n${LAUNCH_AGENT_FLAG_ENTRY}${envBlock[3]}`;
-    return (
-      stripped.slice(0, envBlock.index) +
-      inserted +
-      stripped.slice(envBlock.index + envBlock[0].length)
-    );
-  }
-  if (!stripped.includes("<key>StandardOutPath</key>")) throw new Error(SERVICE_SHAPE_ERROR);
-  return stripped.replace(
-    "  <key>StandardOutPath</key>",
-    `  <key>EnvironmentVariables</key>\n  <dict>\n${LAUNCH_AGENT_FLAG_ENTRY}\n  </dict>\n  <key>StandardOutPath</key>`,
-  );
-}
-
-export function applyCloudTelemetryToSystemdUserService(unit: string, enabled: boolean): string {
-  const stripped = unit.replace(SYSTEMD_FLAG_LINE_RE, "");
-  if (!enabled) return stripped;
-  if (!stripped.includes("Restart=always")) throw new Error(SERVICE_SHAPE_ERROR);
-  return stripped.replace("Restart=always", `${SYSTEMD_FLAG_LINE}\nRestart=always`);
+function serviceScript(): string {
+  return process.argv[1] ? primaryRatelBin(process.argv[1]) : "ratel";
 }
 
 /**
- * Apply an explicit Cloud telemetry override to the installed service file.
- * Returns the applied value, or `undefined` when nothing was written — no
+ * Apply explicit feature-flag overrides to the installed service file.
+ * Returns the applied overrides, or `undefined` when nothing was named — no
  * override in the environment, or no installed service to rewrite.
  */
 async function reconfigureInstalledServiceFeatureFlags(
   ctx: HandlerCtx,
   options: ServeOptions,
   opts: DaemonHandlerDeps,
-): Promise<boolean | undefined> {
-  const override = cloudTelemetryOverrideFromEnv(options.processEnv ?? process.env);
-  if (override === undefined) return undefined;
+): Promise<ServiceFeatureFlagOverrides | undefined> {
+  const overrides = featureFlagOverridesFromEnv(options.processEnv ?? process.env);
+  if (Object.keys(overrides).length === 0) return undefined;
   const platform = daemonPlatform(opts);
   const paths = daemonPaths(ctx.env.homeDir);
   const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
@@ -1022,37 +1050,53 @@ async function reconfigureInstalledServiceFeatureFlags(
   if (current === null) return undefined;
   const next =
     platform === "linux"
-      ? applyCloudTelemetryToSystemdUserService(current, override)
-      : applyCloudTelemetryToLaunchAgentPlist(current, override);
+      ? applyFeatureFlagsToSystemdUserService(current, overrides)
+      : applyFeatureFlagsToLaunchAgentPlist(current, overrides);
   if (next !== current) {
     await ctx.fs.writeAtomic(servicePath, next);
     if (platform === "linux") await systemctl(opts, ["daemon-reload"]);
   }
-  return override;
+  return overrides;
 }
 
+const FLAG_STATUS_FIELD = {
+  [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
+  [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
+  [SKILL_STORAGE_FEATURE_ENV]: "skillStorage",
+} as const;
+
 /**
- * Confirm the restarted daemon actually runs with the flag we just wrote.
+ * Confirm the restarted daemon actually runs with the flags we just wrote.
  * Rewriting the service file is not proof: launchd or systemd may still be
  * serving the previous definition. Throws on a mismatch; returns a note when
- * the running daemon is too old to report the flag at all.
+ * the running daemon is too old to report them at all.
  */
-async function verifyCloudTelemetryApplied(
+async function verifyFeatureFlagsApplied(
   port: number,
   probe: ProbeDaemon,
-  expected: boolean,
+  expected: ServiceFeatureFlagOverrides,
 ): Promise<string | undefined> {
-  const wanted = expected ? "enabled" : "disabled";
   const result = await probe(port);
   const unconfirmed = (reason: string) =>
-    `[ratel] could not confirm Cloud telemetry is ${wanted}: ${reason}. Check "ratel traces status".`;
+    `[ratel] could not confirm the requested feature flags: ${reason}. Check "ratel traces status".`;
   if (!result.ok) return unconfirmed("the daemon did not answer");
-  const observed = result.status?.cloudTelemetry;
-  if (observed === expected) return undefined;
-  if (observed === undefined) return unconfirmed("the running daemon does not report it");
-  throw new Error(
-    `service was updated but the restarted daemon reports Cloud telemetry ${observed ? "enabled" : "disabled"}, expected ${wanted}; the previous service definition may still be loaded. Reinstall with "ratel daemon uninstall" then "${CLOUD_TELEMETRY_FEATURE_ENV}=${expected ? "1" : "0"} ratel daemon install".`,
-  );
+  const unreported: string[] = [];
+  for (const name of SERVICE_FEATURE_FLAG_ENVS) {
+    if (!Object.hasOwn(expected, name)) continue;
+    const want = expected[name];
+    const observed = result.status?.[FLAG_STATUS_FIELD[name]];
+    if (observed === want) continue;
+    if (observed === undefined) {
+      unreported.push(name);
+      continue;
+    }
+    throw new Error(
+      `service was updated but the restarted daemon reports ${name} ${observed ? "enabled" : "disabled"}, expected ${want ? "enabled" : "disabled"}; the previous service definition may still be loaded. Reinstall with "ratel daemon uninstall" then "${name}=${want ? "1" : "0"} ratel daemon install".`,
+    );
+  }
+  return unreported.length > 0
+    ? unconfirmed(`the running daemon does not report ${unreported.join(", ")}`)
+    : undefined;
 }
 
 async function installDaemon(
@@ -1076,7 +1120,7 @@ async function installDaemon(
   await ctx.fs.writeAtomic(
     paths.plist,
     createLaunchAgentPlist({
-      executablePath: opts.executablePath ?? process.argv[1] ?? "ratel",
+      executablePath: opts.executablePath ?? serviceScript(),
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
@@ -1173,7 +1217,7 @@ async function installLinuxDaemon(
   await ctx.fs.writeAtomic(
     paths.systemdService,
     createSystemdUserService({
-      executablePath: opts.executablePath ?? process.argv[1] ?? "ratel",
+      executablePath: opts.executablePath ?? serviceScript(),
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
@@ -1384,7 +1428,7 @@ async function waitForDaemon(
   probe: ProbeDaemon,
   expectedVersion?: string,
 ): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + DAEMON_STARTUP_BUDGET_MS;
   let lastError = "not responding";
   while (Date.now() < deadline) {
     const result = await probe(port);

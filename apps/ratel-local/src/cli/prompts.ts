@@ -35,6 +35,8 @@ export interface PromptAdapter {
   spinner(): SpinnerHandle;
   isCancel(value: unknown): boolean;
   cancel(message?: string): void;
+  /** False when stdin is not a terminal: a pipe, a file, or most CI runners. */
+  canPrompt(): boolean;
 }
 
 export class PromptUnavailableError extends Error {
@@ -85,6 +87,7 @@ export function defaultPromptAdapter(
     spinner: output.spinner,
     isCancel: clack.isCancel,
     cancel: (message = "Cancelled") => output.warning(message),
+    canPrompt: () => environment.interactive,
   };
 }
 
@@ -113,5 +116,6 @@ export function silentPromptAdapter(): PromptAdapter {
       return value === CANCEL_SYMBOL;
     },
     cancel() {},
+    canPrompt: () => false,
   };
 }

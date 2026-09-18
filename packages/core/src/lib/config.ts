@@ -65,11 +65,17 @@ export interface RetrievalConfig {
   embedding?: EmbeddingSpec;
 }
 
+/** Profile name, never a key (ADR-0021). */
+export interface CloudConfig {
+  profile?: string;
+}
+
 /** Lossless on-disk shape. Mutations retain unknown top-level fields. */
 export interface RatelConfigDocument {
   mcpServers?: Record<string, ServerEntry>;
   skills?: SkillsConfig;
   retrieval?: RetrievalConfig;
+  cloud?: CloudConfig;
   [key: string]: unknown;
 }
 
@@ -77,6 +83,7 @@ export interface RatelConfig {
   mcpServers: Record<string, ServerEntry>;
   skills?: SkillsConfig;
   retrieval?: RetrievalConfig;
+  cloud?: CloudConfig;
 }
 
 export function parseConfig(input: unknown): RatelConfig {
@@ -102,7 +109,26 @@ export function parseConfig(input: unknown): RatelConfig {
   if (retrieval !== undefined) {
     config.retrieval = parseRetrieval(retrieval);
   }
+  const cloud = (input as Record<string, unknown>).cloud;
+  if (cloud !== undefined) {
+    config.cloud = parseCloud(cloud);
+  }
   return config;
+}
+
+function parseCloud(raw: unknown): CloudConfig {
+  if (!isPlainObject(raw)) {
+    throw new ConfigError("`cloud` must be a JSON object");
+  }
+  // Keys must not land in a committable config file (ADR-0021).
+  if ("apiKey" in raw) {
+    throw new ConfigError(
+      "`cloud.apiKey` is not allowed; use `cloud.profile` to name a stored profile",
+    );
+  }
+  assertOnlyKeys("cloud", raw, ["profile"]);
+  const profile = optionalNonEmptyString("cloud.profile", raw.profile);
+  return profile === undefined ? {} : { profile };
 }
 
 function parseRetrieval(raw: unknown): RetrievalConfig {
@@ -532,17 +558,20 @@ export function mergeConfigs(configs: readonly RatelConfig[]): RatelConfig {
   const out: Record<string, ServerEntry> = {};
   let skills: SkillsConfig | undefined;
   let retrieval: RetrievalConfig | undefined;
+  let cloud: CloudConfig | undefined;
   for (const c of configs) {
     for (const [name, entry] of Object.entries(c.mcpServers)) {
       out[name] = entry;
     }
     if (c.skills) skills = c.skills;
     if (c.retrieval) retrieval = c.retrieval;
+    if (c.cloud?.profile) cloud = c.cloud;
   }
   return {
     mcpServers: out,
     ...(skills ? { skills } : {}),
     ...(retrieval ? { retrieval } : {}),
+    ...(cloud ? { cloud } : {}),
   };
 }
 

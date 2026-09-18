@@ -4,37 +4,82 @@ All notable changes to this package are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+- Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in
+  `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills
+  come from; `list` shows what is stored and which profile resolves here. A running daemon picks up a stored key without a restart.
+- Added `ratel-local cloud status|test|remove`: `status` prints this directory's resolved profile, source, catalog endpoint,
+  and ready/error/none state (files only; a missing selected profile fails with the selecting file and a `cloud add` remedy);
+  `test` performs one authenticated catalog GET and reports reachability and credential validity separately; `remove` deletes
+  a stored profile, clears the store default when that profile was it, and refuses while this directory's user/project/local
+  configs still select it unless `--force` is passed.
+- Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable.
+  `cloud.apiKey` is rejected.
+- Added per-profile credentials to the Cloud skill catalog: a pull uses the profile the directory resolves to, and a
+  directory naming a profile the store does not define fails instead of falling back to another account.
+- Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an
+  unreadable store, a stored key other users can read, and a scope too broken to say which profile it selects.
+
 ### Changed
-- Added shared CLI formatting for messages, headings, tables, lists, and progress,
-  used by project commands, doctor, and the setup prompt adapter. Terminal output
-  is styled; redirected and CI output is plain and uses fixed progress messages.
-  Narrow tables use labelled records and plain tables preserve complete cell values.
-  Human output stays on stderr and protocol payloads stay on stdout. No feature flag
-  is required. Project list formatting now includes column names; doctor and project
-  messages use consistent severity labels.
-- CLI questions now fail explicitly when interactive input/output is unavailable,
-  including in CI, instead of waiting or implicitly accepting. For automated setup,
-  use the existing `--yes` and explicit agent/daemon options. Existing explicitly
-  injected prompt adapters remain supported.
-- Made `ratel` the primary CLI executable, retaining `ratel-local` as a working
-  compatibility alias of the same entry point. No feature flag is required.
-  Help, errors, prompts, and active command examples now use `ratel`; binary
-  lookup prefers it and falls back to `ratel-local`. Generated npx service
-  commands explicitly select `ratel` from the unchanged `@ratel-ai/ratel-local`
-  package. Existing service identities, integrations, config paths, and
-  `RATEL_LOCAL_BIN` remain compatible. No alias removal date is set.
+- Made `ratel` the primary CLI executable, retaining `ratel-local` as a
+  compatibility alias of the same entry point. CLI help, usage, errors, and the
+  UI now say `ratel`. Binary lookup finds `ratel-local` on `PATH` and prefers the
+  `ratel` installed beside it; newly written services, statusline, and hooks use
+  `ratel`, and services generated through npx select it with
+  `npx --package @ratel-ai/ratel-local@<version> ratel`. The package name,
+  install commands, service identifiers, MCP entry name, config paths, and
+  `RATEL_LOCAL_BIN` are unchanged, and existing services and integrations keep
+  working. The README, plugin skill, and docs switch to `ratel` in the release
+  that ships it.
+- Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load
+  whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
+- Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with
+  `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
+- Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
+  any other value disables, and a flag left out keeps whatever the installed service already says.
+
+### Fixed
+- Fixed concurrent `ratel-local cloud add` and `cloud remove` dropping other profiles in
+  `~/.ratel/cloud.json`: each write waits for a file lock, then re-reads, so the first
+  profile that lands keeps `default` and neither save overwrites the other.
+- Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that
+  variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now
+  keeps the stored key and refuses the save when there is none to keep.
+
+- Added the off-by-default `RATEL_FEATURE_SKILL_STORAGE=1` daemon flag, the gate
+  for the new Skill filesystem and host behavior. Nothing reads it yet.
+
+## [0.9.0] - 2026-09-04
+
+### Added
+- Added the off-by-default `RATEL_FEATURE_CLOUD_CATALOG=1` daemon flag. When it
+  is on, the daemon pulls published Cloud skills into the snapshot using the
+  saved Cloud API key. Local skills of the same id win; a failed pull warns.
+- Added context snapshot diagnostics in the UI shell so catalog and other
+  resolve warnings are visible without failing the page.
+
+### Changed
 - Made `daemon restart` reconfigure the Cloud telemetry feature flag in an
   installed launchd or systemd service when `RATEL_FEATURE_CLOUD_TELEMETRY` is
   present in the invoking environment (`=1` enables, any other value disables,
   absent preserves). Restart now waits for the stopped daemon to release its
   port, and confirms the restarted daemon adopted the change through the new
   `cloudTelemetry` field on `/api/daemon/status`.
+- Made `daemon restart` reconfigure `RATEL_FEATURE_CLOUD_CATALOG` the same way,
+  independently of Cloud telemetry, and confirm the result through
+  `cloudCatalog` on `/api/daemon/status`.
+- Raised how long `daemon install`, `daemon start` and `daemon restart`
+  wait for healthy status from 5 to 15 seconds.
 
 ### Removed
 - Removed the deprecated `search_tools` alias from MCP discovery and call dispatch. Agents now have a single capability-search entry point: `search_capabilities`.
 
 ### Fixed
 - Removed duplicate upstream metadata from capability search responses: Ratel keeps `server.description` and omits `server.instructions` only when their strings are exactly equal; distinct metadata remains unchanged.
+- Held a rejected Cloud catalog API key for 60 seconds after HTTP 401 or 403,
+  so a revoked key is not retried on every context resolve.
+- Held an unreachable Cloud catalog for 10 seconds when nothing is cached, so an
+  unavailable source is not retried on every context resolve.
 
 ## [0.8.2] - 2026-08-19
 

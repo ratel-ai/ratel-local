@@ -13,7 +13,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 export interface CloudOtlpTraceRelayOptions {
   endpoint: URL;
-  logsEndpoint?: URL;
+  logsEndpoint: URL;
   apiKey: string;
   fetch?: typeof fetch;
   log?: (message: string) => void;
@@ -29,46 +29,18 @@ export interface CloudOtlpTraceRelayController extends CloudOtlpTraceRelay {
   configure(options: CloudOtlpTraceRelayOptions): void;
 }
 
-export function cloudOtlpRelayOptionsFromEnv(
-  env: NodeJS.ProcessEnv,
-): CloudOtlpTraceRelayOptions | undefined {
-  const endpointValue = env[CLOUD_OTLP_TRACES_ENDPOINT_ENV];
-  const apiKey = env[CLOUD_API_KEY_ENV];
-  if (!endpointValue && !apiKey) return undefined;
-  if (!endpointValue) {
-    throw new Error(
-      `Cloud OTLP trace relay requires endpoint environment variable ${CLOUD_OTLP_TRACES_ENDPOINT_ENV}`,
-    );
-  }
-  if (!apiKey) {
-    throw new Error(
-      `Cloud OTLP trace relay requires daemon credential environment variable ${CLOUD_API_KEY_ENV}`,
-    );
-  }
-  return cloudOtlpTraceRelayOptions({ endpoint: endpointValue, apiKey });
-}
-
 export function cloudOtlpTraceRelayOptions(settings: {
   endpoint: string;
+  logsEndpoint: URL;
   apiKey: string;
 }): CloudOtlpTraceRelayOptions {
   const endpoint = parseCloudEndpoint(settings.endpoint);
   headerSafeSecret(settings.apiKey, "Ratel Cloud API key");
   return {
     endpoint,
-    logsEndpoint: deriveCloudOtlpLogsEndpoint(endpoint),
+    logsEndpoint: settings.logsEndpoint,
     apiKey: settings.apiKey,
   };
-}
-
-export function deriveCloudOtlpLogsEndpoint(traceEndpoint: URL): URL {
-  const match = /\/traces(\/?)$/.exec(traceEndpoint.pathname);
-  if (!match) {
-    throw new Error("Ratel Cloud OTLP trace endpoint path must end with /traces");
-  }
-  const logsEndpoint = new URL(traceEndpoint);
-  logsEndpoint.pathname = `${traceEndpoint.pathname.slice(0, match.index)}/logs${match[1]}`;
-  return logsEndpoint;
 }
 
 export function createCloudOtlpTraceRelayController(
@@ -102,7 +74,7 @@ export function createCloudOtlpTraceRelay(
     "body limit",
   );
   const timeoutMs = positiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "upstream timeout");
-  const logsEndpoint = options.logsEndpoint ?? deriveCloudOtlpLogsEndpoint(options.endpoint);
+  const logsEndpoint = options.logsEndpoint;
 
   return {
     async handleRequest(req, res, path) {
