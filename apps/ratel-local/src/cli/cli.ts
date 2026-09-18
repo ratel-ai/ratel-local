@@ -50,13 +50,17 @@ import type {
   HandlerCtx,
 } from "./handlers/types.js";
 import { runUi } from "./handlers/ui.js";
-import { type PromptAdapter, silentPromptAdapter } from "./prompts.js";
+import { detectOutputEnvironment, type OutputEnvironment } from "./output/environment.js";
+import { type CliOutput, createCliOutput } from "./output/index.js";
+import { defaultPromptAdapter, type PromptAdapter } from "./prompts.js";
 
 export interface RunCliOptions {
   readConfig?: (path: string) => Promise<unknown>;
   transportFactory?: TransportFactory;
   serverTransport?: Transport;
   logger?: (message: string) => void;
+  output?: CliOutput;
+  outputEnvironment?: OutputEnvironment;
   serverName?: string;
   serverVersion?: string;
   prompts?: PromptAdapter;
@@ -103,6 +107,10 @@ Run \`ratel <group>\` for the verbs available in a group.`;
 
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<RunCliResult> {
   const log = options.logger ?? ((m) => console.error(m));
+  const environment =
+    options.outputEnvironment ??
+    (options.logger ? { interactive: false, color: false, width: 80 } : detectOutputEnvironment());
+  const output = options.output ?? createCliOutput({ environment, write: log });
   let parsed: ParsedArgs;
   try {
     parsed = parseArgs(argv);
@@ -187,7 +195,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     env: options.env ?? defaultEnv(),
     fs: options.fs ?? nodeFs,
     log,
-    prompts: options.prompts ?? silentPromptAdapter(),
+    output,
+    prompts: options.prompts ?? defaultPromptAdapter({ environment, output }),
     installAgentPlugin:
       options.installAgentPlugin ??
       createRatelAgentPluginInstaller({
