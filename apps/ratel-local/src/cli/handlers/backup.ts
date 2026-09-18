@@ -2,7 +2,7 @@ import { ArgError } from "../args.js";
 import { runListBackups } from "./list.js";
 import type { HandlerCtx } from "./types.js";
 
-export const BACKUP_USAGE = `usage: ratel-local backup <verb> [args...]
+export const BACKUP_USAGE = `usage: ratel backup <verb> [args...]
 
 Verbs:
   list    list backup sets under ~/.ratel/backups/`;

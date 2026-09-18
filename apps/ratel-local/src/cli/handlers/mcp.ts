@@ -7,20 +7,20 @@ import { runMcpList } from "./mcp-list.js";
 import { runRemove } from "./remove.js";
 import type { CliServerMutator, HandlerCtx } from "./types.js";
 
-export const MCP_USAGE = `usage: ratel-local mcp <verb> [args...]
+export const MCP_USAGE = `usage: ratel mcp <verb> [args...]
 
 Verbs:
-  add     add an MCP server entry (Claude-compatible: ratel-local mcp add [flags] <name> -- <command> [args...]
-                                   or ratel-local mcp add [flags] <name> <url>)
+  add     add an MCP server entry (Claude-compatible: ratel mcp add [flags] <name> -- <command> [args...]
+                                   or ratel mcp add [flags] <name> <url>)
   remove  remove an entry from a Ratel scope
   list    list MCP servers configured across Ratel scopes
   get     show one entry's resolved details
   edit    edit fields on an existing entry (interactive when no flags supplied)
   auth    drive an interactive OAuth flow for one or all http/sse upstreams that need authorization
 
-To import agent MCP configs and skills, see \`ratel-local import\`.
-To point an agent at Ratel, see \`ratel-local link\`.
-To start the gateway, see \`ratel-local serve\`.
+To import agent MCP configs and skills, see \`ratel import\`.
+To point an agent at Ratel, see \`ratel link\`.
+To start the gateway, see \`ratel serve\`.
 
 Scopes:
   --scope user     write ~/.ratel/config.json (default)

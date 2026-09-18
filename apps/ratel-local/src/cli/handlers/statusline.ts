@@ -22,7 +22,7 @@ export async function runStatuslineInstallStep(
 
   if (opts.yes && state.status === "other") {
     ctx.prompts.note(
-      "Skipped statusline install: a non-Ratel statusLine is already configured. Run `ratel-local statusline install --force` to replace it.",
+      "Skipped statusline install: a non-Ratel statusLine is already configured. Run `ratel statusline install --force` to replace it.",
       "Statusline",
     );
     return "skipped";
@@ -50,7 +50,7 @@ export async function runStatuslineInstallStep(
   return "already-installed";
 }
 
-export const STATUSLINE_USAGE = `usage: ratel-local statusline [install|uninstall]
+export const STATUSLINE_USAGE = `usage: ratel statusline [install|uninstall]
 
 Verbs:
   (none)       render the Claude Code statusline (reads Claude JSON from stdin)

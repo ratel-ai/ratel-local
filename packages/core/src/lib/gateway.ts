@@ -188,7 +188,7 @@ export async function buildGatewayFromConfig(
         markNeedsAuth(upstreamServers, name, entry);
         catalog.recordEvent({ type: "auth_needs", upstream: name });
         log(
-          `[ratel] ${name} OAuth target changed; re-authorization is required — run "ratel-local mcp auth ${name}"`,
+          `[ratel] ${name} OAuth target changed; re-authorization is required — run "ratel mcp auth ${name}"`,
         );
         continue;
       }
@@ -205,7 +205,7 @@ export async function buildGatewayFromConfig(
           markNeedsAuth(upstreamServers, name, entry);
           catalog.recordEvent({ type: "auth_needs", upstream: name });
           log(
-            `[ratel] ${name} needs re-authorization (refresh failed: ${(err as Error).message}) — run "ratel-local mcp auth ${name}"`,
+            `[ratel] ${name} needs re-authorization (refresh failed: ${(err as Error).message}) — run "ratel mcp auth ${name}"`,
           );
           continue;
         }
@@ -245,7 +245,7 @@ export async function buildGatewayFromConfig(
         markNeedsAuth(upstreamServers, name, entry);
         catalog.recordEvent({ type: "auth_needs", upstream: name });
         log(
-          `[ratel] ${name} requires authorization — run "ratel-local mcp auth ${name}" or call the auth tool`,
+          `[ratel] ${name} requires authorization — run "ratel mcp auth ${name}" or call the auth tool`,
         );
         continue;
       }

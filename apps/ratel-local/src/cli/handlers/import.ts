@@ -96,7 +96,7 @@ type ConflictResolutionResult =
   | { kind: "resolved"; resolution: ConflictResolution }
   | { kind: "cancelled" };
 
-export const IMPORT_USAGE = `usage: ratel-local import [flags]
+export const IMPORT_USAGE = `usage: ratel import [flags]
 
 Flags:
   --agent auto|claude-code|codex
@@ -338,7 +338,7 @@ export async function runImport(
   }
 
   if (latestManifest) {
-    ctx.prompts.note(`Backup created. Run \`ratel-local backup list\` to inspect backups.`, "Done");
+    ctx.prompts.note(`Backup created. Run \`ratel backup list\` to inspect backups.`, "Done");
   }
   ctx.prompts.outro(renderCompletion(agentState, plan, skillImportResult.managed));
   return latestManifest;

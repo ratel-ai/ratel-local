@@ -589,7 +589,7 @@ describe("runAdd — auth-probe at add-time (http/sse)", () => {
     const all = logs.join("\n");
     expect(all).toMatch(/stripe/);
     expect(all).toMatch(/user denied/);
-    expect(all).toMatch(/ratel-local mcp auth/);
+    expect(all).toMatch(/ratel mcp auth/);
   });
 
   it("--no-fetch-description skips authProbe too", async () => {
@@ -652,7 +652,7 @@ describe("runAdd — recap output after writing", () => {
     expect(all).toMatch(/command:.*echo hi/);
     expect(all).toMatch(/env:.*A.*B/);
     expect(all).toMatch(/description:.*echo says hello/);
-    expect(all).toMatch(/ratel-local mcp edit --scope user --name fs/);
+    expect(all).toMatch(/ratel mcp edit --scope user --name fs/);
   });
 
   it("logs the url, header keys, oauth fields, and description for an http entry (never echoes the client-secret value)", async () => {
@@ -683,7 +683,7 @@ describe("runAdd — recap output after writing", () => {
     expect(all).not.toMatch(/shhh/);
     expect(all).toMatch(/client-secret:.*\(hidden\)/);
     expect(all).toMatch(/description:.*stripe upstream/);
-    expect(all).toMatch(/ratel-local mcp edit --scope user --name stripe/);
+    expect(all).toMatch(/ratel mcp edit --scope user --name stripe/);
   });
 
   it("trims a description preview at the first newline (with ellipsis)", async () => {
@@ -730,6 +730,6 @@ describe("runAdd — recap output after writing", () => {
     await runAdd(ctx, { probe: async () => undefined });
     const all = logs.join("\n");
     expect(all).not.toMatch(/description:/);
-    expect(all).toMatch(/ratel-local mcp edit --scope user --name fs/);
+    expect(all).toMatch(/ratel mcp edit --scope user --name fs/);
   });
 });

@@ -258,7 +258,7 @@ describe("runDoctor", () => {
     await runDoctor(context(homeDir, previewLogs));
 
     expect(previewLogs).toContain(
-      "[info] legacy_skill_migration_ready [skill:review]: run ratel-local doctor --fix to migrate",
+      "[info] legacy_skill_migration_ready [skill:review]: run ratel doctor --fix to migrate",
     );
     expect((await lstat(managed)).isSymbolicLink()).toBe(true);
 

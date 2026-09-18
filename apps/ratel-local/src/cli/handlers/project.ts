@@ -9,7 +9,7 @@ import { ArgError } from "../args.js";
 import { requestRunningDaemon, requireDaemonJson } from "../daemon-api.js";
 import type { HandlerCtx } from "./types.js";
 
-export const PROJECT_USAGE = `usage: ratel-local project <verb> [args...]
+export const PROJECT_USAGE = `usage: ratel project <verb> [args...]
 
 Verbs:
   list                 list registered project roots
@@ -50,7 +50,7 @@ async function removeProject(
   dependencies: ProjectHandlerDependencies,
 ): Promise<void> {
   if (ctx.argv.rest.length !== 1) {
-    throw new ArgError("usage: ratel-local project remove <id-or-path>");
+    throw new ArgError("usage: ratel project remove <id-or-path>");
   }
   const input = ctx.argv.rest[0];
   const project = await resolveProjectInput(input, dependencies);
@@ -95,7 +95,7 @@ async function addProject(
   dependencies: ProjectHandlerDependencies,
 ): Promise<void> {
   if (ctx.argv.rest.length !== 1) {
-    throw new ArgError("usage: ratel-local project add <path>");
+    throw new ArgError("usage: ratel project add <path>");
   }
   const input = ctx.argv.rest[0];
   const project =

@@ -10,7 +10,7 @@ import { ArgError } from "../args.js";
 import { type DaemonApiRequest, requestRunningDaemon, requireDaemonJson } from "../daemon-api.js";
 import type { HandlerCtx } from "./types.js";
 
-export const TRACES_USAGE = `usage: ratel-local traces <verb> [flags]
+export const TRACES_USAGE = `usage: ratel traces <verb> [flags]
 
 Verbs:
   status    show native trace exporter status (both agents by default)
@@ -80,7 +80,7 @@ export async function runTraces(
   }
   if (status.featureEnabled === false) {
     throw new ArgError(
-      "Cloud telemetry is disabled; start a foreground daemon with RATEL_FEATURE_CLOUD_TELEMETRY=1 or run RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart",
+      "Cloud telemetry is disabled; start a foreground daemon with RATEL_FEATURE_CLOUD_TELEMETRY=1 or run RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel daemon restart",
     );
   }
 

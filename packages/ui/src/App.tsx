@@ -438,7 +438,7 @@ export function AppShell() {
               <main className="w-full">
                 <Alert>
                   <AlertTitle>Missing session token</AlertTitle>
-                  <AlertDescription>Open the URL printed by ratel-local ui.</AlertDescription>
+                  <AlertDescription>Open the URL printed by ratel ui.</AlertDescription>
                 </Alert>
               </main>
             ) : (

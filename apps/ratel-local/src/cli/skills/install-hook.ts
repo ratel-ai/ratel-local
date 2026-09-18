@@ -42,7 +42,7 @@ export function settingsPathForScope(scope: HookScope, env: HierarchyEnv): strin
   return join(env.projectRoot, ".claude", "settings.json");
 }
 
-/** Render the settings hook command string for the resolved ratel-local binary. */
+/** Render the settings hook command string for the resolved ratel binary. */
 export function preloadHookCommand(bin: ResolvedBin): string {
   return [bin.command, ...bin.args, "skill", "preload-hook"].filter(Boolean).join(" ");
 }
