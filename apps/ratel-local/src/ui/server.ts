@@ -112,6 +112,8 @@ export interface CloudTraceSettingsStatus {
   featureEnabled?: boolean;
   configured: boolean;
   endpoint: string;
+  /** False when the active key came from the environment, so Settings cannot keep it. */
+  credentialStored?: boolean;
 }
 
 export interface CloudTraceSettingsControlPlane {
@@ -449,6 +451,30 @@ async function route(
   if (method === "GET" && path === "/api/config") {
     return getConfigWithSnapshot(ctx, runtimeContext, snapshotResolver);
   }
+  if (method === "PATCH" && path === "/api/cloud-profile") {
+    if (!configControlPlane) return null;
+    const body = await readJsonBody(req);
+    const target = parseRatelScopeRef(body.target);
+    const expectedRevision = optionalDocumentRevision(body.expectedRevision);
+    const profile = requiredBodyString(body.profile, "profile");
+    const commit = await configControlPlane.mutateCloud({
+      target,
+      profile,
+      ...(expectedRevision ? { expectedRevision } : {}),
+    });
+    return {
+      status: 200,
+      body: {
+        target,
+        profile,
+        transactionId: commit.transactionId,
+        changedPaths: commit.changedPaths,
+        revisions: commit.revisions,
+        reconnectRequired: true,
+      },
+    };
+  }
+
   if ((method === "PATCH" || method === "DELETE") && path === "/api/retrieval") {
     if (!configControlPlane) return null;
     const body = await readJsonBody(req);

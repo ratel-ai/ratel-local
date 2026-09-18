@@ -26,6 +26,7 @@ import {
   useState,
 } from "react";
 import { BrandLogo } from "@/components/brand-logo";
+import { ContextDiagnostics, type SnapshotDiagnostic } from "@/components/context-diagnostics";
 import { ContextSwitcher } from "@/components/context-switcher";
 import { ShortcutHint } from "@/components/shortcut-hint";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -159,6 +160,7 @@ export interface ConfigResponse {
   }>;
   runtimeRevision?: string;
   effectiveRetrieval?: RetrievalConfig;
+  diagnostics?: SnapshotDiagnostic[];
 }
 
 export interface ServerToolTokenEstimate {
@@ -440,7 +442,10 @@ export function AppShell() {
                 </Alert>
               </main>
             ) : (
-              <Outlet />
+              <>
+                <ContextDiagnostics diagnostics={config?.diagnostics ?? []} />
+                <Outlet />
+              </>
             )}
           </div>
         </div>

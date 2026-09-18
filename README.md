@@ -35,7 +35,7 @@ persistent daemon, detects Claude Code and Codex, connects the agents you
 select, and offers existing MCP servers and skills as a separate reviewed
 import.
 
-This README tracks the `0.8.2` stable release, matching the package version
+This README tracks the `0.9.0` stable release, matching the package version
 pinned by the bundled plugin. Unqualified npm installs resolve the `latest`
 dist-tag; the examples below remain exact-versioned for reproducibility.
 
@@ -44,7 +44,7 @@ the gateway and agent skills. Stable builds use the **Ratel** marketplace from
 the repository's default `main` branch. Prerelease builds alone pin the same
 marketplace identity to their immutable matching release tag: Codex uses
 `--ref`, while Claude Code uses the equivalent `owner/repo@ref` source. Stable
-`0.8.2` therefore carries no RC branch or tag override.
+`0.9.0` therefore carries no RC branch or tag override.
 
 If an agent already has the plugin, `link` reconciles that marketplace channel and reinstalls the plugin. It verifies that an RC tag exists before changing a working installation and attempts to restore the stable plugin if an RC switch fails after removal. When stable is restored, the command preserves that connection but reports the RC setup as failed rather than claiming the requested channel is active. If no usable plugin remains, a new link uses the reviewed explicit MCP gateway fallback; a failed existing-plugin reconciliation stops with an error. Importing still recognizes an enabled plugin as an existing Ratel connection and does not add a second gateway. If the Codex plugin is enabled but its bundled Ratel MCP server is disabled, `link` re-enables that server. Agent Setup offers **Fix duplicate installation** when both the plugin and an explicit Ratel MCP entry are present, and **Switch to plugin** for MCP-only installations. Both actions preserve the existing MCP connection unless plugin installation succeeds, and only recognized Ratel entries are removed.
 
@@ -55,7 +55,7 @@ If an agent already has the plugin, `link` reconciles that marketplace channel a
 Node.js 20.6 or newer is required.
 
 ```bash
-npm install --global @ratel-ai/ratel-local@0.8.2
+npm install --global @ratel-ai/ratel-local@0.9.0
 ratel --version
 ratel-local --version # compatibility alias
 ```
@@ -90,7 +90,7 @@ marketplace channel.
 If you do not have a global installation, run the release-pinned package:
 
 ```bash
-npx -y --package @ratel-ai/ratel-local@0.8.2 ratel setup
+npx -y @ratel-ai/ratel-local@0.9.0 setup
 ```
 
 #### 3. Confirm Ratel Local and restart
@@ -185,11 +185,45 @@ immutable gateway generation. See the [retrieval configuration and preflight
 guide](docs/retrieval.md) for local, Hugging Face, Ollama, and
 OpenAI-compatible embedding sources plus privacy and memory guidance.
 
+### Connect a Ratel Cloud account
+
+Cloud skill-catalog credentials are stored as named profiles in
+`~/.ratel/cloud.json`, readable only by you and never inside a repository:
+
+```bash
+ratel cloud add personal   # masked prompt for the key; needs a terminal
+ratel cloud list           # stored profiles, and which one applies here
+ratel cloud status         # this directory's resolved profile and state
+```
+
+Create a key at <https://cloud.ratel.sh/settings>. The first profile you store
+becomes the default, so a single account needs nothing further. To take one
+project's skills from a different account:
+
+```bash
+ratel cloud use acme --scope project
+```
+
+That writes `cloud.profile` into the project config `/path/to/project/.ratel/config.json`,
+the file stores a profile name (never a key), so it stays safe to commit
+and your team inherits the binding by cloning. Reconnect the agent afterwards.
+
+Check a stored key with `ratel-local cloud test <profile>` (reachability and
+authorization are reported separately). Remove one with
+`ratel-local cloud remove <profile>`; the command refuses while this directory's
+user/project/local configs still select it unless you pass `--force`. For a
+machine-local switch that is not committed, use
+`ratel cloud use <profile> --scope local`.
+
+Telemetry is separate and keeps its own single key in `~/.ratel/cloud-traces.json`
+or in `RATEL_API_KEY`: an agent's exporter is configured once per machine, so
+traces and logs go to one Cloud project regardless of `cloud.profile`.
+
 ### Experimental Cloud telemetry
 
 Native Claude Code and Codex telemetry relay plus Ratel runtime trace export
-ship dark. Enable the daemon-wide feature explicitly before configuring an API
-key or native exporter:
+ship dark. Enable the daemon-wide feature explicitly before configuring a
+native exporter:
 
 ```bash
 # New installation
@@ -204,11 +238,39 @@ RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel daemon restart
 ratel traces status
 ```
 
-Only the exact value `1` enables the feature; any other value disables it. The
-setting is persisted into the installed launchd or systemd service, and omitting
-the variable leaves an installed daemon unchanged. See the [Cloud OTLP relay and native exporter setup
+Only the exact value `1` enables a daemon feature flag; any other value disables
+it. Flags are persisted into the installed launchd or systemd service, and a
+flag you leave out of the environment keeps whatever the service already says.
+See the [Cloud OTLP relay and native exporter setup
 contract](docs/cloud-otlp-relay.md) for privacy levels, precedence, failure
 behavior, and rollback instructions.
+
+### Experimental Cloud skill catalog
+
+A project's skills published to Ratel Cloud can join the locally resolved skill
+set, served through the same gateway and the same capability search as local
+ones. Off by default:
+
+```bash
+# New installation
+RATEL_FEATURE_CLOUD_CATALOG=1 ratel setup
+
+# Existing installed daemon
+RATEL_FEATURE_CLOUD_CATALOG=1 ratel daemon restart
+
+# Disable
+RATEL_FEATURE_CLOUD_CATALOG=0 ratel daemon restart
+```
+
+The flag follows the same semantics as Cloud telemetry above, and the two are independent.
+
+The catalog pulls with the Cloud profile this directory resolves to, stored in
+`~/.ratel/cloud.json` and read on every pull, so a rotated key applies without a
+restart.
+
+A local skill with the same id wins, and the shadowed Cloud one is reported as a
+warning in the daemon UI. An unreachable or stale catalog is a warning too, never
+a failed context resolve.
 
 ### Verify capability search
 
