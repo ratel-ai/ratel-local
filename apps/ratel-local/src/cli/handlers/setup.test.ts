@@ -94,6 +94,21 @@ describe("runSetup", () => {
     });
   });
 
+  it("writes the ratel link when setup runs through the ratel-local alias", () => {
+    expect(
+      resolveSetupServiceExecutable({
+        expectedVersion: packageVersion,
+        env: { PATH: "/opt/node/bin" },
+        execPath: "/opt/node/bin/node",
+        argv1: "/home/u/.nvm/versions/node/v24/bin/ratel-local",
+        isExecutable: (path) => path.endsWith("/npx") || path.endsWith("/bin/ratel"),
+      }),
+    ).toEqual({
+      executablePath: "/opt/node/bin/node",
+      executableArgs: ["/home/u/.nvm/versions/node/v24/bin/ratel"],
+    });
+  });
+
   it("is idempotent when the daemon is already running", async () => {
     const notes: string[] = [];
     const install = vi.fn(async () => {});

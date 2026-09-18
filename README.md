@@ -19,7 +19,7 @@
 
 Ratel Local gives coding agents one searchable catalog instead of every tool schema from every upstream MCP server. Tools and skill instructions enter context only when the agent needs them, with no agent-code changes.
 
-It ships as the npm package `@ratel-ai/ratel-local` and the `ratel` CLI. The `ratel-local` executable remains a working compatibility alias with identical commands and exit behavior; no feature flag is required and no removal date is set. The package also exposes library APIs for serving a Ratel `ToolCatalog` over MCP.
+It ships as the npm package `@ratel-ai/ratel-local` and the `ratel-local` CLI. The package also exposes library APIs for serving a Ratel `ToolCatalog` over MCP.
 
 ## Why Ratel Local
 
@@ -56,21 +56,13 @@ Node.js 20.6 or newer is required.
 
 ```bash
 npm install --global @ratel-ai/ratel-local@0.9.0
-ratel --version
-ratel-local --version # compatibility alias
+ratel-local --version
 ```
-
-Both names are installed by the same package and run the same entry point. Existing
-`npx -y @ratel-ai/ratel-local@0.8.2 setup` invocations also keep working.
-Config paths, `RATEL_LOCAL_BIN`, plugin/MCP identifiers, and daemon service names
-are unchanged. Existing services continue to work; no reinstall is required for
-this rename. New services reuse the installed script, or explicitly run `ratel`
-from the pinned package when setup was launched through `npx`.
 
 #### 2. Run setup
 
 ```bash
-ratel setup
+ratel-local setup
 ```
 
 The wizard:
@@ -110,24 +102,24 @@ Confirm that `ratel-local` is connected or enabled, then restart Claude Code or 
 Plain `--yes` retains the old safe behavior and changes only the daemon:
 
 ```bash
-ratel setup --yes
-ratel setup --daemon-only --yes
+ratel-local setup --yes
+ratel-local setup --daemon-only --yes
 ```
 
 Agent changes require explicit selection. Repeat `--agent`, or use `auto` to
 connect every detected supported agent:
 
 ```bash
-ratel setup --yes --agent claude-code --agent codex
-ratel setup --yes --agent auto
+ratel-local setup --yes --agent claude-code --agent codex
+ratel-local setup --yes --agent auto
 ```
 
 Automated setup never imports native MCP servers or skills. Use the explicit
 expert command when migration is intended:
 
 ```bash
-ratel import --yes --agent claude-code
-ratel import --yes --agent codex
+ratel-local import --yes --agent claude-code
+ratel-local import --yes --agent codex
 ```
 
 `--port N` selects the first-install daemon port. `--daemon-only` cannot be
@@ -140,17 +132,17 @@ debugging:
 
 ```bash
 # Daemon lifecycle
-ratel daemon install
-ratel daemon start
-ratel daemon status
+ratel-local daemon install
+ratel-local daemon start
+ratel-local daemon status
 
 # Connect without importing native entries
-ratel link --agent claude-code
-ratel link --agent codex
+ratel-local link --agent claude-code
+ratel-local link --agent codex
 
 # Preview and confirm one agent migration
-ratel import --agent claude-code
-ratel import --agent codex
+ratel-local import --agent claude-code
+ratel-local import --agent codex
 ```
 
 `daemon start` is idempotent: when the service is already healthy it leaves the
@@ -165,8 +157,8 @@ rollout flag is off by default.
 Add new upstreams directly after onboarding:
 
 ```bash
-ratel mcp add --scope user context7 -- npx -y @upstash/context7-mcp
-ratel mcp list
+ratel-local mcp add --scope user context7 -- npx -y @upstash/context7-mcp
+ratel-local mcp list
 ```
 
 ### Opt-in semantic and hybrid retrieval
@@ -175,9 +167,9 @@ BM25 remains the model-free default. The `0.7.0` feature line adds scoped
 semantic and hybrid retrieval with explicit model preflight:
 
 ```bash
-ratel retrieval status
-ratel retrieval configure --scope project --method hybrid --source built-in
-ratel retrieval prepare --scope project
+ratel-local retrieval status
+ratel-local retrieval configure --scope project --method hybrid --source built-in
+ratel-local retrieval prepare --scope project
 ```
 
 Reconnect the affected agent after changing retrieval so it acquires the new
@@ -191,9 +183,9 @@ Cloud skill-catalog credentials are stored as named profiles in
 `~/.ratel/cloud.json`, readable only by you and never inside a repository:
 
 ```bash
-ratel cloud add personal   # masked prompt for the key; needs a terminal
-ratel cloud list           # stored profiles, and which one applies here
-ratel cloud status         # this directory's resolved profile and state
+ratel-local cloud add personal   # masked prompt for the key; needs a terminal
+ratel-local cloud list           # stored profiles, and which one applies here
+ratel-local cloud status         # this directory's resolved profile and state
 ```
 
 Create a key at <https://cloud.ratel.sh/settings>. The first profile you store
@@ -201,7 +193,7 @@ becomes the default, so a single account needs nothing further. To take one
 project's skills from a different account:
 
 ```bash
-ratel cloud use acme --scope project
+ratel-local cloud use acme --scope project
 ```
 
 That writes `cloud.profile` into the project config `/path/to/project/.ratel/config.json`,
@@ -213,7 +205,7 @@ authorization are reported separately). Remove one with
 `ratel-local cloud remove <profile>`; the command refuses while this directory's
 user/project/local configs still select it unless you pass `--force`. For a
 machine-local switch that is not committed, use
-`ratel cloud use <profile> --scope local`.
+`ratel-local cloud use <profile> --scope local`.
 
 Telemetry is separate and keeps its own single key in `~/.ratel/cloud-traces.json`
 or in `RATEL_API_KEY`: an agent's exporter is configured once per machine, so
@@ -227,15 +219,15 @@ native exporter:
 
 ```bash
 # New installation
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel setup
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local setup
 
 # Existing installed daemon
-RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=1 ratel-local daemon restart
 
 # Disable
-RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel daemon restart
+RATEL_FEATURE_CLOUD_TELEMETRY=0 ratel-local daemon restart
 
-ratel traces status
+ratel-local traces status
 ```
 
 Only the exact value `1` enables a daemon feature flag; any other value disables
@@ -253,13 +245,13 @@ ones. Off by default:
 
 ```bash
 # New installation
-RATEL_FEATURE_CLOUD_CATALOG=1 ratel setup
+RATEL_FEATURE_CLOUD_CATALOG=1 ratel-local setup
 
 # Existing installed daemon
-RATEL_FEATURE_CLOUD_CATALOG=1 ratel daemon restart
+RATEL_FEATURE_CLOUD_CATALOG=1 ratel-local daemon restart
 
 # Disable
-RATEL_FEATURE_CLOUD_CATALOG=0 ratel daemon restart
+RATEL_FEATURE_CLOUD_CATALOG=0 ratel-local daemon restart
 ```
 
 The flag follows the same semantics as Cloud telemetry above, and the two are independent.

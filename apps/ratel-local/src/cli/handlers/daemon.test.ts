@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -35,7 +34,6 @@ import {
   SYSTEMD_SERVICE,
   waitForDaemonStopped,
 } from "./daemon.js";
-import { resolveSetupServiceExecutable } from "./setup.js";
 import { createTestPreparedChanges } from "./test-prepared-changes.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -1172,28 +1170,27 @@ describe("runDaemon", () => {
     expect(plist).toContain("<string>/home/u/.ratel/logs/daemon.log</string>");
   });
 
-  it("generates persistent services using ratel and stable identities", () => {
-    const packageVersion = JSON.parse(
-      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
-    ).version as string;
-    const env = { PATH: "/opt/node/bin" };
-    const executable = resolveSetupServiceExecutable({
-      argv1: "/home/u/.npm/_npx/cache/node_modules/@ratel-ai/ratel-local/dist/bin.js",
-      execPath: "/opt/node/bin/node",
-      expectedVersion: packageVersion,
-      env,
-      isExecutable: () => true,
-    });
-    const input = { ...executable, homeDir: "/home/u", port: 5731 };
+  it("keeps stable service identities while running the ratel executable", () => {
+    const input = {
+      executablePath: "/opt/node/bin/node",
+      executableArgs: [
+        "/opt/node/bin/npx",
+        "-y",
+        "--package",
+        "@ratel-ai/ratel-local@1.2.3",
+        "ratel",
+      ],
+      homeDir: "/home/u",
+      port: 5731,
+    };
     const plist = createLaunchAgentPlist(input);
     const service = createSystemdUserService(input);
     expect(plist).toContain("<string>ai.ratel.local.daemon</string>");
     expect(plist).toContain("<string>ratel</string>");
     expect(SYSTEMD_SERVICE).toBe("ratel-local-daemon.service");
     expect(service).toContain(
-      `ExecStart=/opt/node/bin/node /opt/node/bin/npx -y --package @ratel-ai/ratel-local@${packageVersion} ratel daemon run`,
+      "ExecStart=/opt/node/bin/node /opt/node/bin/npx -y --package @ratel-ai/ratel-local@1.2.3 ratel daemon run --port 5731 --no-open --auto-config",
     );
-    expect(service).toContain("daemon run --port 5731 --no-open --auto-config");
   });
 
   it("preserves a stable package-runner prefix in the macOS service", () => {

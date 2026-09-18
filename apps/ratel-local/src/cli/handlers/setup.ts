@@ -3,6 +3,7 @@ import { delimiter, join } from "node:path";
 import {
   findAgentHostRatelPluginConnection,
   NamedAgentHostAdapter,
+  primaryRatelBin,
   SUPPORTED_AGENT_HOSTS,
   type SupportedAgentHostKind,
 } from "@ratel-ai/ratel-local-core";
@@ -530,7 +531,7 @@ export function resolveSetupServiceExecutable(
   if (currentScript && isReusableServiceScript(currentScript)) {
     return {
       executablePath: input.execPath ?? process.execPath,
-      executableArgs: [currentScript],
+      executableArgs: [primaryRatelBin(currentScript, isExecutable)],
     };
   }
   const npx = findOnPath("npx", env.PATH, isExecutable);

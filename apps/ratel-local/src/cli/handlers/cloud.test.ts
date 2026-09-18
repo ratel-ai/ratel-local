@@ -119,7 +119,7 @@ describe("cloud add", () => {
       personal: { apiKey: "rtl_personal" },
       acme: { apiKey: "rtl_acme" },
     });
-    expect(output.join("\n")).toContain("ratel-local cloud use acme");
+    expect(output.join("\n")).toContain("ratel cloud use acme");
   });
 
   it("stores nothing when the prompt is cancelled", async () => {
@@ -180,7 +180,7 @@ describe("cloud add", () => {
         slow: { apiKey: "rtl_slow" },
       },
     });
-    expect(slow.output.join("\n")).toContain("ratel-local cloud use slow");
+    expect(slow.output.join("\n")).toContain("ratel cloud use slow");
   });
 
   it("two adds that finish together both land", async () => {
@@ -246,7 +246,7 @@ describe("cloud list", () => {
   it("says how to start when nothing is stored", async () => {
     const { ctx, output } = context("list");
     await runCloud(ctx, { store: store() });
-    expect(output.join("\n")).toContain("ratel-local cloud add <profile>");
+    expect(output.join("\n")).toContain("ratel cloud add <profile>");
   });
 });
 
@@ -363,7 +363,7 @@ describe("cloud status", () => {
 
     const printed = output.join("\n");
     expect(printed).toContain("state none");
-    expect(printed).toContain("ratel-local cloud add <profile>");
+    expect(printed).toContain("ratel cloud add <profile>");
   });
 });
 

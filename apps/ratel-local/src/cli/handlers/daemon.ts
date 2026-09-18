@@ -21,6 +21,7 @@ import {
   type PreparedChangeCoordinator,
   type ProjectRegistry,
   prepareAgentTraceChange,
+  primaryRatelBin,
   type RuntimeContextRef,
   readJson,
   type SkillDiscovery,
@@ -1026,47 +1027,8 @@ WantedBy=default.target
 `;
 }
 
-const LAUNCH_AGENT_FLAG_ENTRY = `    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\n    <string>1</string>`;
-const LAUNCH_AGENT_FLAG_ENTRY_RE = new RegExp(
-  `\\n    <key>${CLOUD_TELEMETRY_FEATURE_ENV}</key>\\n    <string>[^<]*</string>`,
-);
-const EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE =
-  /\n {2}<key>EnvironmentVariables<\/key>\n {2}<dict>\n {2}<\/dict>/;
-const SYSTEMD_FLAG_LINE = `Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=1`;
-const SYSTEMD_FLAG_LINE_RE = new RegExp(`^Environment=${CLOUD_TELEMETRY_FEATURE_ENV}=.*\\n`, "m");
-const SERVICE_SHAPE_ERROR =
-  'installed daemon service is not a Ratel Local unit; reinstall with "ratel daemon install"';
-
-export function applyCloudTelemetryToLaunchAgentPlist(plist: string, enabled: boolean): string {
-  // Drop the flag entry, then an environment dict it may have left empty. Both
-  // branches below assume the shape `createLaunchAgentPlist` emits: without the
-  // second replace, enabling twice appends a new dict beside the emptied one.
-  const stripped = plist
-    .replace(LAUNCH_AGENT_FLAG_ENTRY_RE, "")
-    .replace(EMPTY_LAUNCH_AGENT_ENV_BLOCK_RE, "");
-  if (!enabled) return stripped;
-  const envBlock =
-    /(<key>EnvironmentVariables<\/key>\n {2}<dict>\n)([\s\S]*?)(\n {2}<\/dict>)/.exec(stripped);
-  if (envBlock?.index !== undefined) {
-    const inserted = `${envBlock[1]}${envBlock[2]}\n${LAUNCH_AGENT_FLAG_ENTRY}${envBlock[3]}`;
-    return (
-      stripped.slice(0, envBlock.index) +
-      inserted +
-      stripped.slice(envBlock.index + envBlock[0].length)
-    );
-  }
-  if (!stripped.includes("<key>StandardOutPath</key>")) throw new Error(SERVICE_SHAPE_ERROR);
-  return stripped.replace(
-    "  <key>StandardOutPath</key>",
-    `  <key>EnvironmentVariables</key>\n  <dict>\n${LAUNCH_AGENT_FLAG_ENTRY}\n  </dict>\n  <key>StandardOutPath</key>`,
-  );
-}
-
-export function applyCloudTelemetryToSystemdUserService(unit: string, enabled: boolean): string {
-  const stripped = unit.replace(SYSTEMD_FLAG_LINE_RE, "");
-  if (!enabled) return stripped;
-  if (!stripped.includes("Restart=always")) throw new Error(SERVICE_SHAPE_ERROR);
-  return stripped.replace("Restart=always", `${SYSTEMD_FLAG_LINE}\nRestart=always`);
+function serviceScript(): string {
+  return process.argv[1] ? primaryRatelBin(process.argv[1]) : "ratel";
 }
 
 /**
@@ -1129,7 +1091,7 @@ async function verifyFeatureFlagsApplied(
       continue;
     }
     throw new Error(
-      `service was updated but the restarted daemon reports ${name} ${observed ? "enabled" : "disabled"}, expected ${want ? "enabled" : "disabled"}; the previous service definition may still be loaded. Reinstall with "ratel-local daemon uninstall" then "${name}=${want ? "1" : "0"} ratel-local daemon install".`,
+      `service was updated but the restarted daemon reports ${name} ${observed ? "enabled" : "disabled"}, expected ${want ? "enabled" : "disabled"}; the previous service definition may still be loaded. Reinstall with "ratel daemon uninstall" then "${name}=${want ? "1" : "0"} ratel daemon install".`,
     );
   }
   return unreported.length > 0
@@ -1158,7 +1120,7 @@ async function installDaemon(
   await ctx.fs.writeAtomic(
     paths.plist,
     createLaunchAgentPlist({
-      executablePath: opts.executablePath ?? process.argv[1] ?? "ratel",
+      executablePath: opts.executablePath ?? serviceScript(),
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
@@ -1255,7 +1217,7 @@ async function installLinuxDaemon(
   await ctx.fs.writeAtomic(
     paths.systemdService,
     createSystemdUserService({
-      executablePath: opts.executablePath ?? process.argv[1] ?? "ratel",
+      executablePath: opts.executablePath ?? serviceScript(),
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,

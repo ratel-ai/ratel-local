@@ -22,6 +22,7 @@ import {
   prepareAgentRatelMcpFallbackRemoval,
   prepareClaudeCodeStatuslineInstall,
   prepareClaudeCodeStatuslineUninstall,
+  primaryRatelBin,
   type ResolvedBin,
   type RuntimeContextRef,
   type RuntimeRevision,
@@ -544,7 +545,7 @@ export async function authServer(ctx: HandlerCtx, name: string): Promise<ApiResp
 
 function resolveRatelBin(): string | undefined {
   if (process.env.RATEL_LOCAL_BIN) return process.env.RATEL_LOCAL_BIN;
-  if (process.argv[1]) return process.argv[1];
+  if (process.argv[1]) return primaryRatelBin(process.argv[1]);
   return undefined;
 }
 

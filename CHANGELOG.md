@@ -21,6 +21,16 @@ All notable changes to this package are documented here. The format is based on 
   unreadable store, a stored key other users can read, and a scope too broken to say which profile it selects.
 
 ### Changed
+- Made `ratel` the primary CLI executable, retaining `ratel-local` as a
+  compatibility alias of the same entry point. CLI help, usage, errors, and the
+  UI now say `ratel`. Binary lookup finds `ratel-local` on `PATH` and prefers the
+  `ratel` installed beside it; newly written services, statusline, and hooks use
+  `ratel`, and services generated through npx select it with
+  `npx --package @ratel-ai/ratel-local@<version> ratel`. The package name,
+  install commands, service identifiers, MCP entry name, config paths, and
+  `RATEL_LOCAL_BIN` are unchanged, and existing services and integrations keep
+  working. The README, plugin skill, and docs switch to `ratel` in the release
+  that ships it.
 - Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load
   whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
 - Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with
@@ -49,13 +59,6 @@ All notable changes to this package are documented here. The format is based on 
   resolve warnings are visible without failing the page.
 
 ### Changed
-- Made `ratel` the primary CLI executable, retaining `ratel-local` as a working
-  compatibility alias of the same entry point. No feature flag is required.
-  Help, errors, prompts, and active command examples now use `ratel`; binary
-  lookup prefers it and falls back to `ratel-local`. Generated npx service
-  commands explicitly select `ratel` from the unchanged `@ratel-ai/ratel-local`
-  package. Existing service identities, integrations, config paths, and
-  `RATEL_LOCAL_BIN` remain compatible. No alias removal date is set.
 - Made `daemon restart` reconfigure the Cloud telemetry feature flag in an
   installed launchd or systemd service when `RATEL_FEATURE_CLOUD_TELEMETRY` is
   present in the invoking environment (`=1` enables, any other value disables,

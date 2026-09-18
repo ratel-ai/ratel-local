@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { locateRatelBin } from "./locate-bin.js";
+import { execSync } from "node:child_process";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { locateRatelBin, primaryRatelBin, whichRatelBin } from "./locate-bin.js";
+
+vi.mock("node:child_process", () => ({ execSync: vi.fn() }));
 
 describe("locateRatelBin", () => {
   it("prefers $RATEL_LOCAL_BIN when set", async () => {
@@ -71,5 +74,44 @@ describe("locateRatelBin", () => {
 
   it("throws when nothing is configured", async () => {
     await expect(locateRatelBin({})).rejects.toThrow();
+  });
+});
+
+describe("primaryRatelBin", () => {
+  it("swaps a ratel-local link for the ratel link beside it", () => {
+    expect(primaryRatelBin("/usr/local/bin/ratel-local", () => true)).toBe("/usr/local/bin/ratel");
+  });
+
+  it("keeps ratel-local when no ratel sits beside it", () => {
+    expect(primaryRatelBin("/usr/local/bin/ratel-local", () => false)).toBe(
+      "/usr/local/bin/ratel-local",
+    );
+  });
+
+  it("leaves any other path unchanged", () => {
+    const isExecutable = vi.fn(() => true);
+    expect(primaryRatelBin("/pkg/dist/bin.js", isExecutable)).toBe("/pkg/dist/bin.js");
+    expect(isExecutable).not.toHaveBeenCalled();
+  });
+});
+
+describe("whichRatelBin", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("looks up ratel-local, never a bare ratel that may be an unrelated tool", () => {
+    vi.mocked(execSync).mockReturnValue(Buffer.from("/nonexistent/bin/ratel-local\n"));
+    expect(whichRatelBin()).toBe("/nonexistent/bin/ratel-local");
+    expect(vi.mocked(execSync).mock.calls.map(([command]) => command)).toEqual([
+      "which ratel-local",
+    ]);
+  });
+
+  it("returns undefined when ratel-local is not on PATH", () => {
+    vi.mocked(execSync).mockImplementation(() => {
+      throw new Error("missing");
+    });
+    expect(whichRatelBin()).toBeUndefined();
   });
 });
