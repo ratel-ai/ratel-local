@@ -3,6 +3,7 @@ import { delimiter, join } from "node:path";
 import {
   findAgentHostRatelPluginConnection,
   NamedAgentHostAdapter,
+  primaryRatelBin,
   SUPPORTED_AGENT_HOSTS,
   type SupportedAgentHostKind,
 } from "@ratel-ai/ratel-local-core";
@@ -15,7 +16,7 @@ import type { ServeOptions } from "./serve.js";
 import { runTraces } from "./traces.js";
 import type { HandlerCtx } from "./types.js";
 
-export const SETUP_USAGE = `usage: ratel-local setup [options]
+export const SETUP_USAGE = `usage: ratel setup [options]
 
 Install or update the daemon, connect supported agents, and optionally import
 their existing MCP servers and skills.
@@ -338,7 +339,7 @@ async function runDaemonSetupStep<T>(
   } catch (error) {
     spinner.stop(copy.failure);
     throw new Error(
-      `${copy.help} Your projects and settings are safe. Run \`ratel-local daemon status\` to see what went wrong.`,
+      `${copy.help} Your projects and settings are safe. Run \`ratel daemon status\` to see what went wrong.`,
       { cause: error },
     );
   }
@@ -400,7 +401,7 @@ async function onboardAgents(
 
   if (options.yes) {
     ctx.prompts.note(
-      "Existing MCP servers and skills were not imported automatically. Use `ratel-local import --yes --agent <agent>` for an explicit automated migration.",
+      "Existing MCP servers and skills were not imported automatically. Use `ratel import --yes --agent <agent>` for an explicit automated migration.",
       "Safe automation",
     );
     return { connected: selected, cancelled: false };
@@ -530,24 +531,35 @@ export function resolveSetupServiceExecutable(
   if (currentScript && isReusableServiceScript(currentScript)) {
     return {
       executablePath: input.execPath ?? process.execPath,
-      executableArgs: [currentScript],
+      executableArgs: [primaryRatelBin(currentScript, isExecutable)],
     };
   }
   const npx = findOnPath("npx", env.PATH, isExecutable);
   if (npx && input.expectedVersion) {
+    // --package selects the package; ratel selects its executable before daemon args are appended.
     return {
       executablePath: input.execPath ?? process.execPath,
-      executableArgs: [npx, "-y", `@ratel-ai/ratel-local@${input.expectedVersion}`],
+      executableArgs: [
+        npx,
+        "-y",
+        "--package",
+        `@ratel-ai/ratel-local@${input.expectedVersion}`,
+        "ratel",
+      ],
     };
   }
 
-  return { executablePath: currentScript ?? "ratel-local" };
+  return { executablePath: currentScript ?? "ratel" };
 }
 
 function isReusableServiceScript(path: string): boolean {
   const normalized = path.replaceAll("\\", "/");
   if (normalized.includes("/.npm/_npx/") || normalized.includes("/pnpm/dlx/")) return false;
-  return /\.(?:c|m)?js$/.test(normalized) || normalized.endsWith("/ratel-local");
+  return (
+    /\.(?:c|m)?js$/.test(normalized) ||
+    normalized.endsWith("/ratel-local") ||
+    normalized.endsWith("/ratel")
+  );
 }
 
 function findOnPath(

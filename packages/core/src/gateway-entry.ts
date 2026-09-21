@@ -48,7 +48,8 @@ export function isRatelGatewayEntry(name: string, entry: ServerEntry): boolean {
 
 function ratelCliArgs(command: string, args: readonly string[]): readonly string[] | null {
   const executable = basename(command).toLowerCase();
-  if (executable === "ratel-local" || executable === "ratel-mcp") return args;
+  if (executable === "ratel" || executable === "ratel-local" || executable === "ratel-mcp")
+    return args;
   if (/(?:^|[/\\])ratel-(?:local|mcp)[/\\]dist[/\\]bin\.js$/.test(command)) return args;
   if (executable === "node" || executable === "node.exe") {
     const [script, ...rest] = args;

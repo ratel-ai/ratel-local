@@ -1170,6 +1170,29 @@ describe("runDaemon", () => {
     expect(plist).toContain("<string>/home/u/.ratel/logs/daemon.log</string>");
   });
 
+  it("keeps stable service identities while running the ratel executable", () => {
+    const input = {
+      executablePath: "/opt/node/bin/node",
+      executableArgs: [
+        "/opt/node/bin/npx",
+        "-y",
+        "--package",
+        "@ratel-ai/ratel-local@1.2.3",
+        "ratel",
+      ],
+      homeDir: "/home/u",
+      port: 5731,
+    };
+    const plist = createLaunchAgentPlist(input);
+    const service = createSystemdUserService(input);
+    expect(plist).toContain("<string>ai.ratel.local.daemon</string>");
+    expect(plist).toContain("<string>ratel</string>");
+    expect(SYSTEMD_SERVICE).toBe("ratel-local-daemon.service");
+    expect(service).toContain(
+      "ExecStart=/opt/node/bin/node /opt/node/bin/npx -y --package @ratel-ai/ratel-local@1.2.3 ratel daemon run --port 5731 --no-open --auto-config",
+    );
+  });
+
   it("preserves a stable package-runner prefix in the macOS service", () => {
     const plist = createLaunchAgentPlist({
       executablePath: "/opt/node/bin/node",

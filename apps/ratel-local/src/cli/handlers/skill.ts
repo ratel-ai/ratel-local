@@ -50,7 +50,7 @@ import { suggestSkills } from "../skills/suggest.js";
 import { readStdin } from "../stdin.js";
 import type { HandlerCtx } from "./types.js";
 
-export const SKILL_USAGE = `usage: ratel-local skill <verb>
+export const SKILL_USAGE = `usage: ratel skill <verb>
 
 Verbs:
   import           import discovered skills into a scoped registration
@@ -199,7 +199,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
     case "add-scope": {
       if (ctx.argv.rest.length !== 1) {
         throw new Error(
-          "usage: ratel-local skill add-scope <id> --scope user|project|local [--mode reference|copy]",
+          "usage: ratel skill add-scope <id> --scope user|project|local [--mode reference|copy]",
         );
       }
       const runtime = createSkillReadRuntime(ctx, options);
@@ -270,7 +270,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
     case "remove-scope":
     case "remove": {
       if (ctx.argv.rest.length !== 1) {
-        throw new Error(`usage: ratel-local skill ${verb} <id> --scope user|project|local`);
+        throw new Error(`usage: ratel skill ${verb} <id> --scope user|project|local`);
       }
       const runtime = createSkillReadRuntime(ctx, options);
       const context = await resolveSkillContext(
@@ -381,9 +381,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
     case "suggest": {
       const prompt = strFlag(ctx.argv.flags.prompt);
       if (!prompt) {
-        ctx.log(
-          'usage: ratel-local skill suggest --prompt "<text>" [--cwd <dir>] [--dir <path>]...',
-        );
+        ctx.log('usage: ratel skill suggest --prompt "<text>" [--cwd <dir>] [--dir <path>]...');
         return;
       }
       const cwd = strFlag(ctx.argv.flags.cwd);

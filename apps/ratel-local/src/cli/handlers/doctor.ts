@@ -66,7 +66,7 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
         ctx.log(
           ctx.argv.flags.fix === true
             ? `[ok] legacy_skill_migrated [skill:${id}]: converted legacy symlink management to a user-scoped reference`
-            : `[info] legacy_skill_migration_ready [skill:${id}]: run ratel-local doctor --fix to migrate`,
+            : `[info] legacy_skill_migration_ready [skill:${id}]: run ratel doctor --fix to migrate`,
         );
       }
       for (const diagnostic of migration.preview.diagnostics) {

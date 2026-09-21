@@ -19,11 +19,11 @@ async function main() {
   const onSignal = async (signal: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.error(`[ratel-local] received ${signal}, shutting down`);
+    console.error(`[ratel] received ${signal}, shutting down`);
     try {
       await shutdown();
     } catch (err) {
-      console.error(`[ratel-local] shutdown error: ${(err as Error).message}`);
+      console.error(`[ratel] shutdown error: ${(err as Error).message}`);
     }
     process.exit(0);
   };
@@ -32,6 +32,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`[ratel-local] ${(err as Error).message}`);
+  console.error(`[ratel] ${(err as Error).message}`);
   process.exit(1);
 });
