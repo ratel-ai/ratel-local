@@ -1,8 +1,7 @@
-import type { Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
 import * as clack from "@clack/prompts";
 import type { SpinnerHandle } from "../prompts.js";
-import { detectOutputEnvironment, type OutputEnvironment } from "./environment.js";
+import { detectOutputEnvironment, type OutputEnvironment, PLAIN } from "./environment.js";
 import { createProgress } from "./progress.js";
 import { renderMessage, renderTable, style } from "./render.js";
 
@@ -23,22 +22,20 @@ export interface CliOutputOptions {
   environment?: OutputEnvironment;
   /** Receives a complete line, without its final newline. */
   write?: (message: string) => void;
-  stream?: Writable;
 }
 
 export function createCliOutput(options: CliOutputOptions = {}): CliOutput {
   const environment = options.environment ?? detectOutputEnvironment();
-  const stream = options.stream ?? process.stderr;
   const write =
     options.write ??
     ((message: string) => {
-      stream.write(`${message}\n`);
+      process.stderr.write(`${message}\n`);
     });
   const spinner = () =>
     createProgress({
       interactive: environment.interactive,
       write,
-      spinner: () => clack.spinner({ output: stream, indicator: "dots" }),
+      spinner: () => clack.spinner({ output: process.stderr, indicator: "dots" }),
     });
   return {
     text: (message) => write(stripVTControlCharacters(message)),
@@ -67,11 +64,5 @@ export function getCliOutput(ctx: {
   output?: CliOutput;
   log: (message: string) => void;
 }): CliOutput {
-  return (
-    ctx.output ??
-    createCliOutput({
-      write: ctx.log,
-      environment: { interactive: false, prompt: false, color: false, width: 80 },
-    })
-  );
+  return ctx.output ?? createCliOutput({ write: ctx.log, environment: PLAIN });
 }

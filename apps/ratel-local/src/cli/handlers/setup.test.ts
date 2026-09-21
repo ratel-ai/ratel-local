@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
+import { PLAIN } from "../output/environment.js";
 import { createCliOutput } from "../output/index.js";
 import { defaultPromptAdapter, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import { resolveSetupServiceExecutable, runSetup } from "./setup.js";
@@ -46,7 +47,7 @@ function setupCtx(overrides: Partial<HandlerCtx> = {}): HandlerCtx {
 describe("runSetup", () => {
   it("refuses a missing confirmation in CI before installing a service", async () => {
     const install = vi.fn(async () => {});
-    const environment = { interactive: false, prompt: false, color: false, width: 80 };
+    const environment = PLAIN;
     const output = createCliOutput({ environment, write: () => {} });
     await expect(
       runSetup(
@@ -64,7 +65,7 @@ describe("runSetup", () => {
 
   it("uses fixed progress lines with explicit --yes in CI", async () => {
     const lines: string[] = [];
-    const environment = { interactive: false, prompt: false, color: false, width: 80 };
+    const environment = PLAIN;
     const output = createCliOutput({ environment, write: (line) => lines.push(line) });
     let inspection = 0;
     const result = await runSetup(

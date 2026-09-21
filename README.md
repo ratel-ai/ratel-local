@@ -292,7 +292,8 @@ The CLI manages upstreams, agent imports and links, OAuth, skills, backups, the 
 
 ### Terminal output
 
-Project listings, doctor diagnostics, and setup messages use shared CLI output helpers.
+Project listings, doctor diagnostics, and setup's headings, notes, and progress use
+shared CLI output helpers. Other commands print their own messages.
 Interactive terminals get styled messages, aligned tables, and progress spinners.
 Tables that cannot fit the terminal use labelled records so complete paths remain visible.
 Set `NO_COLOR=1` to disable colors while keeping interactive questions.
@@ -305,11 +306,9 @@ Human-readable output and prompts go to stderr; MCP, hook, and statusline payloa
 keep their existing stdout paths.
 
 Questions require a terminal on stdin and stderr and are never asked in CI; redirecting
-stdout alone keeps them. When a question cannot be asked, the
-command reports an error instead of waiting or accepting a confirmation automatically.
-For automation, supply the command's existing explicit options, such as
-`ratel-local setup --daemon-only --yes`. There are no new global automation flags in this change.
-The shared renderer is enabled directly, without a feature flag.
+stdout alone keeps them. When a question cannot be asked, the command reports an error
+instead of waiting or accepting a confirmation automatically. For automation, supply the
+command's existing explicit options, such as `ratel-local setup --daemon-only --yes`.
 
 ## Development
 

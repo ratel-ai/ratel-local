@@ -1,6 +1,6 @@
 import * as clack from "@clack/prompts";
-import { detectOutputEnvironment, type OutputEnvironment } from "./output/environment.js";
-import { type CliOutput, createCliOutput } from "./output/index.js";
+import type { OutputEnvironment } from "./output/environment.js";
+import type { CliOutput } from "./output/index.js";
 
 export const CANCEL_SYMBOL = Symbol("ratel.prompt.cancel");
 
@@ -48,11 +48,11 @@ export class PromptUnavailableError extends Error {
   }
 }
 
-export function defaultPromptAdapter(
-  options: { environment?: OutputEnvironment; output?: CliOutput } = {},
-): PromptAdapter {
-  const environment = options.environment ?? detectOutputEnvironment();
-  const output = options.output ?? createCliOutput({ environment });
+export function defaultPromptAdapter(options: {
+  environment: OutputEnvironment;
+  output: CliOutput;
+}): PromptAdapter {
+  const { environment, output } = options;
   const common = { input: process.stdin, output: process.stderr };
   const requireTerminal = (message: string) => {
     if (!environment.prompt) throw new PromptUnavailableError(message);

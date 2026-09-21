@@ -50,7 +50,7 @@ import type {
   HandlerCtx,
 } from "./handlers/types.js";
 import { runUi } from "./handlers/ui.js";
-import { detectOutputEnvironment } from "./output/environment.js";
+import { detectOutputEnvironment, PLAIN } from "./output/environment.js";
 import { createCliOutput } from "./output/index.js";
 import { defaultPromptAdapter, type PromptAdapter } from "./prompts.js";
 
@@ -105,9 +105,7 @@ Run \`ratel <group>\` for the verbs available in a group.`;
 
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<RunCliResult> {
   const log = options.logger ?? ((m) => console.error(m));
-  const environment = options.logger
-    ? { interactive: false, prompt: false, color: false, width: 80 }
-    : detectOutputEnvironment();
+  const environment = options.logger ? PLAIN : detectOutputEnvironment();
   const output = createCliOutput({ environment, write: log });
   let parsed: ParsedArgs;
   try {

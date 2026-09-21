@@ -28,10 +28,6 @@ export function renderTable(
   rows: string[][],
   environment: OutputEnvironment,
 ): string[] {
-  if (columns.length === 0) return [];
-  if (rows.some((row) => row.length !== columns.length)) {
-    throw new Error("Table rows must have the same number of cells as columns");
-  }
   const values = [columns, ...rows].map((row) => row.map(cell));
   if (!environment.interactive) return values.map((row) => row.join("\t"));
 
@@ -42,7 +38,6 @@ export function renderTable(
     widths.reduce((sum, width) => sum + width, 0) + (columns.length - 1) * 2 >
     environment.width
   ) {
-    if (rows.length === 0) return [values[0].join(" / ")];
     return values
       .slice(1)
       .flatMap((row, rowIndex) => [

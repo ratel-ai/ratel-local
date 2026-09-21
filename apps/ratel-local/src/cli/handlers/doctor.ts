@@ -113,7 +113,7 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
         output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
         if (diagnostic.severity === "error") issueCount += 1;
       }
-      output.success(`${successMessage}`);
+      output.success(successMessage);
     } catch (error) {
       if (error instanceof InvalidContextSnapshotError) {
         for (const diagnostic of error.diagnostics) {
@@ -157,8 +157,8 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
 
   for (const diagnostic of await inventoryCloudSettings({ env: ctx.env, fs: ctx.fs })) {
     if (diagnostic.severity === "error") issueCount += 1;
-    ctx.log(
-      `[${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}. Action: ${diagnostic.action}`,
+    output[diagnostic.severity](
+      `${diagnostic.code}: ${diagnostic.message}. Action: ${diagnostic.action}`,
     );
   }
 

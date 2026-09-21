@@ -6,6 +6,13 @@ export interface OutputEnvironment {
   width: number;
 }
 
+export const PLAIN: OutputEnvironment = {
+  interactive: false,
+  prompt: false,
+  color: false,
+  width: 80,
+};
+
 interface Terminal {
   isTTY?: boolean;
   columns?: number;
