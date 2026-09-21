@@ -3,7 +3,7 @@ import { createCliOutput } from "./output/index.js";
 import { defaultPromptAdapter, PromptUnavailableError } from "./prompts.js";
 
 describe("noninteractive prompts", () => {
-  const environment = { interactive: false, color: false, width: 80 };
+  const environment = { interactive: false, prompt: false, color: false, width: 80 };
 
   it("fails explicitly instead of approving, cancelling silently, or waiting for input", async () => {
     const prompts = defaultPromptAdapter({ environment });
@@ -20,6 +20,13 @@ describe("noninteractive prompts", () => {
     await expect(prompts.multiselect({ message: "Choose", options: [] })).rejects.toBeInstanceOf(
       PromptUnavailableError,
     );
+  });
+
+  it("reports whether questions can be asked from the same rule that blocks them", () => {
+    expect(defaultPromptAdapter({ environment }).canPrompt()).toBe(false);
+    expect(
+      defaultPromptAdapter({ environment: { ...environment, prompt: true } }).canPrompt(),
+    ).toBe(true);
   });
 
   it("keeps notes and progress visible in redirected runs", () => {

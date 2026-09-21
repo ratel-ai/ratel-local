@@ -1,5 +1,7 @@
 export interface OutputEnvironment {
   interactive: boolean;
+  /** Questions read stdin and draw on stderr, so a redirected stdout does not block them. */
+  prompt: boolean;
   color: boolean;
   width: number;
 }
@@ -29,6 +31,7 @@ export function detectOutputEnvironment(input: OutputEnvironmentInput = {}): Out
   const columns = stderr.columns;
   return {
     interactive: terminal && Boolean(stdin.isTTY),
+    prompt: Boolean(stdin.isTTY && stderr.isTTY && !ci),
     color: terminal && !env.NO_COLOR && env.FORCE_COLOR !== "0",
     width:
       terminal && columns && Number.isFinite(columns) && columns > 0 ? Math.floor(columns) : 80,

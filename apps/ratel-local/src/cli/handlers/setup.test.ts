@@ -46,7 +46,7 @@ function setupCtx(overrides: Partial<HandlerCtx> = {}): HandlerCtx {
 describe("runSetup", () => {
   it("refuses a missing confirmation in CI before installing a service", async () => {
     const install = vi.fn(async () => {});
-    const environment = { interactive: false, color: false, width: 80 };
+    const environment = { interactive: false, prompt: false, color: false, width: 80 };
     const output = createCliOutput({ environment, write: () => {} });
     await expect(
       runSetup(
@@ -64,7 +64,7 @@ describe("runSetup", () => {
 
   it("uses fixed progress lines with explicit --yes in CI", async () => {
     const lines: string[] = [];
-    const environment = { interactive: false, color: false, width: 80 };
+    const environment = { interactive: false, prompt: false, color: false, width: 80 };
     const output = createCliOutput({ environment, write: (line) => lines.push(line) });
     let inspection = 0;
     const result = await runSetup(

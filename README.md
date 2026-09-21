@@ -304,10 +304,11 @@ even when it provides a terminal (`CI=false` and `CI=0` disable CI detection).
 Human-readable output and prompts go to stderr; MCP, hook, and statusline payloads
 keep their existing stdout paths.
 
-Questions require terminal input and output. When a question cannot be asked, the
+Questions require a terminal on stdin and stderr and are never asked in CI; redirecting
+stdout alone keeps them. When a question cannot be asked, the
 command reports an error instead of waiting or accepting a confirmation automatically.
 For automation, supply the command's existing explicit options, such as
-`ratel setup --daemon-only --yes`. There are no new global automation flags in this change.
+`ratel-local setup --daemon-only --yes`. There are no new global automation flags in this change.
 The shared renderer is enabled directly, without a feature flag.
 
 ## Development

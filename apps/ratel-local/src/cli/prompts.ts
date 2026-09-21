@@ -55,7 +55,7 @@ export function defaultPromptAdapter(
   const output = options.output ?? createCliOutput({ environment });
   const common = { input: process.stdin, output: process.stderr };
   const requireTerminal = (message: string) => {
-    if (!environment.interactive) throw new PromptUnavailableError(message);
+    if (!environment.prompt) throw new PromptUnavailableError(message);
   };
   return {
     intro: output.heading,
@@ -87,7 +87,7 @@ export function defaultPromptAdapter(
     spinner: output.spinner,
     isCancel: clack.isCancel,
     cancel: (message = "Cancelled") => output.warning(message),
-    canPrompt: () => environment.interactive,
+    canPrompt: () => environment.prompt,
   };
 }
 

@@ -71,7 +71,7 @@ export function getCliOutput(ctx: {
     ctx.output ??
     createCliOutput({
       write: ctx.log,
-      environment: { interactive: false, color: false, width: 80 },
+      environment: { interactive: false, prompt: false, color: false, width: 80 },
     })
   );
 }

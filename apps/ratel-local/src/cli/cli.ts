@@ -50,8 +50,8 @@ import type {
   HandlerCtx,
 } from "./handlers/types.js";
 import { runUi } from "./handlers/ui.js";
-import { detectOutputEnvironment, type OutputEnvironment } from "./output/environment.js";
-import { type CliOutput, createCliOutput } from "./output/index.js";
+import { detectOutputEnvironment } from "./output/environment.js";
+import { createCliOutput } from "./output/index.js";
 import { defaultPromptAdapter, type PromptAdapter } from "./prompts.js";
 
 export interface RunCliOptions {
@@ -59,8 +59,6 @@ export interface RunCliOptions {
   transportFactory?: TransportFactory;
   serverTransport?: Transport;
   logger?: (message: string) => void;
-  output?: CliOutput;
-  outputEnvironment?: OutputEnvironment;
   serverName?: string;
   serverVersion?: string;
   prompts?: PromptAdapter;
@@ -107,10 +105,10 @@ Run \`ratel <group>\` for the verbs available in a group.`;
 
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<RunCliResult> {
   const log = options.logger ?? ((m) => console.error(m));
-  const environment =
-    options.outputEnvironment ??
-    (options.logger ? { interactive: false, color: false, width: 80 } : detectOutputEnvironment());
-  const output = options.output ?? createCliOutput({ environment, write: log });
+  const environment = options.logger
+    ? { interactive: false, prompt: false, color: false, width: 80 }
+    : detectOutputEnvironment();
+  const output = createCliOutput({ environment, write: log });
   let parsed: ParsedArgs;
   try {
     parsed = parseArgs(argv);
