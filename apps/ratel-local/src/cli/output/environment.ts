@@ -18,7 +18,7 @@ interface Terminal {
   columns?: number;
 }
 
-export interface OutputEnvironmentInput {
+interface OutputEnvironmentInput {
   stdin?: Terminal;
   stdout?: Terminal;
   stderr?: Terminal;
@@ -35,12 +35,10 @@ export function detectOutputEnvironment(input: OutputEnvironmentInput = {}): Out
   } = input;
   const ci = Boolean(env.CI && !["0", "false"].includes(env.CI.toLowerCase()));
   const terminal = Boolean(stdout.isTTY && stderr.isTTY && !ci && env.TERM !== "dumb");
-  const columns = stderr.columns;
   return {
     interactive: terminal && Boolean(stdin.isTTY),
     prompt: Boolean(stdin.isTTY && stderr.isTTY && !ci),
     color: terminal && !env.NO_COLOR && env.FORCE_COLOR !== "0",
-    width:
-      terminal && columns && Number.isFinite(columns) && columns > 0 ? Math.floor(columns) : 80,
+    width: (terminal && stderr.columns) || 80,
   };
 }

@@ -2,7 +2,7 @@ import { stripVTControlCharacters } from "node:util";
 import stringWidth from "fast-string-width";
 import type { OutputEnvironment } from "./environment.js";
 
-export type MessageLevel = "ok" | "info" | "warning" | "error";
+type MessageLevel = "ok" | "info" | "warning" | "error";
 const colors: Record<MessageLevel, number> = { ok: 32, info: 36, warning: 33, error: 31 };
 
 export function style(text: string, code: number, color: boolean): string {
