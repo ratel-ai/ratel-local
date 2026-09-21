@@ -12,7 +12,9 @@ describe("noninteractive prompts", () => {
     await expect(prompts.confirm({ message: "Delete?" })).rejects.toBeInstanceOf(
       PromptUnavailableError,
     );
-    await expect(prompts.text({ message: "Name?" })).rejects.toThrow("Name?");
+    await expect(prompts.text({ message: "Pick a field to edit" })).rejects.toThrow(
+      "Interactive input required. Run in a terminal or supply explicit command options. Question: Pick a field to edit",
+    );
     await expect(prompts.password({ message: "Key?" })).rejects.toBeInstanceOf(
       PromptUnavailableError,
     );

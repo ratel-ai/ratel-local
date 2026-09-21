@@ -42,7 +42,7 @@ export interface PromptAdapter {
 export class PromptUnavailableError extends Error {
   constructor(message: string) {
     super(
-      `Interactive input required: ${message} Run in a terminal or supply explicit command options.`,
+      `Interactive input required. Run in a terminal or supply explicit command options. Question: ${message}`,
     );
     this.name = "PromptUnavailableError";
   }
