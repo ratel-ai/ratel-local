@@ -67,6 +67,7 @@
     "@ratel-ai/sdk": "0.9.1",
     "@ratel-ai/telemetry": "0.1.2",
     "@ratel-ai/telemetry-otlp": "0.1.1",
+    "fast-string-width": "^3.0.2",
     "proper-lockfile": "^4.1.2",
     "smol-toml": "^1.6.1"
   }

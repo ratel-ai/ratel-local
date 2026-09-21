@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
-import { type PromptAdapter, silentPromptAdapter } from "../prompts.js";
+import { PLAIN } from "../output/environment.js";
+import { createCliOutput } from "../output/index.js";
+import { defaultPromptAdapter, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import { resolveSetupServiceExecutable, runSetup } from "./setup.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -43,6 +45,50 @@ function setupCtx(overrides: Partial<HandlerCtx> = {}): HandlerCtx {
 }
 
 describe("runSetup", () => {
+  it("refuses a missing confirmation in CI before installing a service", async () => {
+    const install = vi.fn(async () => {});
+    const environment = PLAIN;
+    const output = createCliOutput({ environment, write: () => {} });
+    await expect(
+      runSetup(
+        setupCtx({
+          prompts: defaultPromptAdapter({ environment, output }),
+        }),
+        {
+          inspect: async () => ({ state: "not-installed", port: 7331 }),
+          install,
+        },
+      ),
+    ).rejects.toThrow("Interactive input required");
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("uses fixed progress lines with explicit --yes in CI", async () => {
+    const lines: string[] = [];
+    const environment = PLAIN;
+    const output = createCliOutput({ environment, write: (line) => lines.push(line) });
+    let inspection = 0;
+    const result = await runSetup(
+      setupCtx({
+        output,
+        prompts: defaultPromptAdapter({ environment, output }),
+      }),
+      {
+        yes: true,
+        daemonOnly: true,
+        inspect: async () =>
+          ++inspection === 1
+            ? { state: "not-installed", port: 7331 }
+            : { state: "running", port: 7331 },
+        install: async () => {},
+      },
+    );
+    expect(result.changed).toBe(true);
+    expect(lines).toContain("Setting up Ratel Local…");
+    expect(lines).toContain("Ratel Local is ready");
+    expect(lines.join("\n")).not.toContain("\u001b");
+  });
+
   it("runs an explicit local JS binary with the absolute Node executable", () => {
     expect(
       resolveSetupServiceExecutable({
