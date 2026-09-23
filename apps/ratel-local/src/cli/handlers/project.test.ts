@@ -54,7 +54,11 @@ describe("runProject", () => {
       },
     );
 
-    expect(logs).toEqual(["prj_test-project  [available]  Ratel  /repo"]);
+    expect(logs).toEqual([
+      "Projects",
+      "ID\tStatus\tName\tPath",
+      "prj_test-project\tavailable\tRatel\t/repo",
+    ]);
   });
 
   it("registers the requested project path", async () => {
@@ -79,7 +83,7 @@ describe("runProject", () => {
     );
 
     expect(addedPaths).toEqual(["/repo"]);
-    expect(logs).toEqual(["registered prj_test-project  repo  /canonical/repo"]);
+    expect(logs).toEqual(["[ok] registered prj_test-project  repo  /canonical/repo"]);
   });
 
   it("delegates project registration to the running daemon before the local registry", async () => {
@@ -108,7 +112,7 @@ describe("runProject", () => {
     );
 
     expect(localRegisterCalled).toBe(false);
-    expect(logs).toEqual(["registered prj_test-project  repo  /canonical/repo"]);
+    expect(logs).toEqual(["[ok] registered prj_test-project  repo  /canonical/repo"]);
   });
 
   it("forgets a registered project by id without touching project files", async () => {
@@ -145,7 +149,7 @@ describe("runProject", () => {
 
     expect(forgotten).toEqual([PROJECT_ID]);
     expect(admissions).toEqual(["admitted"]);
-    expect(logs).toEqual(["forgot prj_test-project  /repo"]);
+    expect(logs).toEqual(["[ok] forgot prj_test-project  /repo"]);
   });
 
   it("resolves a path alias before forgetting a project", async () => {

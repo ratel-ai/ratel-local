@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { Skill } from "@ratel-ai/sdk";
 import type {
   DocumentRevision,
   ProjectId,
@@ -72,6 +73,21 @@ export interface ContextSnapshotResolverOptions {
   maxReadAttempts?: number;
   /** Daemon environment used to resolve MCP URL placeholders. Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
+  /** Injected catalog pull; this module does no network I/O. */
+  cloudCatalog?: (
+    context: RuntimeContextRef,
+    profile?: string,
+  ) => Promise<CloudCatalogPullResult | undefined>;
+}
+
+export interface CloudCatalogPullResult {
+  catalog: CloudSkillCatalog;
+  degraded?: string;
+}
+
+export interface CloudSkillCatalog {
+  catalogVersion: string;
+  skills: Skill[];
 }
 
 export class InvalidContextSnapshotError extends Error {
@@ -110,12 +126,22 @@ interface OAuthStoreRevision {
   revision: string;
 }
 
+/** One catalog pull: what it returned, or why it did not. */
+interface CloudCatalogPull {
+  catalog?: CloudSkillCatalog;
+  error?: string;
+  degraded?: string;
+}
+
 export function createContextSnapshotResolver(
   options: ContextSnapshotResolverOptions,
 ): ContextSnapshotResolver {
   const maxReadAttempts = options.maxReadAttempts ?? 3;
   return {
     async resolve(context) {
+      let pulled: Promise<CloudCatalogPull> | undefined;
+      const pullCloudCatalog = (profile?: string) =>
+        (pulled ??= pullCloudCatalogOnce(options.cloudCatalog, context, profile));
       const projectRoot = await resolveProjectRoot(context, options.projectRegistry);
       const targets = documentTargets(options.homeDir, context, projectRoot);
       if (projectRoot) {
@@ -172,8 +198,12 @@ export function createContextSnapshotResolver(
         const oauthStoreRevisions = await readOAuthStoreRevisions(mcpEntries);
         const confirmedOAuthStoreRevisions = await readOAuthStoreRevisions(mcpEntries);
         if (!sameOAuthStoreRevisions(oauthStoreRevisions, confirmedOAuthStoreRevisions)) continue;
-        const retrieval = mergeConfigs(documents.map(({ config }) => config)).retrieval;
+        const merged = mergeConfigs(documents.map(({ config }) => config));
+        const retrieval = merged.retrieval;
+        const cloud = await pullCloudCatalog(merged.cloud?.profile);
+        const composed = composeSkills(skills.effectiveSkills, cloud.catalog?.skills ?? []);
         const diagnostics: Diagnostic[] = [
+          ...cloudDiagnostics(cloud, composed.shadowed),
           ...skills.diagnostics.map(({ code, severity, message, path }) => ({
             code,
             severity,
@@ -193,6 +223,7 @@ export function createContextSnapshotResolver(
           mcpEntries,
           skills.fingerprint,
           oauthStoreRevisions,
+          cloud.catalog?.catalogVersion,
         );
         const skillWatchInputs = await Promise.all(
           skills.watchInputs.map(async (path): Promise<WatchInput> => {
@@ -220,7 +251,8 @@ export function createContextSnapshotResolver(
           documents,
           runtimeRevision,
           mcpEntries,
-          skills,
+          // Cloud skills have no registration or file to watch.
+          skills: { ...skills, effectiveSkills: composed.skills },
           ...(retrieval ? { retrieval } : {}),
           diagnostics,
           watchInputs,
@@ -389,11 +421,63 @@ function sameScope(a: RatelScopeRef, b: RatelScopeRef): boolean {
   );
 }
 
+/** Local id wins; shadowed Cloud ids are returned, not dropped. */
+function composeSkills(local: Skill[], cloud: Skill[]) {
+  const localIds = new Set(local.map(({ id }) => id));
+  return {
+    skills: [...local, ...cloud.filter(({ id }) => !localIds.has(id))],
+    shadowed: cloud.filter(({ id }) => localIds.has(id)).map(({ id }) => id),
+  };
+}
+
+function cloudDiagnostics(cloud: CloudCatalogPull, shadowed: string[]): Diagnostic[] {
+  return [
+    ...(cloud.error
+      ? [
+          {
+            code: "cloud-catalog-unavailable",
+            severity: "warning" as const,
+            message: `Cloud skills are not in use: ${cloud.error}`,
+          },
+        ]
+      : []),
+    ...(cloud.degraded
+      ? [
+          {
+            code: "cloud-catalog-degraded",
+            severity: "warning" as const,
+            message: `Cloud skills may be out of date: the last cached catalog is being served because ${cloud.degraded}`,
+          },
+        ]
+      : []),
+    ...shadowed.map((id) => ({
+      code: "cloud-skill-shadowed",
+      severity: "warning" as const,
+      message: `Cloud skill "${id}" is not in use: a local skill with the same id takes precedence; rename the local skill to use the published one`,
+    })),
+  ];
+}
+
+async function pullCloudCatalogOnce(
+  pull: ContextSnapshotResolverOptions["cloudCatalog"],
+  context: RuntimeContextRef,
+  profile?: string,
+): Promise<CloudCatalogPull> {
+  if (!pull) return {};
+  try {
+    const result = await pull(context, profile);
+    return result ? { catalog: result.catalog, degraded: result.degraded } : {};
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
+}
+
 function digestRuntimeRevision(
   documents: ScopedDocumentSnapshot[],
   mcpEntries: ResolvedMcpEntry[],
   skillFingerprint: string,
   oauthStoreRevisions: readonly OAuthStoreRevision[],
+  cloudCatalogVersion: string | undefined,
 ): RuntimeRevision {
   const normalizedDocuments = documents.map(({ ref, config }) => ({ ref, config }));
   const runtimeMcpEntries = mcpEntries.map(({ name, owner, status, runtimeCwd, oauthKey }) => ({
@@ -403,6 +487,7 @@ function digestRuntimeRevision(
     runtimeCwd,
     oauthFingerprint: oauthKey.fingerprint,
   }));
+  // Cloud skills have no path, so the catalog version stands in for them.
   return createHash("sha256")
     .update(`ratel-runtime-v${CONTEXT_SNAPSHOT_RESOLVER_VERSION}\0`)
     .update(stableStringify(normalizedDocuments))
@@ -412,6 +497,8 @@ function digestRuntimeRevision(
     .update(skillFingerprint)
     .update("\0")
     .update(stableStringify(oauthStoreRevisions))
+    .update("\0")
+    .update(cloudCatalogVersion ?? "")
     .digest("base64url") as RuntimeRevision;
 }
 

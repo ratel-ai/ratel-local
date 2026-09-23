@@ -12,13 +12,18 @@ import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core"
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
 import { IntentGraph } from "@ratel-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { CloudSettings } from "../../cloud/settings.js";
+import type { CloudTraceSettings } from "../../cloud/trace-settings.js";
 import { connectorHeaders } from "../../daemon/access.js";
-import { ADAPTIVE_RANKING_FEATURE_ENV, CLOUD_TELEMETRY_FEATURE_ENV } from "../../feature-flags.js";
+import {
+  ADAPTIVE_RANKING_FEATURE_ENV,
+  CLOUD_CATALOG_FEATURE_ENV,
+  CLOUD_TELEMETRY_FEATURE_ENV,
+  SKILL_STORAGE_FEATURE_ENV,
+} from "../../feature-flags.js";
 import type { ParsedArgs } from "../args.js";
 import { silentPromptAdapter } from "../prompts.js";
 import {
-  applyCloudTelemetryToLaunchAgentPlist,
-  applyCloudTelemetryToSystemdUserService,
   createLaunchAgentPlist,
   createSystemdUserService,
   DAEMON_INSTALL_PATH_ENV,
@@ -103,6 +108,7 @@ describe("runDaemon", () => {
         open: () => {},
         ensureToken: async () => "daemon-test-token",
         preparedChanges: createTestPreparedChanges(makeCtx(fs, { homeDir }).fs),
+        cloudTraceSettingsStore: { load: async () => undefined, save: async () => {} },
       },
     );
     try {
@@ -138,6 +144,21 @@ describe("runDaemon", () => {
       expect(commitResponse.status).toBe(200);
       expect(fs.files.get(join(homeDir, ".claude", "settings.json"))).toContain(expectedEndpoint);
       expect(fs.files.get(join(homeDir, ".codex", "config.toml"))).toContain(expectedEndpoint);
+
+      // Reported "none" above. A UI save has to move it, or `traces status`
+      // shows a configured relay next to a credential that came from nowhere.
+      await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          endpoint: "https://cloud.example.test/api/v1/traces",
+          apiKey: "saved-cloud-secret",
+        }),
+      });
+      const afterSave = await fetch(new URL("/api/agent-traces", daemonUrl), { headers });
+      expect(await afterSave.json()).toMatchObject({
+        cloudConfigured: true,
+      });
     } finally {
       await result.shutdown?.();
       await rm(homeDir, { recursive: true, force: true });
@@ -196,6 +217,7 @@ describe("runDaemon", () => {
       });
       expect(logsResponse.status).toBe(200);
       expect(cloudFetch).toHaveBeenCalledTimes(2);
+      // The env pair names one URL, so logs swap the trailing segment of its path.
       expect(String(cloudFetch.mock.calls[1]?.[0])).toBe("https://cloud.example.test/otlp/v1/logs");
       expect(Buffer.from((cloudFetch.mock.calls[1]?.[1]?.body as Uint8Array) ?? [])).toEqual(
         logPayload,
@@ -317,10 +339,207 @@ describe("runDaemon", () => {
     }
   });
 
+  it("pulls the Cloud catalog with the environment credential while the relay stays off", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const catalogFetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 }),
+    );
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: {
+          [CLOUD_CATALOG_FEATURE_ENV]: "1",
+          RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/otlp/v1/traces",
+          RATEL_API_KEY: "rtl_env",
+        },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudCatalogFetch: catalogFetch,
+        cloudSettingsStore: { load: async () => undefined },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+
+      expect(config.status).toBe(200);
+      expect(catalogFetch).toHaveBeenCalled();
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+
+      expect(relay.status).toBe(404);
+      const status = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+      expect(await status.json()).toMatchObject({ featureEnabled: false, configured: false });
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("keeps logs on the deployment a UI save names for traces", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const save = vi.fn(async (_settings: CloudTraceSettings) => {});
+    const cloudFetch = vi.fn(
+      async (_input: URL | RequestInfo, _init?: RequestInit) =>
+        new Response(Buffer.from([0x00]), { status: 200 }),
+    );
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        cloudOtlpFetch: cloudFetch,
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudTraceSettingsStore: { load: async () => undefined, save },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: "https://staging.example.test/api/v1/traces",
+          apiKey: "rtl_staging",
+        }),
+      });
+
+      await fetch(new URL("/otlp/v1/logs", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+
+      expect(String(cloudFetch.mock.calls[0]?.[0])).toBe(
+        "https://staging.example.test/api/v1/logs",
+      );
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("pulls the catalog with a profile stored after it booted", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    let stored: CloudSettings | undefined;
+    const pulls: string[] = [];
+    const cloudCatalogFetch = (async (_input: URL | RequestInfo, init?: RequestInit) => {
+      pulls.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        processEnv: {
+          [CLOUD_TELEMETRY_FEATURE_ENV]: "1",
+          [CLOUD_CATALOG_FEATURE_ENV]: "1",
+        },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudCatalogFetch,
+        cloudSettingsStore: { load: async () => stored },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const headers = { Authorization: `Bearer ${token}` };
+
+      stored = {
+        baseUrl: "https://cloud.example.test",
+        default: "personal",
+        profiles: { personal: { apiKey: "rtl_added" } },
+      };
+      expect((await fetch(new URL("/api/config", daemonUrl), { headers })).status).toBe(200);
+
+      expect(pulls).toEqual(["Bearer rtl_added"]);
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("refuses to persist a key the environment supplied", async () => {
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const save = vi.fn(async (_settings: CloudTraceSettings) => {});
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: {
+          [CLOUD_TELEMETRY_FEATURE_ENV]: "1",
+          RATEL_CLOUD_OTLP_TRACES_ENDPOINT: "https://cloud.example.test/api/v1/traces",
+          RATEL_API_KEY: "rtl_from_environment",
+        },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry: vi.fn(async () => ({ shutdown: async () => {} })),
+        cloudTraceSettingsStore: { load: async () => undefined, save },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const uiUrl = await mintUiSession(daemonUrl, "daemon-test-token");
+      const token = new URL(uiUrl).searchParams.get("t") ?? "";
+      const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+
+      const status = await fetch(new URL("/api/cloud-traces", daemonUrl), { headers });
+      expect(await status.json()).toMatchObject({ configured: true, credentialStored: false });
+
+      // Saving the endpoint alone used to write RATEL_API_KEY to disk (ADR-0013).
+      const saved = await fetch(new URL("/api/cloud-traces", daemonUrl), {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ endpoint: "https://cloud.example.test/api/v1/traces" }),
+      });
+
+      expect(saved.status).toBeGreaterThanOrEqual(400);
+      expect(save).not.toHaveBeenCalled();
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
   it("activates and persists Cloud trace settings from the running daemon UI", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
-    const save = vi.fn(async () => {});
+    const save = vi.fn(async (_settings: CloudTraceSettings) => {});
     const configureRatelTelemetry = vi.fn(async () => ({ shutdown: async () => {} }));
     const cloudFetch = vi.fn(async () => new Response(Buffer.from([0x00]), { status: 200 }));
     const result = await runDaemon(
@@ -364,6 +583,7 @@ describe("runDaemon", () => {
       expect(await saved.json()).toEqual({
         featureEnabled: true,
         configured: true,
+        credentialStored: true,
         endpoint: "https://cloud.example.test/api/v1/traces",
       });
       expect(save).toHaveBeenCalledWith({
@@ -423,7 +643,59 @@ describe("runDaemon", () => {
     }
   });
 
-  it("ignores malformed persisted Cloud settings without taking down the daemon", async () => {
+  it("reads the Cloud credential store with Cloud telemetry disabled", async () => {
+    // ADR-0021: the credential belongs to the Cloud project, so the catalog
+    // reaches it without the observability flag, and the relay stays dark.
+    const fs = new MemFs();
+    const logs: string[] = [];
+    const configureRatelTelemetry = vi.fn();
+    const load = vi.fn(async () => ({
+      baseUrl: "https://cloud.example.test",
+      default: "personal",
+      profiles: { personal: { apiKey: "persisted-cloud-secret" } },
+    }));
+    const cloudCatalogFetch = (async () =>
+      new Response(JSON.stringify({ catalogVersion: "v1", skills: [] }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+    const result = await runDaemon(
+      daemonArgs(),
+      makeCtx(fs),
+      {
+        readConfig: async () => ({ mcpServers: {} }),
+        processEnv: { [CLOUD_CATALOG_FEATURE_ENV]: "1" },
+      },
+      (message) => logs.push(message),
+      {
+        open: () => {},
+        ensureToken: async () => "daemon-test-token",
+        configureRatelTelemetry,
+        cloudCatalogFetch,
+        cloudSettingsStore: { load },
+      },
+    );
+    const daemonUrl = daemonUrlFromLogs(logs);
+
+    try {
+      const config = await fetch(new URL("/api/config", daemonUrl), {
+        headers: { Authorization: "Bearer daemon-test-token" },
+      });
+      expect(config.status).toBe(200);
+      expect(load).toHaveBeenCalled();
+
+      const relay = await fetch(new URL("/otlp/v1/traces", daemonUrl), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-protobuf" },
+        body: Buffer.from([0x0a, 0x00]),
+      });
+      expect(relay.status).toBe(404);
+      expect(configureRatelTelemetry).not.toHaveBeenCalled();
+    } finally {
+      await result.shutdown?.();
+    }
+  });
+
+  it("ignores malformed persisted Cloud trace settings without taking down the daemon", async () => {
     const fs = new MemFs();
     const logs: string[] = [];
     const configureRatelTelemetry = vi.fn();
@@ -666,70 +938,113 @@ describe("runDaemon", () => {
     }
   });
 
-  it("learns online and persists the global intent graph when adaptive ranking is enabled", async () => {
-    const fs = new MemFs();
-    const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-adaptive-ranking-"));
-    const logs: string[] = [];
-    const upstream = new Server(
-      { name: "adaptive", version: "1.0.0" },
-      { capabilities: { tools: {} } },
-    );
-    upstream.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: "build_status",
-          description: "Inspect the current build status",
-          inputSchema: { type: "object" },
-        },
-      ],
-    }));
-    upstream.setRequestHandler(CallToolRequestSchema, async () => ({ content: [] }));
-    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-    await upstream.connect(serverTransport);
-
-    const result = await runDaemon(
-      daemonArgs(),
-      makeCtx(fs, { homeDir }),
-      {
-        readConfig: async () => ({
-          mcpServers: { adaptive: { type: "stdio", command: "noop" } },
-        }),
-        processEnv: { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" },
-        transportFactory: () => clientTransport,
-      },
-      (message) => logs.push(message),
-      { open: () => {}, ensureToken: async () => "daemon-test-token" },
-    );
-    const client = new Client({ name: "adaptive-test", version: "1.0.0" });
-
-    try {
-      await client.connect(
-        new StreamableHTTPClientTransport(new URL("/mcp", daemonUrlFromLogs(logs)), {
-          requestInit: { headers: connectorHeaders("daemon-test-token") },
-        }),
+  for (const enabled of [false, true]) {
+    it(`isolates HTTP sessions and persists learning only when enabled (${enabled})`, async () => {
+      const fs = new MemFs();
+      const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-adaptive-ranking-"));
+      const logs: string[] = [];
+      const upstream = new Server(
+        { name: "adaptive", version: "1.0.0" },
+        { capabilities: { tools: {} } },
       );
-      const statusResponse = await fetch(new URL("/api/daemon/status", daemonUrlFromLogs(logs)));
-      expect((await statusResponse.json()) as { adaptiveRanking?: boolean }).toMatchObject({
-        adaptiveRanking: true,
-      });
-      await client.callTool({
-        name: "search_capabilities",
-        arguments: { query: "is the build passing" },
-      });
-      await client.callTool({
-        name: "invoke_tool",
-        arguments: { toolId: "adaptive__build_status", args: {} },
-      });
-    } finally {
-      await client.close();
-      await result.shutdown?.();
-      await upstream.close();
-    }
+      upstream.setRequestHandler(ListToolsRequestSchema, async () => ({
+        tools: [
+          {
+            name: "build_status",
+            description: "Inspect the current build status",
+            inputSchema: { type: "object" },
+          },
+          {
+            name: "read_file",
+            description: "Read a file from disk",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }));
+      upstream.setRequestHandler(CallToolRequestSchema, async () => ({ content: [] }));
+      const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+      await upstream.connect(serverTransport);
 
-    const graphPath = join(homeDir, ".ratel", "adaptive-ranking", "global.json");
-    expect(IntentGraph.fromJson(await readFile(graphPath, "utf8")).rev).toBeGreaterThan(0);
-    await rm(homeDir, { recursive: true, force: true });
-  });
+      const result = await runDaemon(
+        daemonArgs(),
+        makeCtx(fs, { homeDir }),
+        {
+          readConfig: async () => ({
+            mcpServers: { adaptive: { type: "stdio", command: "noop" } },
+          }),
+          processEnv: enabled ? { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } : {},
+          transportFactory: () => clientTransport,
+        },
+        (message) => logs.push(message),
+        { open: () => {}, ensureToken: async () => "daemon-test-token" },
+      );
+      const client = new Client({ name: "adaptive-test", version: "1.0.0" });
+      const other = new Client({ name: "adaptive-test", version: "1.0.0" });
+
+      try {
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL("/mcp", daemonUrlFromLogs(logs)), {
+            requestInit: { headers: connectorHeaders("daemon-test-token") },
+          }),
+        );
+        await other.connect(
+          new StreamableHTTPClientTransport(new URL("/mcp", daemonUrlFromLogs(logs)), {
+            requestInit: { headers: connectorHeaders("daemon-test-token") },
+          }),
+        );
+        const statusResponse = await fetch(new URL("/api/daemon/status", daemonUrlFromLogs(logs)));
+        expect((await statusResponse.json()) as { adaptiveRanking?: boolean }).toMatchObject({
+          adaptiveRanking: enabled,
+        });
+        await client.callTool({
+          name: "search_capabilities",
+          arguments: { query: "is the build passing" },
+        });
+        await other.callTool({
+          name: "search_capabilities",
+          arguments: { query: "read a file from disk" },
+        });
+        await client.callTool({
+          name: "invoke_tool",
+          arguments: { toolId: "adaptive__build_status", args: {} },
+        });
+        await other.callTool({
+          name: "invoke_tool",
+          arguments: { toolId: "adaptive__read_file", args: {} },
+        });
+      } finally {
+        await client.close();
+        await other.close();
+        await result.shutdown?.();
+        await upstream.close();
+      }
+
+      const graphPath = join(homeDir, ".ratel", "adaptive-ranking", "global.json");
+      try {
+        if (enabled) {
+          const graph = IntentGraph.fromJson(await readFile(graphPath, "utf8"));
+          const wire = JSON.parse(graph.toJson()) as {
+            intents: { members: string[]; tools: Record<string, number> }[];
+          };
+          expect(wire.intents).toHaveLength(2);
+          for (const [query, tool] of [
+            ["is the build passing", "adaptive__build_status"],
+            ["read a file from disk", "adaptive__read_file"],
+          ]) {
+            expect(
+              Object.keys(
+                wire.intents.find((intent) => intent.members.includes(query))?.tools ?? {},
+              ),
+            ).toEqual([tool]);
+          }
+        } else {
+          await expect(readFile(graphPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      } finally {
+        await rm(homeDir, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("isolates project config chains while sharing one daemon", async () => {
     const fs = new MemFs();
@@ -965,6 +1280,29 @@ describe("runDaemon", () => {
     expect(plist).toContain("<string>/home/u/.ratel/logs/daemon.log</string>");
   });
 
+  it("keeps stable service identities while running the ratel executable", () => {
+    const input = {
+      executablePath: "/opt/node/bin/node",
+      executableArgs: [
+        "/opt/node/bin/npx",
+        "-y",
+        "--package",
+        "@ratel-ai/ratel-local@1.2.3",
+        "ratel",
+      ],
+      homeDir: "/home/u",
+      port: 5731,
+    };
+    const plist = createLaunchAgentPlist(input);
+    const service = createSystemdUserService(input);
+    expect(plist).toContain("<string>ai.ratel.local.daemon</string>");
+    expect(plist).toContain("<string>ratel</string>");
+    expect(SYSTEMD_SERVICE).toBe("ratel-local-daemon.service");
+    expect(service).toContain(
+      "ExecStart=/opt/node/bin/node /opt/node/bin/npx -y --package @ratel-ai/ratel-local@1.2.3 ratel daemon run --port 5731 --no-open --auto-config",
+    );
+  });
+
   it("preserves a stable package-runner prefix in the macOS service", () => {
     const plist = createLaunchAgentPlist({
       executablePath: "/opt/node/bin/node",
@@ -990,7 +1328,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
 
     expect(plist).toContain("<key>EnvironmentVariables</key>");
@@ -1038,6 +1376,35 @@ describe("runDaemon", () => {
     expect(logs).toEqual([]);
   });
 
+  it("regenerates the Skill storage flag from the environment on every install", async () => {
+    const fs = new MemFs();
+    const paths = daemonPaths(HOME);
+    const entry = `<key>${SKILL_STORAGE_FEATURE_ENV}</key>\n    <string>1</string>`;
+    const install = async (processEnv: NodeJS.ProcessEnv) =>
+      runDaemon(
+        daemonArgs({ verb: "install", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { PATH: "/usr/bin", ...processEnv } },
+        () => {},
+        {
+          platform: "darwin",
+          executablePath: "/opt/bin/ratel-local",
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+    await install({ [SKILL_STORAGE_FEATURE_ENV]: "1" });
+    expect(fs.files.get(paths.plist)?.split(entry)).toHaveLength(2);
+
+    // Unlike restart, which leaves flags the environment does not name alone,
+    // install rewrites the unit from scratch: an unset flag is dropped.
+    await install({});
+    expect(fs.files.get(paths.plist)).not.toContain(SKILL_STORAGE_FEATURE_ENV);
+  });
+
   it("keeps restart visibly active with friendly lifecycle copy", async () => {
     const fs = new MemFs();
     const paths = daemonPaths(HOME);
@@ -1070,64 +1437,13 @@ describe("runDaemon", () => {
     );
 
     expect(progress).toEqual([
-      "start:Restarting Ratel Local…",
-      "message:Starting Ratel Local again…",
+      "start:Restarting Ratel Local",
+      "message:Starting Ratel Local again",
       "stop:Ratel Local is ready",
     ]);
     expect(logs).toEqual([]);
     expect(fs.files.get(paths.plist)).toBe(original);
   });
-
-  it("refuses to enable Cloud telemetry in an unrecognised service file", () => {
-    expect(() => applyCloudTelemetryToLaunchAgentPlist("<plist />", true)).toThrow(
-      /not a Ratel Local unit/,
-    );
-    expect(() => applyCloudTelemetryToSystemdUserService("[Service]\n", true)).toThrow(
-      /not a Ratel Local unit/,
-    );
-    // Disabling stays a no-op there: there is no Ratel route to remove.
-    expect(applyCloudTelemetryToLaunchAgentPlist("<plist />", false)).toBe("<plist />");
-    expect(applyCloudTelemetryToSystemdUserService("[Service]\n", false)).toBe("[Service]\n");
-  });
-
-  // Without `pathEnv` the flag is the only environment entry, so enabling has to
-  // create the dict from scratch and disabling has to remove it again. That is
-  // the shape an install performs when PATH is unset in its environment.
-  for (const pathEnv of ["/opt/node/bin:/usr/bin:/bin", undefined]) {
-    it(`round-trips Cloud telemetry flag edits against generated service files (pathEnv: ${pathEnv ? "set" : "unset"})`, () => {
-      const base = {
-        executablePath: "/opt/bin/ratel-local",
-        homeDir: HOME,
-        port: DEFAULT_DAEMON_PORT,
-        ...(pathEnv ? { pathEnv } : {}),
-      };
-      const disabledPlist = createLaunchAgentPlist({
-        ...base,
-        featureFlags: { cloudTelemetry: false },
-      });
-      const enabledPlist = createLaunchAgentPlist({
-        ...base,
-        featureFlags: { cloudTelemetry: true },
-      });
-      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, true)).toBe(enabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, false)).toBe(disabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(enabledPlist, true)).toBe(enabledPlist);
-      expect(applyCloudTelemetryToLaunchAgentPlist(disabledPlist, false)).toBe(disabledPlist);
-
-      const disabledUnit = createSystemdUserService({
-        ...base,
-        featureFlags: { cloudTelemetry: false },
-      });
-      const enabledUnit = createSystemdUserService({
-        ...base,
-        featureFlags: { cloudTelemetry: true },
-      });
-      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, true)).toBe(enabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, false)).toBe(disabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(enabledUnit, true)).toBe(enabledUnit);
-      expect(applyCloudTelemetryToSystemdUserService(disabledUnit, false)).toBe(disabledUnit);
-    });
-  }
 
   for (const platform of ["darwin", "linux"] as const) {
     it(`enables adaptive ranking on ${platform} restart when the flag is explicitly set`, async () => {
@@ -1172,7 +1488,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: false },
+        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1225,7 +1541,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true },
+        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
       };
       const original =
         platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input);
@@ -1269,7 +1585,7 @@ describe("runDaemon", () => {
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
         pathEnv,
-        featureFlags: { cloudTelemetry: true },
+        featureFlags: { cloudTelemetry: true, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1303,7 +1619,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
     fs.files.set(paths.systemdService, original);
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -1362,8 +1678,8 @@ describe("runDaemon", () => {
     );
 
     expect(progress).toEqual([
-      "start:Restarting Ratel Local…",
-      "message:Starting Ratel Local again…",
+      "start:Restarting Ratel Local",
+      "message:Starting Ratel Local again",
       "stop:Ratel Local is ready",
     ]);
     expect(fs.files.get(paths.systemdService)).toBe(original);
@@ -1401,7 +1717,7 @@ describe("runDaemon", () => {
       executablePath: "/opt/bin/ratel-local",
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
-      featureFlags: { cloudTelemetry: false },
+      featureFlags: { cloudTelemetry: false, cloudCatalog: false },
     });
 
   const restartWithProbe = (
@@ -1497,9 +1813,9 @@ describe("runDaemon", () => {
 
     await restartWithProbe(fs, restartStatusProbe(undefined), logs);
 
-    expect(logs.some((message) => message.includes("could not confirm Cloud telemetry"))).toBe(
-      true,
-    );
+    expect(
+      logs.some((message) => message.includes("could not confirm the requested feature flags")),
+    ).toBe(true);
   });
 
   for (const platform of ["darwin", "linux"] as const) {
@@ -1511,7 +1827,7 @@ describe("runDaemon", () => {
         executablePath: "/opt/bin/ratel-local",
         homeDir: HOME,
         port: DEFAULT_DAEMON_PORT,
-        featureFlags: { cloudTelemetry: false },
+        featureFlags: { cloudTelemetry: false, cloudCatalog: false },
       };
       fs.files.set(
         servicePath,
@@ -1708,7 +2024,7 @@ describe("runDaemon", () => {
       homeDir: HOME,
       port: DEFAULT_DAEMON_PORT,
       pathEnv: "/opt/node/bin:/usr/bin:/bin",
-      featureFlags: { cloudTelemetry: true },
+      featureFlags: { cloudTelemetry: true, cloudCatalog: false },
     });
 
     expect(service).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");

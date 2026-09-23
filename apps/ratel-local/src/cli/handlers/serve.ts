@@ -85,10 +85,10 @@ export async function buildConfiguredGateway(
   const command = parsed.group;
   const autoConfig = booleanFlag(parsed.flags["auto-config"]);
   if (autoConfig && parsed.configPaths.length > 0) {
-    throw new Error(`ratel-local ${command}: --auto-config cannot be combined with --config paths`);
+    throw new Error(`ratel ${command}: --auto-config cannot be combined with --config paths`);
   }
   if (!autoConfig && parsed.configPaths.length === 0) {
-    throw new Error(`usage: ratel-local ${command} <config.json> [--config <path> ...]`);
+    throw new Error(`usage: ratel ${command} <config.json> [--config <path> ...]`);
   }
 
   const readConfig = options.readConfig ?? defaultReadConfig;

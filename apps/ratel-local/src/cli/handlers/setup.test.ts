@@ -1,8 +1,15 @@
+import { readFileSync } from "node:fs";
 import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
 import { describe, expect, it, vi } from "vitest";
-import { type PromptAdapter, silentPromptAdapter } from "../prompts.js";
+import { PLAIN } from "../output/environment.js";
+import { createCliOutput } from "../output/index.js";
+import { defaultPromptAdapter, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import { resolveSetupServiceExecutable, runSetup } from "./setup.js";
 import type { HandlerCtx } from "./types.js";
+
+const packageVersion = JSON.parse(
+  readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+).version as string;
 
 class MemFs implements BackupFs, JsonFs {
   async read() {
@@ -38,6 +45,50 @@ function setupCtx(overrides: Partial<HandlerCtx> = {}): HandlerCtx {
 }
 
 describe("runSetup", () => {
+  it("refuses a missing confirmation in CI before installing a service", async () => {
+    const install = vi.fn(async () => {});
+    const environment = PLAIN;
+    const output = createCliOutput({ environment, write: () => {} });
+    await expect(
+      runSetup(
+        setupCtx({
+          prompts: defaultPromptAdapter({ environment, output }),
+        }),
+        {
+          inspect: async () => ({ state: "not-installed", port: 7331 }),
+          install,
+        },
+      ),
+    ).rejects.toThrow("Interactive input required");
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("uses fixed progress lines with explicit --yes in CI", async () => {
+    const lines: string[] = [];
+    const environment = PLAIN;
+    const output = createCliOutput({ environment, write: (line) => lines.push(line) });
+    let inspection = 0;
+    const result = await runSetup(
+      setupCtx({
+        output,
+        prompts: defaultPromptAdapter({ environment, output }),
+      }),
+      {
+        yes: true,
+        daemonOnly: true,
+        inspect: async () =>
+          ++inspection === 1
+            ? { state: "not-installed", port: 7331 }
+            : { state: "running", port: 7331 },
+        install: async () => {},
+      },
+    );
+    expect(result.changed).toBe(true);
+    expect(lines).toContain("Setting up Ratel Local…");
+    expect(lines).toContain("Ratel Local is ready");
+    expect(lines.join("\n")).not.toContain("\u001b");
+  });
+
   it("runs an explicit local JS binary with the absolute Node executable", () => {
     expect(
       resolveSetupServiceExecutable({
@@ -53,7 +104,7 @@ describe("runSetup", () => {
   it("persists a stable node+npx package runner instead of the npx cache script", () => {
     expect(
       resolveSetupServiceExecutable({
-        expectedVersion: "0.6.0-rc.0",
+        expectedVersion: packageVersion,
         env: { PATH: "/opt/node/bin" },
         execPath: "/opt/node/bin/node",
         argv1: "/home/u/.npm/_npx/cache/node_modules/@ratel-ai/ratel-local/dist/bin.js",
@@ -61,22 +112,46 @@ describe("runSetup", () => {
       }),
     ).toEqual({
       executablePath: "/opt/node/bin/node",
-      executableArgs: ["/opt/node/bin/npx", "-y", "@ratel-ai/ratel-local@0.6.0-rc.0"],
+      executableArgs: [
+        "/opt/node/bin/npx",
+        "-y",
+        "--package",
+        `@ratel-ai/ratel-local@${packageVersion}`,
+        "ratel",
+      ],
     });
   });
 
-  it("persists the currently installed global package instead of fetching an unpublished version", () => {
+  it.each([
+    "ratel",
+    "ratel-local",
+  ])("reuses the installed %s executable instead of fetching a package", (name) => {
     expect(
       resolveSetupServiceExecutable({
-        expectedVersion: "0.8.0",
+        expectedVersion: packageVersion,
         env: { PATH: "/opt/node/bin" },
         execPath: "/opt/node/bin/node",
-        argv1: "/home/u/.nvm/versions/node/v24/bin/ratel-local",
+        argv1: `/home/u/.nvm/versions/node/v24/bin/${name}`,
         isExecutable: (path) => path === "/opt/node/bin/npx",
       }),
     ).toEqual({
       executablePath: "/opt/node/bin/node",
-      executableArgs: ["/home/u/.nvm/versions/node/v24/bin/ratel-local"],
+      executableArgs: [`/home/u/.nvm/versions/node/v24/bin/${name}`],
+    });
+  });
+
+  it("writes the ratel link when setup runs through the ratel-local alias", () => {
+    expect(
+      resolveSetupServiceExecutable({
+        expectedVersion: packageVersion,
+        env: { PATH: "/opt/node/bin" },
+        execPath: "/opt/node/bin/node",
+        argv1: "/home/u/.nvm/versions/node/v24/bin/ratel-local",
+        isExecutable: (path) => path.endsWith("/npx") || path.endsWith("/bin/ratel"),
+      }),
+    ).toEqual({
+      executablePath: "/opt/node/bin/node",
+      executableArgs: ["/home/u/.nvm/versions/node/v24/bin/ratel"],
     });
   });
 
@@ -299,7 +374,7 @@ describe("runSetup", () => {
         },
       }),
     ).rejects.toThrow(
-      "We couldn't finish updating Ratel Local. Your projects and settings are safe. Run `ratel-local daemon status` to see what went wrong.",
+      "We couldn't finish updating Ratel Local. Your projects and settings are safe. Run `ratel daemon status` to see what went wrong.",
     );
     expect(progress).toEqual(["start:Updating Ratel Local…", "stop:We couldn't finish the update"]);
   });

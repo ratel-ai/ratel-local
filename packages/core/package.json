@@ -1,12 +1,16 @@
 {
   "name": "@ratel-ai/ratel-local-core",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./json": {
+      "types": "./src/json.ts",
+      "default": "./src/json.ts"
     },
     "./agent-import-workflow": {
       "types": "./src/agent-import-workflow.ts",
@@ -22,7 +26,7 @@
   "dependencies": {
     "@huggingface/hub": "2.14.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@ratel-ai/sdk": "0.12.0",
+    "@ratel-ai/sdk": "0.13.0-rc.5",
     "proper-lockfile": "^4.1.2",
     "smol-toml": "^1.6.1"
   }

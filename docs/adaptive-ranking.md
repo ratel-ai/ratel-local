@@ -48,17 +48,23 @@ model for intent matching. If that model changes, the SDK pauses the adaptive
 arm and emits its model-mismatch warning; the underlying catalog retrieval
 continues to work.
 
-## Current concurrency limitation
+## Session isolation
 
-The daemon shares one catalog generation, and therefore one online learner,
-between sessions in the same project. The learner currently has one pending
-search slot. Two simultaneous sessions can interleave like this:
+Ratel Local pins SDK `0.13.0-rc.5`, which keys pending online-learning state by
+`turnId`. Each MCP server connection generates a unique correlation ID and passes
+it to the SDK for `search_capabilities`, `invoke_tool`, and `get_skill_content`.
+The ID stays stable for the connection, including when tool and skill catalogs
+share a graph. It is independent of client names, request IDs, and the catalog's
+telemetry session ID.
 
-1. Session A searches for X.
-2. Session B searches for Y.
-3. Session A invokes Z.
+If session A searches for X, session B searches for Y, and A invokes Z, the
+learner now pairs X with Z. Session B's search remains available for B's own
+invocation. A reconnect generates a fresh ID and cannot consume the previous
+connection's pending search. Both HTTP daemon sessions and direct stdio servers
+use this boundary; no client changes or new tool arguments are required.
 
-That sequence can incorrectly teach `Y -> Z`. Sequential sessions are not
-affected, and separate projects use separate catalogs and graphs. Session-scoped
-learners over a shared catalog are intentionally deferred from this first
-version.
+MCP does not provide a user-turn boundary here, so the correlation scope is the
+connection, not an individual user message. Within one connection, searches and
+invocations still follow the SDK's latest-search pairing rules. Independent
+parallel agents must use separate MCP connections. Learned graph history remains
+shared within the runtime context so subsequent sessions benefit from it.

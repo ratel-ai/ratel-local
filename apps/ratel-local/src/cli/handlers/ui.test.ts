@@ -60,7 +60,7 @@ describe("runUi", () => {
     };
 
     await expect(runUi(parsed, ctx, ctx.log, { daemonRequest: async () => null })).rejects.toThrow(
-      /daemon is not running.*ratel-local setup/,
+      /daemon is not running.*ratel setup/,
     );
   });
 

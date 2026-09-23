@@ -37,6 +37,7 @@ How a new version is published to npm. Read end-to-end before cutting a release.
      pnpm --filter @ratel-ai/ratel-local pack --pack-destination "$RATEL_PACK_DIR"
      tar -xOf "$RATEL_PACK_DIR"/ratel-ai-ratel-local-*.tgz package/package.json
      ```
+     The packed `package.json` must map both `ratel` and `ratel-local` to `./dist/bin.js`. Install the tarball in a temporary directory and run `node apps/ratel-local/scripts/smoke-cli.js <install-directory>` from the repository root to verify both installed commands and the service entry point (also run by CI).
      The packed `package.json` must show real semver ranges; workspace-protocol dependencies would break installs.
 4. **(Optional dry-run)** `workflow_dispatch` `release.yml` with `dry_run: true` to validate the auth + publish path end-to-end without consuming a version number.
 5. **Commit the release preparation** on `release/X.Y.Z` (or the corresponding

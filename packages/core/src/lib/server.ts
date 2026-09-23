@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -40,6 +41,11 @@ export async function createMcpServer(
   options: CreateMcpServerOptions,
 ): Promise<McpServerHandle> {
   const { name, version, transport, upstreamServers, runAuthFlow, skillCatalog } = options;
+  // A server instance belongs to one MCP connection, while its catalogs may be
+  // shared by many. MCP supplies no user-turn boundary, so use a connection-local
+  // correlation key for the SDK's pending search/invoke pairing. A fresh key on
+  // reconnect prevents a new client from consuming an old client's search.
+  const turnId = randomUUID();
   const hasSkills = skillCatalog !== undefined && skillCatalog.size() > 0;
   const searchUpstreamServers = upstreamServers?.map((upstream) =>
     upstream.description !== undefined && upstream.description === upstream.instructions
@@ -100,7 +106,7 @@ export async function createMcpServer(
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
     let out: unknown;
     try {
-      out = await tool.execute(args);
+      out = await tool.execute(args, undefined, turnId);
     } catch (error) {
       if (!(error instanceof EmbedderError) || req.params.name !== SEARCH_CAPABILITIES_ID) {
         throw error;

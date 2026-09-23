@@ -1,4 +1,6 @@
 import * as clack from "@clack/prompts";
+import type { OutputEnvironment } from "./output/environment.js";
+import type { CliOutput } from "./output/index.js";
 
 export const CANCEL_SYMBOL = Symbol("ratel.prompt.cancel");
 
@@ -33,21 +35,59 @@ export interface PromptAdapter {
   spinner(): SpinnerHandle;
   isCancel(value: unknown): boolean;
   cancel(message?: string): void;
+  /** False when stdin is not a terminal: a pipe, a file, or most CI runners. */
+  canPrompt(): boolean;
 }
 
-export function defaultPromptAdapter(): PromptAdapter {
+export class PromptUnavailableError extends Error {
+  constructor(message: string) {
+    super(
+      `Interactive input required. Run in a terminal or supply explicit command options. Question: ${message}`,
+    );
+    this.name = "PromptUnavailableError";
+  }
+}
+
+export function defaultPromptAdapter(options: {
+  environment: OutputEnvironment;
+  output: CliOutput;
+}): PromptAdapter {
+  const { environment, output } = options;
+  const common = { input: process.stdin, output: process.stderr };
+  const requireTerminal = (message: string) => {
+    if (!environment.prompt) throw new PromptUnavailableError(message);
+  };
   return {
-    intro: clack.intro,
-    outro: clack.outro,
-    note: clack.note,
-    confirm: clack.confirm as PromptAdapter["confirm"],
-    select: clack.select as PromptAdapter["select"],
-    multiselect: clack.multiselect as PromptAdapter["multiselect"],
-    text: clack.text as PromptAdapter["text"],
-    password: clack.password as PromptAdapter["password"],
-    spinner: () => clack.spinner(),
+    intro: output.heading,
+    outro: output.success,
+    note(message, title) {
+      if (title) output.heading(title);
+      output.text(message);
+    },
+    async confirm(opts) {
+      requireTerminal(opts.message);
+      return clack.confirm({ ...opts, ...common });
+    },
+    async select(opts) {
+      requireTerminal(opts.message);
+      return (clack.select as PromptAdapter["select"])({ ...opts, ...common });
+    },
+    async multiselect(opts) {
+      requireTerminal(opts.message);
+      return (clack.multiselect as PromptAdapter["multiselect"])({ ...opts, ...common });
+    },
+    async text(opts) {
+      requireTerminal(opts.message);
+      return clack.text({ ...opts, ...common });
+    },
+    async password(opts) {
+      requireTerminal(opts.message);
+      return clack.password({ ...opts, ...common });
+    },
+    spinner: output.spinner,
     isCancel: clack.isCancel,
-    cancel: clack.cancel,
+    cancel: (message = "Cancelled") => output.warning(message),
+    canPrompt: () => environment.prompt,
   };
 }
 
@@ -76,5 +116,6 @@ export function silentPromptAdapter(): PromptAdapter {
       return value === CANCEL_SYMBOL;
     },
     cancel() {},
+    canPrompt: () => false,
   };
 }

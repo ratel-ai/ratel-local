@@ -26,6 +26,7 @@ import {
   useState,
 } from "react";
 import { BrandLogo } from "@/components/brand-logo";
+import { ContextDiagnostics, type SnapshotDiagnostic } from "@/components/context-diagnostics";
 import { ContextSwitcher } from "@/components/context-switcher";
 import { ShortcutHint } from "@/components/shortcut-hint";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -159,6 +160,7 @@ export interface ConfigResponse {
   }>;
   runtimeRevision?: string;
   effectiveRetrieval?: RetrievalConfig;
+  diagnostics?: SnapshotDiagnostic[];
 }
 
 export interface ServerToolTokenEstimate {
@@ -436,11 +438,14 @@ export function AppShell() {
               <main className="w-full">
                 <Alert>
                   <AlertTitle>Missing session token</AlertTitle>
-                  <AlertDescription>Open the URL printed by ratel-local ui.</AlertDescription>
+                  <AlertDescription>Open the URL printed by ratel ui.</AlertDescription>
                 </Alert>
               </main>
             ) : (
-              <Outlet />
+              <>
+                <ContextDiagnostics diagnostics={config?.diagnostics ?? []} />
+                <Outlet />
+              </>
             )}
           </div>
         </div>

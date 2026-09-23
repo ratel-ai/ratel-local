@@ -18,7 +18,7 @@ export async function resolveCliRatelBin(
     workspaceRoot: opts.workspaceRoot,
     exists: opts.exists,
     promptForPath: async () => {
-      const v = await ctx.prompts.text({ message: "Path to ratel-local binary?" });
+      const v = await ctx.prompts.text({ message: "Path to ratel binary?" });
       return ctx.prompts.isCancel(v) ? "" : (v as string);
     },
   });
