@@ -5,6 +5,7 @@ All notable changes to this package are documented here. The format is based on 
 ## [Unreleased]
 
 ### Added
+- Added experimental online adaptive ranking behind `RATEL_FEATURE_ADAPTIVE_RANKING=1`, with a shared SDK intent graph for tool and skill catalogs per global/project context and atomic persistence with private permissions.
 - Added `ratel-local cloud add|use|list` for Ratel Cloud credentials: `add` stores a key under a profile name in `~/.ratel/cloud.json`, the first one becoming the default, and needs a terminal; `use` selects the profile a scope's skills come from; `list` shows what is stored and which profile resolves here. A running daemon picks up a stored key without a restart.
 - Added `ratel-local cloud status|test|remove`: `status` prints this directory's resolved profile, source, catalog endpoint, and ready/error/none state (files only; a missing selected profile fails with the selecting file and a `cloud add` remedy); `test` performs one authenticated catalog GET and reports reachability and credential validity separately; `remove` deletes a stored profile, clears the store default when that profile was it, and refuses while this directory's user/project/local configs still select it unless `--force` is passed.
 - Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable. `cloud.apiKey` is rejected.
@@ -13,6 +14,7 @@ All notable changes to this package are documented here. The format is based on 
 - Added the off-by-default `RATEL_FEATURE_SKILL_STORAGE=1` daemon feature flag, the gate for the new Skill filesystem and host behavior. Nothing reads it yet.
 
 ### Changed
+- Upgraded and pinned `@ratel-ai/sdk` to `0.13.0-rc.5` for turn-correlated adaptive ranking.
 - Made `ratel` the primary CLI executable, retaining `ratel-local` as a compatibility alias of the same entry point. CLI help, usage, errors, and the UI now say `ratel`. Binary lookup finds `ratel-local` on `PATH` and prefers the `ratel` installed beside it; newly written services, statusline, and hooks use `ratel`, and services generated through npx select it with `npx --package @ratel-ai/ratel-local@<version> ratel`. The package name, install commands, service identifiers, MCP entry name, config paths, and `RATEL_LOCAL_BIN` are unchanged, and existing services and integrations keep working. The README, plugin skill, and docs switch to `ratel` in the release that ships it.
 - Made shared CLI formatting for messages, headings, tables, and progress. Terminal output is styled; when stdout or stderr is redirected, or in CI, output is plain and progress prints fixed start and result lines. Human output stays on stderr and MCP, hook, and statusline payloads stay on stdout. No feature flag. Scripts that parse this output need updating: `project list` prints a header then tab-separated `ID`, `Status`, `Name`, and `Path` columns (was `id  [status]  name  root`); empty lists print `[info] no projects registered`; `project add`/`remove` and the last `doctor` line start with `[ok]`; setup intro, outro, and notes are headings and text, not Clack boxes.
 - Made CLI questions fail with `Interactive input required` when stdin or stderr is not a terminal, or in CI, instead of waiting for input. Redirecting stdout alone still allows them. For automation, use existing options such as `setup --yes` with `--agent` or `--daemon-only`.
@@ -21,6 +23,7 @@ All notable changes to this package are documented here. The format is based on 
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables, any other value disables, and a flag left out keeps whatever the installed service already says.
 
 ### Fixed
+- Isolated online adaptive-ranking search/invocation pairing per MCP connection using the SDK `turnId`, including skill loads and reconnects, so parallel sessions sharing a catalog cannot teach edges from each other’s searches.
 - Fixed concurrent `ratel-local cloud add` and `cloud remove` dropping other profiles in `~/.ratel/cloud.json`: each write waits for a file lock, then re-reads, so the first profile that lands keeps `default` and neither save overwrites the other.
 - Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now keeps the stored key and refuses the save when there is none to keep.
 

@@ -177,6 +177,33 @@ immutable gateway generation. See the [retrieval configuration and preflight
 guide](docs/retrieval.md) for local, Hugging Face, Ollama, and
 OpenAI-compatible embedding sources plus privacy and memory guidance.
 
+### Experimental adaptive ranking
+
+Online adaptive ranking ships dark. It learns from capability searches followed
+by tool or skill invocations, then uses that history to refine later searches in
+the same runtime context:
+
+```bash
+# New installation
+RATEL_FEATURE_ADAPTIVE_RANKING=1 ratel-local setup
+
+# Existing installed daemon
+RATEL_FEATURE_ADAPTIVE_RANKING=1 ratel-local daemon restart
+
+# Disable
+RATEL_FEATURE_ADAPTIVE_RANKING=0 ratel-local daemon restart
+```
+
+The daemon keeps one graph for global use and one graph per project, shares each
+graph between the tool and skill catalogs, and saves changed graphs every five
+seconds and during shutdown. Graph files contain raw search queries and are
+stored with private permissions under `~/.ratel/adaptive-ranking/`.
+
+Searches and invocations use a unique correlation ID per MCP connection, so
+parallel sessions sharing a catalog learn from their own searches. Reconnecting
+starts a fresh correlation context. See the [adaptive-ranking guide](docs/adaptive-ranking.md)
+for the storage layout and session boundaries.
+
 ### Connect a Ratel Cloud account
 
 Cloud skill-catalog credentials are stored as named profiles in

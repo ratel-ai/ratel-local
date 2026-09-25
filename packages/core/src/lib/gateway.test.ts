@@ -8,7 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { EmbedderError, type Skill, SkillCatalog } from "@ratel-ai/sdk";
+import { EmbedderError, IntentGraph, type Skill, SkillCatalog } from "@ratel-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGatewayFromConfig,
@@ -103,6 +103,18 @@ function deterministicEmbedding(text: string): number[] {
 }
 
 describe("buildGatewayFromConfig", () => {
+  it("enables tool and skill adaptive ranking against one shared graph", async () => {
+    const graph = new IntentGraph();
+    const handle = await buildGatewayFromConfig(
+      { mcpServers: {} },
+      { adaptiveRankingGraph: graph, resolvedSkills: [] },
+    );
+
+    expect(handle.catalog.experimentalAdaptiveRankingStatus.status).toBe("active");
+    expect(handle.skillCatalog.experimentalAdaptiveRankingStatus.status).toBe("active");
+    await handle.close();
+  });
+
   it("uses the same semantic endpoint for tool and skill catalogs and recalls paraphrases", async () => {
     const endpoint = await startEmbeddingEndpoint();
     const upstream = await startUpstream([

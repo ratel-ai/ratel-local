@@ -16,7 +16,7 @@ for (const name of ["ratel", "ratel-local"]) {
   }
 }
 
-const requiredRatelSdkVersion = "0.9.1";
+const requiredRatelSdkVersion = "0.13.0-rc.5";
 const ratelSdkVersion = packageJson.dependencies?.["@ratel-ai/sdk"];
 if (ratelSdkVersion !== requiredRatelSdkVersion) {
   throw new Error(`@ratel-ai/sdk must be pinned exactly to ${requiredRatelSdkVersion}`);

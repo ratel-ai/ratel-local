@@ -15,7 +15,7 @@ import {
   ratelConfigPath,
   type TransportFactory,
 } from "@ratel-ai/ratel-local-core";
-import type { TraceSinkConfig } from "@ratel-ai/sdk";
+import type { IntentGraph, TraceSinkConfig } from "@ratel-ai/sdk";
 import type { ParsedArgs } from "../args.js";
 import { defaultTelemetryDir, projectBucketDir } from "../telemetry-paths.js";
 
@@ -29,6 +29,8 @@ export interface ServeOptions {
   processEnv?: NodeJS.ProcessEnv;
   cwd?: string;
   existsSync?: (path: string) => boolean;
+  /** Internal daemon hook for a context-scoped online-learning graph. */
+  adaptiveRankingGraph?: IntentGraph;
 }
 
 export interface ServeResult {
@@ -106,6 +108,7 @@ export async function buildConfiguredGateway(
     transportFactory: options.transportFactory,
     logger: log,
     ...(trace ? { trace } : {}),
+    ...(options.adaptiveRankingGraph ? { adaptiveRankingGraph: options.adaptiveRankingGraph } : {}),
   });
 
   return { config, gateway };

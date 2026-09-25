@@ -8,6 +8,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   EmbedderError,
   type EmbeddingSpec,
+  type IntentGraph,
   type McpServerHandle,
   registerMcpServer,
   type SearchMethod,
@@ -84,6 +85,8 @@ export interface BuildGatewayOptions {
   resolvedSkills?: Skill[];
   /** Resolved scoped retrieval block. Overrides config.retrieval when supplied. */
   retrieval?: RetrievalConfig;
+  /** Shared online-learning graph for the tool and skill catalogs. Off when omitted. */
+  adaptiveRankingGraph?: IntentGraph;
 }
 
 const AUTH_SHAPED_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
@@ -164,6 +167,10 @@ export async function buildGatewayFromConfig(
   const denseRetrieval = isDenseMethod(catalogOptions.method);
   const catalog = new ToolCatalog(catalogOptions);
   const skillCatalog = await buildSkillCatalog(config, options, catalogOptions, log);
+  if (options.adaptiveRankingGraph) {
+    catalog.experimentalEnableAdaptiveRanking(options.adaptiveRankingGraph);
+    skillCatalog.experimentalEnableAdaptiveRanking(options.adaptiveRankingGraph);
+  }
   const handles = new Map<string, McpServerHandle>();
   const upstreamServers: UpstreamServerInfo[] = [];
   const configEntries: Record<string, ServerEntry> = Object.fromEntries(

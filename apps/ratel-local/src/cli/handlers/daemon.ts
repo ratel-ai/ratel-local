@@ -64,6 +64,7 @@ import {
   ensureDaemonToken,
   readDaemonToken,
 } from "../../daemon/access.js";
+import { AdaptiveRankingStore } from "../../daemon/adaptive-ranking-store.js";
 import { InMemoryMcpClientRegistry } from "../../daemon/client-registry.js";
 import { createMcpHttpRoute } from "../../daemon/mcp-http.js";
 import { ReconciledGatewayPool } from "../../daemon/reconciled-gateway-pool.js";
@@ -78,6 +79,7 @@ import {
 } from "../../daemon/service-file.js";
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import {
+  ADAPTIVE_RANKING_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   type FeatureFlags,
@@ -145,6 +147,7 @@ export interface DaemonStatusBody extends DaemonState {
   retrievalHealth?: RetrievalHealthStats;
   /** Absent on daemons older than the restart-reconfiguration support. */
   cloudTelemetry?: boolean;
+  adaptiveRanking?: boolean;
   cloudCatalog?: boolean;
   skillStorage?: boolean;
 }
@@ -386,6 +389,9 @@ export async function runDaemonServer(
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
   const featureFlags = featureFlagsFromEnv(daemonProcessEnv);
+  const adaptiveRankingStore = featureFlags.adaptiveRanking
+    ? new AdaptiveRankingStore({ homeDir: ctx.env.homeDir, logger: log })
+    : undefined;
   const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
   // Cloud profiles serve the catalog; the relay keeps its own single-key store.
   // An agent's exporter is configured once per machine, so telemetry stays on one
@@ -459,6 +465,11 @@ export async function runDaemonServer(
     });
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
+    const adaptiveRankingGraph = await adaptiveRankingStore?.graphFor(
+      scope.kind === "project"
+        ? { kind: "project", projectId: scope.projectId }
+        : { kind: "global" },
+    );
     if (scope.resolvedContext) {
       return buildGatewayFromConfig(
         { mcpServers: {} },
@@ -470,10 +481,12 @@ export async function runDaemonServer(
           ...(scope.resolvedContext.retrieval
             ? { retrieval: scope.resolvedContext.retrieval }
             : {}),
+          ...(adaptiveRankingGraph ? { adaptiveRankingGraph } : {}),
         },
       );
     }
     const scoped = scopeBuildInputs(parsed, ctx, options, scope);
+    if (adaptiveRankingGraph) scoped.options.adaptiveRankingGraph = adaptiveRankingGraph;
     return (await buildConfiguredGateway(scoped.parsed, scoped.options, log)).gateway;
   }, log);
   const useResolvedControlPlane =
@@ -734,6 +747,7 @@ export async function runDaemonServer(
           activeUserGatewayCount: poolStats.activeUserGatewayCount,
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
           cloudTelemetry: featureFlags.cloudTelemetry,
+          adaptiveRanking: featureFlags.adaptiveRanking,
           cloudCatalog: featureFlags.cloudCatalog,
           skillStorage: featureFlags.skillStorage,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
@@ -800,7 +814,11 @@ export async function runDaemonServer(
         await ui.shutdown();
         await gatewayPool.shutdown();
       } finally {
-        await ratelTelemetry?.shutdown();
+        try {
+          await adaptiveRankingStore?.shutdown();
+        } finally {
+          await ratelTelemetry?.shutdown();
+        }
       }
     },
   };
@@ -1060,6 +1078,7 @@ async function reconfigureInstalledServiceFeatureFlags(
 }
 
 const FLAG_STATUS_FIELD = {
+  [ADAPTIVE_RANKING_FEATURE_ENV]: "adaptiveRanking",
   [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
   [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
   [SKILL_STORAGE_FEATURE_ENV]: "skillStorage",

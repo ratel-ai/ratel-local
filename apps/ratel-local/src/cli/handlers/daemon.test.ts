@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,11 +10,13 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { BackupFs, HierarchyEnv, JsonFs } from "@ratel-ai/ratel-local-core";
 import { projectIdFromCanonicalRoot } from "@ratel-ai/ratel-local-core";
+import { IntentGraph } from "@ratel-ai/sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { CloudSettings } from "../../cloud/settings.js";
 import type { CloudTraceSettings } from "../../cloud/trace-settings.js";
 import { connectorHeaders } from "../../daemon/access.js";
 import {
+  ADAPTIVE_RANKING_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   SKILL_STORAGE_FEATURE_ENV,
@@ -936,6 +938,114 @@ describe("runDaemon", () => {
     }
   });
 
+  for (const enabled of [false, true]) {
+    it(`isolates HTTP sessions and persists learning only when enabled (${enabled})`, async () => {
+      const fs = new MemFs();
+      const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-adaptive-ranking-"));
+      const logs: string[] = [];
+      const upstream = new Server(
+        { name: "adaptive", version: "1.0.0" },
+        { capabilities: { tools: {} } },
+      );
+      upstream.setRequestHandler(ListToolsRequestSchema, async () => ({
+        tools: [
+          {
+            name: "build_status",
+            description: "Inspect the current build status",
+            inputSchema: { type: "object" },
+          },
+          {
+            name: "read_file",
+            description: "Read a file from disk",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }));
+      upstream.setRequestHandler(CallToolRequestSchema, async () => ({ content: [] }));
+      const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+      await upstream.connect(serverTransport);
+
+      const result = await runDaemon(
+        daemonArgs(),
+        makeCtx(fs, { homeDir }),
+        {
+          readConfig: async () => ({
+            mcpServers: { adaptive: { type: "stdio", command: "noop" } },
+          }),
+          processEnv: enabled ? { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } : {},
+          transportFactory: () => clientTransport,
+        },
+        (message) => logs.push(message),
+        { open: () => {}, ensureToken: async () => "daemon-test-token" },
+      );
+      const client = new Client({ name: "adaptive-test", version: "1.0.0" });
+      const other = new Client({ name: "adaptive-test", version: "1.0.0" });
+
+      try {
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL("/mcp", daemonUrlFromLogs(logs)), {
+            requestInit: { headers: connectorHeaders("daemon-test-token") },
+          }),
+        );
+        await other.connect(
+          new StreamableHTTPClientTransport(new URL("/mcp", daemonUrlFromLogs(logs)), {
+            requestInit: { headers: connectorHeaders("daemon-test-token") },
+          }),
+        );
+        const statusResponse = await fetch(new URL("/api/daemon/status", daemonUrlFromLogs(logs)));
+        expect((await statusResponse.json()) as { adaptiveRanking?: boolean }).toMatchObject({
+          adaptiveRanking: enabled,
+        });
+        await client.callTool({
+          name: "search_capabilities",
+          arguments: { query: "is the build passing" },
+        });
+        await other.callTool({
+          name: "search_capabilities",
+          arguments: { query: "read a file from disk" },
+        });
+        await client.callTool({
+          name: "invoke_tool",
+          arguments: { toolId: "adaptive__build_status", args: {} },
+        });
+        await other.callTool({
+          name: "invoke_tool",
+          arguments: { toolId: "adaptive__read_file", args: {} },
+        });
+      } finally {
+        await client.close();
+        await other.close();
+        await result.shutdown?.();
+        await upstream.close();
+      }
+
+      const graphPath = join(homeDir, ".ratel", "adaptive-ranking", "global.json");
+      try {
+        if (enabled) {
+          const graph = IntentGraph.fromJson(await readFile(graphPath, "utf8"));
+          const wire = JSON.parse(graph.toJson()) as {
+            intents: { members: string[]; tools: Record<string, number> }[];
+          };
+          expect(wire.intents).toHaveLength(2);
+          for (const [query, tool] of [
+            ["is the build passing", "adaptive__build_status"],
+            ["read a file from disk", "adaptive__read_file"],
+          ]) {
+            expect(
+              Object.keys(
+                wire.intents.find((intent) => intent.members.includes(query))?.tools ?? {},
+              ),
+            ).toEqual([tool]);
+          }
+        } else {
+          await expect(readFile(graphPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      } finally {
+        await rm(homeDir, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("isolates project config chains while sharing one daemon", async () => {
     const fs = new MemFs();
     const temp = await mkdtemp(join(tmpdir(), "ratel-daemon-scopes-"));
@@ -1336,6 +1446,38 @@ describe("runDaemon", () => {
   });
 
   for (const platform of ["darwin", "linux"] as const) {
+    it(`enables adaptive ranking on ${platform} restart when the flag is explicitly set`, async () => {
+      const fs = new MemFs();
+      const paths = daemonPaths(HOME);
+      const servicePath = platform === "linux" ? paths.systemdService : paths.plist;
+      const input = {
+        executablePath: "/opt/bin/ratel-local",
+        homeDir: HOME,
+        port: DEFAULT_DAEMON_PORT,
+        featureFlags: { cloudTelemetry: false, adaptiveRanking: false },
+      };
+      fs.files.set(
+        servicePath,
+        platform === "linux" ? createSystemdUserService(input) : createLaunchAgentPlist(input),
+      );
+
+      await runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } },
+        () => {},
+        {
+          platform,
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: offlineThenHealthyProbe(),
+          lifecycleProgress: false,
+        },
+      );
+
+      expect(fs.files.get(servicePath)).toContain(ADAPTIVE_RANKING_FEATURE_ENV);
+    });
+
     it(`enables Cloud telemetry on ${platform} restart when the flag is explicitly set`, async () => {
       const fs = new MemFs();
       const paths = daemonPaths(HOME);
@@ -1641,6 +1783,27 @@ describe("runDaemon", () => {
     await expect(restartWithProbe(fs, restartStatusProbe(false), [])).rejects.toThrow(
       /previous service definition may still be loaded/,
     );
+  });
+
+  it("fails a restart whose daemon still reports the previous adaptive-ranking state", async () => {
+    const fs = new MemFs();
+    fs.files.set(daemonPaths(HOME).plist, installedPlist());
+
+    await expect(
+      runDaemon(
+        daemonArgs({ verb: "restart", flags: { telemetry: "off", open: false } }),
+        makeCtx(fs),
+        { processEnv: { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } },
+        () => {},
+        {
+          platform: "darwin",
+          getUid: () => 501,
+          commandRunner: async () => ({ stdout: "", stderr: "" }),
+          probe: restartStatusProbe(undefined, false),
+          lifecycleProgress: false,
+        },
+      ),
+    ).rejects.toThrow(/previous service definition may still be loaded/);
   });
 
   it("notes, but does not fail, a restart whose daemon cannot report the flag", async () => {
@@ -1998,7 +2161,7 @@ describe("runDaemon", () => {
   });
 });
 
-function restartStatusProbe(cloudTelemetry?: boolean) {
+function restartStatusProbe(cloudTelemetry?: boolean, adaptiveRanking?: boolean) {
   let calls = 0;
   return async (port: number) => {
     calls += 1;
@@ -2023,6 +2186,7 @@ function restartStatusProbe(cloudTelemetry?: boolean) {
         activeUserGatewayCount: 0,
         activeProjectGatewayCount: 0,
         ...(cloudTelemetry === undefined ? {} : { cloudTelemetry }),
+        ...(adaptiveRanking === undefined ? {} : { adaptiveRanking }),
       },
     };
   };
