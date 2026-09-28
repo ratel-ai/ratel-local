@@ -204,4 +204,124 @@ describe("legacy skill migration", () => {
       },
     });
   });
+
+  it("snapshots when persistDimensions is true even if the env flag is unset", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    try {
+      const homeDir = await mkdtemp(join(tmpdir(), "ratel-legacy-skill-"));
+      homes.push(homeDir);
+      const native = join(homeDir, ".claude", "skills", "review");
+      const managed = join(homeDir, ".ratel", "skills", "review");
+      const manifestPath = join(homeDir, ".ratel", "skill-manifest.json");
+      const configPath = join(homeDir, ".ratel", "config.json");
+      const before = "---\nname: review\ndescription: Review\n---\n\nBody\n";
+      const after =
+        "---\nname: review\ndescription: Review\ndisable-model-invocation: true\n---\n\nBody\n";
+      await mkdir(native, { recursive: true });
+      await mkdir(join(homeDir, ".ratel", "skills"), { recursive: true });
+      await writeFile(join(native, "SKILL.md"), after);
+      await symlink(native, managed);
+      await writeFile(configPath, '{"skills":{"entries":{}}}\n');
+      await writeFile(
+        manifestPath,
+        `${JSON.stringify({
+          version: 1,
+          managed: [
+            {
+              id: "review",
+              mode: "linked",
+              originalPath: native,
+              linkPath: managed,
+              source: "claude",
+              metadataPatch: [{ path: join(native, "SKILL.md"), before, after }],
+            },
+          ],
+        })}\n`,
+      );
+      const preparedChanges = createPreparedChangeCoordinator({
+        mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
+      });
+      const configControlPlane = await createConfigControlPlane({
+        homeDir,
+        projectRegistry: createProjectRegistry({ homeDir }),
+        preparedChanges,
+      });
+
+      const change = await prepareLegacySkillMigration({
+        homeDir,
+        configControlPlane,
+        preparedChanges,
+        persistDimensions: true,
+      });
+      expect(change).not.toBeNull();
+      if (!change) throw new Error("expected a migration change");
+      const commit = await preparedChanges.commit(change.changeId);
+      expect(commit.backupManifest).not.toBeNull();
+      expect(commit.backupManifest?.entries.some((entry) => entry.kind !== undefined)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
+  });
+
+  it("keeps per-file backups when persistDimensions is false even if the env flag is on", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    process.env.RATEL_FEATURE_SKILL_STORAGE = "1";
+    try {
+      const homeDir = await mkdtemp(join(tmpdir(), "ratel-legacy-skill-"));
+      homes.push(homeDir);
+      const native = join(homeDir, ".claude", "skills", "review");
+      const managed = join(homeDir, ".ratel", "skills", "review");
+      const manifestPath = join(homeDir, ".ratel", "skill-manifest.json");
+      const configPath = join(homeDir, ".ratel", "config.json");
+      const before = "---\nname: review\ndescription: Review\n---\n\nBody\n";
+      const after =
+        "---\nname: review\ndescription: Review\ndisable-model-invocation: true\n---\n\nBody\n";
+      await mkdir(native, { recursive: true });
+      await mkdir(join(homeDir, ".ratel", "skills"), { recursive: true });
+      await writeFile(join(native, "SKILL.md"), after);
+      await symlink(native, managed);
+      await writeFile(configPath, '{"skills":{"entries":{}}}\n');
+      await writeFile(
+        manifestPath,
+        `${JSON.stringify({
+          version: 1,
+          managed: [
+            {
+              id: "review",
+              mode: "linked",
+              originalPath: native,
+              linkPath: managed,
+              source: "claude",
+              metadataPatch: [{ path: join(native, "SKILL.md"), before, after }],
+            },
+          ],
+        })}\n`,
+      );
+      const preparedChanges = createPreparedChangeCoordinator({
+        mutationEngine: await createMutationEngine({ controlDir: join(homeDir, ".ratel") }),
+      });
+      const configControlPlane = await createConfigControlPlane({
+        homeDir,
+        projectRegistry: createProjectRegistry({ homeDir }),
+        preparedChanges,
+      });
+
+      const change = await prepareLegacySkillMigration({
+        homeDir,
+        configControlPlane,
+        preparedChanges,
+        persistDimensions: false,
+      });
+      expect(change).not.toBeNull();
+      if (!change) throw new Error("expected a migration change");
+      const commit = await preparedChanges.commit(change.changeId);
+      expect(commit.backupManifest).not.toBeNull();
+      expect(commit.backupManifest?.entries.every((entry) => entry.kind === undefined)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
+  });
 });

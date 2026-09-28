@@ -101,7 +101,7 @@ export interface SkillImportControlPlaneOptions {
   discovery: SkillDiscovery;
   preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
-  /** When set, overrides skillStorageEnabled() for persisting origin/path. */
+  /** When set, overrides skillStorageEnabled() for persisting origin/path and backup format. */
   persistDimensions?: boolean;
 }
 
@@ -370,12 +370,17 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
         },
       },
       captureBackup: () =>
-        captureOperationBackup({ homeDir: this.options.homeDir }, nodeFs, {
-          action: "import",
-          paths: [...configOperations, ...copyOperations, ...hostPolicyOperations].map(
-            (operation) => operation.path,
-          ),
-        }),
+        captureOperationBackup(
+          { homeDir: this.options.homeDir },
+          nodeFs,
+          {
+            action: "import",
+            paths: [...configOperations, ...copyOperations, ...hostPolicyOperations].map(
+              (operation) => operation.path,
+            ),
+          },
+          this.persistDimensions(),
+        ),
       result: {
         imported: appliedSelections.map((selection) => {
           const candidate = candidateById.get(selection.candidateId);
@@ -538,7 +543,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     hostPolicy: SkillHostPolicy | undefined,
   ): Promise<SkillEntry> {
     const source = configuredSource(candidate.source);
-    const persist = this.options.persistDimensions ?? skillStorageEnabled();
+    const persist = this.persistDimensions();
     if (target.mode === "copy") {
       const entry = {
         mode: "copy" as const,
@@ -591,6 +596,10 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     const entry = { mode: "reference" as const, path: configuredPath, source };
     if (!persist) return entry;
     return skillEntryForWrite(entry);
+  }
+
+  private persistDimensions(): boolean {
+    return this.options.persistDimensions ?? skillStorageEnabled();
   }
 }
 

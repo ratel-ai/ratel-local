@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createProjectRegistry, type MutationJournalV1, nodeFs } from "@ratel-ai/ratel-local-core";
@@ -389,6 +389,10 @@ describe("runDoctor", () => {
           },
         },
       });
+      const backupRoot = join(homeDir, ".ratel", "backups");
+      const backupDirs = await readdir(backupRoot);
+      expect(backupDirs.length).toBeGreaterThan(0);
+      expect(await anySnapshotBackup(backupRoot, backupDirs)).toBe(true);
     } finally {
       vi.unstubAllGlobals();
       if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
@@ -402,6 +406,20 @@ describe("runDoctor", () => {
     return home;
   }
 });
+
+async function anySnapshotBackup(backupRoot: string, backupDirs: string[]): Promise<boolean> {
+  for (const dir of backupDirs) {
+    try {
+      const manifest = JSON.parse(
+        await readFile(join(backupRoot, dir, "manifest.json"), "utf8"),
+      ) as { entries: Array<{ kind?: string }> };
+      if (manifest.entries.some((entry) => entry.kind !== undefined)) return true;
+    } catch {
+      // ignore missing or unreadable manifests
+    }
+  }
+  return false;
+}
 
 function context(homeDir: string, logs: string[], fix = false): HandlerCtx {
   return {

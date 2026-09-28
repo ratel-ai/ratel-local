@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -582,6 +582,48 @@ describe("runSkill — snapshot-backed reads", () => {
     }
   });
 
+  it("snapshots on skill import when daemon reports skillStorage and CLI env is unset", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    const home = await mkdtemp(join(tmpdir(), "ratel-skill-import-backup-"));
+    try {
+      const skillDir = join(home, ".claude", "skills", "review");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        join(skillDir, "SKILL.md"),
+        "---\nname: review\ndescription: Review skill\n---\nbody\n",
+      );
+      await mkdir(join(home, ".ratel"), { recursive: true });
+      await writeFile(join(home, ".ratel", "config.json"), '{"skills":{"entries":{},"dirs":[]}}\n');
+
+      const logs: string[] = [];
+      const ctx = listCtx((line) => logs.push(line));
+      ctx.env = { homeDir: home };
+      ctx.argv.verb = "import";
+      ctx.argv.rest = ["review"];
+      ctx.argv.flags = { scope: "user", mode: "reference", yes: true };
+
+      await runSkill(ctx, {
+        daemonRequest: async (path) => {
+          if (path === "/api/daemon/status") {
+            return Response.json({ skillStorage: true }, { status: 200 });
+          }
+          return null;
+        },
+      });
+
+      expect(logs.some((line) => line.includes("imported"))).toBe(true);
+      const backupRoot = join(home, ".ratel", "backups");
+      const backupDirs = await readdir(backupRoot);
+      expect(backupDirs.length).toBeGreaterThan(0);
+      expect(await anySnapshotBackup(backupRoot, backupDirs)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("lists discovered candidates without resolving the effective catalog", async () => {
     const ctx = listCtx(() => {});
     const logs: string[] = [];
@@ -675,3 +717,17 @@ describe("runSkill — snapshot-backed reads", () => {
     }
   });
 });
+
+async function anySnapshotBackup(backupRoot: string, backupDirs: string[]): Promise<boolean> {
+  for (const dir of backupDirs) {
+    try {
+      const manifest = JSON.parse(
+        await readFile(join(backupRoot, dir, "manifest.json"), "utf8"),
+      ) as { entries: Array<{ kind?: string }> };
+      if (manifest.entries.some((entry) => entry.kind !== undefined)) return true;
+    } catch {
+      // ignore missing or unreadable manifests
+    }
+  }
+  return false;
+}

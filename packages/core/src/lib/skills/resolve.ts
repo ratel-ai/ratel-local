@@ -97,7 +97,7 @@ export async function resolveConfiguredSkills(
 
   for (const scoped of input.scopes) {
     for (const [id, entry] of Object.entries(scoped.config?.entries ?? {})) {
-      let configuredPath = entry.mode === "reference" ? entry.path : id;
+      let configuredPath = entry.path ?? id;
       try {
         if (!isSafeSkillId(id))
           throw new Error(`unsafe skill registration id: ${JSON.stringify(id)}`);
@@ -388,7 +388,7 @@ function dimensionFields(
   const sync = syncFromOrigin(origin);
   return {
     origin,
-    storage: skillStorageFrom(origin, configuredPath),
+    ...(isAbsolute(configuredPath) ? { storage: skillStorageFrom(origin, configuredPath) } : {}),
     availability,
     ...(sync ? { sync } : {}),
   };

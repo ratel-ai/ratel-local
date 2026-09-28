@@ -890,6 +890,11 @@ command = "codex"
       });
       expect(typeof scoped.skills.entries["api-design"].path).toBe("string");
       expect(scoped.skills.entries["api-design"].path).toContain("api-design");
+
+      const backupRoot = join(skillPaths.root, ".ratel", "backups");
+      const backupDirs = await readdir(backupRoot);
+      expect(backupDirs.length).toBeGreaterThan(0);
+      expect(await anySnapshotBackup(backupRoot, backupDirs)).toBe(true);
     } finally {
       vi.unstubAllGlobals();
       if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
@@ -1372,3 +1377,17 @@ command = "codex"
     }
   });
 });
+
+async function anySnapshotBackup(backupRoot: string, backupDirs: string[]): Promise<boolean> {
+  for (const dir of backupDirs) {
+    try {
+      const manifest = JSON.parse(
+        await readFile(join(backupRoot, dir, "manifest.json"), "utf8"),
+      ) as { entries: Array<{ kind?: string }> };
+      if (manifest.entries.some((entry) => entry.kind !== undefined)) return true;
+    } catch {
+      // ignore missing or unreadable manifests
+    }
+  }
+  return false;
+}

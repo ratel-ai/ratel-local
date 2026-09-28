@@ -61,9 +61,10 @@ export async function prepareLegacySkillMigration(options: {
   homeDir: string;
   configControlPlane: ConfigControlPlane;
   preparedChanges: PreparedChangeCoordinator;
-  /** When set, overrides skillStorageEnabled() for persisting origin/path. */
+  /** When set, overrides skillStorageEnabled() for persisting origin/path and backup format. */
   persistDimensions?: boolean;
 }): Promise<PreparedChange<LegacySkillMigrationReview> | null> {
+  const persistDimensions = options.persistDimensions ?? skillStorageEnabled();
   const manifestPath = join(options.homeDir, ".ratel", "skill-manifest.json");
   const manifest = await readLegacyManifest(manifestPath);
   if (!manifest) return null;
@@ -139,10 +140,7 @@ export async function prepareLegacySkillMigration(options: {
           created: metadataPatch.created,
         }),
       };
-      entries[entry.id] =
-        (options.persistDimensions ?? skillStorageEnabled())
-          ? skillEntryForWrite(baseEntry)
-          : baseEntry;
+      entries[entry.id] = persistDimensions ? skillEntryForWrite(baseEntry) : baseEntry;
       operations.push({
         kind: "delete-artifact",
         path: linkPath,
@@ -189,10 +187,15 @@ export async function prepareLegacySkillMigration(options: {
       files: mutation.preview.files,
     }),
     captureBackup: () =>
-      captureOperationBackup({ homeDir: options.homeDir }, nodeFs, {
-        action: "migrate",
-        paths: [current.path, manifestPath],
-      }),
+      captureOperationBackup(
+        { homeDir: options.homeDir },
+        nodeFs,
+        {
+          action: "migrate",
+          paths: [current.path, manifestPath],
+        },
+        persistDimensions,
+      ),
     result: { migrated, diagnostics },
   });
 }

@@ -556,4 +556,58 @@ describe("SkillImportControlPlane", () => {
       sibling,
     );
   });
+
+  it("snapshots when persistDimensions is true even if the env flag is unset", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    try {
+      const f = await fixture({ persistDimensions: true });
+      await putSkill(join(f.homeDir, ".claude", "skills", "review"), "review");
+      const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+        ({ id }) => id === "review",
+      );
+      if (!candidate) throw new Error("candidate not discovered");
+
+      const plan = await f.controlPlane.prepare([
+        {
+          candidateId: candidate.candidateId,
+          targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+        },
+      ]);
+      const commit = await f.controlPlane.commit(plan.changeId);
+
+      expect(commit.backupManifest).not.toBeNull();
+      expect(commit.backupManifest?.entries.some((entry) => entry.kind !== undefined)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
+  });
+
+  it("keeps per-file backups when persistDimensions is false even if the env flag is on", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    process.env.RATEL_FEATURE_SKILL_STORAGE = "1";
+    try {
+      const f = await fixture({ persistDimensions: false });
+      await putSkill(join(f.homeDir, ".claude", "skills", "review"), "review");
+      const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+        ({ id }) => id === "review",
+      );
+      if (!candidate) throw new Error("candidate not discovered");
+
+      const plan = await f.controlPlane.prepare([
+        {
+          candidateId: candidate.candidateId,
+          targets: [{ scopeRef: { scope: "user" }, mode: "reference" }],
+        },
+      ]);
+      const commit = await f.controlPlane.commit(plan.changeId);
+
+      expect(commit.backupManifest).not.toBeNull();
+      expect(commit.backupManifest?.entries.every((entry) => entry.kind === undefined)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
+  });
 });

@@ -25,6 +25,7 @@ All notable changes to this package are documented here. The format is based on 
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables, any other value disables, and a flag left out keeps whatever the installed service already says.
 - With `RATEL_FEATURE_SKILL_STORAGE=1`, skill registration JSON includes `origin`, `storage`, and `availability` (and optional `sync`) on configured views.
 - With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first. Deletion used to list directories as regular files, dropping symlinks, modes and binaries. Flag off keeps per-file capture.
+- `captureOperationBackup`'s fourth argument is now a `snapshot` boolean (defaulting to `skillStorageEnabled()`) instead of a process-env object. Callers that already resolve the skill-storage flag (CLI via the daemon, control planes via `persistDimensions`) pass that same boolean so backup format matches the write.
 - Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead of a fixed line and silence.
 - A concurrent Skill change fails immediately with `skill_busy` instead of waiting on the mutation lock. An interrupted transaction whose lock is gone is still rolled back as a crash, not busy.
 

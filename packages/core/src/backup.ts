@@ -169,14 +169,14 @@ export async function captureSnapshot(
   return manifest;
 }
 
-/** Snapshot when the new Skill filesystem is on, flat per-file copies otherwise. */
+/** Snapshot when `snapshot` is true, flat per-file copies otherwise. */
 export async function captureOperationBackup(
   env: HierarchyEnv,
   fs: BackupFs,
   request: SnapshotRequest,
-  processEnv: NodeJS.ProcessEnv = process.env,
+  snapshot: boolean = skillStorageEnabled(),
 ): Promise<BackupManifest> {
-  if (skillStorageEnabled(processEnv)) return captureSnapshot(env, request);
+  if (snapshot) return captureSnapshot(env, request);
   const session = startBackup(env, fs);
   for (const path of request.paths) await session.capture(path);
   return session.finalize(request.action);

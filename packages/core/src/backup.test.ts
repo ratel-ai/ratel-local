@@ -121,7 +121,7 @@ describe("captureOperationBackup", () => {
       { homeDir: HOME },
       fs,
       { action: "import", paths: ["/a.json"] },
-      {},
+      false,
     );
 
     expect(manifest.entries[0].kind).toBeUndefined();
@@ -265,7 +265,7 @@ describe("captureSnapshot", () => {
         action: "import",
         paths: [tree],
       },
-      { RATEL_FEATURE_SKILL_STORAGE: "1" },
+      true,
     );
 
     const link = byPath(manifest, join(tree, "link"));
