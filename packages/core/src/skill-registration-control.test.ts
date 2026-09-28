@@ -486,6 +486,43 @@ describe("SkillRegistrationControlPlane", () => {
     });
   });
 
+  it("refuses to delete a user copy whose path escapes ~/.ratel", async () => {
+    const outside = join(root, "Documents", "escaped");
+    await mkdir(outside, { recursive: true });
+    await writeFile(
+      join(outside, "SKILL.md"),
+      "---\nname: escaped\ndescription: escaped\n---\n\nBody\n",
+    );
+    await writeFile(
+      join(outside, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "escaped" })}\n`,
+    );
+    const { control } = await fixture(
+      {
+        escaped: {
+          mode: "copy",
+          origin: "local-managed",
+          path: outside,
+          source: "ratel",
+        },
+      },
+      { persistDimensions: true },
+    );
+
+    await expect(
+      control.prepareRemove({
+        target: { scope: "user" },
+        id: "escaped",
+        deleteOwnedCopy: true,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      reason: "invalid_registration",
+      name: "SkillRegistrationValidationError",
+    });
+    expect(await readFile(join(outside, "SKILL.md"), "utf8")).toContain("Body");
+  });
+
   it("deletes the persisted copy path, not a re-derived sibling", async () => {
     const derived = join(homeDir, ".ratel", "skills", "relocated");
     const persisted = join(homeDir, ".ratel", "skills-alt", "relocated");
@@ -641,5 +678,45 @@ describe("SkillRegistrationControlPlane", () => {
     const resolver = createContextSnapshotResolver({ homeDir, projectRegistry: registry });
     await resolver.resolve({ kind: "global" });
     expect(await readFile(configPath, "utf8")).toBe(original);
+  });
+
+  it("snapshots when persistDimensions is true even if the env flag is unset", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    try {
+      const { control } = await fixture({}, { persistDimensions: true });
+      const commit = await control.create({
+        target: { scope: "user" },
+        id: "authored",
+        description: "Authored in Ratel",
+        tags: [],
+        body: "Body",
+      });
+      expect(commit.backupManifest).not.toBeNull();
+      expect(commit.backupManifest?.entries.some((entry) => entry.kind !== undefined)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
+  });
+
+  it("keeps per-file backups when persistDimensions is false even if the env flag is on", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    process.env.RATEL_FEATURE_SKILL_STORAGE = "1";
+    try {
+      const { control } = await fixture({}, { persistDimensions: false });
+      const commit = await control.create({
+        target: { scope: "user" },
+        id: "authored",
+        description: "Authored in Ratel",
+        tags: [],
+        body: "Body",
+      });
+      expect(commit.backupManifest).not.toBeNull();
+      expect(commit.backupManifest?.entries.every((entry) => entry.kind === undefined)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
   });
 });

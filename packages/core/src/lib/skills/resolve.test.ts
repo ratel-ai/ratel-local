@@ -782,6 +782,78 @@ describe("resolveConfiguredSkills", () => {
       }),
     );
   });
+
+  it("marks a user copy outside ~/.ratel as invalid and not editable", async () => {
+    const homeDir = await tempDir();
+    const outsideDir = join(homeDir, "Documents", "escaped");
+    await writeSkill(outsideDir, "escaped", "Escaped", "Body.");
+    await writeFile(
+      join(outsideDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "escaped" })}\n`,
+      "utf8",
+    );
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      scopes: [
+        {
+          ref: { scope: "user" },
+          config: {
+            entries: {
+              escaped: { mode: "copy", path: outsideDir, source: "ratel" },
+            },
+            dirs: [],
+          },
+        },
+      ],
+    });
+
+    expect(catalog.registrations).toEqual([
+      expect.objectContaining({
+        id: "escaped",
+        state: "invalid",
+        editable: false,
+      }),
+    ]);
+  });
+
+  it("reports a real path and copy-mode diagnostic for an absolute project copy path", async () => {
+    const homeDir = await tempDir();
+    const projectRoot = join(homeDir, "repo");
+    await mkdir(projectRoot, { recursive: true });
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      projectRoot,
+      includeDimensions: true,
+      scopes: [
+        {
+          ref: { scope: "project", projectId: "prj_1" },
+          config: {
+            entries: {
+              escaped: { mode: "copy", path: "/etc", source: "ratel" },
+            },
+            dirs: [],
+          },
+        },
+      ],
+    });
+
+    const registration = catalog.registrations.find((r) => r.id === "escaped");
+    expect(registration).toEqual(
+      expect.objectContaining({
+        id: "escaped",
+        state: "invalid",
+        editable: false,
+        configuredPath: "/etc",
+        origin: "local-managed",
+        storage: { kind: "managed-copy", path: "/etc" },
+      }),
+    );
+    expect(catalog.diagnostics.map(({ message }) => message)).toEqual([
+      expect.stringMatching(/copy/i),
+    ]);
+  });
 });
 
 async function tempDir(): Promise<string> {

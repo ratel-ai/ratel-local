@@ -73,7 +73,9 @@ export function configuredSkillStoragePath(input: ConfiguredSkillStoragePathInpu
     throw new Error(`unsafe skill registration id: ${JSON.stringify(input.id)}`);
   }
   if (input.path !== undefined) {
-    return resolveConfiguredPath(input, input.path);
+    const resolved = resolveConfiguredPath(input, input.path);
+    if (input.mode === "copy") assertCopyPathContained(input, resolved);
+    return resolved;
   }
   if (input.mode === "copy") {
     return derivedCopyPath(input);
@@ -94,13 +96,31 @@ function derivedCopyPath(input: ConfiguredSkillStoragePathInput): string {
 function resolveConfiguredPath(input: ConfiguredSkillStoragePathInput, path: string): string {
   if (input.scopeRef.scope !== "user" && isAbsolute(path)) {
     throw new Error(
-      `${input.scopeRef.scope} skill reference paths must be relative to the project root`,
+      `${input.scopeRef.scope} skill ${input.mode} paths must be relative to the project root`,
     );
   }
   if (isAbsolute(path)) return path;
   const base =
     input.scopeRef.scope === "user" ? join(input.homeDir, ".ratel") : requiredProjectRoot(input);
   return resolve(base, path);
+}
+
+function assertCopyPathContained(input: ConfiguredSkillStoragePathInput, resolved: string): void {
+  const root =
+    input.scopeRef.scope === "user" ? join(input.homeDir, ".ratel") : requiredProjectRoot(input);
+  const fromRoot = relative(root, resolved);
+  if (
+    fromRoot === "" ||
+    fromRoot === ".." ||
+    fromRoot.startsWith(`..${sep}`) ||
+    isAbsolute(fromRoot)
+  ) {
+    throw new Error(
+      input.scopeRef.scope === "user"
+        ? "user skill copy path resolves outside ~/.ratel"
+        : `${input.scopeRef.scope} skill copy path resolves outside the project root`,
+    );
+  }
 }
 
 function requiredProjectRoot(input: ConfiguredSkillStoragePathInput): string {

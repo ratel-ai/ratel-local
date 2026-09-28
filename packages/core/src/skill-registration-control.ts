@@ -76,7 +76,7 @@ export interface SkillRegistrationControlPlaneOptions {
   snapshotResolver: ContextSnapshotResolver;
   preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
-  /** When set, overrides skillStorageEnabled() for persisting origin/path. */
+  /** When set, overrides skillStorageEnabled() for persisting origin/path and backup format. */
   persistDimensions?: boolean;
 }
 
@@ -753,7 +753,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
             : input.action === "remove"
               ? "remove"
               : "edit";
-        if (skillStorageEnabled()) {
+        if (this.persistDimensions()) {
           return captureSnapshot(
             { homeDir: this.options.homeDir },
             { action, paths: input.operations.map((operation) => operation.path) },
@@ -787,14 +787,19 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       target.scope === "user"
         ? undefined
         : (await this.options.projectRegistry.resolve(target.projectId)).canonicalRoot;
-    const path = configuredSkillStoragePath({
-      homeDir: this.options.homeDir,
-      ...(projectRoot ? { projectRoot } : {}),
-      scopeRef: target,
-      id,
-      mode: entry?.mode ?? "copy",
-      ...(entry?.path ? { path: entry.path } : {}),
-    });
+    let path: string;
+    try {
+      path = configuredSkillStoragePath({
+        homeDir: this.options.homeDir,
+        ...(projectRoot ? { projectRoot } : {}),
+        scopeRef: target,
+        id,
+        mode: entry?.mode ?? "copy",
+        ...(entry?.path ? { path: entry.path } : {}),
+      });
+    } catch (error) {
+      throw new SkillRegistrationValidationError("invalid_registration", (error as Error).message);
+    }
     if (projectRoot) await assertSafeProjectControlPath(projectRoot, path);
     return path;
   }

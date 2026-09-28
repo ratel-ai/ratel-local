@@ -147,6 +147,53 @@ describe("skill registration helpers", () => {
       }),
     ).toBe(persisted);
   });
+
+  it("keeps copy paths inside ~/.ratel or the project root", () => {
+    const homeDir = "/home/u";
+    const projectRoot = "/repo";
+    const projectId = "prj_test" as ProjectId;
+
+    expect(() =>
+      configuredSkillStoragePath({
+        homeDir,
+        scopeRef: { scope: "user" },
+        id: "demo",
+        mode: "copy",
+        path: join(homeDir, "Documents", "demo"),
+      }),
+    ).toThrow(/outside/i);
+
+    expect(
+      configuredSkillStoragePath({
+        homeDir,
+        scopeRef: { scope: "user" },
+        id: "demo",
+        mode: "copy",
+        path: join(homeDir, ".ratel", "cloud", "p1", "skills", "demo"),
+      }),
+    ).toBe(join(homeDir, ".ratel", "cloud", "p1", "skills", "demo"));
+
+    expect(() =>
+      configuredSkillStoragePath({
+        homeDir,
+        projectRoot,
+        scopeRef: { scope: "project", projectId },
+        id: "demo",
+        mode: "copy",
+        path: "../outside/demo",
+      }),
+    ).toThrow(/outside/i);
+
+    expect(() =>
+      configuredSkillStoragePath({
+        homeDir,
+        scopeRef: { scope: "user" },
+        id: "demo",
+        mode: "copy",
+        path: join(homeDir, ".ratel-evil", "demo"),
+      }),
+    ).toThrow(/outside/i);
+  });
 });
 
 describe("availabilityFromResolveFailure", () => {
