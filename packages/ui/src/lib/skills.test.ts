@@ -128,7 +128,6 @@ describe("scoped skill response", () => {
         state: "shadowed" as const,
         editable: false,
         origin: "reference" as const,
-        storage: { kind: "external" as const, path: "/home/u/.claude/skills/shared" },
         availability: "available" as const,
       },
       {
@@ -145,7 +144,6 @@ describe("scoped skill response", () => {
         state: "effective" as const,
         editable: true,
         origin: "local-managed" as const,
-        storage: { kind: "managed-copy" as const, path: "/repo/.ratel/skills/shared" },
         availability: "available" as const,
       },
       {
@@ -162,7 +160,6 @@ describe("scoped skill response", () => {
         state: "invalid" as const,
         editable: false,
         origin: "reference" as const,
-        storage: { kind: "external" as const, path: "missing" },
         availability: "not-found" as const,
       },
     ];
@@ -193,7 +190,6 @@ describe("scoped skill response", () => {
       },
     ]);
     expect(registrations[0]?.origin).toBe("reference");
-    expect(registrations[0]?.storage?.kind).toBe("external");
     expect(registrations[0]?.availability).toBe("available");
   });
 });

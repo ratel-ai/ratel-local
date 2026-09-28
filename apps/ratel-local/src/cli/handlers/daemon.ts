@@ -463,7 +463,7 @@ export async function runDaemonServer(
       homeDir: ctx.env.homeDir,
       projectRegistry,
       ...(cloudCatalog ? { cloudCatalog } : {}),
-      ...(featureFlags.skillStorage ? { includeDimensions: true } : {}),
+      ...(featureFlags.skillStorage ? { skillStorage: true } : {}),
     });
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {

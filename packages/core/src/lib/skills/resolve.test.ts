@@ -570,7 +570,7 @@ describe("resolveConfiguredSkills", () => {
     ]);
   });
 
-  it("omits dimension fields when includeDimensions is false", async () => {
+  it("omits dimension fields when skillStorage is false", async () => {
     const homeDir = await tempDir();
     const ownedDir = join(homeDir, ".ratel", "skills", "owned");
     await writeSkill(ownedDir, "owned", "Owned", "Body.");
@@ -582,7 +582,7 @@ describe("resolveConfiguredSkills", () => {
 
     const catalog = await resolveConfiguredSkills({
       homeDir,
-      includeDimensions: false,
+      skillStorage: false,
       scopes: [
         {
           ref: { scope: "user" },
@@ -637,7 +637,7 @@ describe("resolveConfiguredSkills", () => {
     expect(owned.configuredPath).toBe(join(homeDir, ".ratel", "skills", "owned"));
   });
 
-  it("attaches origin storage and availability when includeDimensions is true", async () => {
+  it("attaches origin and availability when skillStorage is true", async () => {
     const homeDir = await tempDir();
     const projectRoot = join(homeDir, "repo");
     const ownedDir = join(homeDir, ".ratel", "skills", "owned");
@@ -677,7 +677,7 @@ describe("resolveConfiguredSkills", () => {
     const withDimensions = await resolveConfiguredSkills({
       homeDir,
       projectRoot,
-      includeDimensions: true,
+      skillStorage: true,
       scopes: [
         {
           ref: { scope: "user" },
@@ -718,12 +718,11 @@ describe("resolveConfiguredSkills", () => {
     expect(ownedUser).toEqual(
       expect.objectContaining({
         origin: "local-managed",
-        storage: { kind: "managed-copy", path: ownedDir },
+        configuredPath: ownedDir,
         availability: "available",
         state: "shadowed",
       }),
     );
-    expect(ownedUser?.sync).toBeUndefined();
 
     const ownedProject = withDimensions.registrations.find(
       (r) => r.id === "owned" && r.mode === "reference",
@@ -740,7 +739,7 @@ describe("resolveConfiguredSkills", () => {
     ).toEqual(
       expect.objectContaining({
         origin: "reference",
-        storage: { kind: "external", path: refPath },
+        configuredPath: refPath,
         availability: "available",
       }),
     );
@@ -768,7 +767,8 @@ describe("resolveConfiguredSkills", () => {
 
     expect(withDimensions.registrations.find((r) => r.id === "proj")).toEqual(
       expect.objectContaining({
-        storage: { kind: "managed-copy", path: projectCopy },
+        origin: "local-managed",
+        configuredPath: projectCopy,
         availability: "available",
       }),
     );
@@ -776,7 +776,7 @@ describe("resolveConfiguredSkills", () => {
     expect(withDimensions.registrations.find((r) => r.id === "relocated")).toEqual(
       expect.objectContaining({
         id: "relocated",
-        storage: { kind: "managed-copy", path: altCopy },
+        origin: "local-managed",
         availability: "available",
         configuredPath: altCopy,
       }),
@@ -825,7 +825,7 @@ describe("resolveConfiguredSkills", () => {
     const catalog = await resolveConfiguredSkills({
       homeDir,
       projectRoot,
-      includeDimensions: true,
+      skillStorage: true,
       scopes: [
         {
           ref: { scope: "project", projectId: "prj_1" },
@@ -847,7 +847,6 @@ describe("resolveConfiguredSkills", () => {
         editable: false,
         configuredPath: "/etc",
         origin: "local-managed",
-        storage: { kind: "managed-copy", path: "/etc" },
       }),
     );
     expect(catalog.diagnostics.map(({ message }) => message)).toEqual([

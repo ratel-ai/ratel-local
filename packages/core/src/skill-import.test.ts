@@ -27,7 +27,7 @@ async function putSkill(path: string, id: string, body = "Instructions") {
   );
 }
 
-async function fixture(options: { persistDimensions?: boolean } = {}) {
+async function fixture(options: { skillStorage?: boolean } = {}) {
   const homeDir = await mkdtemp(join(tmpdir(), "ratel-skill-import-home-"));
   const projectA = await mkdtemp(join(tmpdir(), "ratel-skill-import-a-"));
   const projectB = await mkdtemp(join(tmpdir(), "ratel-skill-import-b-"));
@@ -46,9 +46,7 @@ async function fixture(options: { persistDimensions?: boolean } = {}) {
     projectRegistry,
     discovery,
     preparedChanges,
-    ...(options.persistDimensions !== undefined
-      ? { persistDimensions: options.persistDimensions }
-      : {}),
+    ...(options.skillStorage !== undefined ? { skillStorage: options.skillStorage } : {}),
   });
 
   return {
@@ -453,8 +451,8 @@ describe("SkillImportControlPlane", () => {
     });
   });
 
-  it("persists relative path and origin when importing a project copy with persistDimensions", async () => {
-    const f = await fixture({ persistDimensions: true });
+  it("persists relative path and origin when importing a project copy with skillStorage", async () => {
+    const f = await fixture({ skillStorage: true });
     const source = join(f.projectA, ".agents", "skills", "demo");
     await putSkill(source, "demo");
     const candidate = (await f.discovery.discover({ kind: "project", projectRoot: f.projectA }))
@@ -483,8 +481,8 @@ describe("SkillImportControlPlane", () => {
     });
   });
 
-  it("keeps hostPolicy and adds origin when importing a reference with persistDimensions", async () => {
-    const f = await fixture({ persistDimensions: true });
+  it("keeps hostPolicy and adds origin when importing a reference with skillStorage", async () => {
+    const f = await fixture({ skillStorage: true });
     await putSkill(join(f.homeDir, ".claude", "skills", "review"), "review");
     const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
       ({ id }) => id === "review",
@@ -514,8 +512,8 @@ describe("SkillImportControlPlane", () => {
     });
   });
 
-  it("leaves sibling entries byte-identical when persistDimensions writes a new entry", async () => {
-    const f = await fixture({ persistDimensions: true });
+  it("leaves sibling entries byte-identical when skillStorage writes a new entry", async () => {
+    const f = await fixture({ skillStorage: true });
     const userConfigPath = join(f.homeDir, ".ratel", "config.json");
     const sibling = {
       mode: "reference" as const,
@@ -557,11 +555,11 @@ describe("SkillImportControlPlane", () => {
     );
   });
 
-  it("snapshots when persistDimensions is true even if the env flag is unset", async () => {
+  it("snapshots when skillStorage is true even if the env flag is unset", async () => {
     const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
     delete process.env.RATEL_FEATURE_SKILL_STORAGE;
     try {
-      const f = await fixture({ persistDimensions: true });
+      const f = await fixture({ skillStorage: true });
       await putSkill(join(f.homeDir, ".claude", "skills", "review"), "review");
       const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
         ({ id }) => id === "review",
@@ -584,11 +582,11 @@ describe("SkillImportControlPlane", () => {
     }
   });
 
-  it("keeps per-file backups when persistDimensions is false even if the env flag is on", async () => {
+  it("keeps per-file backups when skillStorage is false even if the env flag is on", async () => {
     const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
     process.env.RATEL_FEATURE_SKILL_STORAGE = "1";
     try {
-      const f = await fixture({ persistDimensions: false });
+      const f = await fixture({ skillStorage: false });
       await putSkill(join(f.homeDir, ".claude", "skills", "review"), "review");
       const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
         ({ id }) => id === "review",

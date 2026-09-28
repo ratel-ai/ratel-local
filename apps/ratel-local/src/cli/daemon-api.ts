@@ -60,26 +60,22 @@ export function daemonLoopbackUrl(stateText: string): string | null {
   return `http://127.0.0.1:${state.port}`;
 }
 
-export async function daemonSkillStorage(request: DaemonApiRequest): Promise<boolean | undefined> {
-  const response = await request("/api/daemon/status");
-  if (!response) return undefined;
-  try {
-    const body = (await response.json()) as { skillStorage?: unknown };
-    return body.skillStorage === true;
-  } catch {
-    return undefined;
-  }
-}
-
+/** A running daemon decides; its own environment is what the operation will use. */
 export async function resolveSkillStorageFlag(
   ctx: HandlerCtx,
   daemonRequest?: DaemonApiRequest,
 ): Promise<boolean> {
-  return (
-    (await daemonSkillStorage(
-      daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init)),
-    )) ?? skillStorageEnabled()
-  );
+  const request = daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
+  const response = await request("/api/daemon/status");
+  if (response) {
+    try {
+      const body = (await response.json()) as { skillStorage?: unknown };
+      return body.skillStorage === true;
+    } catch {
+      // unparseable status: fall back to this process's environment
+    }
+  }
+  return skillStorageEnabled();
 }
 
 export async function requireDaemonJson<T>(response: Response, operation: string): Promise<T> {

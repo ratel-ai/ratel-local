@@ -548,7 +548,7 @@ describe("runSkill — snapshot-backed reads", () => {
         await createContextSnapshotResolver({
           homeDir: home,
           projectRegistry: registry,
-          includeDimensions: true,
+          skillStorage: true,
         }).resolve({ kind: "global" })
       ).skills.registrations;
 
@@ -572,7 +572,6 @@ describe("runSkill — snapshot-backed reads", () => {
       expect(cliRegistrations[0]).toMatchObject({
         id: "review",
         origin: expected[0]?.origin,
-        storage: expected[0]?.storage,
         availability: expected[0]?.availability,
       });
     } finally {

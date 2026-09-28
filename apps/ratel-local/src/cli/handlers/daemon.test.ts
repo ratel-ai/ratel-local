@@ -803,7 +803,7 @@ describe("runDaemon", () => {
         await createContextSnapshotResolver({
           homeDir,
           projectRegistry: createProjectRegistry({ homeDir }),
-          includeDimensions: true,
+          skillStorage: true,
         }).resolve({ kind: "global" })
       ).skills.registrations;
       const daemonUrl = daemonUrlFromLogs(logs);
@@ -818,7 +818,6 @@ describe("runDaemon", () => {
       expect(body.registrations[0]).toMatchObject({
         id: "review",
         origin: expected[0]?.origin,
-        storage: expected[0]?.storage,
         availability: expected[0]?.availability,
       });
     } finally {

@@ -139,7 +139,7 @@ describe("legacy skill migration", () => {
     expect(await readFile(manifestPath, "utf8")).toContain(unrelated);
   });
 
-  it("writes origin path and hostPolicy when persistDimensions is true", async () => {
+  it("writes origin path and hostPolicy when skillStorage is true", async () => {
     const homeDir = await mkdtemp(join(tmpdir(), "ratel-legacy-skill-"));
     homes.push(homeDir);
     const native = join(homeDir, ".claude", "skills", "review");
@@ -183,7 +183,7 @@ describe("legacy skill migration", () => {
       homeDir,
       configControlPlane,
       preparedChanges,
-      persistDimensions: true,
+      skillStorage: true,
     });
     expect(change).not.toBeNull();
     if (!change) throw new Error("expected a migration change");
@@ -205,7 +205,7 @@ describe("legacy skill migration", () => {
     });
   });
 
-  it("snapshots when persistDimensions is true even if the env flag is unset", async () => {
+  it("snapshots when skillStorage is true even if the env flag is unset", async () => {
     const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
     delete process.env.RATEL_FEATURE_SKILL_STORAGE;
     try {
@@ -252,7 +252,7 @@ describe("legacy skill migration", () => {
         homeDir,
         configControlPlane,
         preparedChanges,
-        persistDimensions: true,
+        skillStorage: true,
       });
       expect(change).not.toBeNull();
       if (!change) throw new Error("expected a migration change");
@@ -265,7 +265,7 @@ describe("legacy skill migration", () => {
     }
   });
 
-  it("keeps per-file backups when persistDimensions is false even if the env flag is on", async () => {
+  it("keeps per-file backups when skillStorage is false even if the env flag is on", async () => {
     const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
     process.env.RATEL_FEATURE_SKILL_STORAGE = "1";
     try {
@@ -312,7 +312,7 @@ describe("legacy skill migration", () => {
         homeDir,
         configControlPlane,
         preparedChanges,
-        persistDimensions: false,
+        skillStorage: false,
       });
       expect(change).not.toBeNull();
       if (!change) throw new Error("expected a migration change");

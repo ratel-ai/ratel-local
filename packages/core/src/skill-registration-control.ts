@@ -77,7 +77,7 @@ export interface SkillRegistrationControlPlaneOptions {
   preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
   /** When set, overrides skillStorageEnabled() for persisting origin/path and backup format. */
-  persistDimensions?: boolean;
+  skillStorage?: boolean;
 }
 
 export interface SkillRegistrationControlPlane {
@@ -208,7 +208,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     }
 
     const base = { mode: "copy" as const, source: "ratel" as const };
-    entries[request.id] = this.persistDimensions()
+    entries[request.id] = this.skillStorage()
       ? skillEntryForWrite({
           ...base,
           path: persistedCopyPathForWrite(
@@ -362,7 +362,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     if (request.mode === "reference") {
       const path = referencePathForTarget(request.target, projectRoot, canonicalSource);
       const base = { mode: "reference" as const, path, source };
-      entries[request.id] = this.persistDimensions()
+      entries[request.id] = this.skillStorage()
         ? skillEntryForWrite(base)
         : (base satisfies SkillEntry);
     } else {
@@ -372,7 +372,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         source,
         copiedFrom: { source: sourceRegistration.source, id: request.id },
       };
-      entries[request.id] = this.persistDimensions()
+      entries[request.id] = this.skillStorage()
         ? skillEntryForWrite({
             ...base,
             path: persistedCopyPathForWrite(
@@ -749,7 +749,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
             : input.action === "remove"
               ? "remove"
               : "edit";
-        if (this.persistDimensions()) {
+        if (this.skillStorage()) {
           return captureSnapshot(
             { homeDir: this.options.homeDir },
             { action, paths: input.operations.map((operation) => operation.path) },
@@ -769,8 +769,8 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     });
   }
 
-  private persistDimensions(): boolean {
-    return this.options.persistDimensions ?? skillStorageEnabled();
+  private skillStorage(): boolean {
+    return this.options.skillStorage ?? skillStorageEnabled();
   }
 
   private async ownedCopyPath(

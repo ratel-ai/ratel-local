@@ -11,10 +11,6 @@ import {
   originFromEntry,
   type SkillAvailability,
   type SkillOrigin,
-  type SkillStorage,
-  type SkillSyncState,
-  skillStorageFrom,
-  syncFromOrigin,
 } from "../../skill-registration.js";
 import type { SkillsConfig } from "../config.js";
 import { isDirectoryEntry } from "../fs.js";
@@ -56,9 +52,7 @@ export interface SkillRegistrationView {
   duplicateOf?: SkillRegistrationRef;
   diagnostics: SkillDiagnostic[];
   origin?: SkillOrigin;
-  storage?: SkillStorage;
   availability?: SkillAvailability;
-  sync?: SkillSyncState;
 }
 
 export interface ResolvedSkillCatalog {
@@ -74,7 +68,7 @@ export interface ResolveConfiguredSkillsInput {
   projectRoot?: string;
   scopes: SkillScopeConfig[];
   /** When true, attach origin/storage/availability (and optional sync). Defaults to false. */
-  includeDimensions?: boolean;
+  skillStorage?: boolean;
 }
 
 interface ValidCandidate {
@@ -89,7 +83,7 @@ interface ValidCandidate {
 export async function resolveConfiguredSkills(
   input: ResolveConfiguredSkillsInput,
 ): Promise<ResolvedSkillCatalog> {
-  const includeDimensions = input.includeDimensions === true;
+  const skillStorage = input.skillStorage === true;
   const registrations: SkillRegistrationView[] = [];
   const diagnostics: SkillDiagnostic[] = [];
   const candidates: ValidCandidate[] = [];
@@ -124,12 +118,7 @@ export async function resolveConfiguredSkills(
           state: "effective",
           editable: entry.mode === "copy" && (await hasMatchingCopyMarker(canonicalPath, id)),
           diagnostics: [],
-          ...dimensionFields(
-            includeDimensions,
-            originFromEntry(entry),
-            configuredPath,
-            "available",
-          ),
+          ...(skillStorage ? dimensionFields(originFromEntry(entry), "available") : {}),
         };
         registrations.push(registration);
         candidates.push({
@@ -158,7 +147,7 @@ export async function resolveConfiguredSkills(
           path: configuredPath,
         };
         diagnostics.push(diagnostic);
-        const availability = includeDimensions
+        const availability = skillStorage
           ? await availabilityFromResolveFailure(error, configuredPath)
           : undefined;
         registrations.push({
@@ -171,12 +160,7 @@ export async function resolveConfiguredSkills(
           state: "invalid",
           editable: false,
           diagnostics: [diagnostic],
-          ...dimensionFields(
-            includeDimensions,
-            originFromEntry(entry),
-            configuredPath,
-            availability,
-          ),
+          ...(availability ? dimensionFields(originFromEntry(entry), availability) : {}),
         });
       }
     }
@@ -245,7 +229,7 @@ export async function resolveConfiguredSkills(
             state: "effective",
             editable: false,
             diagnostics: [],
-            ...dimensionFields(includeDimensions, "reference", configuredPath, "available"),
+            ...(skillStorage ? dimensionFields("reference", "available") : {}),
           };
           registrations.push(registration);
           candidates.push({
@@ -271,7 +255,7 @@ export async function resolveConfiguredSkills(
             configuredPath,
           };
           diagnostics.push(diagnostic);
-          const availability = includeDimensions
+          const availability = skillStorage
             ? await availabilityFromResolveFailure(error, configuredPath)
             : undefined;
           registrations.push({
@@ -284,7 +268,7 @@ export async function resolveConfiguredSkills(
             state: "invalid",
             editable: false,
             diagnostics: [diagnostic],
-            ...dimensionFields(includeDimensions, "reference", configuredPath, availability),
+            ...(availability ? dimensionFields("reference", availability) : {}),
           });
         }
       }
@@ -378,19 +362,10 @@ function configuredSkillPath(
 }
 
 function dimensionFields(
-  includeDimensions: boolean,
   origin: SkillOrigin,
-  configuredPath: string,
-  availability: SkillAvailability | undefined,
-): Pick<SkillRegistrationView, "origin" | "storage" | "availability" | "sync"> {
-  if (!includeDimensions || availability === undefined) return {};
-  const sync = syncFromOrigin(origin);
-  return {
-    origin,
-    ...(isAbsolute(configuredPath) ? { storage: skillStorageFrom(origin, configuredPath) } : {}),
-    availability,
-    ...(sync ? { sync } : {}),
-  };
+  availability: SkillAvailability,
+): Pick<SkillRegistrationView, "origin" | "availability"> {
+  return { origin, availability };
 }
 
 function requiredProjectRoot(

@@ -62,12 +62,12 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
   let issueCount = 0;
   const legacyManifestPath = join(controlDir, "skill-manifest.json");
   try {
-    const persistDimensions = await resolveSkillStorageFlag(ctx);
+    const skillStorage = await resolveSkillStorageFlag(ctx);
     const migration = await prepareLegacySkillMigration({
       homeDir: ctx.env.homeDir,
       configControlPlane,
       preparedChanges,
-      persistDimensions,
+      skillStorage,
     });
     if (migration) {
       if (ctx.argv.flags.fix === true) {

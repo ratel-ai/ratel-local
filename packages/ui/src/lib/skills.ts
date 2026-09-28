@@ -50,10 +50,8 @@ export interface SkillRegistrationView extends SkillRegistrationSummary {
   configuredPath?: string;
   canonicalPath?: string;
   diagnostics?: SkillRegistrationDiagnostic[];
-  origin?: "local-managed" | "reference" | "cloud-managed" | "cloud-detached";
-  storage?: { kind: "managed-copy" | "external" | "cloud-replica"; path: string };
+  origin?: "local-managed" | "reference";
   availability?: "available" | "not-found" | "invalid" | "inaccessible";
-  sync?: "synced" | "conflict" | "disabled";
 }
 
 export interface SkillRegistrationGroup {

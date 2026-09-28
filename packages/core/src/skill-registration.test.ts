@@ -19,11 +19,7 @@ import {
   availabilityFromResolveFailure,
   configuredSkillStoragePath,
   originFromEntry,
-  originFromMode,
   type SkillAvailability,
-  skillStorageFrom,
-  storageKindFromOrigin,
-  syncFromOrigin,
 } from "./skill-registration.js";
 
 const cleanups: string[] = [];
@@ -84,22 +80,10 @@ async function skillDirectoryReadable(configuredPath: string): Promise<boolean> 
 }
 
 describe("skill registration helpers", () => {
-  it("maps mode to origin and storage kind", () => {
-    expect(originFromMode("copy")).toBe("local-managed");
-    expect(originFromMode("reference")).toBe("reference");
+  it("derives origin from mode and prefers a persisted origin", () => {
     expect(originFromEntry({ mode: "copy" })).toBe("local-managed");
-    expect(originFromEntry({ mode: "copy", origin: "cloud-managed" })).toBe("cloud-managed");
-    expect(storageKindFromOrigin("local-managed")).toBe("managed-copy");
-    expect(storageKindFromOrigin("reference")).toBe("external");
-    expect(storageKindFromOrigin("cloud-managed")).toBe("cloud-replica");
-    expect(storageKindFromOrigin("cloud-detached")).toBe("cloud-replica");
-    expect(skillStorageFrom("reference", "/tmp/skill")).toEqual({
-      kind: "external",
-      path: "/tmp/skill",
-    });
-    expect(syncFromOrigin("reference")).toBeUndefined();
-    expect(syncFromOrigin("cloud-managed")).toBeUndefined();
-    expect(syncFromOrigin("cloud-detached")).toBe("disabled");
+    expect(originFromEntry({ mode: "reference" })).toBe("reference");
+    expect(originFromEntry({ mode: "copy", origin: "reference" })).toBe("reference");
   });
 
   it("derives copy paths by scope and prefers a persisted path", () => {

@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import type { EmbeddingSpec, SearchMethod } from "@ratel-ai/sdk";
 import { isPlainObject } from "../json.js";
 import { isSafeSkillId } from "../skill-id.js";
-import { isSkillOrigin, type SkillOrigin } from "../skill-registration.js";
+import type { SkillOrigin } from "../skill-registration.js";
 
 export interface ServerEntry {
   type: string;
@@ -424,10 +424,8 @@ function parseSkillEntry(path: string, raw: unknown): SkillEntry {
 
 function parseSkillOrigin(path: string, raw: unknown): SkillOrigin | undefined {
   if (raw === undefined) return undefined;
-  if (!isSkillOrigin(raw)) {
-    throw new ConfigError(
-      `\`${path}\` must be one of local-managed|reference|cloud-managed|cloud-detached`,
-    );
+  if (raw !== "local-managed" && raw !== "reference") {
+    throw new ConfigError(`\`${path}\` must be one of local-managed|reference`);
   }
   return raw;
 }

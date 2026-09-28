@@ -5,57 +5,15 @@ import type { SkillEntry, SkillHostPolicy, SkillSource } from "./lib/config.js";
 import { SkillLoadError } from "./lib/skills/load.js";
 import { isSafeSkillId } from "./skill-id.js";
 
-export type SkillOrigin = "local-managed" | "reference" | "cloud-managed" | "cloud-detached";
-
-export type SkillStorageKind = "managed-copy" | "external" | "cloud-replica";
-
-export interface SkillStorage {
-  kind: SkillStorageKind;
-  path: string;
-}
+export type SkillOrigin = "local-managed" | "reference";
 
 export type SkillAvailability = "available" | "not-found" | "invalid" | "inaccessible";
-
-export type SkillSyncState = "synced" | "conflict" | "disabled";
-
-export function isSkillOrigin(value: unknown): value is SkillOrigin {
-  return (
-    value === "local-managed" ||
-    value === "reference" ||
-    value === "cloud-managed" ||
-    value === "cloud-detached"
-  );
-}
-
-export function originFromMode(mode: "reference" | "copy"): SkillOrigin {
-  return mode === "copy" ? "local-managed" : "reference";
-}
 
 export function originFromEntry(entry: {
   mode: "reference" | "copy";
   origin?: SkillOrigin;
 }): SkillOrigin {
-  return entry.origin ?? originFromMode(entry.mode);
-}
-
-export function storageKindFromOrigin(origin: SkillOrigin): SkillStorageKind {
-  switch (origin) {
-    case "local-managed":
-      return "managed-copy";
-    case "reference":
-      return "external";
-    case "cloud-managed":
-    case "cloud-detached":
-      return "cloud-replica";
-  }
-}
-
-export function skillStorageFrom(origin: SkillOrigin, path: string): SkillStorage {
-  return { kind: storageKindFromOrigin(origin), path };
-}
-
-export function syncFromOrigin(origin: SkillOrigin): SkillSyncState | undefined {
-  return origin === "cloud-detached" ? "disabled" : undefined;
+  return entry.origin ?? (entry.mode === "copy" ? "local-managed" : "reference");
 }
 
 export interface ConfiguredSkillStoragePathInput {
@@ -170,7 +128,7 @@ export interface SkillEntryForWriteInput {
 
 /** Persistable entry shape when the skill-storage flag is on. */
 export function skillEntryForWrite(input: SkillEntryForWriteInput): SkillEntry {
-  const origin = input.origin ?? originFromMode(input.mode);
+  const origin = originFromEntry(input);
   if (input.mode === "reference") {
     return {
       mode: "reference",
@@ -197,16 +155,13 @@ export function persistedCopyPathForWrite(
   projectRoot: string | undefined,
   id: string,
 ): string {
-  const absolute = configuredSkillStoragePath({
+  const input: ConfiguredSkillStoragePathInput = {
     homeDir,
     ...(projectRoot ? { projectRoot } : {}),
     scopeRef,
     id,
     mode: "copy",
-  });
-  if (scopeRef.scope === "user") return absolute;
-  if (!projectRoot) {
-    throw new Error(`scope ${scopeRef.scope} requires a project root`);
-  }
-  return relative(projectRoot, absolute);
+  };
+  const absolute = configuredSkillStoragePath(input);
+  return scopeRef.scope === "user" ? absolute : relative(requiredProjectRoot(input), absolute);
 }

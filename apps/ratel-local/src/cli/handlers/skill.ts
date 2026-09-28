@@ -153,10 +153,10 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
             "skill discovery came from the daemon, but the daemon disappeared before preview",
           );
         }
-        const persistDimensions = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
         control =
           options.importControlPlane ??
-          (await createImportControlPlane(ctx, runtime, persistDimensions));
+          (await createImportControlPlane(ctx, runtime, skillStorage));
         change = await control.prepare(selections, { duplicateStrategy: "keep-first" });
       }
       if (dryRun) {
@@ -233,10 +233,10 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           "skill add-scope preparation",
         );
       } else {
-        const persistDimensions = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
         control =
           options.registrationControlPlane ??
-          (await createRegistrationControlPlane(ctx, runtime, persistDimensions));
+          (await createRegistrationControlPlane(ctx, runtime, skillStorage));
         change = await control.prepareAddScope(request);
       }
       if (dryRun) {
@@ -340,8 +340,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
     }
 
     case "list": {
-      const includeDimensions = await resolveSkillStorageFlag(ctx, options.daemonRequest);
-      const runtime = createSkillReadRuntime(ctx, options, includeDimensions);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         undefined,
@@ -581,7 +581,7 @@ interface SkillReadRuntime {
 async function createRegistrationControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
-  persistDimensions?: boolean,
+  skillStorage?: boolean,
 ): Promise<SkillRegistrationControlPlane> {
   const preparedChanges =
     ctx.preparedChanges ??
@@ -602,14 +602,14 @@ async function createRegistrationControlPlane(
     snapshotResolver: runtime.resolver,
     preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
-    ...(persistDimensions !== undefined ? { persistDimensions } : {}),
+    ...(skillStorage !== undefined ? { skillStorage } : {}),
   });
 }
 
 async function createImportControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
-  persistDimensions?: boolean,
+  skillStorage?: boolean,
 ): Promise<SkillImportControlPlane> {
   const preparedChanges =
     ctx.preparedChanges ??
@@ -624,14 +624,14 @@ async function createImportControlPlane(
     discovery: runtime.discovery,
     preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
-    ...(persistDimensions !== undefined ? { persistDimensions } : {}),
+    ...(skillStorage !== undefined ? { skillStorage } : {}),
   });
 }
 
 function createSkillReadRuntime(
   ctx: HandlerCtx,
   options: SkillHandlerOptions,
-  includeDimensions = false,
+  skillStorage = false,
 ): SkillReadRuntime {
   const registry = options.registry ?? createProjectRegistry({ homeDir: ctx.env.homeDir });
   const resolver =
@@ -639,7 +639,7 @@ function createSkillReadRuntime(
     createContextSnapshotResolver({
       homeDir: ctx.env.homeDir,
       projectRegistry: registry,
-      ...(includeDimensions ? { includeDimensions: true } : {}),
+      ...(skillStorage ? { skillStorage: true } : {}),
     });
   const discovery =
     options.discovery ??

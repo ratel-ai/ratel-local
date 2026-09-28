@@ -25,7 +25,7 @@ describe("SkillRegistrationControlPlane", () => {
 
   async function fixture(
     entries: Record<string, unknown>,
-    options: { persistDimensions?: boolean } = {},
+    options: { skillStorage?: boolean } = {},
   ) {
     const configPath = join(homeDir, ".ratel", "config.json");
     await writeFile(configPath, `${JSON.stringify({ skills: { entries, dirs: [] } }, null, 2)}\n`);
@@ -47,9 +47,7 @@ describe("SkillRegistrationControlPlane", () => {
         configControlPlane,
         snapshotResolver,
         preparedChanges,
-        ...(options.persistDimensions !== undefined
-          ? { persistDimensions: options.persistDimensions }
-          : {}),
+        ...(options.skillStorage !== undefined ? { skillStorage: options.skillStorage } : {}),
       }),
     };
   }
@@ -460,8 +458,8 @@ describe("SkillRegistrationControlPlane", () => {
     expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
   });
 
-  it("persists origin and path when persistDimensions is true", async () => {
-    const { control, configPath } = await fixture({}, { persistDimensions: true });
+  it("persists origin and path when skillStorage is true", async () => {
+    const { control, configPath } = await fixture({}, { skillStorage: true });
 
     await control.create({
       target: { scope: "user" },
@@ -506,7 +504,7 @@ describe("SkillRegistrationControlPlane", () => {
           source: "ratel",
         },
       },
-      { persistDimensions: true },
+      { skillStorage: true },
     );
 
     await expect(
@@ -546,7 +544,7 @@ describe("SkillRegistrationControlPlane", () => {
           source: "ratel",
         },
       },
-      { persistDimensions: true },
+      { skillStorage: true },
     );
 
     await control.remove({
@@ -582,7 +580,7 @@ describe("SkillRegistrationControlPlane", () => {
           source: "ratel",
         },
       },
-      { persistDimensions: true },
+      { skillStorage: true },
     );
 
     await control.edit({
@@ -600,7 +598,7 @@ describe("SkillRegistrationControlPlane", () => {
     expect(updated).toContain("Updated body");
   });
 
-  it("persists relative path when add-scope copies into project scope with persistDimensions", async () => {
+  it("persists relative path when add-scope copies into project scope with skillStorage", async () => {
     const projectA = join(root, "scope-a");
     const projectB = join(root, "scope-b");
     const source = join(projectA, ".agents", "skills", "demo");
@@ -634,7 +632,7 @@ describe("SkillRegistrationControlPlane", () => {
       }),
       snapshotResolver: createContextSnapshotResolver({ homeDir, projectRegistry: registry }),
       preparedChanges,
-      persistDimensions: true,
+      skillStorage: true,
     });
 
     await control.addScope({
@@ -680,11 +678,11 @@ describe("SkillRegistrationControlPlane", () => {
     expect(await readFile(configPath, "utf8")).toBe(original);
   });
 
-  it("snapshots when persistDimensions is true even if the env flag is unset", async () => {
+  it("snapshots when skillStorage is true even if the env flag is unset", async () => {
     const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
     delete process.env.RATEL_FEATURE_SKILL_STORAGE;
     try {
-      const { control } = await fixture({}, { persistDimensions: true });
+      const { control } = await fixture({}, { skillStorage: true });
       const commit = await control.create({
         target: { scope: "user" },
         id: "authored",
@@ -700,11 +698,11 @@ describe("SkillRegistrationControlPlane", () => {
     }
   });
 
-  it("keeps per-file backups when persistDimensions is false even if the env flag is on", async () => {
+  it("keeps per-file backups when skillStorage is false even if the env flag is on", async () => {
     const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
     process.env.RATEL_FEATURE_SKILL_STORAGE = "1";
     try {
-      const { control } = await fixture({}, { persistDimensions: false });
+      const { control } = await fixture({}, { skillStorage: false });
       const commit = await control.create({
         target: { scope: "user" },
         id: "authored",

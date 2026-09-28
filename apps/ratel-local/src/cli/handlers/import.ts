@@ -126,10 +126,10 @@ export async function runImport(
   }
 
   const skillPaths = opts.skillPaths ?? defaultSkillPaths(ctx.env.homeDir);
-  const persistDimensions = await resolveSkillStorageFlag(ctx);
+  const skillStorage = await resolveSkillStorageFlag(ctx);
   const skillRuntime = await createScopedSkillImportRuntime(skillPaths, {
     source: resolveSkillSource(opts.agentKind, agentState),
-    persistDimensions,
+    skillStorage,
   });
   const skillPreview = skillRuntime.preview;
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
@@ -583,7 +583,7 @@ function skillSourceForAgentKind(kind: string | undefined): "claude" | "codex" |
 
 async function createScopedSkillImportRuntime(
   paths: SkillPaths,
-  opts: { source?: "claude" | "codex"; persistDimensions?: boolean },
+  opts: { source?: "claude" | "codex"; skillStorage?: boolean },
 ): Promise<ScopedSkillImportRuntime> {
   const homeDir = dirname(dirname(paths.nativeDir));
   const discovery = createSkillDiscovery({ homeDir });
@@ -626,9 +626,7 @@ async function createScopedSkillImportRuntime(
           projectRegistry,
           discovery,
           preparedChanges,
-          ...(opts.persistDimensions !== undefined
-            ? { persistDimensions: opts.persistDimensions }
-            : {}),
+          ...(opts.skillStorage !== undefined ? { skillStorage: opts.skillStorage } : {}),
         })
       : null,
     preview: {

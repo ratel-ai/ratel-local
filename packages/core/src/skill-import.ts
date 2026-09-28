@@ -102,7 +102,7 @@ export interface SkillImportControlPlaneOptions {
   preparedChanges: PreparedChangeCoordinator;
   localGitExcludeManager?: LocalGitExcludeManager;
   /** When set, overrides skillStorageEnabled() for persisting origin/path and backup format. */
-  persistDimensions?: boolean;
+  skillStorage?: boolean;
 }
 
 export interface SkillImportControlPlane {
@@ -379,7 +379,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
               (operation) => operation.path,
             ),
           },
-          this.persistDimensions(),
+          this.skillStorage(),
         ),
       result: {
         imported: appliedSelections.map((selection) => {
@@ -543,7 +543,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     hostPolicy: SkillHostPolicy | undefined,
   ): Promise<SkillEntry> {
     const source = configuredSource(candidate.source);
-    const persist = this.persistDimensions();
+    const persist = this.skillStorage();
     if (target.mode === "copy") {
       const entry = {
         mode: "copy" as const,
@@ -598,8 +598,8 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     return skillEntryForWrite(entry);
   }
 
-  private persistDimensions(): boolean {
-    return this.options.persistDimensions ?? skillStorageEnabled();
+  private skillStorage(): boolean {
+    return this.options.skillStorage ?? skillStorageEnabled();
   }
 }
 
