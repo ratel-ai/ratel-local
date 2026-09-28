@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -384,6 +394,152 @@ describe("SkillImportControlPlane", () => {
         },
       },
     });
+  });
+
+  it("takes over a global Claude skill: managed copy, symlinked original, policy in the copy", async () => {
+    const f = await fixture({ skillStorage: true });
+    const original = join(f.homeDir, ".claude", "skills", "taken");
+    await putSkill(original, "taken");
+    await writeFile(join(original, "reference.md"), "extra");
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "taken",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: candidate.candidateId,
+        targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
+      },
+    ]);
+    const commit = await f.controlPlane.commit(plan.changeId);
+
+    const copy = join(f.homeDir, ".ratel", "skills", "taken");
+    expect((await lstat(original)).isSymbolicLink()).toBe(true);
+    expect(await readlink(original)).toBe(copy);
+    expect(await readFile(join(copy, "reference.md"), "utf8")).toBe("extra");
+    // The host reads the policy through the link; the copy carries it.
+    expect(await readFile(join(copy, "SKILL.md"), "utf8")).toContain(
+      "disable-model-invocation: true",
+    );
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toContain(
+      "disable-model-invocation: true",
+    );
+    expect(await readJson(join(f.homeDir, ".ratel", "config.json"))).toMatchObject({
+      skills: {
+        entries: {
+          taken: {
+            mode: "copy",
+            origin: "local-managed",
+            path: copy,
+            source: "claude",
+            copiedFrom: { source: "claude", id: candidate.candidateId ? "taken" : "taken" },
+            hostPolicy: { mode: "manual-only", source: "claude" },
+          },
+        },
+      },
+    });
+
+    // The snapshot holds the original directory, symlink-free.
+    const captured = commit.backupManifest?.entries.filter((entry) =>
+      entry.originalPath.startsWith(original),
+    );
+    expect(captured?.map(({ kind }) => kind)).toEqual(
+      expect.arrayContaining(["dir", "file", "file"]),
+    );
+    const capturedSkill = captured?.find(({ originalPath }) =>
+      originalPath.endsWith(join("taken", "SKILL.md")),
+    );
+    if (!capturedSkill) throw new Error("SKILL.md not captured");
+    expect(await readFile(capturedSkill.backupPath, "utf8")).not.toContain(
+      "disable-model-invocation",
+    );
+  });
+
+  it("lists a taken-over skill once and refuses a second import", async () => {
+    const f = await fixture({ skillStorage: true });
+    const original = join(f.homeDir, ".claude", "skills", "taken");
+    await putSkill(original, "taken");
+    const first = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "taken",
+    );
+    if (!first) throw new Error("candidate not discovered");
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: first.candidateId,
+        targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
+      },
+    ]);
+    await f.controlPlane.commit(plan.changeId);
+
+    const rediscovered = (await f.discovery.discover({ kind: "global" })).candidates.filter(
+      ({ id }) => id === "taken",
+    );
+    expect(rediscovered.map(({ source }) => source)).toEqual(["ratel"]);
+
+    const again = rediscovered[0];
+    if (!again) throw new Error("managed copy not discovered");
+    await expect(
+      f.controlPlane.prepare([
+        {
+          candidateId: again.candidateId,
+          targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
+        },
+      ]),
+    ).rejects.toBeInstanceOf(SkillImportValidationError);
+    expect((await lstat(original)).isSymbolicLink()).toBe(true);
+    expect(await realpath(original)).toBe(
+      await realpath(join(f.homeDir, ".ratel", "skills", "taken")),
+    );
+  });
+
+  it("changes nothing on disk when the tree cannot be copied", async () => {
+    const f = await fixture({ skillStorage: true });
+    const original = join(f.homeDir, ".claude", "skills", "linky");
+    await putSkill(original, "linky");
+    await symlink(join(f.homeDir, ".claude"), join(original, "escape"));
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "linky",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    await expect(
+      f.controlPlane.prepare([
+        {
+          candidateId: candidate.candidateId,
+          targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
+        },
+      ]),
+    ).rejects.toThrow(/symlink/);
+
+    expect((await lstat(original)).isDirectory()).toBe(true);
+    await expect(lstat(join(f.homeDir, ".ratel", "skills", "linky"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(join(f.homeDir, ".ratel", "config.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("refuses to take over a native path that is itself a link", async () => {
+    const f = await fixture({ skillStorage: true });
+    const elsewhere = join(f.homeDir, "dotfiles", "linked");
+    await putSkill(elsewhere, "linked");
+    await mkdir(join(f.homeDir, ".claude", "skills"), { recursive: true });
+    await symlink(elsewhere, join(f.homeDir, ".claude", "skills", "linked"));
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "linked",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    await expect(
+      f.controlPlane.prepare([
+        {
+          candidateId: candidate.candidateId,
+          targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
+        },
+      ]),
+    ).rejects.toThrow(/import it as a reference/);
   });
 
   it("rejects when a target config changes between derivation and mutation preview", async () => {

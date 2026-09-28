@@ -136,7 +136,7 @@ export async function prepareSkillHostPolicyRestore(input: {
   return after === before ? undefined : { kind: "replace-file", path, contents: after };
 }
 
-function nativeSkillPath(homeDir: string, id: string, source: NativeSkillSource): string {
+export function nativeSkillPath(homeDir: string, id: string, source: NativeSkillSource): string {
   if (source === "claude") return join(homeDir, ".claude", "skills", id);
   if (source === "codex-current") return join(homeDir, ".agents", "skills", id);
   return join(homeDir, ".codex", "skills", id);

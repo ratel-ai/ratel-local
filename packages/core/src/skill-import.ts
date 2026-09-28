@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { lstat, readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, sep } from "node:path";
 import { captureOperationBackup } from "./backup.js";
 import type { DocumentRevision, RatelScopeRef, RuntimeContextRef } from "./context.js";
@@ -35,7 +35,12 @@ import {
   StaleSkillCandidateError,
   UnknownSkillCandidateError,
 } from "./skill-discovery.js";
-import { prepareSkillHostPolicy, type SkillHostPolicy } from "./skill-host-policy.js";
+import {
+  type NativeSkillSource,
+  nativeSkillPath,
+  prepareSkillHostPolicy,
+  type SkillHostPolicy,
+} from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
 import {
   configuredSkillStoragePath,
@@ -182,6 +187,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     const appliedTargets = new Map<string, SkillImportTarget[]>();
     const skippedDuplicates: SkippedDuplicateSkillImport[] = [];
     const hostPolicyOperations: MutationInputOperation[] = [];
+    const linkOperations: MutationInputOperation[] = [];
     const projectRootsByPath = new Map<string, string>();
     const adoptionRevisions = new Map<string, DocumentRevision>();
 
@@ -227,7 +233,29 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
         targets.push(target);
         appliedTargets.set(selection.candidateId, targets);
 
+        // A managed global copy takes the original over: Ratel owns the copy and
+        // the native path becomes a symlink to it.
+        let takeover: { source: NativeSkillSource; nativePath: string } | undefined;
+        if (
+          this.skillStorage() &&
+          target.mode === "copy" &&
+          target.scopeRef.scope === "user" &&
+          candidate.context.kind === "global" &&
+          candidate.source !== "ratel"
+        ) {
+          const nativePath = nativeSkillPath(this.options.homeDir, candidate.id, candidate.source);
+          // Only a real directory is taken over. A link here points at content
+          // someone else owns, which ADR 0022 keeps as a reference.
+          if ((await lstat(nativePath)).isSymbolicLink()) {
+            throw new SkillImportValidationError(
+              `${nativePath} is a link to ${candidate.canonicalPath}; import it as a reference instead of taking it over`,
+            );
+          }
+          takeover = { source: candidate.source, nativePath };
+        }
+
         let hostPolicy: SkillHostPolicy | undefined;
+        let copyFile: { relativePath: string; contents: string } | undefined;
         if (target.scopeRef.scope === "user" && candidate.source !== "ratel") {
           const prepared = await prepareSkillHostPolicy({
             canonicalSkillPath: candidate.canonicalPath,
@@ -236,14 +264,14 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
             source: candidate.source,
           });
           hostPolicy = prepared.policy;
-          if (prepared.operation) hostPolicyOperations.push(prepared.operation);
+          if (prepared.operation) {
+            // Under takeover the host reads the copy through the link, so the
+            // policy belongs in the copy and the original stays as it was.
+            if (takeover) {
+              copyFile = policyFileForCopy(takeover.nativePath, prepared.operation);
+            } else hostPolicyOperations.push(prepared.operation);
+          }
         }
-        targetDocument.entries[candidate.id] = await this.registrationEntry(
-          candidate,
-          target,
-          targetDocument.projectRoot,
-          hostPolicy,
-        );
         if (target.mode === "copy") {
           const targetPath = copyTargetPath(
             this.options.homeDir,
@@ -258,8 +286,16 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
             sourcePath: candidate.canonicalPath,
             targetPath,
             id: candidate.id,
+            ...(copyFile ? { copyFile } : {}),
           });
           copyOperations.push(...materialization.operations);
+          if (takeover) {
+            linkOperations.push({
+              kind: "link-directory",
+              path: takeover.nativePath,
+              target: targetPath,
+            });
+          }
           if (materialization.adopted) {
             adoptionRevisions.set(materialization.adopted.path, materialization.adopted.revision);
           }
@@ -269,6 +305,12 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
             }
           }
         }
+        targetDocument.entries[candidate.id] = await this.registrationEntry(
+          candidate,
+          target,
+          targetDocument.projectRoot,
+          hostPolicy,
+        );
       }
     }
 
@@ -299,7 +341,14 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     );
     return this.options.preparedChanges.prepare({
       kind: "skill.import",
-      operations: [...configOperations, ...copyOperations, ...hostPolicyOperations],
+      // The copy is published before the link, so the link never dangles, and the
+      // policy is written before the link replaces the original directory.
+      operations: [
+        ...configOperations,
+        ...copyOperations,
+        ...hostPolicyOperations,
+        ...linkOperations,
+      ],
       affectedContexts: contextsForSelections(appliedSelections),
       skillIds: appliedSelections.flatMap((selection) => {
         const candidate = candidateById.get(selection.candidateId);
@@ -367,6 +416,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
         operationPrecondition: async (operation) => {
           const projectRoot = projectRootsByPath.get(operation.path);
           if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
+          if (operation.kind === "link-directory") await assertCopyPublished(operation.target);
         },
       },
       captureBackup: () =>
@@ -375,9 +425,12 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
           nodeFs,
           {
             action: "import",
-            paths: [...configOperations, ...copyOperations, ...hostPolicyOperations].map(
-              (operation) => operation.path,
-            ),
+            paths: [
+              ...configOperations,
+              ...copyOperations,
+              ...hostPolicyOperations,
+              ...linkOperations,
+            ].map((operation) => operation.path),
           },
           this.skillStorage(),
         ),
@@ -700,6 +753,34 @@ function copyTargetPath(
     id,
     mode: "copy",
   });
+}
+
+/** The host policy edit, rebased from the native tree onto the managed copy. */
+function policyFileForCopy(
+  nativePath: string,
+  operation: MutationInputOperation,
+): { relativePath: string; contents: string } {
+  const relativePath = relative(nativePath, operation.path);
+  if (
+    operation.kind !== "replace-file" ||
+    typeof operation.contents !== "string" ||
+    relativePath.length === 0 ||
+    isAbsolute(relativePath) ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`)
+  ) {
+    throw new SkillImportValidationError(
+      `host policy does not apply inside the skill: ${operation.path}`,
+    );
+  }
+  return { relativePath, contents: operation.contents };
+}
+
+async function assertCopyPublished(path: string): Promise<void> {
+  const info = await lstat(path).catch(() => undefined);
+  if (!info?.isDirectory() || info.isSymbolicLink()) {
+    throw new SkillImportValidationError(`managed copy is missing before linking: ${path}`);
+  }
 }
 
 async function validateAdoptions(revisions: ReadonlyMap<string, DocumentRevision>): Promise<void> {

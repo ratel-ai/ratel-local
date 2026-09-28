@@ -13,6 +13,7 @@ import {
   rm,
   rmdir,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
@@ -42,14 +43,23 @@ export interface CopyDirectoryInput {
   additionalFiles?: AdditionalDirectoryFileInput[];
 }
 
+export interface LinkDirectoryInput {
+  kind: "link-directory";
+  path: string;
+  target: string;
+}
+
 export interface DeleteArtifactInput {
   kind: "delete-artifact";
   path: string;
-  /** Allows deletion only when the symlink resolves to this canonical target. */
   expectedSymlinkTarget?: string;
 }
 
-export type MutationInputOperation = ReplaceFileInput | CopyDirectoryInput | DeleteArtifactInput;
+export type MutationInputOperation =
+  | ReplaceFileInput
+  | CopyDirectoryInput
+  | LinkDirectoryInput
+  | DeleteArtifactInput;
 
 /** Private, normalized operation retained only by trusted control-plane code. */
 export interface ReplaceFileOperation {
@@ -71,6 +81,12 @@ export interface CopyDirectoryOperation {
   additionalFiles: AdditionalDirectoryFile[];
 }
 
+export interface LinkDirectoryOperation {
+  kind: "link-directory";
+  path: string;
+  target: string;
+}
+
 export interface DeleteArtifactOperation {
   kind: "delete-artifact";
   path: string;
@@ -80,6 +96,7 @@ export interface DeleteArtifactOperation {
 export type MutationOperation =
   | ReplaceFileOperation
   | CopyDirectoryOperation
+  | LinkDirectoryOperation
   | DeleteArtifactOperation;
 
 export interface MutationPreviewFile {
@@ -329,6 +346,23 @@ export class FilesystemMutationEngine implements MutationEngine {
         continue;
       }
 
+      if (input.kind === "link-directory") {
+        assertLinkTarget(input.target);
+        if (before.exists && before.kind !== "directory") {
+          throw new MutationValidationError(`link target is not a directory: ${input.path}`);
+        }
+        baseRevisions[input.path] = before.revision;
+        operations.push({ kind: "link-directory", path: input.path, target: input.target });
+        files.push({
+          kind: "directory",
+          path: input.path,
+          existedBefore: before.exists,
+          beforeRevision: before.revision,
+          afterRevision: symlinkRevision(input.target),
+        });
+        continue;
+      }
+
       if (before.exists) {
         throw new MutationValidationError(
           `copy target already exists; directory merges are not supported: ${input.path}`,
@@ -338,10 +372,7 @@ export class FilesystemMutationEngine implements MutationEngine {
         throw new MutationValidationError("copy source must be an absolute directory path");
       }
       const sourceRevision = await directoryRevision(input.sourcePath);
-      const additionalFiles = await normalizeAdditionalFiles(
-        input.sourcePath,
-        input.additionalFiles ?? [],
-      );
+      const additionalFiles = normalizeAdditionalFiles(input.additionalFiles ?? []);
       const afterRevision = copiedDirectoryRevision(sourceRevision, additionalFiles);
       baseRevisions[input.path] = before.revision;
       operations.push({
@@ -466,6 +497,10 @@ export class FilesystemMutationEngine implements MutationEngine {
         if (baseRevision !== MISSING_DOCUMENT_REVISION || preview.existedBefore) {
           throw new MutationValidationError(`copy target must not exist: ${operation.path}`);
         }
+      } else if (operation.kind === "link-directory") {
+        assertLinkTarget(operation.target);
+        expectedAfterRevision = symlinkRevision(operation.target);
+        expectedKind = "directory";
       } else if (operation.kind === "delete-artifact") {
         if (
           operation.expectedSymlinkTarget !== undefined &&
@@ -568,9 +603,9 @@ export class FilesystemMutationEngine implements MutationEngine {
         artifactKind:
           operation.kind === "delete-artifact"
             ? plan.preview.files[index]?.kind
-            : operation.kind === "copy-directory"
-              ? "directory"
-              : "file",
+            : operation.kind === "replace-file"
+              ? "file"
+              : "directory",
         operationKind: operation.kind,
         path: operation.path,
         stagePath: `${operation.path}.ratel-stage-${plan.id}-${index}`,
@@ -627,6 +662,10 @@ export class FilesystemMutationEngine implements MutationEngine {
         if (operation.kind === "delete-artifact") {
           await rename(entry.path, entry.backupPath);
         } else {
+          // rename cannot publish a symlink over an existing directory.
+          if (operation.kind === "link-directory" && entry.existedBefore) {
+            await rename(entry.path, entry.backupPath);
+          }
           await rename(entry.stagePath, entry.path);
         }
         entry.applied = true;
@@ -678,6 +717,11 @@ export class FilesystemMutationEngine implements MutationEngine {
       if (operation.kind === "delete-artifact") {
         continue;
       }
+      if (operation.kind === "link-directory") {
+        // "dir" is required on Windows, where the link type is not inferred.
+        await symlink(operation.target, entry.stagePath, "dir");
+        continue;
+      }
       const exclude = mutationExcludePaths(plan, createdDirectories);
       if (operation.kind === "replace-file") {
         await writeFile(entry.stagePath, decodeBase64(operation.contentsBase64, operation.path), {
@@ -689,8 +733,8 @@ export class FilesystemMutationEngine implements MutationEngine {
         for (const additional of operation.additionalFiles) {
           const target = join(entry.stagePath, additional.relativePath);
           await mkdir(dirname(target), { recursive: true });
+          // mode applies on create only, so a file copied from the source keeps its own.
           await writeFile(target, decodeBase64(additional.contentsBase64, target), {
-            flag: "wx",
             mode: PRIVATE_FILE_MODE,
           });
         }
@@ -787,6 +831,9 @@ export class FilesystemMutationEngine implements MutationEngine {
       const wasApplied = entry.applied || !stageStillExists;
       if (wasApplied) {
         if (entry.existedBefore) {
+          if (entry.operationKind === "link-directory") {
+            await rm(entry.path, { recursive: true, force: true });
+          }
           if (await pathExists(entry.backupPath)) {
             await rename(entry.backupPath, entry.path);
           } else if (!(await pathExists(entry.path))) {
@@ -905,22 +952,14 @@ async function readArtifact(
   }
 }
 
-async function normalizeAdditionalFiles(
-  sourcePath: string,
+function normalizeAdditionalFiles(
   inputs: readonly AdditionalDirectoryFileInput[],
-): Promise<AdditionalDirectoryFile[]> {
+): AdditionalDirectoryFile[] {
   const files = inputs.map(({ relativePath, contents }) => ({
     relativePath,
     contentsBase64: toBuffer(contents).toString("base64"),
   }));
   validateAdditionalFiles(files);
-  for (const file of files) {
-    if (await pathExists(join(sourcePath, file.relativePath))) {
-      throw new MutationValidationError(
-        `additional copy file collides with source content: ${file.relativePath}`,
-      );
-    }
-  }
   return files;
 }
 
@@ -962,6 +1001,16 @@ function copiedDirectoryRevision(
     hash.update("\0").update(file.relativePath).update("\0").update(file.contentsBase64);
   }
   return `dir_${hash.digest("base64url")}` as DocumentRevision;
+}
+
+function symlinkRevision(target: string): DocumentRevision {
+  return documentRevision(`symlink\0${target}`);
+}
+
+function assertLinkTarget(target: string): void {
+  if (!isAbsolute(target) || target.includes("\0")) {
+    throw new MutationValidationError(`link source must be an absolute directory path: ${target}`);
+  }
 }
 
 async function directoryRevision(
@@ -1163,9 +1212,10 @@ async function removeEmptyCreatedDirectories(directories: readonly string[]): Pr
   }
 }
 
+/** lstat, not stat: a symlink occupying the path counts, dangling or not. */
 async function pathExists(path: string): Promise<boolean> {
   try {
-    await stat(path);
+    await lstat(path);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -1218,6 +1268,7 @@ function isMutationJournal(value: unknown): value is MutationJournalV1 {
       (item.operationKind === undefined ||
         item.operationKind === "replace-file" ||
         item.operationKind === "copy-directory" ||
+        item.operationKind === "link-directory" ||
         item.operationKind === "delete-artifact")
     );
   });

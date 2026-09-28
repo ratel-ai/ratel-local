@@ -14,6 +14,7 @@ All notable changes to this package are documented here. The format is based on 
 - Added the off-by-default `RATEL_FEATURE_SKILL_STORAGE=1` daemon flag to gate the new Skill filesystem and host behavior.
 - Added whole-tree backups under `~/.ratel/backups/<snapshot-id>/` that capture directories, symlinks, permissions and binaries as-is. Each entry has a type and content digest; symlink targets are not walked.
 - Added a directory-derived id to every backup manifest so a snapshot can be named and selected. Older manifests get that id on read.
+- With `RATEL_FEATURE_SKILL_STORAGE=1`, importing a global Skill as a managed copy copies the tree to `~/.ratel/skills/<id>` and the native directory becomes a symlink to it, so Claude and Codex find it while Ratel owns it. Copy, link and configuration are one journaled snapshot. Manual-only host policy is written into the copy, and registration records the link under `nativeLinks` as a replacement. A native symlink is refused; import it as a reference, per ADR 0022.
 
 ### Changed
 - Upgraded and pinned `@ratel-ai/sdk` to `0.13.0-rc.5` for turn-correlated adaptive ranking.

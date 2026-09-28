@@ -526,6 +526,63 @@ describe("MutationEngine", () => {
     expect((await stat(target)).isDirectory()).toBe(true);
   });
 
+  it("replaces a directory with a symlink to the copy in one transaction", async () => {
+    const original = join(root, "claude", "skills", "taken");
+    const copy = join(root, "ratel", "skills", "taken");
+    await mkdir(original, { recursive: true });
+    await writeFile(join(original, "SKILL.md"), "---\nname: taken\n---\nbody");
+    await mkdir(join(root, "ratel", "skills"), { recursive: true });
+    const engine = await createMutationEngine({ controlDir });
+
+    const plan = await engine.prepare([
+      {
+        kind: "copy-directory",
+        sourcePath: original,
+        path: copy,
+        additionalFiles: [
+          { relativePath: "SKILL.md", contents: "---\nname: taken\nmanual: true\n---\nbody" },
+        ],
+      },
+      { kind: "link-directory", path: original, target: copy },
+    ]);
+    await engine.commit(plan, { digest: plan.digest });
+
+    expect((await lstat(original)).isSymbolicLink()).toBe(true);
+    expect(await realpath(original)).toBe(await realpath(copy));
+    expect(await readFile(join(copy, "SKILL.md"), "utf8")).toContain("manual: true");
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toContain("manual: true");
+  });
+
+  it("restores the original directory when the link follow-up fails", async () => {
+    const original = join(root, "claude", "skills", "taken");
+    const copy = join(root, "ratel", "skills", "taken");
+    const config = join(root, "config.json");
+    await mkdir(original, { recursive: true });
+    await writeFile(join(original, "SKILL.md"), "body");
+    await writeFile(config, "before");
+    const engine = await createMutationEngine({
+      controlDir,
+      hooks: {
+        afterApplyOperation(operation) {
+          if (operation.kind === "link-directory") throw new Error("link follow-up failed");
+        },
+      },
+    });
+    const plan = await engine.prepare([
+      { kind: "copy-directory", sourcePath: original, path: copy },
+      { kind: "link-directory", path: original, target: copy },
+      { kind: "replace-file", path: config, contents: "after" },
+    ]);
+
+    await expect(engine.commit(plan, { digest: plan.digest })).rejects.toThrow(
+      "link follow-up failed",
+    );
+    expect((await lstat(original)).isDirectory()).toBe(true);
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toBe("body");
+    await expect(lstat(copy)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(config, "utf8")).toBe("before");
+  });
+
   it("restores a deleted directory when a later hook fails", async () => {
     const config = join(root, "config.json");
     const target = join(root, "skill");

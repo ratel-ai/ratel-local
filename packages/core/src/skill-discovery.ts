@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { parseSkillMd } from "./lib/skills/load.js";
 import { isSafeSkillId } from "./skill-id.js";
 
@@ -121,11 +121,15 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
   }
 
   private async discoverGlobal(context: Extract<SkillDiscoveryContext, { kind: "global" }>) {
+    const managedRoot = join(this.options.homeDir, ".ratel", "skills");
+    // Links are compared against the canonical root: a symlinked home would
+    // otherwise never match.
+    const canonicalManagedRoot = await realpath(managedRoot).catch(() => managedRoot);
     const sources: Array<{ source: DiscoveredSkillSource; path: string }> = [
       { source: "claude", path: join(this.options.homeDir, ".claude", "skills") },
       { source: "codex-current", path: join(this.options.homeDir, ".agents", "skills") },
       { source: "codex-legacy", path: join(this.options.homeDir, ".codex", "skills") },
-      { source: "ratel", path: join(this.options.homeDir, ".ratel", "skills") },
+      { source: "ratel", path: managedRoot },
     ];
     const diagnostics: SkillDiscoveryDiagnostic[] = [];
     const candidates: SkillCandidate[] = [];
@@ -139,6 +143,9 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
         if (candidates.length >= maxSkills) break;
         const path = join(source.path, entry.name);
         if (!(await isDirectoryOrDirectorySymlink(path, entry))) continue;
+        // A native link into ~/.ratel/skills is Ratel's own exposure of a managed
+        // copy; the copy is scanned under its own root.
+        if (source.source !== "ratel" && (await linksInto(path, canonicalManagedRoot))) continue;
         await pushCandidate(candidates, diagnostics, path, source.source, context);
       }
     }
@@ -308,6 +315,16 @@ async function readDirectory(
       diagnostics.push({ path, message: (error as Error).message });
     }
     return undefined;
+  }
+}
+
+async function linksInto(path: string, root: string): Promise<boolean> {
+  try {
+    if (!(await lstat(path)).isSymbolicLink()) return false;
+    const canonical = await realpath(path);
+    return canonical === root || canonical.startsWith(`${root}${sep}`);
+  } catch {
+    return false;
   }
 }
 
