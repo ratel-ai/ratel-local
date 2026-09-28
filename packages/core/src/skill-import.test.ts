@@ -46,7 +46,10 @@ async function fixture(options: { skillStorage?: boolean } = {}) {
   const projectRegistry = createProjectRegistry({ homeDir });
   const registeredA = await projectRegistry.registerRoot(projectA, "A");
   const registeredB = await projectRegistry.registerRoot(projectB, "B");
-  const discovery = createSkillDiscovery({ homeDir });
+  const discovery = createSkillDiscovery({
+    homeDir,
+    ...(options.skillStorage !== undefined ? { skillStorage: options.skillStorage } : {}),
+  });
   const mutationEngine = await createMutationEngine({
     controlDir: join(homeDir, ".ratel"),
   });

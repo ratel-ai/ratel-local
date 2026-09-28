@@ -108,6 +108,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         options.daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
       const remoteDiscovery = await daemonRequest(contextApiPath("/api/skills", context));
       let candidates: SkillCandidate[];
+      let scanning = runtime;
+      let skillStorage: boolean | undefined;
       if (remoteDiscovery) {
         const body = await requireDaemonJson<{ discovered?: SkillCandidate[] }>(
           remoteDiscovery,
@@ -118,8 +120,17 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         }
         candidates = body.discovered;
       } else {
+        skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+        scanning =
+          options.discovery !== undefined
+            ? runtime
+            : createSkillReadRuntime(
+                ctx,
+                { ...options, registry: runtime.registry, resolver: runtime.resolver },
+                skillStorage,
+              );
         candidates = (
-          await runtime.discovery.discover(
+          await scanning.discovery.discover(
             project ? { kind: "project", projectRoot: project.canonicalRoot } : { kind: "global" },
           )
         ).candidates;
@@ -153,10 +164,9 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
             "skill discovery came from the daemon, but the daemon disappeared before preview",
           );
         }
-        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
         control =
           options.importControlPlane ??
-          (await createImportControlPlane(ctx, runtime, skillStorage));
+          (await createImportControlPlane(ctx, scanning, skillStorage));
         change = await control.prepare(selections, { duplicateStrategy: "keep-first" });
       }
       if (dryRun) {
@@ -649,6 +659,7 @@ function createSkillReadRuntime(
         (await registry.list())
           .filter((project) => project.status === "available")
           .map((project) => project.canonicalRoot),
+      ...(skillStorage ? { skillStorage: true } : {}),
     });
   return { registry, resolver, discovery };
 }

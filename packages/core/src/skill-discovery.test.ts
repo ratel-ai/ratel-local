@@ -76,4 +76,40 @@ describe("SkillDiscovery", () => {
       StaleSkillCandidateError,
     );
   });
+
+  it("lists a native link into ~/.ratel/skills only when skillStorage is off", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-discovery-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "ratel-discovery-outside-"));
+    roots.push(homeDir, outside);
+    const managed = join(homeDir, ".ratel", "skills", "legacy");
+    await putSkill(managed, "legacy");
+    await putSkill(join(homeDir, ".claude", "skills", "plain"), "plain");
+    await putSkill(join(outside, "elsewhere"), "elsewhere");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await symlink(managed, join(homeDir, ".claude", "skills", "legacy"));
+    await symlink(join(outside, "elsewhere"), join(homeDir, ".claude", "skills", "elsewhere"));
+
+    const bothRows = [
+      ["claude", "elsewhere"],
+      ["claude", "legacy"],
+      ["claude", "plain"],
+      ["ratel", "legacy"],
+    ];
+    for (const discovery of [
+      createSkillDiscovery({ homeDir }),
+      createSkillDiscovery({ homeDir, skillStorage: false }),
+    ]) {
+      const result = await discovery.discover({ kind: "global" });
+      expect(result.candidates.map(({ source, id }) => [source, id])).toEqual(bothRows);
+    }
+
+    const gated = await createSkillDiscovery({ homeDir, skillStorage: true }).discover({
+      kind: "global",
+    });
+    expect(gated.candidates.map(({ source, id }) => [source, id])).toEqual([
+      ["claude", "elsewhere"],
+      ["claude", "plain"],
+      ["ratel", "legacy"],
+    ]);
+  });
 });

@@ -41,6 +41,7 @@ export interface SkillDiscoveryOptions {
   timeoutMs?: number;
   now?: () => number;
   registeredProjectRoots?: () => Promise<string[]>;
+  skillStorage?: boolean;
 }
 
 export interface SkillDiscovery {
@@ -143,9 +144,16 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
         if (candidates.length >= maxSkills) break;
         const path = join(source.path, entry.name);
         if (!(await isDirectoryOrDirectorySymlink(path, entry))) continue;
-        // A native link into ~/.ratel/skills is Ratel's own exposure of a managed
-        // copy; the copy is scanned under its own root.
-        if (source.source !== "ratel" && (await linksInto(path, canonicalManagedRoot))) continue;
+        // While skill storage is on, a native link into ~/.ratel/skills is Ratel's
+        // own exposure of a managed copy (scanned under its own root). With the
+        // flag off, a link left by an older install is still a native skill.
+        if (
+          true &&
+          source.source !== "ratel" &&
+          (await linksInto(path, canonicalManagedRoot))
+        ) {
+          continue;
+        }
         await pushCandidate(candidates, diagnostics, path, source.source, context);
       }
     }

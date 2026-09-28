@@ -555,6 +555,7 @@ export async function runDaemonServer(
         homeDir: ctx.env.homeDir,
         registeredProjectRoots: async () =>
           (await projectRegistry.list()).map(({ canonicalRoot }) => canonicalRoot),
+        ...(featureFlags.skillStorage ? { skillStorage: true } : {}),
       }))
     : undefined;
   const skillImportControlPlane =
