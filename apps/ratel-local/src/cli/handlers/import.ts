@@ -33,12 +33,11 @@ import {
   ratelConfigPath,
   type SkillImportControlPlane,
   type SupportedAgentHostKind,
-  skillStorageEnabled,
   startBackup,
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core";
 import { ArgError } from "../args.js";
-import { daemonSkillStorage, requestRunningDaemon } from "../daemon-api.js";
+import { resolveSkillStorageFlag } from "../daemon-api.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import { defaultSkillPaths, type SkillPaths } from "../skills/paths.js";
 import { runLink } from "./link.js";
@@ -127,9 +126,7 @@ export async function runImport(
   }
 
   const skillPaths = opts.skillPaths ?? defaultSkillPaths(ctx.env.homeDir);
-  const persistDimensions =
-    (await daemonSkillStorage((path, init) => requestRunningDaemon(ctx, path, init))) ??
-    skillStorageEnabled();
+  const persistDimensions = await resolveSkillStorageFlag(ctx);
   const skillRuntime = await createScopedSkillImportRuntime(skillPaths, {
     source: resolveSkillSource(opts.agentKind, agentState),
     persistDimensions,

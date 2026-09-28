@@ -124,7 +124,12 @@ export async function resolveConfiguredSkills(
           state: "effective",
           editable: entry.mode === "copy" && (await hasMatchingCopyMarker(canonicalPath, id)),
           diagnostics: [],
-          ...dimensionFields(includeDimensions, entry, configuredPath, "available"),
+          ...dimensionFields(
+            includeDimensions,
+            originFromEntry(entry),
+            configuredPath,
+            "available",
+          ),
         };
         registrations.push(registration);
         candidates.push({
@@ -166,7 +171,12 @@ export async function resolveConfiguredSkills(
           state: "invalid",
           editable: false,
           diagnostics: [diagnostic],
-          ...dimensionFields(includeDimensions, entry, configuredPath, availability),
+          ...dimensionFields(
+            includeDimensions,
+            originFromEntry(entry),
+            configuredPath,
+            availability,
+          ),
         });
       }
     }
@@ -235,12 +245,7 @@ export async function resolveConfiguredSkills(
             state: "effective",
             editable: false,
             diagnostics: [],
-            ...dimensionFields(
-              includeDimensions,
-              { mode: "reference" },
-              configuredPath,
-              "available",
-            ),
+            ...dimensionFields(includeDimensions, "reference", configuredPath, "available"),
           };
           registrations.push(registration);
           candidates.push({
@@ -279,12 +284,7 @@ export async function resolveConfiguredSkills(
             state: "invalid",
             editable: false,
             diagnostics: [diagnostic],
-            ...dimensionFields(
-              includeDimensions,
-              { mode: "reference" },
-              configuredPath,
-              availability,
-            ),
+            ...dimensionFields(includeDimensions, "reference", configuredPath, availability),
           });
         }
       }
@@ -379,12 +379,11 @@ function configuredSkillPath(
 
 function dimensionFields(
   includeDimensions: boolean,
-  entry: { mode: "reference" | "copy"; origin?: SkillOrigin },
+  origin: SkillOrigin,
   configuredPath: string,
   availability: SkillAvailability | undefined,
 ): Pick<SkillRegistrationView, "origin" | "storage" | "availability" | "sync"> {
   if (!includeDimensions || availability === undefined) return {};
-  const origin = originFromEntry(entry);
   const sync = syncFromOrigin(origin);
   return {
     origin,

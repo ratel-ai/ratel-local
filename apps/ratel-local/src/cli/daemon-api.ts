@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { skillStorageEnabled } from "@ratel-ai/ratel-local-core";
 import { daemonPaths } from "./handlers/daemon.js";
 import type { HandlerCtx } from "./handlers/types.js";
 
@@ -68,6 +69,17 @@ export async function daemonSkillStorage(request: DaemonApiRequest): Promise<boo
   } catch {
     return undefined;
   }
+}
+
+export async function resolveSkillStorageFlag(
+  ctx: HandlerCtx,
+  daemonRequest?: DaemonApiRequest,
+): Promise<boolean> {
+  return (
+    (await daemonSkillStorage(
+      daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init)),
+    )) ?? skillStorageEnabled()
+  );
 }
 
 export async function requireDaemonJson<T>(response: Response, operation: string): Promise<T> {

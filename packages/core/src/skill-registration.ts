@@ -208,14 +208,5 @@ export function persistedCopyPathForWrite(
   if (!projectRoot) {
     throw new Error(`scope ${scopeRef.scope} requires a project root`);
   }
-  const relativePath = relative(projectRoot, absolute);
-  if (
-    relativePath.length === 0 ||
-    isAbsolute(relativePath) ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${sep}`)
-  ) {
-    throw new Error(`${scopeRef.scope} skill copy path resolves outside the project root`);
-  }
-  return relativePath;
+  return relative(projectRoot, absolute);
 }

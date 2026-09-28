@@ -207,18 +207,18 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       throw new SkillRegistrationValidationError("invalid_registration", (error as Error).message);
     }
 
+    const base = { mode: "copy" as const, source: "ratel" as const };
     entries[request.id] = this.persistDimensions()
       ? skillEntryForWrite({
-          mode: "copy",
+          ...base,
           path: persistedCopyPathForWrite(
             request.target,
             this.options.homeDir,
             projectRoot,
             request.id,
           ),
-          source: "ratel",
         })
-      : ({ mode: "copy", source: "ratel" } satisfies SkillEntry);
+      : (base satisfies SkillEntry);
     skills.entries = entries;
     document.skills = skills;
     try {
@@ -361,32 +361,28 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     let adoptedCopy: { path: string; revision: DocumentRevision } | undefined;
     if (request.mode === "reference") {
       const path = referencePathForTarget(request.target, projectRoot, canonicalSource);
+      const base = { mode: "reference" as const, path, source };
       entries[request.id] = this.persistDimensions()
-        ? skillEntryForWrite({
-            mode: "reference",
-            path,
-            source,
-          })
-        : ({ mode: "reference", path, source } satisfies SkillEntry);
+        ? skillEntryForWrite(base)
+        : (base satisfies SkillEntry);
     } else {
       const targetPath = await this.ownedCopyPath(request.target, request.id);
+      const base = {
+        mode: "copy" as const,
+        source,
+        copiedFrom: { source: sourceRegistration.source, id: request.id },
+      };
       entries[request.id] = this.persistDimensions()
         ? skillEntryForWrite({
-            mode: "copy",
+            ...base,
             path: persistedCopyPathForWrite(
               request.target,
               this.options.homeDir,
               projectRoot,
               request.id,
             ),
-            source,
-            copiedFrom: { source: sourceRegistration.source, id: request.id },
           })
-        : ({
-            mode: "copy",
-            source,
-            copiedFrom: { source: sourceRegistration.source, id: request.id },
-          } satisfies SkillEntry);
+        : (base satisfies SkillEntry);
       const materialization = await planSkillCopyMaterialization({
         sourcePath: canonicalSource,
         targetPath,

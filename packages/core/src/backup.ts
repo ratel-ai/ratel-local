@@ -13,7 +13,6 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { skillStorageEnabled } from "./feature-flags.js";
 import type { HierarchyEnv } from "./hierarchy.js";
 
 export interface BackupFs {
@@ -174,7 +173,7 @@ export async function captureOperationBackup(
   env: HierarchyEnv,
   fs: BackupFs,
   request: SnapshotRequest,
-  snapshot: boolean = skillStorageEnabled(),
+  snapshot: boolean,
 ): Promise<BackupManifest> {
   if (snapshot) return captureSnapshot(env, request);
   const session = startBackup(env, fs);
