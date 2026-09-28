@@ -148,7 +148,7 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
         // own exposure of a managed copy (scanned under its own root). With the
         // flag off, a link left by an older install is still a native skill.
         if (
-          true &&
+          this.options.skillStorage &&
           source.source !== "ratel" &&
           (await linksInto(path, canonicalManagedRoot))
         ) {
