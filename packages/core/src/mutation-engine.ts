@@ -11,10 +11,11 @@ import {
   realpath,
   rename,
   rm,
+  rmdir,
   stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, normalize, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
 import lockfile from "proper-lockfile";
 import type { DocumentRevision } from "./context.js";
 
@@ -220,6 +221,8 @@ export interface MutationJournalV1 extends MutationJournalAnnotation {
   transactionId: string;
   status: "prepared" | "applying" | "committed";
   skillIds?: string[];
+  /** Directories staging created under a copy source; excluded from integrity checks. */
+  createdDirectories?: string[];
   entries: MutationJournalEntryV1[];
 }
 
@@ -237,7 +240,7 @@ export function documentRevision(bytes: string | Uint8Array): DocumentRevision {
 
 export function describeRecoveredTransaction(transaction: RecoveredTransaction): string {
   const snapshot =
-    transaction.snapshotId === undefined ? "" : `, snapshot ${transaction.snapshotId}`;
+    transaction.snapshotId === undefined ? "" : ` (snapshot ${transaction.snapshotId})`;
   const what = transaction.kind ?? "transaction";
   return `rolled back ${what} ${transaction.transactionId}: ${transaction.paths.join(", ")}${snapshot}`;
 }
@@ -246,7 +249,8 @@ export async function createMutationEngine(
   options: MutationEngineOptions,
 ): Promise<MutationEngine> {
   const engine = new FilesystemMutationEngine(options);
-  await options.onRecovery?.(await engine.recover());
+  const recovery = await engine.recover();
+  await options.onRecovery?.(recovery);
   return engine;
 }
 
@@ -354,6 +358,24 @@ export class FilesystemMutationEngine implements MutationEngine {
         beforeRevision: before.revision,
         afterRevision,
       });
+    }
+
+    for (let index = 0; index < operations.length; index += 1) {
+      const operation = operations[index];
+      if (!operation || operation.kind !== "copy-directory") continue;
+      for (let earlier = 0; earlier < index; earlier += 1) {
+        const prior = operations[earlier];
+        if (
+          !prior ||
+          (prior.kind !== "replace-file" && prior.kind !== "delete-artifact") ||
+          !isPathInsideDirectory(operation.sourcePath, prior.path)
+        ) {
+          continue;
+        }
+        throw new MutationValidationError(
+          `cannot write inside copy source before copying: ${prior.path}`,
+        );
+      }
     }
 
     const planWithoutDigest = {
@@ -479,14 +501,16 @@ export class FilesystemMutationEngine implements MutationEngine {
   }
 
   private async validateBaseRevisions(plan: PreparedMutation): Promise<void> {
+    const exclude = planArtifactPaths(plan);
     for (const operation of plan.operations) {
-      await this.validateOperationBaseRevision(plan, operation);
+      await this.validateOperationBaseRevision(plan, operation, exclude);
     }
   }
 
   private async validateOperationBaseRevision(
     plan: PreparedMutation,
     operation: MutationOperation,
+    exclude: ReadonlySet<string> = planArtifactPaths(plan),
   ): Promise<void> {
     const expected = plan.baseRevisions[operation.path];
     if (expected === undefined) {
@@ -508,7 +532,7 @@ export class FilesystemMutationEngine implements MutationEngine {
       );
     }
     if (operation.kind === "copy-directory") {
-      const sourceRevision = await directoryRevision(operation.sourcePath);
+      const sourceRevision = await directoryRevision(operation.sourcePath, exclude);
       if (sourceRevision !== operation.sourceRevision) {
         throw new MutationConflictError(
           "revision_conflict",
@@ -570,8 +594,9 @@ export class FilesystemMutationEngine implements MutationEngine {
         if (!operation || !entry) {
           throw new MutationValidationError("operation and journal entry counts differ");
         }
+        const exclude = mutationExcludePaths(plan, journal.createdDirectories ?? []);
         await this.hooks.beforeApplyOperation?.(operation, index);
-        await this.validateOperationBaseRevision(plan, operation);
+        await this.validateOperationBaseRevision(plan, operation, exclude);
         await options.operationPrecondition?.(operation, index);
         if (operation.kind === "replace-file" && entry.existedBefore) {
           const sourceStat = await stat(entry.path);
@@ -587,7 +612,7 @@ export class FilesystemMutationEngine implements MutationEngine {
               backupRevision,
             );
           }
-          await this.validateOperationBaseRevision(plan, operation);
+          await this.validateOperationBaseRevision(plan, operation, exclude);
           await chmod(entry.stagePath, sourceStat.mode & 0o7777);
         }
         if (operation.kind === "copy-directory" && (await pathExists(operation.path))) {
@@ -618,7 +643,7 @@ export class FilesystemMutationEngine implements MutationEngine {
           await this.rollbackJournal(journal);
           await rm(journalPath, { force: true });
         } else {
-          await this.cleanupArtifacts(journal.entries);
+          await this.cleanupArtifacts(journal);
         }
       } catch (rollbackError) {
         throw new MutationRecoveryError(plan.id, `failed to roll back transaction ${plan.id}`, {
@@ -641,23 +666,26 @@ export class FilesystemMutationEngine implements MutationEngine {
     plan: PreparedMutation,
     journal: MutationJournalV1,
   ): Promise<void> {
+    const createdDirectories = journal.createdDirectories ?? [];
+    journal.createdDirectories = createdDirectories;
     for (let index = 0; index < plan.operations.length; index += 1) {
       const operation = plan.operations[index];
       const entry = journal.entries[index];
       if (!operation || !entry) {
         throw new MutationValidationError("operation and journal entry counts differ");
       }
-      await mkdir(dirname(operation.path), { recursive: true });
+      await ensureParentDirectories(operation.path, createdDirectories);
       if (operation.kind === "delete-artifact") {
         continue;
       }
+      const exclude = mutationExcludePaths(plan, createdDirectories);
       if (operation.kind === "replace-file") {
         await writeFile(entry.stagePath, decodeBase64(operation.contentsBase64, operation.path), {
           flag: "wx",
           mode: PRIVATE_FILE_MODE,
         });
       } else {
-        await copyValidatedDirectory(operation.sourcePath, entry.stagePath);
+        await copyValidatedDirectory(operation.sourcePath, entry.stagePath, exclude);
         for (const additional of operation.additionalFiles) {
           const target = join(entry.stagePath, additional.relativePath);
           await mkdir(dirname(target), { recursive: true });
@@ -666,7 +694,7 @@ export class FilesystemMutationEngine implements MutationEngine {
             mode: PRIVATE_FILE_MODE,
           });
         }
-        if ((await directoryRevision(operation.sourcePath)) !== operation.sourceRevision) {
+        if ((await directoryRevision(operation.sourcePath, exclude)) !== operation.sourceRevision) {
           throw new MutationConflictError(
             "revision_conflict",
             `copy source changed while staging: ${operation.sourcePath}`,
@@ -771,18 +799,20 @@ export class FilesystemMutationEngine implements MutationEngine {
       await rm(entry.stagePath, { recursive: true, force: true });
       await rm(entry.backupPath, { recursive: true, force: true });
     }
+    await removeEmptyCreatedDirectories(journal.createdDirectories ?? []);
   }
 
   private async finalizeJournal(journal: MutationJournalV1, journalPath: string): Promise<void> {
-    await this.cleanupArtifacts(journal.entries);
+    await this.cleanupArtifacts(journal);
     await rm(journalPath, { force: true });
   }
 
-  private async cleanupArtifacts(entries: readonly MutationJournalEntryV1[]): Promise<void> {
-    for (const entry of entries) {
+  private async cleanupArtifacts(journal: MutationJournalV1): Promise<void> {
+    for (const entry of journal.entries) {
       await rm(entry.stagePath, { recursive: true, force: true });
       await rm(entry.backupPath, { recursive: true, force: true });
     }
+    await removeEmptyCreatedDirectories(journal.createdDirectories ?? []);
   }
 
   private async writeJournal(journal: MutationJournalV1): Promise<void> {
@@ -934,7 +964,10 @@ function copiedDirectoryRevision(
   return `dir_${hash.digest("base64url")}` as DocumentRevision;
 }
 
-async function directoryRevision(path: string): Promise<DocumentRevision> {
+async function directoryRevision(
+  path: string,
+  exclude: ReadonlySet<string> = new Set(),
+): Promise<DocumentRevision> {
   let rootInfo: Stats;
   try {
     rootInfo = await lstat(path);
@@ -947,15 +980,17 @@ async function directoryRevision(path: string): Promise<DocumentRevision> {
   if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
     throw new MutationValidationError(`copy source must be a real directory: ${path}`);
   }
+  const excludedRelative = await excludeRelativeToWalkRoot(path, exclude);
   const hash = createHash("sha256").update("ratel-directory-v1\0");
   const queue = [""];
   while (queue.length > 0) {
-    const relative = queue.shift() as string;
-    const entries = (await readdir(join(path, relative), { withFileTypes: true })).sort((a, b) =>
-      a.name.localeCompare(b.name),
+    const relativePath = queue.shift() as string;
+    const entries = (await readdir(join(path, relativePath), { withFileTypes: true })).sort(
+      (a, b) => a.name.localeCompare(b.name),
     );
     for (const entry of entries) {
-      const childRelative = relative ? join(relative, entry.name) : entry.name;
+      const childRelative = relativePath ? join(relativePath, entry.name) : entry.name;
+      if (excludedRelative.has(childRelative)) continue;
       const child = join(path, childRelative);
       const info = await lstat(child);
       if (info.isSymbolicLink()) {
@@ -982,16 +1017,27 @@ export function validateCopySourceDirectory(path: string): Promise<DocumentRevis
   return directoryRevision(path);
 }
 
-async function copyValidatedDirectory(source: string, target: string): Promise<void> {
+async function copyValidatedDirectory(
+  source: string,
+  target: string,
+  exclude: ReadonlySet<string> = new Set(),
+  excludedRelative?: ReadonlySet<string>,
+  relativePrefix = "",
+): Promise<void> {
   const sourceInfo = await lstat(source);
   if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) {
     throw new MutationValidationError(`copy source must be a real directory: ${source}`);
   }
+  const skip =
+    excludedRelative ??
+    (relativePrefix === "" ? await excludeRelativeToWalkRoot(source, exclude) : new Set());
   await mkdir(target, { mode: sourceInfo.mode & 0o7777 });
   const entries = (await readdir(source, { withFileTypes: true })).sort((a, b) =>
     a.name.localeCompare(b.name),
   );
   for (const entry of entries) {
+    const childRelative = relativePrefix ? join(relativePrefix, entry.name) : entry.name;
+    if (skip.has(childRelative)) continue;
     const sourceChild = join(source, entry.name);
     const targetChild = join(target, entry.name);
     const info = await lstat(sourceChild);
@@ -999,12 +1045,118 @@ async function copyValidatedDirectory(source: string, target: string): Promise<v
       throw new MutationValidationError(`copy source contains a symlink: ${sourceChild}`);
     }
     if (info.isDirectory()) {
-      await copyValidatedDirectory(sourceChild, targetChild);
+      await copyValidatedDirectory(sourceChild, targetChild, exclude, skip, childRelative);
     } else if (info.isFile()) {
       await copyFile(sourceChild, targetChild, 1);
       await chmod(targetChild, info.mode & 0o7777);
     } else {
       throw new MutationValidationError(`copy source contains a special file: ${sourceChild}`);
+    }
+  }
+}
+
+function planArtifactPaths(plan: PreparedMutation): Set<string> {
+  const paths = new Set<string>();
+  for (let index = 0; index < plan.operations.length; index += 1) {
+    const operation = plan.operations[index];
+    if (!operation) continue;
+    paths.add(`${operation.path}.ratel-stage-${plan.id}-${index}`);
+    paths.add(`${operation.path}.ratel-backup-${plan.id}-${index}`);
+  }
+  return paths;
+}
+
+function mutationExcludePaths(
+  plan: PreparedMutation,
+  createdDirectories: readonly string[],
+): ReadonlySet<string> {
+  const paths = planArtifactPaths(plan);
+  for (const directory of createdDirectories) paths.add(directory);
+  return paths;
+}
+
+/**
+ * Map absolute exclude paths onto relatives under a walk root.
+ * realpath both sides so /var vs /private/var (and any homeDir symlink) still match.
+ */
+async function excludeRelativeToWalkRoot(
+  walkRoot: string,
+  exclude: ReadonlySet<string>,
+): Promise<ReadonlySet<string>> {
+  if (exclude.size === 0) return exclude;
+  const rootReal = await realpath(walkRoot);
+  const relatives = new Set<string>();
+  for (const entry of exclude) {
+    const canonical = await canonicalPath(entry);
+    const rel = relative(rootReal, canonical);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) continue;
+    relatives.add(rel);
+  }
+  return relatives;
+}
+
+/** realpath the longest existing prefix; append missing segments (stage paths, new dirs). */
+async function canonicalPath(path: string): Promise<string> {
+  const missing: string[] = [];
+  let current = normalize(path);
+  for (;;) {
+    try {
+      const real = await realpath(current);
+      return missing.length === 0 ? real : join(real, ...missing);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(current);
+      if (parent === current) return normalize(path);
+      missing.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isPathInsideDirectory(directory: string, path: string): boolean {
+  if (path === directory) return true;
+  const rel = relative(directory, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+async function ensureParentDirectories(targetPath: string, created: string[]): Promise<void> {
+  const missing: string[] = [];
+  let current = dirname(targetPath);
+  for (;;) {
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink() || !info.isDirectory()) {
+        throw new MutationValidationError(`parent path is not a directory: ${current}`);
+      }
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      missing.push(current);
+      const parent = dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  for (const directory of missing.reverse()) {
+    try {
+      await mkdir(directory);
+      created.push(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+}
+
+async function removeEmptyCreatedDirectories(directories: readonly string[]): Promise<void> {
+  const sorted = [...directories].sort((a, b) => b.length - a.length);
+  for (const directory of sorted) {
+    try {
+      const entries = await readdir(directory);
+      if (entries.length > 0) continue;
+      await rmdir(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
     }
   }
 }
@@ -1042,6 +1194,13 @@ function isMutationJournal(value: unknown): value is MutationJournalV1 {
     typeof candidate.transactionId !== "string" ||
     !["prepared", "applying", "committed"].includes(candidate.status ?? "") ||
     !Array.isArray(candidate.entries)
+  ) {
+    return false;
+  }
+  if (
+    candidate.createdDirectories !== undefined &&
+    (!Array.isArray(candidate.createdDirectories) ||
+      candidate.createdDirectories.some((directory) => typeof directory !== "string"))
   ) {
     return false;
   }
