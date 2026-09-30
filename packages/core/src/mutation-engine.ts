@@ -1124,8 +1124,10 @@ async function ensureParentDirectories(targetPath: string, created: string[]): P
   let current = dirname(targetPath);
   for (;;) {
     try {
-      const info = await lstat(current);
-      if (info.isSymbolicLink() || !info.isDirectory()) {
+      // stat, not lstat: a symlinked parent resolving to a directory is a
+      // supported layout, and mkdir has always followed it.
+      const info = await stat(current);
+      if (!info.isDirectory()) {
         throw new MutationValidationError(`parent path is not a directory: ${current}`);
       }
       break;

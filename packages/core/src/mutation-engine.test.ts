@@ -436,6 +436,22 @@ describe("MutationEngine", () => {
     expect(await readFile(config, "utf8")).toBe('{"skills":{}}\n');
   });
 
+  it("writes through a symlinked parent directory", async () => {
+    const real = join(root, "real-config");
+    const linked = join(root, "linked-config");
+    await mkdir(real);
+    await writeFile(join(real, "config.json"), "before");
+    await symlink(real, linked, "dir");
+    const engine = await createMutationEngine({ controlDir });
+
+    const plan = await engine.prepare([
+      { kind: "replace-file", path: join(linked, "config.json"), contents: "after" },
+    ]);
+    await engine.commit(plan, { digest: plan.digest });
+
+    expect(await readFile(join(real, "config.json"), "utf8")).toBe("after");
+  });
+
   it("refuses directory merges and unsafe copy sources", async () => {
     const source = join(root, "source");
     const target = join(root, "target");
