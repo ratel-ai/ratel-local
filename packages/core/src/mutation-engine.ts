@@ -734,7 +734,16 @@ export class FilesystemMutationEngine implements MutationEngine {
       }
       if (operation.kind === "link-directory") {
         // "dir" is required on Windows, where the link type is not inferred.
-        await symlink(operation.target, entry.stagePath, "dir");
+        try {
+          await symlink(operation.target, entry.stagePath, "dir");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EPERM") {
+            throw new MutationValidationError(
+              `creating a directory symlink requires privilege: ${entry.stagePath} -> ${operation.target}`,
+            );
+          }
+          throw error;
+        }
         continue;
       }
       const exclude = mutationExcludePaths(plan, createdDirectories);
