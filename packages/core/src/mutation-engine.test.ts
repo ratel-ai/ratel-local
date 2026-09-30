@@ -674,6 +674,46 @@ describe("MutationEngine", () => {
     await expect(lstat(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("removes a published link that replaced nothing when recovery rolls it back", async () => {
+    const nativePath = join(root, "claude", "skills", "linked");
+    const copy = join(root, "ratel", "skills", "linked");
+    await mkdir(dirname(nativePath), { recursive: true });
+    await mkdir(copy, { recursive: true });
+    await writeFile(join(copy, "SKILL.md"), "body");
+    await symlink(copy, nativePath, "dir");
+    await mkdir(join(controlDir, "transactions"), { recursive: true });
+    const journal: MutationJournalV1 = {
+      version: 1,
+      transactionId: "linked",
+      status: "applying",
+      kind: "skill.link",
+      entries: [
+        {
+          artifactKind: "directory",
+          operationKind: "link-directory",
+          path: nativePath,
+          stagePath: `${nativePath}.ratel-stage-linked-0`,
+          backupPath: `${nativePath}.ratel-backup-linked-0`,
+          existedBefore: false,
+          applied: false,
+        },
+      ],
+    };
+    await writeFile(
+      join(controlDir, "transactions", "linked.json"),
+      `${JSON.stringify(journal, null, 2)}\n`,
+    );
+
+    const recoveries: MutationRecoveryResult[] = [];
+    await createMutationEngine({ controlDir, onRecovery: (r) => void recoveries.push(r) });
+
+    expect(recoveries[0]?.recovered).toEqual([
+      { kind: "skill.link", transactionId: "linked", paths: [nativePath] },
+    ]);
+    await expect(lstat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await lstat(copy)).isDirectory()).toBe(true);
+  });
+
   it("leaves a restored original directory alone on a second recovery", async () => {
     const original = join(root, "claude", "skills", "taken");
     const copy = join(root, "ratel", "skills", "taken");

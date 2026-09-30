@@ -855,10 +855,14 @@ export class FilesystemMutationEngine implements MutationEngine {
         const backupExists = await pathExists(entry.backupPath);
         const targetExists = await pathExists(entry.path);
         const targetIsSymlink = targetExists && (await lstat(entry.path)).isSymbolicLink();
-        // Decide from the backup and the target, not the stage: a crash between
-        // the two renames leaves the stage in place and the only copy in the backup.
+        // With an original to protect, decide from the backup and the target, not the
+        // stage: a crash between the two renames leaves the stage in place and the only
+        // copy in the backup. Without one there is no backup, so the stage is the signal.
         const wasApplied =
-          entry.applied || (backupExists && !targetExists) || (backupExists && targetIsSymlink);
+          entry.applied ||
+          (entry.existedBefore
+            ? backupExists && (!targetExists || targetIsSymlink)
+            : !(await pathExists(entry.stagePath)));
         if (wasApplied) {
           if (entry.existedBefore) {
             if (targetExists && !targetIsSymlink) {
