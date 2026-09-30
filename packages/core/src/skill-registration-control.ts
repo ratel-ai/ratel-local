@@ -7,7 +7,7 @@ import type { ContextSnapshotResolver } from "./context-snapshot.js";
 import { skillStorageEnabled } from "./feature-flags.js";
 import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
-import type { SkillSource } from "./lib/config.js";
+import type { SkillHostPolicy, SkillSource } from "./lib/config.js";
 import { parseConfig, parseSkillMd, type SkillEntry } from "./lib/index.js";
 import { loadSkillBundle } from "./lib/skills/load.js";
 import type { SkillRegistrationView } from "./lib/skills/resolve.js";
@@ -30,7 +30,7 @@ import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { planSkillCopyMaterialization } from "./skill-copy-adoption.js";
 import { rewriteSkillDocument, stripBundledResourceIndex } from "./skill-document.js";
-import { prepareSkillHostPolicyRestore } from "./skill-host-policy.js";
+import { nativeSkillPath, prepareSkillHostPolicyRestore } from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
 import {
   configuredSkillStoragePath,
@@ -599,7 +599,30 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         contents: `${JSON.stringify(document, null, 2)}\n`,
       },
     ];
-    if (request.target.scope === "user" && registration.hostPolicy) {
+    const projectRootsByPath = new Map<string, string>();
+    if (request.target.scope !== "user") {
+      const project = await this.options.projectRegistry.resolve(request.target.projectId);
+      projectRootsByPath.set(current.path, project.canonicalRoot);
+    }
+
+    let copyPath: string | undefined;
+    if (registration.mode === "copy") {
+      copyPath = await this.ownedCopyPath(request.target, request.id, registration);
+    }
+    const takeoverNativePath =
+      request.target.scope === "user" &&
+      registration.mode === "copy" &&
+      registration.hostPolicy &&
+      copyPath
+        ? await resolveTakeoverNativePath({
+            homeDir: this.options.homeDir,
+            id: request.id,
+            hostPolicy: registration.hostPolicy,
+            copyPath,
+          })
+        : undefined;
+
+    if (request.target.scope === "user" && registration.hostPolicy && !takeoverNativePath) {
       try {
         const restore = await prepareSkillHostPolicyRestore({
           homeDir: this.options.homeDir,
@@ -614,14 +637,22 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         );
       }
     }
-    const projectRootsByPath = new Map<string, string>();
-    if (request.target.scope !== "user") {
-      const project = await this.options.projectRegistry.resolve(request.target.projectId);
-      projectRootsByPath.set(current.path, project.canonicalRoot);
+
+    // Unlink the Ratel-made native symlink before deleting the copy so apply-time
+    // realpath of the link still resolves.
+    if (takeoverNativePath && copyPath) {
+      operations.push({
+        kind: "delete-artifact",
+        path: takeoverNativePath,
+        expectedSymlinkTarget: await realpath(copyPath),
+      });
     }
+
     let deletion: { copyPath: string; removedTarget: RatelScopeRef; removedId: string } | undefined;
     if (request.deleteOwnedCopy && registration.mode === "copy") {
-      const copyPath = await this.ownedCopyPath(request.target, request.id, registration);
+      if (!copyPath) {
+        copyPath = await this.ownedCopyPath(request.target, request.id, registration);
+      }
       await assertOwnedCopy(copyPath, request.id);
       await this.assertNoReverseReferences(copyPath, request.target, request.id);
       operations.push({ kind: "delete-artifact", path: copyPath });
@@ -846,6 +877,28 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       }
     }
   }
+}
+
+/** User-scope takeover: native path is Ratel's symlink into the owned copy. */
+async function resolveTakeoverNativePath(input: {
+  homeDir: string;
+  id: string;
+  hostPolicy: SkillHostPolicy;
+  copyPath: string;
+}): Promise<string | undefined> {
+  const nativePath = nativeSkillPath(input.homeDir, input.id, input.hostPolicy.source);
+  let info: Awaited<ReturnType<typeof lstat>>;
+  try {
+    info = await lstat(nativePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  if (!info.isSymbolicLink()) return undefined;
+  const linkTarget = await realpath(nativePath);
+  const copyReal = await realpath(input.copyPath);
+  if (linkTarget !== copyReal) return undefined;
+  return nativePath;
 }
 
 function buildSkillDocument(request: CreateSkillRegistrationRequest): string {
