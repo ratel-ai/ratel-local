@@ -291,7 +291,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     );
     return this.options.preparedChanges.prepare({
       kind: "skill.import",
-      operations: [...configOperations, ...hostPolicyOperations, ...copyOperations],
+      operations: [...configOperations, ...copyOperations, ...hostPolicyOperations],
       affectedContexts: contextsForSelections(appliedSelections),
       skillIds: appliedSelections.flatMap((selection) => {
         const candidate = candidateById.get(selection.candidateId);
@@ -364,7 +364,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
       captureBackup: () =>
         captureOperationBackup({ homeDir: this.options.homeDir }, nodeFs, {
           action: "import",
-          paths: [...configOperations, ...hostPolicyOperations, ...copyOperations].map(
+          paths: [...configOperations, ...copyOperations, ...hostPolicyOperations].map(
             (operation) => operation.path,
           ),
         }),
