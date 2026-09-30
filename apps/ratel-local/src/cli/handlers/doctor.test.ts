@@ -72,9 +72,56 @@ describe("runDoctor", () => {
 
     expect(await readFile(configPath, "utf8")).toBe('{"mcpServers":{}}\n');
     expect(logs).toContain(
-      `[ok] mutation_recovery: rolled back skill.import ${transactionId}: ${configPath}, snapshot 2026-01-01T00-00-00.000Z-snapshot`,
+      `[ok] mutation_recovery: rolled back skill.import ${transactionId}: ${configPath} (snapshot 2026-01-01T00-00-00.000Z-snapshot)`,
     );
     expect(logs).toContain("[ok] context_global: resolved global context");
+  });
+
+  it("keeps snapshot ids out of the recovered path list", async () => {
+    const homeDir = await temporaryHome();
+    const transactionsDir = join(homeDir, ".ratel", "transactions");
+    await mkdir(transactionsDir, { recursive: true });
+    const firstPath = join(homeDir, "first.json");
+    const secondPath = join(homeDir, "second.json");
+    await writeFile(firstPath, "partial");
+    await writeFile(secondPath, "partial");
+    await writeFile(`${firstPath}.ratel-backup-multi-0`, "before-first");
+    await writeFile(`${secondPath}.ratel-backup-multi-1`, "before-second");
+    const transactionId = "multi";
+    const snapshotId = "2026-01-01T00-00-00.000Z-snapshot";
+    const journal = {
+      version: 1,
+      transactionId,
+      status: "applying",
+      kind: "skill.import",
+      snapshotId,
+      entries: [
+        {
+          path: firstPath,
+          stagePath: `${firstPath}.ratel-stage-multi-0`,
+          backupPath: `${firstPath}.ratel-backup-multi-0`,
+          existedBefore: true,
+          applied: true,
+        },
+        {
+          path: secondPath,
+          stagePath: `${secondPath}.ratel-stage-multi-1`,
+          backupPath: `${secondPath}.ratel-backup-multi-1`,
+          existedBefore: true,
+          applied: true,
+        },
+      ],
+    };
+    await writeFile(join(transactionsDir, `${transactionId}.json`), `${JSON.stringify(journal)}\n`);
+    const logs: string[] = [];
+
+    await runDoctor(context(homeDir, logs));
+
+    const recovery = logs.find((line) => line.includes("mutation_recovery"));
+    expect(recovery).toBe(
+      `[ok] mutation_recovery: rolled back skill.import ${transactionId}: ${firstPath}, ${secondPath} (snapshot ${snapshotId})`,
+    );
+    expect(recovery?.split(", ").includes(`snapshot ${snapshotId}`)).toBe(false);
   });
 
   it("reports a stable failure when transaction recovery cannot complete", async () => {
