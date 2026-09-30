@@ -61,7 +61,7 @@ describe("SkillRegistrationControlPlane", () => {
   }
 
   it("creates an authored skill as an owned scoped copy", async () => {
-    const { control, configPath } = await fixture({});
+    const { control, configPath } = await fixture({}, { skillStorage: false });
 
     const commit = await control.create({
       target: { scope: "user" },

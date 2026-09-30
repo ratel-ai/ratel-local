@@ -89,7 +89,7 @@ function requiredProjectRoot(input: ConfiguredSkillStoragePathInput): string {
 }
 
 /**
- * Classify a resolve failure into availability. Uses `stat`/`realpath` (follow
+ * Classify a resolve failure into availability. Uses `stat` (follow
  * links) so a dangling symlink is `not-found`, not `invalid`.
  */
 export async function availabilityFromResolveFailure(

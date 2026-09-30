@@ -285,7 +285,7 @@ describe("SkillImportControlPlane", () => {
   });
 
   it("preserves unknown document and skills fields plus existing registrations", async () => {
-    const f = await fixture();
+    const f = await fixture({ skillStorage: false });
     await putSkill(join(f.homeDir, ".claude", "skills", "new-skill"), "new-skill");
     const userConfigPath = join(f.homeDir, ".ratel", "config.json");
     await mkdir(join(f.homeDir, ".ratel"), { recursive: true });

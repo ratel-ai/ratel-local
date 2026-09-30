@@ -67,7 +67,7 @@ export interface ResolveConfiguredSkillsInput {
   homeDir: string;
   projectRoot?: string;
   scopes: SkillScopeConfig[];
-  /** When true, attach origin/storage/availability (and optional sync). Defaults to false. */
+  /** When true, attach origin and availability. Defaults to false. */
   skillStorage?: boolean;
 }
 
@@ -118,7 +118,7 @@ export async function resolveConfiguredSkills(
           state: "effective",
           editable: entry.mode === "copy" && (await hasMatchingCopyMarker(canonicalPath, id)),
           diagnostics: [],
-          ...(skillStorage ? dimensionFields(originFromEntry(entry), "available") : {}),
+          ...(skillStorage ? { origin: originFromEntry(entry), availability: "available" } : {}),
         };
         registrations.push(registration);
         candidates.push({
@@ -160,7 +160,7 @@ export async function resolveConfiguredSkills(
           state: "invalid",
           editable: false,
           diagnostics: [diagnostic],
-          ...(availability ? dimensionFields(originFromEntry(entry), availability) : {}),
+          ...(availability ? { origin: originFromEntry(entry), availability } : {}),
         });
       }
     }
@@ -229,7 +229,9 @@ export async function resolveConfiguredSkills(
             state: "effective",
             editable: false,
             diagnostics: [],
-            ...(skillStorage ? dimensionFields("reference", "available") : {}),
+            ...(skillStorage
+              ? { origin: "reference" as const, availability: "available" as const }
+              : {}),
           };
           registrations.push(registration);
           candidates.push({
@@ -268,7 +270,7 @@ export async function resolveConfiguredSkills(
             state: "invalid",
             editable: false,
             diagnostics: [diagnostic],
-            ...(availability ? dimensionFields("reference", availability) : {}),
+            ...(availability ? { origin: "reference" as const, availability } : {}),
           });
         }
       }
@@ -359,13 +361,6 @@ function configuredSkillPath(
     mode: entry.mode,
     ...(entry.path ? { path: entry.path } : {}),
   });
-}
-
-function dimensionFields(
-  origin: SkillOrigin,
-  availability: SkillAvailability,
-): Pick<SkillRegistrationView, "origin" | "availability"> {
-  return { origin, availability };
 }
 
 function requiredProjectRoot(
