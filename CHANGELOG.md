@@ -11,7 +11,9 @@ All notable changes to this package are documented here. The format is based on 
 - Added `cloud.profile` to layered configuration, a name and never a credential, so a project-scope file stays committable. `cloud.apiKey` is rejected.
 - Added per-profile credentials to the Cloud skill catalog: a pull uses the profile the directory resolves to, and a directory naming a profile the store does not define fails instead of falling back to another account.
 - Added Cloud checks to `ratel-local doctor`, from the files and never over the network: an unresolvable `cloud.profile`, an unreadable store, a stored key other users can read, and a scope too broken to say which profile it selects.
-- Added the off-by-default `RATEL_FEATURE_SKILL_STORAGE=1` daemon feature flag, the gate for the new Skill filesystem and host behavior. Nothing reads it yet.
+- Added the off-by-default `RATEL_FEATURE_SKILL_STORAGE=1` daemon flag to gate the new Skill filesystem and host behavior.
+- Added whole-tree backups under `~/.ratel/backups/<snapshot-id>/` that capture directories, symlinks, permissions and binaries as-is. Each entry has a type and content digest; symlink targets are not walked.
+- Added a directory-derived id to every backup manifest so a snapshot can be named and selected. Older manifests get that id on read.
 
 ### Changed
 - Upgraded and pinned `@ratel-ai/sdk` to `0.13.0-rc.5` for turn-correlated adaptive ranking.
@@ -21,6 +23,9 @@ All notable changes to this package are documented here. The format is based on 
 - Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
 - Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables, any other value disables, and a flag left out keeps whatever the installed service already says.
+- With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first. Deletion used to list directories as regular files, dropping symlinks, modes and binaries. Flag off keeps per-file capture.
+- Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead of a fixed line and silence.
+- A concurrent Skill change fails immediately with `skill_busy` instead of waiting on the mutation lock. An interrupted transaction whose lock is gone is still rolled back as a crash, not busy.
 
 ### Fixed
 - Isolated online adaptive-ranking search/invocation pairing per MCP connection using the SDK `turnId`, including skill loads and reconnects, so parallel sessions sharing a catalog cannot teach edges from each other’s searches.

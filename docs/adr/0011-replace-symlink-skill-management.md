@@ -4,7 +4,7 @@ Date: 2026-07-31
 
 ## Status
 
-Accepted
+Superseded by [ADR 0022](0022-ratel-owned-skill-storage-and-exposure.md)
 
 Supersedes the compatibility-wrapper decision in ADR-0008.
 

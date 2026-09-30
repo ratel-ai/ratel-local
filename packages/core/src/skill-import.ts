@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
-import { startBackup } from "./backup.js";
+import { captureOperationBackup } from "./backup.js";
 import type { DocumentRevision, RatelScopeRef, RuntimeContextRef } from "./context.js";
 import { ratelConfigPath } from "./hierarchy.js";
 import { nodeFs } from "./io.js";
@@ -291,8 +291,12 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     );
     return this.options.preparedChanges.prepare({
       kind: "skill.import",
-      operations: [...configOperations, ...hostPolicyOperations, ...copyOperations],
+      operations: [...configOperations, ...copyOperations, ...hostPolicyOperations],
       affectedContexts: contextsForSelections(appliedSelections),
+      skillIds: appliedSelections.flatMap((selection) => {
+        const candidate = candidateById.get(selection.candidateId);
+        return candidate ? [candidate.id] : [];
+      }),
       buildPreview: (mutation) => {
         for (const target of documents.values()) {
           const previewRevision = mutation.baseRevisions[target.path];
@@ -357,13 +361,13 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
           if (projectRoot) await assertSafeProjectControlPath(projectRoot, operation.path);
         },
       },
-      captureBackup: async () => {
-        const backup = startBackup({ homeDir: this.options.homeDir }, nodeFs);
-        for (const operation of [...configOperations, ...hostPolicyOperations, ...copyOperations]) {
-          await backup.capture(operation.path);
-        }
-        return backup.finalize("import");
-      },
+      captureBackup: () =>
+        captureOperationBackup({ homeDir: this.options.homeDir }, nodeFs, {
+          action: "import",
+          paths: [...configOperations, ...copyOperations, ...hostPolicyOperations].map(
+            (operation) => operation.path,
+          ),
+        }),
       result: {
         imported: appliedSelections.map((selection) => {
           const candidate = candidateById.get(selection.candidateId);

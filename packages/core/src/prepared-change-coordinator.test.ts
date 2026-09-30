@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectId } from "./context.js";
-import { createMutationEngine } from "./mutation-engine.js";
+import { createMutationEngine, type MutationJournalV1 } from "./mutation-engine.js";
 import {
   createPreparedChangeCoordinator,
   PreparedChangeUnavailableError,
@@ -53,6 +53,45 @@ describe("PreparedChangeCoordinator", () => {
     await expect(coordinator.commit(prepared.changeId)).rejects.toBeInstanceOf(
       PreparedChangeUnavailableError,
     );
+  });
+
+  it("journals the change kind and the snapshot captured for it", async () => {
+    const target = join(root, "config.json");
+    const controlDir = join(root, "control");
+    let journal: MutationJournalV1 | undefined;
+    const engine = await createMutationEngine({
+      controlDir,
+      idFactory: () => "tx-1",
+      hooks: {
+        beforeApplyOperation: async () => {
+          const text = await readFile(join(controlDir, "transactions", "tx-1.json"), "utf8");
+          journal = JSON.parse(text) as MutationJournalV1;
+        },
+      },
+    });
+    const coordinator = createPreparedChangeCoordinator({
+      mutationEngine: engine,
+      now: () => now,
+      idFactory: () => `change-${++nextId}`,
+    });
+
+    const prepared = await coordinator.prepare({
+      kind: "skill.import",
+      operations: [{ kind: "replace-file", path: target, contents: "planned" }],
+      preview: {},
+      captureBackup: async () => ({
+        id: "2026-01-01T00-00-00.000Z-snapshot",
+        createdAt: now.toISOString(),
+        action: "import",
+        entries: [],
+      }),
+      result: {},
+    });
+    const commit = await coordinator.commit(prepared.changeId);
+
+    expect(journal?.kind).toBe("skill.import");
+    expect(journal?.snapshotId).toBe("2026-01-01T00-00-00.000Z-snapshot");
+    expect(commit.backupManifest?.id).toBe("2026-01-01T00-00-00.000Z-snapshot");
   });
 
   it("cancels idempotently and expired changes never write", async () => {

@@ -6,6 +6,7 @@ export * from "./backup.js";
 export * from "./config-control-plane.js";
 export * from "./context.js";
 export * from "./context-snapshot.js";
+export * from "./feature-flags.js";
 export * from "./gateway-entry.js";
 export * from "./hierarchy.js";
 export * from "./import-plan.js";

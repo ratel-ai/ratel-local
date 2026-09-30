@@ -35,6 +35,7 @@ export interface PrepareChangeInput<ReviewData, DomainResult> {
   preview?: ReviewData;
   buildPreview?: (mutation: Readonly<PreparedMutation>) => ReviewData;
   affectedContexts?: readonly RuntimeContextRef[];
+  skillIds?: readonly string[];
   captureBackup?: () => Promise<BackupManifest | null>;
   invariants?: PreparedChangeInvariants;
   beforeCommit?: () => Promise<
@@ -68,6 +69,7 @@ interface StoredPreparedChange {
   expiresAtMs: number;
   mutation: PreparedMutation;
   affectedContexts: readonly RuntimeContextRef[];
+  skillIds: readonly string[];
   captureBackup?: () => Promise<BackupManifest | null>;
   invariants?: PreparedChangeInvariants;
   beforeCommit?: () => Promise<
@@ -138,6 +140,7 @@ class InMemoryPreparedChangeCoordinator implements PreparedChangeCoordinator {
       expiresAtMs,
       mutation: structuredClone(mutation),
       affectedContexts: structuredClone(input.affectedContexts ?? []),
+      skillIds: structuredClone(input.skillIds ?? []),
       captureBackup: input.captureBackup,
       invariants: input.invariants,
       beforeCommit: input.beforeCommit,
@@ -164,6 +167,7 @@ class InMemoryPreparedChangeCoordinator implements PreparedChangeCoordinator {
     try {
       commit = await this.options.mutationEngine.commit(stored.mutation, {
         digest: stored.mutation.digest,
+        skillIds: stored.skillIds,
         precondition: async () => {
           await stored.invariants?.precondition?.();
           decision = await stored.beforeCommit?.();
@@ -171,6 +175,10 @@ class InMemoryPreparedChangeCoordinator implements PreparedChangeCoordinator {
             throw new PreparedChangeCancelledDuringCommit();
           }
           backupManifest = (await stored.captureBackup?.()) ?? null;
+          return {
+            kind: stored.kind,
+            ...(backupManifest === null ? {} : { snapshotId: backupManifest.id }),
+          };
         },
         operationPrecondition: stored.invariants?.operationPrecondition,
       });
