@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { BackupFs, JsonFs } from "@ratel-ai/ratel-local-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { daemonLoopbackUrl, requestRunningDaemon } from "./daemon-api.js";
+import { daemonLoopbackUrl, requestRunningDaemon, resolveSkillStorageFlag } from "./daemon-api.js";
 import { daemonPaths } from "./handlers/daemon.js";
 import type { HandlerCtx } from "./handlers/types.js";
 import { silentPromptAdapter } from "./prompts.js";
@@ -52,6 +52,36 @@ describe("requestRunningDaemon", () => {
 
     await expect(requestRunningDaemon(ctx, "/api/projects")).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveSkillStorageFlag", () => {
+  const ctx = makeCtx(JSON.stringify({ port: 5731 }), "token");
+
+  it("follows a running daemon, on or off", async () => {
+    await expect(
+      resolveSkillStorageFlag(ctx, async () =>
+        Response.json({ skillStorage: true }, { status: 200 }),
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      resolveSkillStorageFlag(ctx, async () =>
+        Response.json({ skillStorage: false }, { status: 200 }),
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("falls back to this process's environment when the daemon is unreachable", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    try {
+      process.env.RATEL_FEATURE_SKILL_STORAGE = "1";
+      await expect(resolveSkillStorageFlag(ctx, async () => null)).resolves.toBe(true);
+      delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      await expect(resolveSkillStorageFlag(ctx, async () => null)).resolves.toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
   });
 });
 

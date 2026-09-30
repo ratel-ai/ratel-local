@@ -24,8 +24,10 @@ All notable changes to this package are documented here. The format is based on 
 - Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
 - Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables, any other value disables, and a flag left out keeps whatever the installed service already says.
 - With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first. Deletion used to list directories as regular files, dropping symlinks, modes and binaries. Flag off keeps per-file capture.
+- `captureOperationBackup`'s fourth argument is now a required `snapshot` boolean instead of a process-env object. Callers that already resolve the skill-storage flag (CLI via the daemon, control planes via `skillStorage`) pass that same boolean so backup format matches the write.
 - Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead of a fixed line and silence.
 - A concurrent Skill change fails immediately with `skill_busy` instead of waiting on the mutation lock. An interrupted transaction whose lock is gone is still rolled back as a crash, not busy.
+- With `RATEL_FEATURE_SKILL_STORAGE=1`, a skill registration gains `origin` and `availability` in the configured JSON views, and writes persist `origin` and the copy `path` in `skills.entries` (absolute for user scope, project-relative otherwise). A persisted `path` is honored on read regardless of the flag, so entries written with it on keep resolving after it is turned off.
 
 ### Fixed
 - Isolated online adaptive-ranking search/invocation pairing per MCP connection using the SDK `turnId`, including skill loads and reconnects, so parallel sessions sharing a catalog cannot teach edges from each other’s searches.

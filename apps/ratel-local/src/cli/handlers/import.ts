@@ -37,6 +37,7 @@ import {
   unlinkedAgentImportWarning,
 } from "@ratel-ai/ratel-local-core";
 import { ArgError } from "../args.js";
+import { resolveSkillStorageFlag } from "../daemon-api.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import { defaultSkillPaths, type SkillPaths } from "../skills/paths.js";
 import { runLink } from "./link.js";
@@ -125,8 +126,10 @@ export async function runImport(
   }
 
   const skillPaths = opts.skillPaths ?? defaultSkillPaths(ctx.env.homeDir);
+  const skillStorage = await resolveSkillStorageFlag(ctx);
   const skillRuntime = await createScopedSkillImportRuntime(skillPaths, {
     source: resolveSkillSource(opts.agentKind, agentState),
+    skillStorage,
   });
   const skillPreview = skillRuntime.preview;
   const workflowHostKind = resolveWorkflowHostKind(opts.agentKind, agentState);
@@ -580,7 +583,7 @@ function skillSourceForAgentKind(kind: string | undefined): "claude" | "codex" |
 
 async function createScopedSkillImportRuntime(
   paths: SkillPaths,
-  opts: { source?: "claude" | "codex" },
+  opts: { source?: "claude" | "codex"; skillStorage?: boolean },
 ): Promise<ScopedSkillImportRuntime> {
   const homeDir = dirname(dirname(paths.nativeDir));
   const discovery = createSkillDiscovery({ homeDir });
@@ -623,6 +626,7 @@ async function createScopedSkillImportRuntime(
           projectRegistry,
           discovery,
           preparedChanges,
+          ...(opts.skillStorage !== undefined ? { skillStorage: opts.skillStorage } : {}),
         })
       : null,
     preview: {

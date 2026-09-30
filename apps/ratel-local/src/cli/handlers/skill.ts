@@ -27,7 +27,12 @@ import {
 } from "@ratel-ai/ratel-local-core";
 import type { Skill } from "@ratel-ai/sdk";
 import type { FlagValue } from "../args.js";
-import { type DaemonApiRequest, requestRunningDaemon, requireDaemonJson } from "../daemon-api.js";
+import {
+  type DaemonApiRequest,
+  requestRunningDaemon,
+  requireDaemonJson,
+  resolveSkillStorageFlag,
+} from "../daemon-api.js";
 import { resolveCliRatelBin } from "../ratel-bin.js";
 import {
   type HookScope,
@@ -148,7 +153,10 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
             "skill discovery came from the daemon, but the daemon disappeared before preview",
           );
         }
-        control = options.importControlPlane ?? (await createImportControlPlane(ctx, runtime));
+        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+        control =
+          options.importControlPlane ??
+          (await createImportControlPlane(ctx, runtime, skillStorage));
         change = await control.prepare(selections, { duplicateStrategy: "keep-first" });
       }
       if (dryRun) {
@@ -225,8 +233,10 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           "skill add-scope preparation",
         );
       } else {
+        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
         control =
-          options.registrationControlPlane ?? (await createRegistrationControlPlane(ctx, runtime));
+          options.registrationControlPlane ??
+          (await createRegistrationControlPlane(ctx, runtime, skillStorage));
         change = await control.prepareAddScope(request);
       }
       if (dryRun) {
@@ -285,7 +295,12 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         deleteOwnedCopy: verb === "remove",
       };
       const control =
-        options.registrationControlPlane ?? (await createRegistrationControlPlane(ctx, runtime));
+        options.registrationControlPlane ??
+        (await createRegistrationControlPlane(
+          ctx,
+          runtime,
+          await resolveSkillStorageFlag(ctx, options.daemonRequest),
+        ));
       if (dryRun) {
         const change = await control.prepareRemove(request);
         ctx.log(`would update ${change.preview.files.map(({ path }) => path).join(", ")}`);
@@ -325,7 +340,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
     }
 
     case "list": {
-      const runtime = createSkillReadRuntime(ctx, options);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         undefined,
@@ -565,6 +581,7 @@ interface SkillReadRuntime {
 async function createRegistrationControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
+  skillStorage?: boolean,
 ): Promise<SkillRegistrationControlPlane> {
   const preparedChanges =
     ctx.preparedChanges ??
@@ -585,12 +602,14 @@ async function createRegistrationControlPlane(
     snapshotResolver: runtime.resolver,
     preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
+    ...(skillStorage !== undefined ? { skillStorage } : {}),
   });
 }
 
 async function createImportControlPlane(
   ctx: HandlerCtx,
   runtime: SkillReadRuntime,
+  skillStorage?: boolean,
 ): Promise<SkillImportControlPlane> {
   const preparedChanges =
     ctx.preparedChanges ??
@@ -605,14 +624,23 @@ async function createImportControlPlane(
     discovery: runtime.discovery,
     preparedChanges,
     localGitExcludeManager: createLocalGitExcludeManager(),
+    ...(skillStorage !== undefined ? { skillStorage } : {}),
   });
 }
 
-function createSkillReadRuntime(ctx: HandlerCtx, options: SkillHandlerOptions): SkillReadRuntime {
+function createSkillReadRuntime(
+  ctx: HandlerCtx,
+  options: SkillHandlerOptions,
+  skillStorage = false,
+): SkillReadRuntime {
   const registry = options.registry ?? createProjectRegistry({ homeDir: ctx.env.homeDir });
   const resolver =
     options.resolver ??
-    createContextSnapshotResolver({ homeDir: ctx.env.homeDir, projectRegistry: registry });
+    createContextSnapshotResolver({
+      homeDir: ctx.env.homeDir,
+      projectRegistry: registry,
+      ...(skillStorage ? { skillStorage: true } : {}),
+    });
   const discovery =
     options.discovery ??
     createSkillDiscovery({

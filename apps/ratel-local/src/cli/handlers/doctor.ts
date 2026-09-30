@@ -14,6 +14,7 @@ import {
   type RuntimeContextRef,
 } from "@ratel-ai/ratel-local-core";
 import { inventoryCloudSettings } from "../../cloud/inventory.js";
+import { resolveSkillStorageFlag } from "../daemon-api.js";
 import { getCliOutput } from "../output/index.js";
 import type { HandlerCtx } from "./types.js";
 
@@ -61,10 +62,12 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
   let issueCount = 0;
   const legacyManifestPath = join(controlDir, "skill-manifest.json");
   try {
+    const skillStorage = await resolveSkillStorageFlag(ctx);
     const migration = await prepareLegacySkillMigration({
       homeDir: ctx.env.homeDir,
       configControlPlane,
       preparedChanges,
+      skillStorage,
     });
     if (migration) {
       if (ctx.argv.flags.fix === true) {

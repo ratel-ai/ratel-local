@@ -467,6 +467,54 @@ describe("parseConfig skills", () => {
     });
   });
 
+  it("parses additive origin and path while dropping unknown entry keys", () => {
+    const config = parseConfig({
+      skills: {
+        entries: {
+          release: {
+            mode: "copy",
+            origin: "local-managed",
+            path: "/tmp/skills/release",
+            source: "ratel",
+            future: true,
+          },
+          review: {
+            mode: "reference",
+            origin: "reference",
+            path: "/native/review",
+            source: "claude",
+            hostPolicy: { mode: "manual-only", source: "claude", createdFile: true },
+          },
+        },
+      },
+    });
+
+    expect(config.skills?.entries?.release).toEqual({
+      mode: "copy",
+      origin: "local-managed",
+      path: "/tmp/skills/release",
+      source: "ratel",
+    });
+    expect(config.skills?.entries?.review).toEqual({
+      mode: "reference",
+      origin: "reference",
+      path: "/native/review",
+      source: "claude",
+      hostPolicy: { mode: "manual-only", source: "claude", createdFile: true },
+    });
+    expect(
+      (config.skills?.entries?.release as Record<string, unknown> | undefined)?.future,
+    ).toBeUndefined();
+  });
+
+  it("rejects an unknown skill origin", () => {
+    expect(() =>
+      parseConfig({
+        skills: { entries: { bad: { mode: "copy", origin: "nope" } } },
+      }),
+    ).toThrow(/origin/);
+  });
+
   it("parses an optional skills.dirs array", () => {
     const config = parseConfig({
       mcpServers: {},

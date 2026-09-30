@@ -1508,6 +1508,7 @@ describe("UI server — add / edit / remove", () => {
       configControlPlane: control,
       snapshotResolver,
       preparedChanges,
+      skillStorage: false,
     });
     const token = newSessionToken();
     const daemonToken = "daemon-control-token";

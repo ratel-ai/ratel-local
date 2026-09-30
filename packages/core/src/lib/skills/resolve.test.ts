@@ -569,6 +569,290 @@ describe("resolveConfiguredSkills", () => {
       expect.stringMatching(/outside.*project root/i),
     ]);
   });
+
+  it("omits dimension fields when skillStorage is false", async () => {
+    const homeDir = await tempDir();
+    const ownedDir = join(homeDir, ".ratel", "skills", "owned");
+    await writeSkill(ownedDir, "owned", "Owned", "Body.");
+    await writeFile(
+      join(ownedDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "owned" })}\n`,
+      "utf8",
+    );
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      skillStorage: false,
+      scopes: [
+        {
+          ref: { scope: "user" },
+          config: {
+            entries: {
+              owned: { mode: "copy", source: "ratel" },
+              missing: { mode: "reference", path: join(homeDir, "nowhere") },
+            },
+            dirs: [],
+          },
+        },
+      ],
+    });
+
+    expect(catalog.registrations).toHaveLength(2);
+    const owned = catalog.registrations.find((registration) => registration.id === "owned");
+    const missing = catalog.registrations.find((registration) => registration.id === "missing");
+    expect(owned).toBeDefined();
+    expect(missing).toBeDefined();
+    if (!owned || !missing) throw new Error("expected owned and missing registrations");
+    expect(Object.keys(owned)).toEqual([
+      "ref",
+      "id",
+      "mode",
+      "source",
+      "scopeRef",
+      "configuredPath",
+      "canonicalPath",
+      "state",
+      "editable",
+      "diagnostics",
+    ]);
+    expect(Object.keys(missing)).toEqual([
+      "ref",
+      "id",
+      "mode",
+      "source",
+      "scopeRef",
+      "configuredPath",
+      "state",
+      "editable",
+      "diagnostics",
+    ]);
+    expect(owned.origin).toBeUndefined();
+    expect(owned.storage).toBeUndefined();
+    expect(owned.availability).toBeUndefined();
+    expect(owned.sync).toBeUndefined();
+    expect(missing.origin).toBeUndefined();
+    expect(missing.storage).toBeUndefined();
+    expect(missing.availability).toBeUndefined();
+    expect(missing.sync).toBeUndefined();
+    expect(owned.configuredPath).toBe(join(homeDir, ".ratel", "skills", "owned"));
+  });
+
+  it("attaches origin and availability when skillStorage is true", async () => {
+    const homeDir = await tempDir();
+    const projectRoot = join(homeDir, "repo");
+    const ownedDir = join(homeDir, ".ratel", "skills", "owned");
+    const projectCopy = join(projectRoot, ".ratel", "skills", "proj");
+    const altCopy = join(homeDir, ".ratel", "skills-alt", "relocated");
+    const refPath = join(homeDir, "native", "review");
+    await writeSkill(ownedDir, "owned", "Owned", "Body.");
+    await writeFile(
+      join(ownedDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "owned" })}\n`,
+      "utf8",
+    );
+    await writeSkill(projectCopy, "proj", "Project", "Body.");
+    await writeFile(
+      join(projectCopy, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "proj" })}\n`,
+      "utf8",
+    );
+    await writeSkill(altCopy, "relocated", "Alt owned", "Body.");
+    await writeFile(
+      join(altCopy, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "relocated" })}\n`,
+      "utf8",
+    );
+    await writeSkill(refPath, "review", "Review", "Body.");
+    await writeSkill(
+      join(projectRoot, ".agents", "skills", "owned"),
+      "owned",
+      "Project owned",
+      "Body.",
+    );
+    await mkdir(join(homeDir, "empty-skill"), { recursive: true });
+    if (process.platform !== "win32") {
+      await symlink(join(homeDir, "nope"), join(homeDir, "dangling"));
+    }
+
+    const withDimensions = await resolveConfiguredSkills({
+      homeDir,
+      projectRoot,
+      skillStorage: true,
+      scopes: [
+        {
+          ref: { scope: "user" },
+          config: {
+            entries: {
+              owned: { mode: "copy", source: "ratel" },
+              review: { mode: "reference", path: refPath, source: "claude" },
+              missing: { mode: "reference", path: join(homeDir, "gone") },
+              empty: { mode: "reference", path: join(homeDir, "empty-skill") },
+              ...(process.platform === "win32"
+                ? {}
+                : { dangling: { mode: "reference" as const, path: join(homeDir, "dangling") } }),
+              relocated: {
+                mode: "copy",
+                path: altCopy,
+                source: "ratel",
+              },
+            },
+            dirs: [],
+          },
+        },
+        {
+          ref: { scope: "project", projectId: "prj_1" },
+          config: {
+            entries: {
+              proj: { mode: "copy" },
+              owned: { mode: "reference", path: ".agents/skills/owned" },
+            },
+            dirs: [],
+          },
+        },
+      ],
+    });
+
+    const ownedUser = withDimensions.registrations.find(
+      (r) => r.id === "owned" && r.mode === "copy",
+    );
+    expect(ownedUser).toEqual(
+      expect.objectContaining({
+        origin: "local-managed",
+        configuredPath: ownedDir,
+        availability: "available",
+        state: "shadowed",
+      }),
+    );
+
+    const ownedProject = withDimensions.registrations.find(
+      (r) => r.id === "owned" && r.mode === "reference",
+    );
+    expect(ownedProject).toEqual(
+      expect.objectContaining({
+        availability: "available",
+        state: "effective",
+      }),
+    );
+
+    expect(
+      withDimensions.registrations.find((r) => r.id === "review" && r.mode === "reference"),
+    ).toEqual(
+      expect.objectContaining({
+        origin: "reference",
+        configuredPath: refPath,
+        availability: "available",
+      }),
+    );
+
+    expect(withDimensions.registrations.find((r) => r.id === "missing")).toEqual(
+      expect.objectContaining({
+        availability: "not-found",
+        state: "invalid",
+      }),
+    );
+    expect(withDimensions.registrations.find((r) => r.id === "empty")).toEqual(
+      expect.objectContaining({
+        availability: "invalid",
+        state: "invalid",
+      }),
+    );
+    if (process.platform !== "win32") {
+      expect(withDimensions.registrations.find((r) => r.id === "dangling")).toEqual(
+        expect.objectContaining({
+          availability: "not-found",
+          state: "invalid",
+        }),
+      );
+    }
+
+    expect(withDimensions.registrations.find((r) => r.id === "proj")).toEqual(
+      expect.objectContaining({
+        origin: "local-managed",
+        configuredPath: projectCopy,
+        availability: "available",
+      }),
+    );
+
+    expect(withDimensions.registrations.find((r) => r.id === "relocated")).toEqual(
+      expect.objectContaining({
+        id: "relocated",
+        origin: "local-managed",
+        availability: "available",
+        configuredPath: altCopy,
+      }),
+    );
+  });
+
+  it("marks a user copy outside ~/.ratel as invalid and not editable", async () => {
+    const homeDir = await tempDir();
+    const outsideDir = join(homeDir, "Documents", "escaped");
+    await writeSkill(outsideDir, "escaped", "Escaped", "Body.");
+    await writeFile(
+      join(outsideDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "escaped" })}\n`,
+      "utf8",
+    );
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      scopes: [
+        {
+          ref: { scope: "user" },
+          config: {
+            entries: {
+              escaped: { mode: "copy", path: outsideDir, source: "ratel" },
+            },
+            dirs: [],
+          },
+        },
+      ],
+    });
+
+    expect(catalog.registrations).toEqual([
+      expect.objectContaining({
+        id: "escaped",
+        state: "invalid",
+        editable: false,
+      }),
+    ]);
+  });
+
+  it("reports a real path and copy-mode diagnostic for an absolute project copy path", async () => {
+    const homeDir = await tempDir();
+    const projectRoot = join(homeDir, "repo");
+    await mkdir(projectRoot, { recursive: true });
+
+    const catalog = await resolveConfiguredSkills({
+      homeDir,
+      projectRoot,
+      skillStorage: true,
+      scopes: [
+        {
+          ref: { scope: "project", projectId: "prj_1" },
+          config: {
+            entries: {
+              escaped: { mode: "copy", path: "/etc", source: "ratel" },
+            },
+            dirs: [],
+          },
+        },
+      ],
+    });
+
+    const registration = catalog.registrations.find((r) => r.id === "escaped");
+    expect(registration).toEqual(
+      expect.objectContaining({
+        id: "escaped",
+        state: "invalid",
+        editable: false,
+        configuredPath: "/etc",
+        origin: "local-managed",
+      }),
+    );
+    expect(catalog.diagnostics.map(({ message }) => message)).toEqual([
+      expect.stringMatching(/copy/i),
+    ]);
+  });
 });
 
 async function tempDir(): Promise<string> {

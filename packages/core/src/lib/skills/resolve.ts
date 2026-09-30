@@ -5,6 +5,13 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
 import type { RatelScopeRef } from "../../context.js";
 import { isSafeSkillId } from "../../skill-id.js";
+import {
+  availabilityFromResolveFailure,
+  configuredSkillStoragePath,
+  originFromEntry,
+  type SkillAvailability,
+  type SkillOrigin,
+} from "../../skill-registration.js";
 import type { SkillsConfig } from "../config.js";
 import { isDirectoryEntry } from "../fs.js";
 import { loadSkillBundle } from "./load.js";
@@ -44,6 +51,8 @@ export interface SkillRegistrationView {
   shadowedBy?: SkillRegistrationRef;
   duplicateOf?: SkillRegistrationRef;
   diagnostics: SkillDiagnostic[];
+  origin?: SkillOrigin;
+  availability?: SkillAvailability;
 }
 
 export interface ResolvedSkillCatalog {
@@ -58,6 +67,8 @@ export interface ResolveConfiguredSkillsInput {
   homeDir: string;
   projectRoot?: string;
   scopes: SkillScopeConfig[];
+  /** When true, attach origin and availability. Defaults to false. */
+  skillStorage?: boolean;
 }
 
 interface ValidCandidate {
@@ -72,6 +83,7 @@ interface ValidCandidate {
 export async function resolveConfiguredSkills(
   input: ResolveConfiguredSkillsInput,
 ): Promise<ResolvedSkillCatalog> {
+  const skillStorage = input.skillStorage === true;
   const registrations: SkillRegistrationView[] = [];
   const diagnostics: SkillDiagnostic[] = [];
   const candidates: ValidCandidate[] = [];
@@ -79,7 +91,7 @@ export async function resolveConfiguredSkills(
 
   for (const scoped of input.scopes) {
     for (const [id, entry] of Object.entries(scoped.config?.entries ?? {})) {
-      let configuredPath = entry.mode === "reference" ? entry.path : id;
+      let configuredPath = entry.path ?? id;
       try {
         if (!isSafeSkillId(id))
           throw new Error(`unsafe skill registration id: ${JSON.stringify(id)}`);
@@ -106,6 +118,7 @@ export async function resolveConfiguredSkills(
           state: "effective",
           editable: entry.mode === "copy" && (await hasMatchingCopyMarker(canonicalPath, id)),
           diagnostics: [],
+          ...(skillStorage ? { origin: originFromEntry(entry), availability: "available" } : {}),
         };
         registrations.push(registration);
         candidates.push({
@@ -134,6 +147,9 @@ export async function resolveConfiguredSkills(
           path: configuredPath,
         };
         diagnostics.push(diagnostic);
+        const availability = skillStorage
+          ? await availabilityFromResolveFailure(error, configuredPath)
+          : undefined;
         registrations.push({
           ref,
           id,
@@ -144,6 +160,7 @@ export async function resolveConfiguredSkills(
           state: "invalid",
           editable: false,
           diagnostics: [diagnostic],
+          ...(availability ? { origin: originFromEntry(entry), availability } : {}),
         });
       }
     }
@@ -212,6 +229,9 @@ export async function resolveConfiguredSkills(
             state: "effective",
             editable: false,
             diagnostics: [],
+            ...(skillStorage
+              ? { origin: "reference" as const, availability: "available" as const }
+              : {}),
           };
           registrations.push(registration);
           candidates.push({
@@ -237,6 +257,9 @@ export async function resolveConfiguredSkills(
             configuredPath,
           };
           diagnostics.push(diagnostic);
+          const availability = skillStorage
+            ? await availabilityFromResolveFailure(error, configuredPath)
+            : undefined;
           registrations.push({
             ref,
             id,
@@ -247,6 +270,7 @@ export async function resolveConfiguredSkills(
             state: "invalid",
             editable: false,
             diagnostics: [diagnostic],
+            ...(availability ? { origin: "reference" as const, availability } : {}),
           });
         }
       }
@@ -329,21 +353,14 @@ function configuredSkillPath(
   id: string,
   entry: NonNullable<SkillsConfig["entries"]>[string],
 ): string {
-  if (!isSafeSkillId(id)) throw new Error(`unsafe skill registration id: ${JSON.stringify(id)}`);
-  if (entry.mode === "copy") {
-    if (ref.scope === "user") return join(input.homeDir, ".ratel", "skills", id);
-    const root = requiredProjectRoot(input, ref);
-    return ref.scope === "project"
-      ? join(root, ".ratel", "skills", id)
-      : join(root, ".ratel", "skills.local", id);
-  }
-  if (ref.scope !== "user" && isAbsolute(entry.path)) {
-    throw new Error(`${ref.scope} skill reference paths must be relative to the project root`);
-  }
-  if (isAbsolute(entry.path)) return entry.path;
-  const base =
-    ref.scope === "user" ? join(input.homeDir, ".ratel") : requiredProjectRoot(input, ref);
-  return resolve(base, entry.path);
+  return configuredSkillStoragePath({
+    homeDir: input.homeDir,
+    ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
+    scopeRef: ref,
+    id,
+    mode: entry.mode,
+    ...(entry.path ? { path: entry.path } : {}),
+  });
 }
 
 function requiredProjectRoot(

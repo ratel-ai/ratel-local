@@ -9,7 +9,7 @@ import {
   nodeFs,
   type ResolvedBin,
 } from "@ratel-ai/ratel-local-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CANCEL_SYMBOL, type PromptAdapter, silentPromptAdapter } from "../prompts.js";
 import type { SkillPaths } from "../skills/paths.js";
 import { runImport } from "./import.js";
@@ -853,6 +853,56 @@ command = "codex"
     }
   });
 
+  it("persists origin and path when daemon reports skillStorage and CLI env is unset", async () => {
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    const fs = new MemFs();
+    fs.files.set(join(HOME, ".ratel", "daemon.json"), JSON.stringify({ port: 5731 }));
+    fs.files.set(join(HOME, ".ratel", "daemon-token"), "daemon-test-token");
+    const skillPaths = await makeSkillPaths();
+    try {
+      await writeCliClaudeSkill(skillPaths, "api-design");
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/daemon/status")) {
+          return Response.json({ skillStorage: true });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      const { ctx } = ctxOf(fs, autoConfirm(), false);
+
+      await runImport(ctx, {
+        bin: BIN,
+        yes: true,
+        agentKind: "claude-code",
+        skillPaths,
+        probe: async () => undefined,
+      });
+
+      const scoped = JSON.parse(
+        await readFile(join(skillPaths.root, ".ratel", "config.json"), "utf8"),
+      );
+      expect(scoped.skills.entries["api-design"]).toMatchObject({
+        mode: "reference",
+        origin: "reference",
+        source: "claude",
+        hostPolicy: { mode: "manual-only", source: "claude" },
+      });
+      expect(typeof scoped.skills.entries["api-design"].path).toBe("string");
+      expect(scoped.skills.entries["api-design"].path).toContain("api-design");
+
+      const backupRoot = join(skillPaths.root, ".ratel", "backups");
+      const backupDirs = await readdir(backupRoot);
+      expect(backupDirs.length).toBeGreaterThan(0);
+      expect(await anySnapshotBackup(backupRoot, backupDirs)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+      await rm(skillPaths.root, { recursive: true, force: true });
+    }
+  });
+
   it("--yes skips the confirm prompt entirely", async () => {
     const fs = new MemFs();
     fs.files.set(
@@ -1327,3 +1377,17 @@ command = "codex"
     }
   });
 });
+
+async function anySnapshotBackup(backupRoot: string, backupDirs: string[]): Promise<boolean> {
+  for (const dir of backupDirs) {
+    try {
+      const manifest = JSON.parse(
+        await readFile(join(backupRoot, dir, "manifest.json"), "utf8"),
+      ) as { entries: Array<{ kind?: string }> };
+      if (manifest.entries.some((entry) => entry.kind !== undefined)) return true;
+    } catch {
+      // ignore missing or unreadable manifests
+    }
+  }
+  return false;
+}

@@ -43,12 +43,15 @@ export interface SkillRegistrationDiagnostic {
   severity?: "warning" | "error";
 }
 
+/** Mirrors the daemon's SkillRegistrationView wire shape from core. */
 export interface SkillRegistrationView extends SkillRegistrationSummary {
   id: string;
   source: string;
   configuredPath?: string;
   canonicalPath?: string;
   diagnostics?: SkillRegistrationDiagnostic[];
+  origin?: "local-managed" | "reference";
+  availability?: "available" | "not-found" | "invalid" | "inaccessible";
 }
 
 export interface SkillRegistrationGroup {

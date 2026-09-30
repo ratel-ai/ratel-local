@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { skillStorageEnabled } from "@ratel-ai/ratel-local-core";
 import { daemonPaths } from "./handlers/daemon.js";
 import type { HandlerCtx } from "./handlers/types.js";
 
@@ -57,6 +58,24 @@ export function daemonLoopbackUrl(stateText: string): string | null {
     return null;
   }
   return `http://127.0.0.1:${state.port}`;
+}
+
+/** A running daemon decides; its own environment is what the operation will use. */
+export async function resolveSkillStorageFlag(
+  ctx: HandlerCtx,
+  daemonRequest?: DaemonApiRequest,
+): Promise<boolean> {
+  const request = daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
+  const response = await request("/api/daemon/status");
+  if (response) {
+    try {
+      const body = (await response.json()) as { skillStorage?: unknown };
+      return body.skillStorage === true;
+    } catch {
+      // unparseable status: fall back to this process's environment
+    }
+  }
+  return skillStorageEnabled();
 }
 
 export async function requireDaemonJson<T>(response: Response, operation: string): Promise<T> {
