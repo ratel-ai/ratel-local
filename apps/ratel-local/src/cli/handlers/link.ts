@@ -38,7 +38,7 @@ export interface LinkOptions {
   exists?: (path: string) => Promise<boolean>;
 }
 
-export const LINK_USAGE = `usage: ratel-local link [flags]
+export const LINK_USAGE = `usage: ratel link [flags]
 
 Flags:
   --agent auto|claude-code|codex
@@ -187,7 +187,7 @@ export async function runLink(
         "Plugin installation failed",
       );
     }
-    ctx.prompts.note(`Backup created. Run \`ratel-local backup list\` to inspect backups.`, "Done");
+    ctx.prompts.note(`Backup created. Run \`ratel backup list\` to inspect backups.`, "Done");
     ctx.prompts.outro(
       commit.result.mode === "mcp-fallback"
         ? `MCP fallback link complete · restart ${agentState.host.displayName} to pick up the new MCP entry`

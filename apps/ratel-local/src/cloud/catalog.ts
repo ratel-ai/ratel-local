@@ -167,7 +167,7 @@ export function createCloudCatalogSource(input: {
     if (!settings) {
       if (!profile) return undefined;
       throw new Error(
-        `Cloud profile ${JSON.stringify(profile)} (${source}) is selected, but no Cloud credential is stored. Add one with: ratel-local cloud add ${profile}`,
+        `Cloud profile ${JSON.stringify(profile)} (${source}) is selected, but no Cloud credential is stored. Add one with: ratel cloud add ${profile}`,
       );
     }
     const apiKey = resolveCloudCredential(settings, {

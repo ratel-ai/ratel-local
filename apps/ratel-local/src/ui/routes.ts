@@ -22,6 +22,7 @@ import {
   prepareAgentRatelMcpFallbackRemoval,
   prepareClaudeCodeStatuslineInstall,
   prepareClaudeCodeStatuslineUninstall,
+  primaryRatelBin,
   type ResolvedBin,
   type RuntimeContextRef,
   type RuntimeRevision,
@@ -544,13 +545,13 @@ export async function authServer(ctx: HandlerCtx, name: string): Promise<ApiResp
 
 function resolveRatelBin(): string | undefined {
   if (process.env.RATEL_LOCAL_BIN) return process.env.RATEL_LOCAL_BIN;
-  if (process.argv[1]) return process.argv[1];
+  if (process.argv[1]) return primaryRatelBin(process.argv[1]);
   return undefined;
 }
 
 function resolveUiRatelBin(): ResolvedBin {
   const command = resolveRatelBin();
-  if (!command) throw new Error("Could not locate the ratel-local binary for statusline install");
+  if (!command) throw new Error("Could not locate the ratel binary for statusline install");
   return { command, args: [], source: "env" };
 }
 

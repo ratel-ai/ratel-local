@@ -50,7 +50,9 @@ import type {
   HandlerCtx,
 } from "./handlers/types.js";
 import { runUi } from "./handlers/ui.js";
-import { type PromptAdapter, silentPromptAdapter } from "./prompts.js";
+import { detectOutputEnvironment, PLAIN } from "./output/environment.js";
+import { createCliOutput } from "./output/index.js";
+import { defaultPromptAdapter, type PromptAdapter } from "./prompts.js";
 
 export interface RunCliOptions {
   readConfig?: (path: string) => Promise<unknown>;
@@ -76,7 +78,9 @@ export interface RunCliResult {
   shutdown?: () => Promise<void>;
 }
 
-const TOP_USAGE = `usage: ratel-local <command> [args...]
+const TOP_USAGE = `usage: ratel <command> [args...]
+
+The \`ratel-local\` executable remains a compatibility alias.
 
 Commands:
   serve    start the gateway over stdio (use --config <path>; repeat for multi-file merge,
@@ -97,10 +101,12 @@ Commands:
   statusline render or install the Claude Code Ratel statusline
   ui       open the persistent daemon UI [--no-open]
 
-Run \`ratel-local <group>\` for the verbs available in a group.`;
+Run \`ratel <group>\` for the verbs available in a group.`;
 
 export async function runCli(argv: string[], options: RunCliOptions = {}): Promise<RunCliResult> {
   const log = options.logger ?? ((m) => console.error(m));
+  const environment = options.logger ? PLAIN : detectOutputEnvironment();
+  const output = createCliOutput({ environment, write: log });
   let parsed: ParsedArgs;
   try {
     parsed = parseArgs(argv);
@@ -185,7 +191,8 @@ export async function runCli(argv: string[], options: RunCliOptions = {}): Promi
     env: options.env ?? defaultEnv(),
     fs: options.fs ?? nodeFs,
     log,
-    prompts: options.prompts ?? silentPromptAdapter(),
+    output,
+    prompts: options.prompts ?? defaultPromptAdapter({ environment, output }),
     installAgentPlugin:
       options.installAgentPlugin ??
       createRatelAgentPluginInstaller({

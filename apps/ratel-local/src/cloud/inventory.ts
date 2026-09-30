@@ -112,7 +112,7 @@ export async function inventoryCloudSettings(input: {
       code: "cloud_profile_unresolved",
       severity: "error",
       message: `${selected.path} selects Cloud profile "${selected.profile}", which ${path} does not define; stored profiles: ${known}`,
-      action: `run "ratel-local cloud add ${selected.profile}", or select a stored profile with "ratel-local cloud use"`,
+      action: `run "ratel cloud add ${selected.profile}", or select a stored profile with "ratel cloud use"`,
     });
   }
   if (selected && !settings) {
@@ -120,7 +120,7 @@ export async function inventoryCloudSettings(input: {
       code: "cloud_profile_unresolved",
       severity: "error",
       message: `${selected.path} selects Cloud profile "${selected.profile}", but no Cloud credential is stored`,
-      action: `run "ratel-local cloud add ${selected.profile}"`,
+      action: `run "ratel cloud add ${selected.profile}"`,
     });
   }
   return diagnostics;

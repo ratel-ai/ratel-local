@@ -15,7 +15,7 @@ import type { EmbeddingSpec } from "@ratel-ai/sdk";
 import { ArgError } from "../args.js";
 import type { HandlerCtx } from "./types.js";
 
-export const RETRIEVAL_USAGE = `usage: ratel-local retrieval <verb> [flags]
+export const RETRIEVAL_USAGE = `usage: ratel retrieval <verb> [flags]
 
 Verbs:
   status      show user/project/local overrides and the effective retrieval mode

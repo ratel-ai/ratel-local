@@ -149,4 +149,17 @@ describe("Ratel gateway entries", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    "ratel",
+    "ratel-local",
+  ])("recognizes a %s connector without changing the MCP entry name", (command) => {
+    const { name, entry } = makeRatelGatewayEntry({
+      bin: { command, args: [], source: "path" },
+      agentHost: "codex",
+      linkScope: "user",
+    });
+    expect(name).toBe("ratel-local");
+    expect(isRatelGatewayEntry(name, entry)).toBe(true);
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ADAPTIVE_RANKING_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   featureFlagOverridesFromEnv,
@@ -8,7 +9,12 @@ import {
   SKILL_STORAGE_FEATURE_ENV,
 } from "./feature-flags.js";
 
-const OFF = { cloudTelemetry: false, cloudCatalog: false, skillStorage: false };
+const OFF = {
+  adaptiveRanking: false,
+  cloudTelemetry: false,
+  cloudCatalog: false,
+  skillStorage: false,
+};
 
 describe("feature flags", () => {
   it("keeps flags off by default and accepts only an explicit 1", () => {
@@ -26,10 +32,29 @@ describe("feature flags", () => {
         [CLOUD_CATALOG_FEATURE_ENV]: "1",
         [SKILL_STORAGE_FEATURE_ENV]: "1",
       }),
-    ).toEqual({ cloudTelemetry: true, cloudCatalog: true, skillStorage: true });
+    ).toEqual({
+      adaptiveRanking: false,
+      cloudTelemetry: true,
+      cloudCatalog: true,
+      skillStorage: true,
+    });
+  });
+
+  it("keeps adaptive ranking off by default and accepts only an explicit 1", () => {
+    expect(featureFlagsFromEnv({}).adaptiveRanking).toBe(false);
+    expect(featureFlagsFromEnv({ [ADAPTIVE_RANKING_FEATURE_ENV]: "0" }).adaptiveRanking).toBe(
+      false,
+    );
+    expect(featureFlagsFromEnv({ [ADAPTIVE_RANKING_FEATURE_ENV]: "true" }).adaptiveRanking).toBe(
+      false,
+    );
+    expect(featureFlagsFromEnv({ [ADAPTIVE_RANKING_FEATURE_ENV]: "1" }).adaptiveRanking).toBe(true);
   });
 
   it("persists only enabled flags into daemon service environments", () => {
+    expect(featureFlagServiceEnvironment({ adaptiveRanking: true })).toEqual({
+      [ADAPTIVE_RANKING_FEATURE_ENV]: "1",
+    });
     expect(featureFlagServiceEnvironment({})).toEqual({});
     expect(featureFlagServiceEnvironment(OFF)).toEqual({});
     expect(featureFlagServiceEnvironment({ cloudTelemetry: true })).toEqual({
@@ -76,6 +101,16 @@ describe("feature flags", () => {
       [CLOUD_TELEMETRY_FEATURE_ENV]: false,
       [CLOUD_CATALOG_FEATURE_ENV]: true,
       [SKILL_STORAGE_FEATURE_ENV]: false,
+    });
+  });
+
+  it("treats adaptive-ranking env presence as an explicit service override", () => {
+    expect(featureFlagOverridesFromEnv({})).toEqual({});
+    expect(featureFlagOverridesFromEnv({ [ADAPTIVE_RANKING_FEATURE_ENV]: "1" })).toEqual({
+      [ADAPTIVE_RANKING_FEATURE_ENV]: true,
+    });
+    expect(featureFlagOverridesFromEnv({ [ADAPTIVE_RANKING_FEATURE_ENV]: "0" })).toEqual({
+      [ADAPTIVE_RANKING_FEATURE_ENV]: false,
     });
   });
 });

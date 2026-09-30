@@ -127,7 +127,7 @@ export function AllProjectsPage() {
             </EmptyStateIcon>
             <h2 className="font-medium">No registered projects</h2>
             <p className="text-muted-foreground text-sm">
-              Register a root with ratel-local project add, then refresh this overview.
+              Register a root with ratel project add, then refresh this overview.
             </p>
           </div>
         </section>

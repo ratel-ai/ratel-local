@@ -98,7 +98,7 @@ function logEntryRecap(ctx: HandlerCtx, scope: RatelScope, name: string, entry: 
   if (entry.description) {
     ctx.log(`  description:   ${previewDescription(entry.description)}`);
   }
-  ctx.log(`something not right? \`ratel-local mcp edit --scope ${scope} --name ${name}\``);
+  ctx.log(`something not right? \`ratel mcp edit --scope ${scope} --name ${name}\``);
 }
 
 function readScope(ctx: HandlerCtx): RatelScope {
@@ -114,9 +114,7 @@ function readName(ctx: HandlerCtx): string {
     // first positional is a URL; we expect <name> first
     throw new Error("first positional must be a name; received what looks like a URL");
   }
-  throw new Error(
-    "name is required: ratel-local mcp add [flags] <name> [-- <command> ...] | <url>",
-  );
+  throw new Error("name is required: ratel mcp add [flags] <name> [-- <command> ...] | <url>");
 }
 
 function assembleEntry(ctx: HandlerCtx): ServerEntry {
@@ -219,14 +217,14 @@ async function maybeProbeAndAuth(
       result = await authProbe(name, entry, oauthEntry.oauthKey);
     } catch (err) {
       ctx.log(
-        `[ratel] could not authorize ${name}: ${(err as Error).message}; run \`ratel-local mcp auth ${name}\` to retry`,
+        `[ratel] could not authorize ${name}: ${(err as Error).message}; run \`ratel mcp auth ${name}\` to retry`,
       );
       return;
     }
     if (result.status !== "authorized") {
       const reason = result.reason ?? "unknown reason";
       ctx.log(
-        `[ratel] could not authorize ${name}: ${reason}; run \`ratel-local mcp auth ${name}\` to retry`,
+        `[ratel] could not authorize ${name}: ${reason}; run \`ratel mcp auth ${name}\` to retry`,
       );
       return;
     }

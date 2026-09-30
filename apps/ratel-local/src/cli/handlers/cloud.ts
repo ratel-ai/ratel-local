@@ -16,7 +16,7 @@ import {
 import { ArgError } from "../args.js";
 import type { CliCloudMutator, HandlerCtx } from "./types.js";
 
-export const CLOUD_USAGE = `usage: ratel-local cloud <verb> [args...]
+export const CLOUD_USAGE = `usage: ratel cloud <verb> [args...]
 
 Verbs:
   add <profile>     store a Ratel Cloud API key under a profile name
@@ -67,7 +67,7 @@ async function add(
   // uses for Ctrl-C, so afterwards a pipe and a deliberate abort look alike.
   if (!ctx.prompts.canPrompt()) {
     throw new ArgError(
-      `cannot read a key for "${profile}" without a terminal. Run "ratel-local cloud add ${profile}" from an interactive shell.`,
+      `cannot read a key for "${profile}" without a terminal. Run "ratel cloud add ${profile}" from an interactive shell.`,
     );
   }
   const entered = await ctx.prompts.password({
@@ -90,7 +90,7 @@ async function add(
   if (next.default === profile) {
     ctx.log(`"${profile}" is the default profile.`);
   } else {
-    ctx.log(`Select it with: ratel-local cloud use ${profile}`);
+    ctx.log(`Select it with: ratel cloud use ${profile}`);
   }
 }
 
@@ -111,7 +111,7 @@ async function use(
 async function list(ctx: HandlerCtx, settings: CloudSettings): Promise<void> {
   const names = Object.keys(settings.profiles).sort();
   if (names.length === 0) {
-    ctx.log("No Cloud profiles stored. Add one with: ratel-local cloud add <profile>");
+    ctx.log("No Cloud profiles stored. Add one with: ratel cloud add <profile>");
     return;
   }
   const scopes = await scanCloudProfileScopes(ctx);
@@ -153,13 +153,13 @@ async function status(ctx: HandlerCtx, settings: CloudSettings): Promise<void> {
   ctx.log(`catalog ${cloudEndpoints(settings).catalog.toString().padEnd(46)}${catalogSource}`);
   if (!resolved) {
     ctx.log("state none");
-    ctx.log("No Cloud profile resolves here. Add one with: ratel-local cloud add <profile>");
+    ctx.log("No Cloud profile resolves here. Add one with: ratel cloud add <profile>");
     return;
   }
   if (!settings.profiles[resolved.profile]) {
     const known = Object.keys(settings.profiles).sort().join(", ") || "none";
     throw new ArgError(
-      `${resolved.source} selects Cloud profile "${resolved.profile}", which is not stored; stored profiles: ${known}. Add one with: ratel-local cloud add ${resolved.profile}`,
+      `${resolved.source} selects Cloud profile "${resolved.profile}", which is not stored; stored profiles: ${known}. Add one with: ratel cloud add ${resolved.profile}`,
     );
   }
   ctx.log(`profile "${resolved.profile}"`);
@@ -219,7 +219,7 @@ async function remove(
   if (blockers.length > 0 && !force) {
     const files = blockers.map((binding) => binding.path).join(", ");
     throw new ArgError(
-      `refusing to remove "${profile}" while ${files} still select it. This check covers this directory's user/project/local configs only, not every project on the machine. Rerun with --force to remove anyway, or change the selection with "ratel-local cloud use".`,
+      `refusing to remove "${profile}" while ${files} still select it. This check covers this directory's user/project/local configs only, not every project on the machine. Rerun with --force to remove anyway, or change the selection with "ratel cloud use".`,
     );
   }
   let clearedDefault = false;
@@ -248,7 +248,7 @@ async function remove(
 function unknownProfileError(profile: string, settings: CloudSettings): ArgError {
   const known = Object.keys(settings.profiles).sort().join(", ") || "none";
   return new ArgError(
-    `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel-local cloud add ${profile}`,
+    `no Cloud profile named "${profile}"; stored profiles: ${known}. Add one with: ratel cloud add ${profile}`,
   );
 }
 

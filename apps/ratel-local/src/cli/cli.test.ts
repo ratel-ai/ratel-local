@@ -207,7 +207,7 @@ describe("runCli — serve", () => {
   });
 
   it("rejects when no config path is provided, with a usage message", async () => {
-    await expect(runCli(["serve"], { logger: () => {} })).rejects.toThrow(/usage/i);
+    await expect(runCli(["serve"], { logger: () => {} })).rejects.toThrow("usage: ratel serve");
   });
 
   it("propagates a clear error when the config file cannot be read", async () => {
@@ -286,6 +286,8 @@ describe("runCli — help and routing", () => {
     const logs: string[] = [];
     await runCli(["--help"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
+    expect(out).toContain("usage: ratel <command>");
+    expect(out).toContain("`ratel-local` executable remains a compatibility alias");
     expect(out).toMatch(/mcp/);
     expect(out).toMatch(/backup/);
     expect(out).toMatch(/^\s*import\s/m);
@@ -296,6 +298,18 @@ describe("runCli — help and routing", () => {
     expect(out).toMatch(/daemon open/);
     expect(out).toMatch(/skill import/);
     expect(out).toMatch(/remove-scope/);
+  });
+
+  it.each([
+    "retrieval",
+    "project",
+    "skill",
+    "traces",
+    "daemon",
+  ])("%s help uses the primary command name", async (command) => {
+    const logs: string[] = [];
+    await runCli([command, "--help"], { logger: (message) => logs.push(message) });
+    expect(logs.join("\n")).toContain(`usage: ratel ${command}`);
   });
 
   it("prints command-specific help for import and link without running either workflow", async () => {
@@ -309,7 +323,7 @@ describe("runCli — help and routing", () => {
         logger: (message) => logs.push(message),
       });
 
-      expect(logs.join("\n")).toContain(`usage: ratel-local ${command}`);
+      expect(logs.join("\n")).toContain(`usage: ratel ${command}`);
       expect(fs.files.size).toBe(0);
     }
   });
@@ -321,7 +335,7 @@ describe("runCli — help and routing", () => {
       logger: (message) => logs.push(message),
     });
 
-    expect(logs.join("\n")).toContain("usage: ratel-local connect");
+    expect(logs.join("\n")).toContain("usage: ratel connect");
     expect(result.shutdown).toBeUndefined();
   });
 
@@ -331,19 +345,21 @@ describe("runCli — help and routing", () => {
     expect(logs).toEqual(["1.2.3"]);
   });
 
-  it("`ratel-local mcp` (no verb) logs the mcp group usage", async () => {
+  it("`ratel mcp` (no verb) logs the mcp group usage", async () => {
     const logs: string[] = [];
     await runCli(["mcp"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
+    expect(out).toContain("usage: ratel mcp");
     expect(out).toMatch(/add/);
     expect(out).not.toMatch(/^\s*import\s/m);
     expect(out).not.toMatch(/^\s*link\s/m);
   });
 
-  it("`ratel-local backup` (no verb) logs the backup group usage", async () => {
+  it("`ratel backup` (no verb) logs the backup group usage", async () => {
     const logs: string[] = [];
     await runCli(["backup"], { logger: (m) => logs.push(m) });
     const out = logs.join("\n");
+    expect(out).toContain("usage: ratel backup");
     expect(out).toMatch(/list/);
     expect(out).not.toMatch(/undo/);
   });
@@ -375,7 +391,7 @@ describe("runCli — help and routing", () => {
     });
 
     expect(homes).toEqual([HOME]);
-    expect(logs).toEqual(["no projects registered"]);
+    expect(logs).toEqual(["[info] no projects registered"]);
   });
 
   it("routes doctor through recovery and scoped diagnostics", async () => {
@@ -390,13 +406,14 @@ describe("runCli — help and routing", () => {
       await rm(homeDir, { recursive: true, force: true });
     }
 
-    expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
+    expect(logs.at(-1)).toBe("[ok] doctor: ok (1 context checked)");
   });
 
-  it("`ratel-local setup --help` describes complete and automated onboarding", async () => {
+  it("`ratel setup --help` describes complete and automated onboarding", async () => {
     const logs: string[] = [];
     await runCli(["setup", "--help"], { logger: (message) => logs.push(message) });
     const out = logs.join("\n");
+    expect(out).toContain("usage: ratel setup");
     expect(out).toContain("--agent auto|claude-code|codex");
     expect(out).toContain("--daemon-only");
     expect(out).toContain("--yes");
@@ -447,7 +464,11 @@ describe("runCli — help and routing", () => {
   });
 
   it("rejects an unknown command with ArgError", async () => {
-    await expect(runCli(["mcps"], { logger: () => {} })).rejects.toThrow(/mcps/);
+    const logs: string[] = [];
+    await expect(runCli(["mcps"], { logger: (message) => logs.push(message) })).rejects.toThrow(
+      /mcps/,
+    );
+    expect(logs.join("\n")).toContain("usage: ratel <command>");
   });
 
   it("rejects an unknown mcp verb", async () => {

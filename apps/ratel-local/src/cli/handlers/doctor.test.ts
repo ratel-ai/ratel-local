@@ -22,7 +22,7 @@ describe("runDoctor", () => {
 
     expect(logs).toContain("[ok] mutation_recovery: transaction recovery completed");
     expect(logs).toContain("[ok] context_global: resolved global context");
-    expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
+    expect(logs.at(-1)).toBe("[ok] doctor: ok (1 context checked)");
   });
 
   it("counts an unreadable Cloud store as an issue", async () => {
@@ -152,7 +152,7 @@ describe("runDoctor", () => {
     expect(logs).toContain(
       `[ok] context_project: resolved project ${project.id} (${project.canonicalRoot})`,
     );
-    expect(logs.at(-1)).toBe("doctor: ok (2 contexts checked)");
+    expect(logs.at(-1)).toBe("[ok] doctor: ok (2 contexts checked)");
   });
 
   it("reports a missing registered project as an actionable failure", async () => {
@@ -275,7 +275,7 @@ describe("runDoctor", () => {
       ]),
     );
     expect(await readFile(legacyPath, "utf8")).toContain("secret");
-    expect(logs.at(-1)).toBe("doctor: ok (1 context checked)");
+    expect(logs.at(-1)).toBe("[ok] doctor: ok (1 context checked)");
   });
 
   it("previews and fixes a verified legacy skill symlink migration", async () => {
@@ -310,7 +310,7 @@ describe("runDoctor", () => {
     await runDoctor(context(homeDir, previewLogs));
 
     expect(previewLogs).toContain(
-      "[info] legacy_skill_migration_ready [skill:review]: run ratel-local doctor --fix to migrate",
+      "[info] legacy_skill_migration_ready [skill:review]: run ratel doctor --fix to migrate",
     );
     expect((await lstat(managed)).isSymbolicLink()).toBe(true);
 

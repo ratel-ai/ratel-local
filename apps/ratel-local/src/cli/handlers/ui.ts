@@ -15,7 +15,7 @@ export async function runUi(
 ): Promise<RunUiResult> {
   if (parsed.flags.port !== undefined) {
     throw new Error(
-      "`ratel-local ui --port` is no longer supported; configure the daemon port with `ratel-local setup --port <port>`",
+      "`ratel ui --port` is no longer supported; configure the daemon port with `ratel setup --port <port>`",
     );
   }
   const noOpen = parsed.flags.open === false;
@@ -23,9 +23,7 @@ export async function runUi(
     opts.daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
   const response = await daemonRequest("/api/ui/sessions", { method: "POST" });
   if (!response) {
-    throw new Error(
-      "the Ratel daemon is not running; run `ratel-local setup` before opening the UI",
-    );
+    throw new Error("the Ratel daemon is not running; run `ratel setup` before opening the UI");
   }
   const { url } = await requireDaemonJson<{ url: string }>(response, "open daemon UI");
   if (typeof url !== "string" || url.length === 0) {

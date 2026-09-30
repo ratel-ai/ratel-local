@@ -22,6 +22,7 @@ import {
   type PreparedChangeCoordinator,
   type ProjectRegistry,
   prepareAgentTraceChange,
+  primaryRatelBin,
   type RuntimeContextRef,
   readJson,
   type SkillDiscovery,
@@ -64,6 +65,7 @@ import {
   ensureDaemonToken,
   readDaemonToken,
 } from "../../daemon/access.js";
+import { AdaptiveRankingStore } from "../../daemon/adaptive-ranking-store.js";
 import { InMemoryMcpClientRegistry } from "../../daemon/client-registry.js";
 import { createMcpHttpRoute } from "../../daemon/mcp-http.js";
 import { ReconciledGatewayPool } from "../../daemon/reconciled-gateway-pool.js";
@@ -78,6 +80,7 @@ import {
 } from "../../daemon/service-file.js";
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import {
+  ADAPTIVE_RANKING_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   type FeatureFlags,
@@ -103,7 +106,7 @@ export const DAEMON_SERVICE_ID = "ratel-local-daemon";
 export const DAEMON_PROTOCOL_VERSION = 1;
 export { DAEMON_INSTALL_PATH_ENV };
 
-export const DAEMON_USAGE = `usage: ratel-local daemon [verb] [args...]
+export const DAEMON_USAGE = `usage: ratel daemon [verb] [args...]
 
 Verbs:
   run        run the daemon in the foreground (default)
@@ -145,6 +148,7 @@ export interface DaemonStatusBody extends DaemonState {
   retrievalHealth?: RetrievalHealthStats;
   /** Absent on daemons older than the restart-reconfiguration support. */
   cloudTelemetry?: boolean;
+  adaptiveRanking?: boolean;
   cloudCatalog?: boolean;
   skillStorage?: boolean;
 }
@@ -386,6 +390,9 @@ export async function runDaemonServer(
   const serverVersion = options.serverVersion ?? "0.0.0";
   const daemonProcessEnv = options.processEnv ?? process.env;
   const featureFlags = featureFlagsFromEnv(daemonProcessEnv);
+  const adaptiveRankingStore = featureFlags.adaptiveRanking
+    ? new AdaptiveRankingStore({ homeDir: ctx.env.homeDir, logger: log })
+    : undefined;
   const retrievalHealthEnabled = daemonProcessEnv.RATEL_EXPERIMENTAL_RETRIEVAL_HEALTH === "1";
   // Cloud profiles serve the catalog; the relay keeps its own single-key store.
   // An agent's exporter is configured once per machine, so telemetry stays on one
@@ -459,6 +466,11 @@ export async function runDaemonServer(
     });
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
+    const adaptiveRankingGraph = await adaptiveRankingStore?.graphFor(
+      scope.kind === "project"
+        ? { kind: "project", projectId: scope.projectId }
+        : { kind: "global" },
+    );
     if (scope.resolvedContext) {
       return buildGatewayFromConfig(
         { mcpServers: {} },
@@ -470,10 +482,12 @@ export async function runDaemonServer(
           ...(scope.resolvedContext.retrieval
             ? { retrieval: scope.resolvedContext.retrieval }
             : {}),
+          ...(adaptiveRankingGraph ? { adaptiveRankingGraph } : {}),
         },
       );
     }
     const scoped = scopeBuildInputs(parsed, ctx, options, scope);
+    if (adaptiveRankingGraph) scoped.options.adaptiveRankingGraph = adaptiveRankingGraph;
     return (await buildConfiguredGateway(scoped.parsed, scoped.options, log)).gateway;
   }, log);
   const useResolvedControlPlane =
@@ -530,7 +544,7 @@ export async function runDaemonServer(
       }
     } catch (error) {
       log(
-        `[ratel] automatic legacy skill migration skipped: ${(error as Error).message}; run ratel-local doctor --fix`,
+        `[ratel] automatic legacy skill migration skipped: ${(error as Error).message}; run ratel doctor --fix`,
       );
     }
   }
@@ -741,6 +755,7 @@ export async function runDaemonServer(
           activeUserGatewayCount: poolStats.activeUserGatewayCount,
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
           cloudTelemetry: featureFlags.cloudTelemetry,
+          adaptiveRanking: featureFlags.adaptiveRanking,
           cloudCatalog: featureFlags.cloudCatalog,
           skillStorage: featureFlags.skillStorage,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
@@ -786,7 +801,7 @@ export async function runDaemonServer(
     log(`[ratel] Cloud OTLP log endpoint available at ${state.uiUrl}${OTLP_LOGS_PATH}`);
   } else {
     log(
-      `[ratel] Cloud telemetry disabled; start a foreground daemon with ${CLOUD_TELEMETRY_FEATURE_ENV}=1 or run ${CLOUD_TELEMETRY_FEATURE_ENV}=1 ratel-local daemon restart`,
+      `[ratel] Cloud telemetry disabled; start a foreground daemon with ${CLOUD_TELEMETRY_FEATURE_ENV}=1 or run ${CLOUD_TELEMETRY_FEATURE_ENV}=1 ratel daemon restart`,
     );
   }
   if (featureFlags.cloudTelemetry && activeCloudOptions) {
@@ -807,7 +822,11 @@ export async function runDaemonServer(
         await ui.shutdown();
         await gatewayPool.shutdown();
       } finally {
-        await ratelTelemetry?.shutdown();
+        try {
+          await adaptiveRankingStore?.shutdown();
+        } finally {
+          await ratelTelemetry?.shutdown();
+        }
       }
     },
   };
@@ -856,7 +875,7 @@ async function openDaemonUi(
 ): Promise<void> {
   const port = await daemonPort(parsed, ctx);
   const daemonToken = await (opts.readToken ?? readDaemonToken)(ctx.env.homeDir);
-  if (!daemonToken) throw new Error('daemon token is missing; run "ratel-local daemon install"');
+  if (!daemonToken) throw new Error('daemon token is missing; run "ratel daemon install"');
   const response = await (opts.fetch ?? fetch)(`http://127.0.0.1:${port}/api/ui/sessions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${daemonToken}` },
@@ -1034,6 +1053,10 @@ WantedBy=default.target
 `;
 }
 
+function serviceScript(): string {
+  return process.argv[1] ? primaryRatelBin(process.argv[1]) : "ratel";
+}
+
 /**
  * Apply explicit feature-flag overrides to the installed service file.
  * Returns the applied overrides, or `undefined` when nothing was named — no
@@ -1063,6 +1086,7 @@ async function reconfigureInstalledServiceFeatureFlags(
 }
 
 const FLAG_STATUS_FIELD = {
+  [ADAPTIVE_RANKING_FEATURE_ENV]: "adaptiveRanking",
   [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
   [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
   [SKILL_STORAGE_FEATURE_ENV]: "skillStorage",
@@ -1081,7 +1105,7 @@ async function verifyFeatureFlagsApplied(
 ): Promise<string | undefined> {
   const result = await probe(port);
   const unconfirmed = (reason: string) =>
-    `[ratel] could not confirm the requested feature flags: ${reason}. Check "ratel-local traces status".`;
+    `[ratel] could not confirm the requested feature flags: ${reason}. Check "ratel traces status".`;
   if (!result.ok) return unconfirmed("the daemon did not answer");
   const unreported: string[] = [];
   for (const name of SERVICE_FEATURE_FLAG_ENVS) {
@@ -1094,7 +1118,7 @@ async function verifyFeatureFlagsApplied(
       continue;
     }
     throw new Error(
-      `service was updated but the restarted daemon reports ${name} ${observed ? "enabled" : "disabled"}, expected ${want ? "enabled" : "disabled"}; the previous service definition may still be loaded. Reinstall with "ratel-local daemon uninstall" then "${name}=${want ? "1" : "0"} ratel-local daemon install".`,
+      `service was updated but the restarted daemon reports ${name} ${observed ? "enabled" : "disabled"}, expected ${want ? "enabled" : "disabled"}; the previous service definition may still be loaded. Reinstall with "ratel daemon uninstall" then "${name}=${want ? "1" : "0"} ratel daemon install".`,
     );
   }
   return unreported.length > 0
@@ -1123,7 +1147,7 @@ async function installDaemon(
   await ctx.fs.writeAtomic(
     paths.plist,
     createLaunchAgentPlist({
-      executablePath: opts.executablePath ?? process.argv[1] ?? "ratel-local",
+      executablePath: opts.executablePath ?? serviceScript(),
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
@@ -1173,7 +1197,7 @@ async function startDaemon(
   ensureMacos("daemon start", opts);
   const paths = daemonPaths(ctx.env.homeDir);
   if (!(await ctx.fs.exists(paths.plist))) {
-    throw new Error(`daemon is not installed; run "ratel-local daemon install" first`);
+    throw new Error(`daemon is not installed; run "ratel daemon install" first`);
   }
   const port = await daemonPort(parsed, ctx);
   const probe = opts.probe ?? probeDaemon;
@@ -1220,7 +1244,7 @@ async function installLinuxDaemon(
   await ctx.fs.writeAtomic(
     paths.systemdService,
     createSystemdUserService({
-      executablePath: opts.executablePath ?? process.argv[1] ?? "ratel-local",
+      executablePath: opts.executablePath ?? serviceScript(),
       executableArgs: opts.executableArgs,
       homeDir: ctx.env.homeDir,
       port,
@@ -1259,7 +1283,7 @@ async function startLinuxDaemon(
 ): Promise<void> {
   const paths = daemonPaths(ctx.env.homeDir);
   if (!(await ctx.fs.exists(paths.systemdService))) {
-    throw new Error(`daemon is not installed; run "ratel-local daemon install" first`);
+    throw new Error(`daemon is not installed; run "ratel daemon install" first`);
   }
   const port = await daemonPort(parsed, ctx);
   const probe = opts.probe ?? probeDaemon;
@@ -1382,7 +1406,7 @@ async function systemctl(
   } catch (err) {
     if (options.ignoreFailure) return;
     throw new Error(
-      `${(err as Error).message}\nUser-level systemd is required on Linux. You can still run "ratel-local daemon run --port ${DEFAULT_DAEMON_PORT} --no-open --auto-config" manually.`,
+      `${(err as Error).message}\nUser-level systemd is required on Linux. You can still run "ratel daemon run --port ${DEFAULT_DAEMON_PORT} --no-open --auto-config" manually.`,
     );
   }
 }

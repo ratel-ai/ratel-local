@@ -15,7 +15,7 @@ import {
   ratelConfigPath,
   type TransportFactory,
 } from "@ratel-ai/ratel-local-core";
-import type { TraceSinkConfig } from "@ratel-ai/sdk";
+import type { IntentGraph, TraceSinkConfig } from "@ratel-ai/sdk";
 import type { ParsedArgs } from "../args.js";
 import { defaultTelemetryDir, projectBucketDir } from "../telemetry-paths.js";
 
@@ -29,6 +29,8 @@ export interface ServeOptions {
   processEnv?: NodeJS.ProcessEnv;
   cwd?: string;
   existsSync?: (path: string) => boolean;
+  /** Internal daemon hook for a context-scoped online-learning graph. */
+  adaptiveRankingGraph?: IntentGraph;
 }
 
 export interface ServeResult {
@@ -83,10 +85,10 @@ export async function buildConfiguredGateway(
   const command = parsed.group;
   const autoConfig = booleanFlag(parsed.flags["auto-config"]);
   if (autoConfig && parsed.configPaths.length > 0) {
-    throw new Error(`ratel-local ${command}: --auto-config cannot be combined with --config paths`);
+    throw new Error(`ratel ${command}: --auto-config cannot be combined with --config paths`);
   }
   if (!autoConfig && parsed.configPaths.length === 0) {
-    throw new Error(`usage: ratel-local ${command} <config.json> [--config <path> ...]`);
+    throw new Error(`usage: ratel ${command} <config.json> [--config <path> ...]`);
   }
 
   const readConfig = options.readConfig ?? defaultReadConfig;
@@ -106,6 +108,7 @@ export async function buildConfiguredGateway(
     transportFactory: options.transportFactory,
     logger: log,
     ...(trace ? { trace } : {}),
+    ...(options.adaptiveRankingGraph ? { adaptiveRankingGraph: options.adaptiveRankingGraph } : {}),
   });
 
   return { config, gateway };

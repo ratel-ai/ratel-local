@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { accessSync, constants } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 export interface LocateBinEnv {
   envVar?: string;
@@ -38,19 +39,39 @@ export async function locateRatelBin(env: LocateBinEnv): Promise<ResolvedBin> {
     }
   }
   throw new Error(
-    "Could not locate the ratel-local binary. Set $RATEL_LOCAL_BIN or run from inside the ratel-local workspace.",
+    "Could not locate the ratel binary. Set $RATEL_LOCAL_BIN or run from inside the ratel-local workspace.",
   );
 }
 
 export function whichRatelBin(): string | undefined {
+  // Look up the alias, not `ratel`: that generic name can belong to an unrelated tool.
   try {
     const out = execSync("which ratel-local", {
       stdio: ["ignore", "pipe", "ignore"],
     })
       .toString()
       .trim();
-    return out || undefined;
+    return out ? primaryRatelBin(out) : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** Swap a `ratel-local` link for the `ratel` link installed beside it by the same package. */
+export function primaryRatelBin(
+  path: string,
+  isExecutable: (path: string) => boolean = defaultIsExecutable,
+): string {
+  if (basename(path) !== "ratel-local") return path;
+  const primary = join(dirname(path), "ratel");
+  return isExecutable(primary) ? primary : path;
+}
+
+function defaultIsExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
