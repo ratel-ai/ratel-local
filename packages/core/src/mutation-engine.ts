@@ -827,13 +827,41 @@ export class FilesystemMutationEngine implements MutationEngine {
         await rm(entry.backupPath, { recursive: true, force: true });
         continue;
       }
+      if (entry.operationKind === "link-directory") {
+        const backupExists = await pathExists(entry.backupPath);
+        const targetExists = await pathExists(entry.path);
+        const targetIsSymlink = targetExists && (await lstat(entry.path)).isSymbolicLink();
+        // Decide from the backup and the target, not the stage: a crash between
+        // the two renames leaves the stage in place and the only copy in the backup.
+        const wasApplied =
+          entry.applied || (backupExists && !targetExists) || (backupExists && targetIsSymlink);
+        if (wasApplied) {
+          if (entry.existedBefore) {
+            if (targetExists && !targetIsSymlink) {
+              throw new Error(`cannot restore link over a real directory: ${entry.path}`);
+            }
+            if (targetIsSymlink) {
+              await rm(entry.path, { force: true });
+            }
+            if (await pathExists(entry.backupPath)) {
+              await rename(entry.backupPath, entry.path);
+            } else if (!(await pathExists(entry.path))) {
+              throw new Error(`missing backup for ${entry.path}`);
+            }
+          } else {
+            await rm(entry.path, { recursive: true, force: true });
+          }
+        } else if (backupExists) {
+          throw new Error(`refusing to delete unrestored link backup for ${entry.path}`);
+        }
+        await rm(entry.stagePath, { recursive: true, force: true });
+        await rm(entry.backupPath, { recursive: true, force: true });
+        continue;
+      }
       const stageStillExists = await pathExists(entry.stagePath);
       const wasApplied = entry.applied || !stageStillExists;
       if (wasApplied) {
         if (entry.existedBefore) {
-          if (entry.operationKind === "link-directory") {
-            await rm(entry.path, { recursive: true, force: true });
-          }
           if (await pathExists(entry.backupPath)) {
             await rename(entry.backupPath, entry.path);
           } else if (!(await pathExists(entry.path))) {

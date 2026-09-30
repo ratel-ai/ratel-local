@@ -583,6 +583,165 @@ describe("MutationEngine", () => {
     expect(await readFile(config, "utf8")).toBe("before");
   });
 
+  it("restores the original when recovery finds a crash between the link renames", async () => {
+    const original = join(root, "claude", "skills", "taken");
+    const copy = join(root, "ratel", "skills", "taken");
+    const stagePath = `${original}.ratel-stage-between-1`;
+    const backupPath = `${original}.ratel-backup-between-1`;
+    await mkdir(join(root, "claude", "skills"), { recursive: true });
+    await mkdir(copy, { recursive: true });
+    await writeFile(join(copy, "SKILL.md"), "---\nname: taken\nmanual: true\n---\nbody");
+    await mkdir(backupPath, { recursive: true });
+    await writeFile(join(backupPath, "SKILL.md"), "body");
+    await symlink(copy, stagePath, "dir");
+    await mkdir(join(controlDir, "transactions"), { recursive: true });
+    const journal: MutationJournalV1 = {
+      version: 1,
+      transactionId: "between",
+      status: "applying",
+      kind: "skill.import",
+      entries: [
+        {
+          artifactKind: "directory",
+          operationKind: "copy-directory",
+          path: copy,
+          stagePath: `${copy}.ratel-stage-between-0`,
+          backupPath: `${copy}.ratel-backup-between-0`,
+          existedBefore: false,
+          applied: true,
+        },
+        {
+          artifactKind: "directory",
+          operationKind: "link-directory",
+          path: original,
+          stagePath,
+          backupPath,
+          existedBefore: true,
+          applied: false,
+        },
+      ],
+    };
+    await writeFile(
+      join(controlDir, "transactions", "between.json"),
+      `${JSON.stringify(journal)}\n`,
+    );
+
+    const recoveries: MutationRecoveryResult[] = [];
+    await createMutationEngine({ controlDir, onRecovery: (r) => void recoveries.push(r) });
+
+    expect(recoveries[0]?.recovered).toEqual([
+      expect.objectContaining({ transactionId: "between", paths: [copy, original] }),
+    ]);
+    expect((await lstat(original)).isDirectory()).toBe(true);
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toBe("body");
+    await expect(lstat(copy)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(stagePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("leaves a restored original directory alone on a second recovery", async () => {
+    const original = join(root, "claude", "skills", "taken");
+    const copy = join(root, "ratel", "skills", "taken");
+    await mkdir(original, { recursive: true });
+    await writeFile(join(original, "SKILL.md"), "body");
+    await mkdir(join(controlDir, "transactions"), { recursive: true });
+    const journal: MutationJournalV1 = {
+      version: 1,
+      transactionId: "restored",
+      status: "applying",
+      kind: "skill.import",
+      entries: [
+        {
+          artifactKind: "directory",
+          operationKind: "copy-directory",
+          path: copy,
+          stagePath: `${copy}.ratel-stage-restored-0`,
+          backupPath: `${copy}.ratel-backup-restored-0`,
+          existedBefore: false,
+          applied: true,
+        },
+        {
+          artifactKind: "directory",
+          operationKind: "link-directory",
+          path: original,
+          stagePath: `${original}.ratel-stage-restored-1`,
+          backupPath: `${original}.ratel-backup-restored-1`,
+          existedBefore: true,
+          applied: false,
+        },
+      ],
+    };
+    await writeFile(
+      join(controlDir, "transactions", "restored.json"),
+      `${JSON.stringify(journal)}\n`,
+    );
+
+    // onRecovery is what makes recovery run: the optional call in
+    // createMutationEngine never evaluates recover() without it.
+    const recoveries: MutationRecoveryResult[] = [];
+    await createMutationEngine({ controlDir, onRecovery: (r) => void recoveries.push(r) });
+
+    expect(recoveries[0]?.recovered).toEqual([
+      { kind: "skill.import", transactionId: "restored", paths: [copy, original] },
+    ]);
+    expect((await lstat(original)).isDirectory()).toBe(true);
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toBe("body");
+  });
+
+  it("restores the original when both link renames finished but applied is still false", async () => {
+    const original = join(root, "claude", "skills", "taken");
+    const copy = join(root, "ratel", "skills", "taken");
+    const backupPath = `${original}.ratel-backup-published-1`;
+    await mkdir(join(root, "claude", "skills"), { recursive: true });
+    await mkdir(copy, { recursive: true });
+    await writeFile(join(copy, "SKILL.md"), "---\nname: taken\nmanual: true\n---\nbody");
+    await symlink(copy, original, "dir");
+    await mkdir(backupPath, { recursive: true });
+    await writeFile(join(backupPath, "SKILL.md"), "body");
+    await mkdir(join(controlDir, "transactions"), { recursive: true });
+    const journal: MutationJournalV1 = {
+      version: 1,
+      transactionId: "published",
+      status: "applying",
+      kind: "skill.import",
+      entries: [
+        {
+          artifactKind: "directory",
+          operationKind: "copy-directory",
+          path: copy,
+          stagePath: `${copy}.ratel-stage-published-0`,
+          backupPath: `${copy}.ratel-backup-published-0`,
+          existedBefore: false,
+          applied: true,
+        },
+        {
+          artifactKind: "directory",
+          operationKind: "link-directory",
+          path: original,
+          stagePath: `${original}.ratel-stage-published-1`,
+          backupPath,
+          existedBefore: true,
+          applied: false,
+        },
+      ],
+    };
+    await writeFile(
+      join(controlDir, "transactions", "published.json"),
+      `${JSON.stringify(journal)}\n`,
+    );
+
+    const recoveries: MutationRecoveryResult[] = [];
+    await createMutationEngine({ controlDir, onRecovery: (r) => void recoveries.push(r) });
+
+    expect(recoveries[0]?.recovered).toEqual([
+      expect.objectContaining({ transactionId: "published", paths: [copy, original] }),
+    ]);
+    expect((await lstat(original)).isDirectory()).toBe(true);
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toBe("body");
+    await expect(lstat(copy)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("restores a deleted directory when a later hook fails", async () => {
     const config = join(root, "config.json");
     const target = join(root, "skill");
