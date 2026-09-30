@@ -246,7 +246,18 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
           const nativePath = nativeSkillPath(this.options.homeDir, candidate.id, candidate.source);
           // Only a real directory is taken over. A link here points at content
           // someone else owns, which ADR 0022 keeps as a reference.
-          if ((await lstat(nativePath)).isSymbolicLink()) {
+          let nativeInfo: Awaited<ReturnType<typeof lstat>>;
+          try {
+            nativeInfo = await lstat(nativePath);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              throw new SkillImportValidationError(
+                `native skill path does not exist: ${nativePath}`,
+              );
+            }
+            throw error;
+          }
+          if (nativeInfo.isSymbolicLink()) {
             throw new SkillImportValidationError(
               `${nativePath} is a link to ${candidate.canonicalPath}; import it as a reference instead of taking it over`,
             );

@@ -459,6 +459,46 @@ describe("SkillImportControlPlane", () => {
     );
   });
 
+  it("rejects takeover when the native directory disappears after discovery", async () => {
+    const f = await fixture({ skillStorage: true });
+    const original = join(f.homeDir, ".claude", "skills", "gone");
+    await putSkill(original, "gone");
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "gone",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+    await rm(original, { recursive: true, force: true });
+
+    // Keep the discovered snapshot so prepare reaches the takeover lstat instead of
+    // failing earlier on a stale-candidate refresh.
+    const mutationEngine = await createMutationEngine({
+      controlDir: join(f.homeDir, ".ratel"),
+    });
+    const preparedChanges = createPreparedChangeCoordinator({ mutationEngine });
+    const controlPlane = createSkillImportControlPlane({
+      homeDir: f.homeDir,
+      projectRegistry: f.projectRegistry,
+      discovery: {
+        discover: (context) => f.discovery.discover(context),
+        resolveCandidate: async () => candidate,
+      },
+      preparedChanges,
+      skillStorage: true,
+    });
+
+    await expect(
+      controlPlane.prepare([
+        {
+          candidateId: candidate.candidateId,
+          targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
+        },
+      ]),
+    ).rejects.toMatchObject({
+      name: "SkillImportValidationError",
+      message: expect.stringContaining(original),
+    });
+  });
+
   it("lists a taken-over skill once and refuses a second import", async () => {
     const f = await fixture({ skillStorage: true });
     const original = join(f.homeDir, ".claude", "skills", "taken");

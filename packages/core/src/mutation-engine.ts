@@ -373,6 +373,21 @@ export class FilesystemMutationEngine implements MutationEngine {
       }
       const sourceRevision = await directoryRevision(input.sourcePath);
       const additionalFiles = normalizeAdditionalFiles(input.additionalFiles ?? []);
+      for (const file of additionalFiles) {
+        const additionalPath = join(input.sourcePath, file.relativePath);
+        let info: Stats;
+        try {
+          info = await lstat(additionalPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        if (info.isDirectory()) {
+          throw new MutationValidationError(
+            `additional copy path collides with a directory: ${additionalPath}`,
+          );
+        }
+      }
       const afterRevision = copiedDirectoryRevision(sourceRevision, additionalFiles);
       baseRevisions[input.path] = before.revision;
       operations.push({
@@ -1037,7 +1052,7 @@ function symlinkRevision(target: string): DocumentRevision {
 
 function assertLinkTarget(target: string): void {
   if (!isAbsolute(target) || target.includes("\0")) {
-    throw new MutationValidationError(`link source must be an absolute directory path: ${target}`);
+    throw new MutationValidationError(`link target must be an absolute directory path: ${target}`);
   }
 }
 

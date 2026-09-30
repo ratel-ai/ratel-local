@@ -471,6 +471,41 @@ describe("MutationEngine", () => {
     ).rejects.toThrow(/symlink/i);
   });
 
+  it("rejects additional copy files that collide with a source directory", async () => {
+    const source = join(root, "source");
+    const target = join(root, "target");
+    const colliding = join(source, "refs");
+    await mkdir(colliding, { recursive: true });
+    await writeFile(join(source, "SKILL.md"), "body");
+    const engine = await createMutationEngine({ controlDir });
+
+    await expect(
+      engine.prepare([
+        {
+          kind: "copy-directory",
+          sourcePath: source,
+          path: target,
+          additionalFiles: [{ relativePath: "refs", contents: "not a dir\n" }],
+        },
+      ]),
+    ).rejects.toMatchObject({
+      name: "MutationValidationError",
+      message: expect.stringContaining(colliding),
+    });
+  });
+
+  it("rejects a relative link-directory target", async () => {
+    const link = join(root, "native-skill");
+    const engine = await createMutationEngine({ controlDir });
+
+    await expect(
+      engine.prepare([{ kind: "link-directory", path: link, target: "relative-copy" }]),
+    ).rejects.toMatchObject({
+      name: "MutationValidationError",
+      message: expect.stringMatching(/link target must be an absolute directory path/),
+    });
+  });
+
   it("deletes an owned directory as a recoverable transaction artifact", async () => {
     const target = join(root, "project", ".ratel", "skills", "audit");
     await mkdir(target, { recursive: true });
