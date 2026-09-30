@@ -436,7 +436,7 @@ describe("SkillImportControlPlane", () => {
             origin: "local-managed",
             path: copy,
             source: "claude",
-            copiedFrom: { source: "claude", id: candidate.candidateId ? "taken" : "taken" },
+            copiedFrom: { source: "claude", id: "taken" },
             hostPolicy: { mode: "manual-only", source: "claude" },
           },
         },
@@ -457,6 +457,55 @@ describe("SkillImportControlPlane", () => {
     expect(await readFile(capturedSkill.backupPath, "utf8")).not.toContain(
       "disable-model-invocation",
     );
+  });
+
+  it("takes over a global Codex skill: managed copy, symlinked original, policy in the copy", async () => {
+    const f = await fixture({ skillStorage: true });
+    const original = join(f.homeDir, ".agents", "skills", "taken-codex");
+    await putSkill(original, "taken-codex");
+    await writeFile(join(original, "reference.md"), "extra");
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "taken-codex",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: candidate.candidateId,
+        targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
+      },
+    ]);
+    await f.controlPlane.commit(plan.changeId);
+
+    const copy = join(f.homeDir, ".ratel", "skills", "taken-codex");
+    expect((await lstat(original)).isSymbolicLink()).toBe(true);
+    expect(await readlink(original)).toBe(copy);
+    expect(await readFile(join(copy, "reference.md"), "utf8")).toBe("extra");
+    expect(await readFile(join(copy, "agents", "openai.yaml"), "utf8")).toContain(
+      "allow_implicit_invocation: false",
+    );
+    expect(await readFile(join(original, "agents", "openai.yaml"), "utf8")).toContain(
+      "allow_implicit_invocation: false",
+    );
+    expect(await readJson(join(f.homeDir, ".ratel", "config.json"))).toMatchObject({
+      skills: {
+        entries: {
+          "taken-codex": {
+            mode: "copy",
+            origin: "local-managed",
+            path: copy,
+            source: "codex",
+            copiedFrom: { source: "codex-current", id: "taken-codex" },
+            hostPolicy: {
+              mode: "manual-only",
+              source: "codex-current",
+              createdFile: true,
+              createdPolicy: true,
+            },
+          },
+        },
+      },
+    });
   });
 
   it("rejects takeover when the native directory disappears after discovery", async () => {
@@ -529,7 +578,10 @@ describe("SkillImportControlPlane", () => {
           targets: [{ scopeRef: { scope: "user" }, mode: "copy" }],
         },
       ]),
-    ).rejects.toBeInstanceOf(SkillImportValidationError);
+    ).rejects.toMatchObject({
+      name: "SkillImportValidationError",
+      message: expect.stringMatching(/already exists/),
+    });
     expect((await lstat(original)).isSymbolicLink()).toBe(true);
     expect(await realpath(original)).toBe(
       await realpath(join(f.homeDir, ".ratel", "skills", "taken")),
