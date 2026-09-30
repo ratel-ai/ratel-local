@@ -144,6 +144,7 @@ export async function captureSnapshot(
   const id = snapshotId(now);
   const dir = join(backupsRoot(env), id);
   await mkdir(dir, { recursive: true });
+  await chmod(dir, 0o700);
   const entries: BackupEntry[] = [];
   const seen = new Set<string>();
   for (const originalPath of request.paths) {
@@ -162,8 +163,9 @@ export async function captureSnapshot(
   // without manifest, which listBackups skips.
   const manifestPath = join(dir, MANIFEST);
   const temporaryPath = `${manifestPath}.tmp-${randomUUID()}`;
-  await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   await rename(temporaryPath, manifestPath);
+  await chmod(manifestPath, 0o600);
   return manifest;
 }
 

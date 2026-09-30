@@ -309,6 +309,24 @@ describe("captureSnapshot", () => {
     expect((await readdir(dir)).filter((n) => n.includes(".tmp-"))).toEqual([]);
   });
 
+  it("forces snapshot directory 0o700 and manifest 0o600 under umask 022", async () => {
+    const previous = process.umask(0o022);
+    try {
+      const tree = await buildTree();
+      const manifest = await captureSnapshot(
+        { homeDir: home },
+        { action: "import", paths: [tree] },
+      );
+      const dir = join(home, ".ratel", "backups", manifest.id);
+      const manifestPath = join(dir, "manifest.json");
+      expect((await lstat(dir)).mode & 0o777).toBe(0o700);
+      expect((await lstat(manifestPath)).mode & 0o777).toBe(0o600);
+      await expect(readFile(manifestPath, "utf8")).resolves.toContain(manifest.id);
+    } finally {
+      process.umask(previous);
+    }
+  });
+
   it("writes the manifest last, so an interrupted capture has none to find", async () => {
     const tree = await buildTree();
     await rm(join(tree, "nested"), { recursive: true });
