@@ -849,7 +849,7 @@ describe("runDaemon", () => {
     const result = await runDaemon(
       daemonArgs({ configPaths: [], flags: { open: false, telemetry: "off", port: "0" } }),
       makeCtx(fs, { homeDir }),
-      { readConfig: async () => ({ mcpServers: {} }) },
+      { readConfig: async () => ({ mcpServers: {} }), processEnv: {} },
       (message) => logs.push(message),
       { open: () => {}, ensureToken: async () => "daemon-test-token" },
     );
