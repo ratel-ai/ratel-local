@@ -17,7 +17,6 @@ All notable changes to this package are documented here. The format is based on 
 - With `RATEL_FEATURE_SKILL_STORAGE=1`, a managed-copy import copies a global Skill to `~/.ratel/skills/<id>` and replaces the native directory with a symlink so hosts still find it, as one journaled transaction over a prior snapshot. The copy carries manual-only host policy. Symlink sources are refused; import them as a reference (ADR 0022).
 
 ### Changed
-<<<<<<< ours
 - Upgraded and pinned `@ratel-ai/sdk` to `0.13.0-rc.5` for turn-correlated adaptive ranking.
 - Made `ratel` the primary CLI executable, retaining `ratel-local` as a compatibility alias of the same entry point. CLI help, usage, errors, and the UI now say `ratel`. Binary lookup finds `ratel-local` on `PATH` and prefers the `ratel` installed beside it; newly written services, statusline, and hooks use `ratel`, and services generated through npx select it with `npx --package @ratel-ai/ratel-local@<version> ratel`. The package name, install commands, service identifiers, MCP entry name, config paths, and `RATEL_LOCAL_BIN` are unchanged, and existing services and integrations keep working. The README, plugin skill, and docs switch to `ratel` in the release that ships it.
 - Made shared CLI formatting for messages, headings, tables, and progress. Terminal output is styled; when stdout or stderr is redirected, or in CI, output is plain and progress prints fixed start and result lines. Human output stays on stderr and MCP, hook, and statusline payloads stay on stdout. No feature flag. Scripts that parse this output need updating: `project list` prints a header then tab-separated `ID`, `Status`, `Name`, and `Path` columns (was `id  [status]  name  root`); empty lists print `[info] no projects registered`; `project add`/`remove` and the last `doctor` line start with `[ok]`; setup intro, outro, and notes are headings and text, not Clack boxes.
@@ -30,50 +29,7 @@ All notable changes to this package are documented here. The format is based on 
 - Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead of a fixed line and silence.
 - A concurrent Skill change fails immediately with `skill_busy` instead of waiting on the mutation lock. An interrupted transaction whose lock is gone is still rolled back as a crash, not busy.
 - With `RATEL_FEATURE_SKILL_STORAGE=1`, a skill registration gains `origin` and `availability` in the configured JSON views, and writes persist `origin` and the copy `path` in `skills.entries` (absolute for user scope, project-relative otherwise). A persisted `path` is honored on read regardless of the flag, so entries written with it on keep resolving after it is turned off.
-||||||| base
-- With `RATEL_FEATURE_SKILL_STORAGE=1`, a skill registration gains `origin` and `availability` in the configured JSON
-  views, and writes persist `origin` and the copy `path` in `skills.entries`
-  (absolute for user scope, project-relative otherwise). A persisted `path` is honored on read regardless of the flag,
-  so entries written with it on keep resolving after it is turned off.
-- Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load
-  whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
-- Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with
-  `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
-- Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
-  any other value disables, and a flag left out keeps whatever the installed service already says.
-- With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first.
-  Deletion used to list directories as regular files, dropping symlinks, modes and binaries. Flag off keeps per-file capture.
-- `captureOperationBackup`'s fourth argument is now a required `snapshot` boolean instead of
-  a process-env object. Callers that already resolve the skill-storage flag (CLI via the daemon, control planes via
-  `skillStorage`) pass that same boolean so backup format matches the write.
-- Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead
-  of a fixed line and silence.
-- A concurrent Skill change fails immediately with `skill_busy` instead of waiting on the mutation lock. An interrupted
-  transaction whose lock is gone is still rolled back as a crash, not busy.
-=======
-- `copy-directory`'s `additionalFiles` now win over content copied from the source instead of being rejected as a
-  collision, which is how the managed copy receives its host policy. The file mode is applied on create only, so a file
-  that came from the source keeps its own.
-- With `RATEL_FEATURE_SKILL_STORAGE=1`, a skill registration gains `origin` and `availability` in the configured JSON
-  views, and writes persist `origin` and the copy `path` in `skills.entries`
-  (absolute for user scope, project-relative otherwise). A persisted `path` is honored on read regardless of the flag,
-  so entries written with it on keep resolving after it is turned off.
-- Moved Cloud credentials out of the telemetry feature, for the catalog only: profiles in `~/.ratel/cloud.json` load
-  whenever the catalog is enabled, while `/otlp/v1/traces` and `/otlp/v1/logs` stay behind `RATEL_FEATURE_CLOUD_TELEMETRY`.
-- Made the Cloud catalog endpoint follow `baseUrl` in `cloud.json`, which defaults to `https://cloud.ratel.sh`, with
-  `catalogEndpoint` overriding it. `cloud list` shows the one in effect.
-- Made `daemon restart` apply every feature flag named in the invoking environment, not only the Cloud ones: `=1` enables,
-  any other value disables, and a flag left out keeps whatever the installed service already says.
-- With `RATEL_FEATURE_SKILL_STORAGE=1`, skill import, registration and legacy migration snapshot the tree first.
-  Deletion used to list directories as regular files, dropping symlinks, modes and binaries. Flag off keeps per-file capture.
-- `captureOperationBackup`'s fourth argument is now a required `snapshot` boolean instead of
-  a process-env object. Callers that already resolve the skill-storage flag (CLI via the daemon, control planes via
-  `skillStorage`) pass that same boolean so backup format matches the write.
-- Transaction recovery now reports rollbacks: `ratel-local doctor` and the daemon name the operation, paths and snapshot instead
-  of a fixed line and silence.
-- A concurrent Skill change fails immediately with `skill_busy` instead of waiting on the mutation lock. An interrupted
-  transaction whose lock is gone is still rolled back as a crash, not busy.
->>>>>>> theirs
+- `copy-directory`'s `additionalFiles` now win over content copied from the source instead of being rejected as a collision, which is how the managed copy receives its host policy. The file mode is applied on create only, so a file that came from the source keeps its own.
 
 ### Fixed
 - Isolated online adaptive-ranking search/invocation pairing per MCP connection using the SDK `turnId`, including skill loads and reconnects, so parallel sessions sharing a catalog cannot teach edges from each other’s searches.
