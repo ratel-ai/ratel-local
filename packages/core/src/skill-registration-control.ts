@@ -927,10 +927,11 @@ type TakeoverState =
  * the copy. Non-ENOENT errors propagate, so an unreadable path cannot be
  * classified as none or broken and skip the unlink.
  *
- * `none` still runs host-policy restore. A symlink that resolves into a directory
- * Ratel does not own is pre-existing: restore wrote through hostPolicy with no
- * symlink check before takeover. Skipping restore for `broken` does not make
- * `none` safe in that respect.
+ * `none` still runs host-policy restore, so a symlink that resolves into a
+ * directory Ratel does not own is edited through that link. Pre-existing: before
+ * takeover, restore read and wrote whatever occupied the native path, with no
+ * symlink check at all. Skipping restore for `broken` does not make `none` safe
+ * in that respect. Tracked as RL-63.
  */
 async function resolveTakeoverNativePath(input: {
   homeDir: string;
