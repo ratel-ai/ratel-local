@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import {
+  type BrokenNativeLink,
   type ContextSnapshotResolver,
   createConfigControlPlane,
   createContextSnapshotResolver,
@@ -10,7 +11,6 @@ import {
   createSkillDiscovery,
   createSkillImportControlPlane,
   createSkillRegistrationControlPlane,
-  type MutationCommit,
   type PreparedChange,
   type ProjectId,
   ProjectNotFoundError,
@@ -304,6 +304,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       if (dryRun) {
         const change = await control.prepareRemove(request);
         ctx.log(`would update ${change.preview.files.map(({ path }) => path).join(", ")}`);
+        logBrokenNativeLink(ctx, change.preview.brokenNativeLink, true);
         control.cancel(change.changeId);
         return;
       }
@@ -330,12 +331,14 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         },
       );
       if (remote) {
-        const commit = await requireDaemonJson<MutationCommit>(remote, `skill ${verb}`);
+        const commit = await requireDaemonJson<SkillRegistrationCommit>(remote, `skill ${verb}`);
         ctx.log(`updated ${commit.changedPaths.join(", ")}`);
+        logBrokenNativeLink(ctx, commit.result?.brokenNativeLink, false);
         return;
       }
       const commit = await control.remove(request);
       ctx.log(`updated ${commit.changedPaths.join(", ")}`);
+      logBrokenNativeLink(ctx, commit.result?.brokenNativeLink, false);
       return;
     }
 
@@ -724,6 +727,21 @@ function importMode(value: FlagValue | undefined): "reference" | "copy" {
   if (value === undefined) return "reference";
   if (value === "reference" || value === "copy") return value;
   throw new Error("--mode must be reference|copy");
+}
+
+function logBrokenNativeLink(
+  ctx: HandlerCtx,
+  link: BrokenNativeLink | undefined,
+  dryRun: boolean,
+): void {
+  if (!link) return;
+  const verb = dryRun ? "would leave" : "left";
+  if (link.kind === "unresolved") {
+    const copyNote = link.copyKept ? " The managed copy was left in place." : "";
+    ctx.log(`${verb} a broken symlink at ${link.path}; delete it by hand.${copyNote}`);
+    return;
+  }
+  ctx.log(`${verb} a symlink at ${link.path}; the managed copy is gone, so it was not removed`);
 }
 
 async function selectImportCandidates(
