@@ -13,7 +13,11 @@ import {
   type SkillSource,
 } from "./lib/config.js";
 import type { LocalGitExcludeManager } from "./local-git-exclude.js";
-import type { MutationInputOperation, MutationPreview } from "./mutation-engine.js";
+import type {
+  MutationInputOperation,
+  MutationPreview,
+  ReplaceFileInput,
+} from "./mutation-engine.js";
 import {
   documentRevision,
   MISSING_DOCUMENT_REVISION,
@@ -36,7 +40,6 @@ import {
   UnknownSkillCandidateError,
 } from "./skill-discovery.js";
 import {
-  type NativeSkillSource,
   nativeSkillPath,
   prepareSkillHostPolicy,
   type SkillHostPolicy,
@@ -235,7 +238,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
 
         // A managed global copy takes the original over: Ratel owns the copy and
         // the native path becomes a symlink to it.
-        let takeover: { source: NativeSkillSource; nativePath: string } | undefined;
+        let takeoverPath: string | undefined;
         if (
           this.skillStorage() &&
           target.mode === "copy" &&
@@ -246,23 +249,19 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
           const nativePath = nativeSkillPath(this.options.homeDir, candidate.id, candidate.source);
           // Only a real directory is taken over. A link here points at content
           // someone else owns, which ADR 0022 keeps as a reference.
-          let nativeInfo: Awaited<ReturnType<typeof lstat>>;
-          try {
-            nativeInfo = await lstat(nativePath);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-              throw new SkillImportValidationError(
-                `native skill path does not exist: ${nativePath}`,
-              );
-            }
+          const nativeInfo = await lstat(nativePath).catch((error) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
             throw error;
+          });
+          if (!nativeInfo) {
+            throw new SkillImportValidationError(`native skill path does not exist: ${nativePath}`);
           }
           if (nativeInfo.isSymbolicLink()) {
             throw new SkillImportValidationError(
               `${nativePath} is a link to ${candidate.canonicalPath}; import it as a reference instead of taking it over`,
             );
           }
-          takeover = { source: candidate.source, nativePath };
+          takeoverPath = nativePath;
         }
 
         let hostPolicy: SkillHostPolicy | undefined;
@@ -278,8 +277,8 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
           if (prepared.operation) {
             // Under takeover the host reads the copy through the link, so the
             // policy belongs in the copy and the original stays as it was.
-            if (takeover) {
-              copyFile = policyFileForCopy(takeover.nativePath, prepared.operation);
+            if (takeoverPath) {
+              copyFile = policyFileForCopy(takeoverPath, prepared.operation);
             } else hostPolicyOperations.push(prepared.operation);
           }
         }
@@ -300,10 +299,10 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
             ...(copyFile ? { copyFile } : {}),
           });
           copyOperations.push(...materialization.operations);
-          if (takeover) {
+          if (takeoverPath) {
             linkOperations.push({
               kind: "link-directory",
-              path: takeover.nativePath,
+              path: takeoverPath,
               target: targetPath,
             });
           }
@@ -350,16 +349,17 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     const candidateById = new Map(
       candidateSnapshots.map((candidate) => [candidate.candidateId, candidate]),
     );
+    const allOperations = [
+      ...configOperations,
+      ...copyOperations,
+      ...hostPolicyOperations,
+      ...linkOperations,
+    ];
     return this.options.preparedChanges.prepare({
       kind: "skill.import",
       // The copy is published before the link, so the link never dangles, and the
       // policy is written before the link replaces the original directory.
-      operations: [
-        ...configOperations,
-        ...copyOperations,
-        ...hostPolicyOperations,
-        ...linkOperations,
-      ],
+      operations: allOperations,
       affectedContexts: contextsForSelections(appliedSelections),
       skillIds: appliedSelections.flatMap((selection) => {
         const candidate = candidateById.get(selection.candidateId);
@@ -436,12 +436,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
           nodeFs,
           {
             action: "import",
-            paths: [
-              ...configOperations,
-              ...copyOperations,
-              ...hostPolicyOperations,
-              ...linkOperations,
-            ].map((operation) => operation.path),
+            paths: allOperations.map((operation) => operation.path),
           },
           this.skillStorage(),
         ),
@@ -769,11 +764,10 @@ function copyTargetPath(
 /** The host policy edit, rebased from the native tree onto the managed copy. */
 function policyFileForCopy(
   nativePath: string,
-  operation: MutationInputOperation,
+  operation: ReplaceFileInput,
 ): { relativePath: string; contents: string } {
   const relativePath = relative(nativePath, operation.path);
   if (
-    operation.kind !== "replace-file" ||
     typeof operation.contents !== "string" ||
     relativePath.length === 0 ||
     isAbsolute(relativePath) ||
@@ -787,6 +781,11 @@ function policyFileForCopy(
   return { relativePath, contents: operation.contents };
 }
 
+/**
+ * The link op can arrive with nothing published: planSkillCopyMaterialization
+ * returns zero operations when it adopts an existing copy whose ownership
+ * marker is already present. Operation order does not cover that case.
+ */
 async function assertCopyPublished(path: string): Promise<void> {
   const info = await lstat(path).catch(() => undefined);
   if (!info?.isDirectory() || info.isSymbolicLink()) {

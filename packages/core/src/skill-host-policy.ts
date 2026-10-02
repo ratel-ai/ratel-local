@@ -1,6 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import type { MutationInputOperation } from "./mutation-engine.js";
+import type { MutationInputOperation, ReplaceFileInput } from "./mutation-engine.js";
 import type { DiscoveredSkillSource } from "./skill-discovery.js";
 
 export type NativeSkillSource = Exclude<DiscoveredSkillSource, "ratel">;
@@ -15,7 +15,7 @@ export interface SkillHostPolicy {
 
 export interface PreparedSkillHostPolicy {
   policy: SkillHostPolicy;
-  operation?: MutationInputOperation;
+  operation?: ReplaceFileInput;
 }
 
 export function skillHostPolicyFromLegacyPatch(input: {

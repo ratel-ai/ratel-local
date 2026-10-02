@@ -649,10 +649,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     }
 
     let deletion: { copyPath: string; removedTarget: RatelScopeRef; removedId: string } | undefined;
-    if (request.deleteOwnedCopy && registration.mode === "copy") {
-      if (!copyPath) {
-        copyPath = await this.ownedCopyPath(request.target, request.id, registration);
-      }
+    if (request.deleteOwnedCopy && copyPath) {
       await assertOwnedCopy(copyPath, request.id);
       await this.assertNoReverseReferences(copyPath, request.target, request.id);
       operations.push({ kind: "delete-artifact", path: copyPath });
@@ -879,7 +876,12 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
   }
 }
 
-/** User-scope takeover: native path is Ratel's symlink into the owned copy. */
+/**
+ * Exact match against the copy, not skill-discovery's linksInto, which matches a
+ * prefix: a link nested under the copy must read as not-a-takeover rather than
+ * reach delete-artifact and fail on expectedSymlinkTarget. Non-ENOENT errors
+ * propagate, so an unreadable native path cannot silently skip the unlink.
+ */
 async function resolveTakeoverNativePath(input: {
   homeDir: string;
   id: string;
