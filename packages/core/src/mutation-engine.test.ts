@@ -817,6 +817,90 @@ describe("MutationEngine", () => {
     await expect(lstat(backupPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("refuses to restore a link over a real directory", async () => {
+    const original = join(root, "claude", "skills", "taken");
+    const backupPath = `${original}.ratel-backup-blocked-1`;
+    await mkdir(original, { recursive: true });
+    await writeFile(join(original, "SKILL.md"), "intruder");
+    await mkdir(backupPath, { recursive: true });
+    await writeFile(join(backupPath, "SKILL.md"), "body");
+    await mkdir(join(controlDir, "transactions"), { recursive: true });
+    const journal: MutationJournalV1 = {
+      version: 1,
+      transactionId: "blocked",
+      status: "applying",
+      kind: "skill.import",
+      entries: [
+        {
+          artifactKind: "directory",
+          operationKind: "link-directory",
+          path: original,
+          stagePath: `${original}.ratel-stage-blocked-1`,
+          backupPath,
+          existedBefore: true,
+          applied: true,
+        },
+      ],
+    };
+    await writeFile(
+      join(controlDir, "transactions", "blocked.json"),
+      `${JSON.stringify(journal)}\n`,
+    );
+
+    await expect(
+      createMutationEngine({ controlDir, onRecovery: () => undefined }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("failed to recover transaction blocked"),
+      cause: expect.objectContaining({
+        message: `cannot restore link over a real directory: ${original}`,
+      }),
+    });
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toBe("intruder");
+    expect(await readFile(join(backupPath, "SKILL.md"), "utf8")).toBe("body");
+  });
+
+  it("refuses to delete an unrestored link backup", async () => {
+    const original = join(root, "claude", "skills", "taken");
+    const backupPath = `${original}.ratel-backup-unrestored-1`;
+    await mkdir(original, { recursive: true });
+    await writeFile(join(original, "SKILL.md"), "still-here");
+    await mkdir(backupPath, { recursive: true });
+    await writeFile(join(backupPath, "SKILL.md"), "body");
+    await mkdir(join(controlDir, "transactions"), { recursive: true });
+    const journal: MutationJournalV1 = {
+      version: 1,
+      transactionId: "unrestored",
+      status: "applying",
+      kind: "skill.import",
+      entries: [
+        {
+          artifactKind: "directory",
+          operationKind: "link-directory",
+          path: original,
+          stagePath: `${original}.ratel-stage-unrestored-1`,
+          backupPath,
+          existedBefore: true,
+          applied: false,
+        },
+      ],
+    };
+    await writeFile(
+      join(controlDir, "transactions", "unrestored.json"),
+      `${JSON.stringify(journal)}\n`,
+    );
+
+    await expect(
+      createMutationEngine({ controlDir, onRecovery: () => undefined }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("failed to recover transaction unrestored"),
+      cause: expect.objectContaining({
+        message: `refusing to delete unrestored link backup for ${original}`,
+      }),
+    });
+    expect(await readFile(join(original, "SKILL.md"), "utf8")).toBe("still-here");
+    expect(await readFile(join(backupPath, "SKILL.md"), "utf8")).toBe("body");
+  });
+
   it("restores a deleted directory when a later hook fails", async () => {
     const config = join(root, "config.json");
     const target = join(root, "skill");

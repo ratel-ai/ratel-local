@@ -400,6 +400,66 @@ describe("runDoctor", () => {
     }
   });
 
+  it("reports a dangling native skill symlink while the registration is present", async () => {
+    const homeDir = await temporaryHome();
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({
+        skills: {
+          entries: {
+            taken: {
+              mode: "copy",
+              path: copyPath,
+              source: "claude",
+              hostPolicy: { mode: "manual-only", source: "claude" },
+            },
+          },
+          dirs: [],
+        },
+      })}\n`,
+    );
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(homeDir, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    expect(
+      logs.some(
+        (line) =>
+          line.includes("skill-native-link-broken") &&
+          line.includes(nativePath) &&
+          line.includes("broken symlink") &&
+          !line.includes("ENOENT"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports a dangling native skill symlink after the registration is gone", async () => {
+    const homeDir = await temporaryHome();
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(join(homeDir, ".ratel", "config.json"), "{}\n");
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(homeDir, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    expect(
+      logs.some(
+        (line) =>
+          line.startsWith("[error] skill-native-link-broken [skill:taken]:") &&
+          line.includes(nativePath) &&
+          line.includes("broken symlink"),
+      ),
+    ).toBe(true);
+  });
+
   async function temporaryHome(): Promise<string> {
     const home = await mkdtemp(join(tmpdir(), "ratel-doctor-"));
     homes.push(home);

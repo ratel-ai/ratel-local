@@ -1,5 +1,6 @@
-import { access } from "node:fs/promises";
-import { join } from "node:path";
+import type { Dirent } from "node:fs";
+import { access, readdir, readlink, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   createConfigControlPlane,
   createContextSnapshotResolver,
@@ -200,8 +201,72 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     );
     issueCount += 1;
   }
+
+  const reportedNativePaths = new Set(
+    snapshots.flatMap(({ diagnostics }) =>
+      diagnostics
+        .filter((diagnostic) => diagnostic.code === "skill-native-link-broken" && diagnostic.path)
+        .map((diagnostic) => diagnostic.path as string),
+    ),
+  );
+  for (const orphan of await findOrphanNativeSkillLinks(ctx.env.homeDir, reportedNativePaths)) {
+    issueCount += 1;
+    output.error(
+      `skill-native-link-broken [skill:${orphan.id}]: ${orphan.path} is a broken symlink to ${orphan.target}. Action: delete the symlink by hand; restore does not run from doctor.`,
+    );
+  }
+
   if (issueCount > 0) throw new DoctorFailure(issueCount);
   output.success(
     `doctor: ok (${snapshots.length} ${snapshots.length === 1 ? "context" : "contexts"} checked)`,
   );
+}
+
+const NATIVE_SKILL_ROOTS = [".claude/skills", ".agents/skills", ".codex/skills"] as const;
+
+async function findOrphanNativeSkillLinks(
+  homeDir: string,
+  alreadyReported: ReadonlySet<string>,
+): Promise<Array<{ id: string; path: string; target: string }>> {
+  const managedRoot = join(homeDir, ".ratel", "skills");
+  const found: Array<{ id: string; path: string; target: string }> = [];
+  for (const relativeRoot of NATIVE_SKILL_ROOTS) {
+    const root = join(homeDir, relativeRoot);
+    let entries: Dirent[];
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const path = join(root, entry.name);
+      if (!entry.isSymbolicLink()) continue;
+      if (alreadyReported.has(path)) continue;
+      let target: string;
+      try {
+        target = await readlink(path);
+      } catch {
+        continue;
+      }
+      const absoluteTarget = isAbsolute(target) ? target : resolve(dirname(path), target);
+      const fromManaged = relative(managedRoot, absoluteTarget);
+      if (
+        fromManaged === "" ||
+        fromManaged === ".." ||
+        fromManaged.startsWith(`..${sep}`) ||
+        isAbsolute(fromManaged)
+      ) {
+        continue;
+      }
+      try {
+        await realpath(path);
+        continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
+      }
+      found.push({ id: entry.name, path, target: absoluteTarget });
+    }
+  }
+  return found;
 }

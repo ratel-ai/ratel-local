@@ -349,7 +349,7 @@ export class FilesystemMutationEngine implements MutationEngine {
       if (input.kind === "link-directory") {
         assertLinkTarget(input.target);
         if (before.exists && before.kind !== "directory") {
-          throw new MutationValidationError(`link target is not a directory: ${input.path}`);
+          throw new MutationValidationError(`link path is not a directory: ${input.path}`);
         }
         baseRevisions[input.path] = before.revision;
         operations.push({ kind: "link-directory", path: input.path, target: input.target });
@@ -731,12 +731,15 @@ export class FilesystemMutationEngine implements MutationEngine {
       }
       if (operation.kind === "link-directory") {
         // "dir" is required on Windows, where the link type is not inferred.
+        // Skill-import takeover is the only producer of link-directory today
+        // (ADR 0022). If a second producer emits it, move the reference-route
+        // wording up to that control plane.
         try {
           await symlink(operation.target, entry.stagePath, "dir");
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "EPERM") {
             throw new MutationValidationError(
-              `creating a directory symlink requires privilege: ${entry.stagePath} -> ${operation.target}`,
+              `creating a directory symlink requires privilege: ${operation.path} -> ${operation.target}; register the skill as a reference instead of taking it over`,
             );
           }
           throw error;
@@ -966,6 +969,12 @@ async function readArtifact(
   path: string,
   expectedSymlinkTarget?: string,
 ): Promise<{ exists: boolean; kind?: "file" | "directory"; revision: DocumentRevision }> {
+  // A dangling symlink with expectedSymlinkTarget hits realpath inside the try;
+  // the ENOENT catch returns { exists: false }. pathExists (lstat) reports the
+  // same path as existing. That is why delete-with-target says "delete target
+  // does not exist" and delete-without-target says "mutation target must not be
+  // a symlink". Snapshot restore needs an operation for arbitrary symlinks;
+  // leave this inconsistency until then.
   try {
     const info = await lstat(path);
     if (info.isSymbolicLink()) {

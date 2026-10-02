@@ -732,6 +732,34 @@ describe("SkillImportControlPlane", () => {
     });
   });
 
+  it("does not take over a global skill copied into project scope", async () => {
+    const f = await fixture({ skillStorage: true });
+    const original = join(f.homeDir, ".claude", "skills", "global-into-project");
+    await putSkill(original, "global-into-project");
+    const candidate = (await f.discovery.discover({ kind: "global" })).candidates.find(
+      ({ id }) => id === "global-into-project",
+    );
+    if (!candidate) throw new Error("candidate not discovered");
+
+    const plan = await f.controlPlane.prepare([
+      {
+        candidateId: candidate.candidateId,
+        targets: [{ scopeRef: projectScope(f.projectAId), mode: "copy" }],
+      },
+    ]);
+    await f.controlPlane.commit(plan.changeId);
+
+    expect((await lstat(original)).isSymbolicLink()).toBe(false);
+    expect((await lstat(original)).isDirectory()).toBe(true);
+    expect(plan.preview.files.some((file) => file.path === original)).toBe(false);
+    expect(
+      await readFile(
+        join(f.projectA, ".ratel", "skills", "global-into-project", "SKILL.md"),
+        "utf8",
+      ),
+    ).toContain("global-into-project");
+  });
+
   it("keeps hostPolicy and adds origin when importing a reference with skillStorage", async () => {
     const f = await fixture({ skillStorage: true });
     await putSkill(join(f.homeDir, ".claude", "skills", "review"), "review");

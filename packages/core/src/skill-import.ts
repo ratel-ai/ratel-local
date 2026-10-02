@@ -761,7 +761,10 @@ function copyTargetPath(
   });
 }
 
-/** The host policy edit, rebased from the native tree onto the managed copy. */
+/** The host policy edit, rebased from the native tree onto the managed copy.
+ * isAbsolute / .. cannot fire for the current caller: relative() is taken from
+ * the same native path that caller passed in. They stay as a guard on a write.
+ */
 function policyFileForCopy(
   nativePath: string,
   operation: ReplaceFileInput,
@@ -782,9 +785,11 @@ function policyFileForCopy(
 }
 
 /**
- * The link op can arrive with nothing published: planSkillCopyMaterialization
- * returns zero operations when it adopts an existing copy whose ownership
- * marker is already present. Operation order does not cover that case.
+ * Defense in depth for a state current callers cannot reach. Adoption requires
+ * realpath(target) === realpath(source), which a non-symlink native directory
+ * cannot satisfy against a distinct copy path, so planSkillCopyMaterialization
+ * always publishes copy operations before the link. Keep the guard on a step
+ * that renames a user's directory aside.
  */
 async function assertCopyPublished(path: string): Promise<void> {
   const info = await lstat(path).catch(() => undefined);
