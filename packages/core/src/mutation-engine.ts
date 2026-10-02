@@ -375,14 +375,11 @@ export class FilesystemMutationEngine implements MutationEngine {
       const additionalFiles = normalizeAdditionalFiles(input.additionalFiles ?? []);
       for (const file of additionalFiles) {
         const additionalPath = join(input.sourcePath, file.relativePath);
-        let info: Stats;
-        try {
-          info = await lstat(additionalPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        const info = await lstat(additionalPath).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
           throw error;
-        }
-        if (info.isDirectory()) {
+        });
+        if (info?.isDirectory()) {
           throw new MutationValidationError(
             `additional copy path collides with a directory: ${additionalPath}`,
           );
@@ -851,33 +848,27 @@ export class FilesystemMutationEngine implements MutationEngine {
         await rm(entry.backupPath, { recursive: true, force: true });
         continue;
       }
-      if (entry.operationKind === "link-directory") {
+      if (entry.operationKind === "link-directory" && entry.existedBefore) {
         const backupExists = await pathExists(entry.backupPath);
         const targetExists = await pathExists(entry.path);
         const targetIsSymlink = targetExists && (await lstat(entry.path)).isSymbolicLink();
         // With an original to protect, decide from the backup and the target, not the
         // stage: a crash between the two renames leaves the stage in place and the only
-        // copy in the backup. Without one there is no backup, so the stage is the signal.
-        const wasApplied =
-          entry.applied ||
-          (entry.existedBefore
-            ? backupExists && (!targetExists || targetIsSymlink)
-            : !(await pathExists(entry.stagePath)));
+        // copy in the backup. Rollback infers that intermediate state from the
+        // filesystem instead of journaling it; pay this down when the same
+        // publish-and-rollback path is generalized for snapshot restore.
+        const wasApplied = entry.applied || (backupExists && (!targetExists || targetIsSymlink));
         if (wasApplied) {
-          if (entry.existedBefore) {
-            if (targetExists && !targetIsSymlink) {
-              throw new Error(`cannot restore link over a real directory: ${entry.path}`);
-            }
-            if (targetIsSymlink) {
-              await rm(entry.path, { force: true });
-            }
-            if (await pathExists(entry.backupPath)) {
-              await rename(entry.backupPath, entry.path);
-            } else if (!(await pathExists(entry.path))) {
-              throw new Error(`missing backup for ${entry.path}`);
-            }
-          } else {
-            await rm(entry.path, { recursive: true, force: true });
+          if (targetExists && !targetIsSymlink) {
+            throw new Error(`cannot restore link over a real directory: ${entry.path}`);
+          }
+          if (targetIsSymlink) {
+            await rm(entry.path, { force: true });
+          }
+          if (backupExists) {
+            await rename(entry.backupPath, entry.path);
+          } else if (!(await pathExists(entry.path))) {
+            throw new Error(`missing backup for ${entry.path}`);
           }
         } else if (backupExists) {
           throw new Error(`refusing to delete unrestored link backup for ${entry.path}`);
