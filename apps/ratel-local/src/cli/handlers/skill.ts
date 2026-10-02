@@ -94,7 +94,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
 
   switch (verb) {
     case "import": {
-      const runtime = createSkillReadRuntime(ctx, options);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         ctx.env.projectRoot,
@@ -108,8 +109,6 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         options.daemonRequest ?? ((path, init) => requestRunningDaemon(ctx, path, init));
       const remoteDiscovery = await daemonRequest(contextApiPath("/api/skills", context));
       let candidates: SkillCandidate[];
-      let scanning = runtime;
-      let skillStorage: boolean | undefined;
       if (remoteDiscovery) {
         const body = await requireDaemonJson<{ discovered?: SkillCandidate[] }>(
           remoteDiscovery,
@@ -120,17 +119,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         }
         candidates = body.discovered;
       } else {
-        skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
-        scanning =
-          options.discovery !== undefined
-            ? runtime
-            : createSkillReadRuntime(
-                ctx,
-                { ...options, registry: runtime.registry, resolver: runtime.resolver },
-                skillStorage,
-              );
         candidates = (
-          await scanning.discovery.discover(
+          await runtime.discovery.discover(
             project ? { kind: "project", projectRoot: project.canonicalRoot } : { kind: "global" },
           )
         ).candidates;
@@ -166,7 +156,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         }
         control =
           options.importControlPlane ??
-          (await createImportControlPlane(ctx, scanning, skillStorage));
+          (await createImportControlPlane(ctx, runtime, skillStorage));
         change = await control.prepare(selections, { duplicateStrategy: "keep-first" });
       }
       if (dryRun) {

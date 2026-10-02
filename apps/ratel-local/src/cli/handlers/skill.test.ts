@@ -306,6 +306,10 @@ describe("runSkill — snapshot-backed reads", () => {
 
     expect(calls).toEqual([
       {
+        path: "/api/daemon/status",
+        init: undefined,
+      },
+      {
         path: `/api/skills?projectId=${PROJECT_ID}`,
         init: undefined,
       },
