@@ -1,6 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import type { MutationInputOperation } from "./mutation-engine.js";
+import type { MutationInputOperation, ReplaceFileInput } from "./mutation-engine.js";
 import type { DiscoveredSkillSource } from "./skill-discovery.js";
 
 export type NativeSkillSource = Exclude<DiscoveredSkillSource, "ratel">;
@@ -15,7 +15,7 @@ export interface SkillHostPolicy {
 
 export interface PreparedSkillHostPolicy {
   policy: SkillHostPolicy;
-  operation?: MutationInputOperation;
+  operation?: ReplaceFileInput;
 }
 
 export function skillHostPolicyFromLegacyPatch(input: {
@@ -136,7 +136,7 @@ export async function prepareSkillHostPolicyRestore(input: {
   return after === before ? undefined : { kind: "replace-file", path, contents: after };
 }
 
-function nativeSkillPath(homeDir: string, id: string, source: NativeSkillSource): string {
+export function nativeSkillPath(homeDir: string, id: string, source: NativeSkillSource): string {
   if (source === "claude") return join(homeDir, ".claude", "skills", id);
   if (source === "codex-current") return join(homeDir, ".agents", "skills", id);
   return join(homeDir, ".codex", "skills", id);

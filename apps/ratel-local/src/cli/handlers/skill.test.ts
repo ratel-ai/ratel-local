@@ -306,6 +306,10 @@ describe("runSkill — snapshot-backed reads", () => {
 
     expect(calls).toEqual([
       {
+        path: "/api/daemon/status",
+        init: undefined,
+      },
+      {
         path: `/api/skills?projectId=${PROJECT_ID}`,
         init: undefined,
       },
@@ -422,6 +426,118 @@ describe("runSkill — snapshot-backed reads", () => {
         deleteOwnedCopy,
       },
     ]);
+  });
+
+  it("remove logs a leftover broken symlink from the commit result", async () => {
+    const logs: string[] = [];
+    const nativePath = "/home/u/.claude/skills/gone";
+    const brokenNativeLink = {
+      path: nativePath,
+      kind: "unresolved" as const,
+      copyKept: false,
+    };
+    const registrationControlPlane = {
+      async prepareRemove() {
+        return {
+          changeId: "change-broken",
+          kind: "skill.remove",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          preview: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "gone",
+            files: [{ kind: "file" as const, path: "/home/u/.ratel/config.json" }],
+            brokenNativeLink,
+          },
+        };
+      },
+      async remove() {
+        return {
+          transactionId: "tx",
+          changedPaths: ["/home/u/.ratel/config.json"],
+          revisions: {},
+          backupManifest: null,
+          result: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "gone",
+            brokenNativeLink,
+          },
+        };
+      },
+      cancel() {},
+    } as unknown as SkillRegistrationControlPlane;
+    const ctx = listCtx((line) => logs.push(line));
+    ctx.argv.verb = "remove";
+    ctx.argv.rest = ["gone"];
+    ctx.argv.flags = { scope: "user", yes: true };
+
+    await runSkill(ctx, { registry: registry(), registrationControlPlane });
+
+    expect(logs).toContain(`updated /home/u/.ratel/config.json`);
+    expect(logs).toContain(`left a broken symlink at ${nativePath}; delete it by hand.`);
+  });
+
+  it("remove dry-run and daemon paths report a leftover broken symlink", async () => {
+    const nativePath = "/home/u/.claude/skills/gone";
+    const brokenNativeLink = {
+      path: nativePath,
+      kind: "unresolved" as const,
+      copyKept: false,
+    };
+
+    const dryLogs: string[] = [];
+    const dryControl = {
+      async prepareRemove() {
+        return {
+          changeId: "change-dry",
+          kind: "skill.remove",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          preview: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "gone",
+            files: [{ kind: "file" as const, path: "/home/u/.ratel/config.json" }],
+            brokenNativeLink,
+          },
+        };
+      },
+      cancel() {},
+    } as unknown as SkillRegistrationControlPlane;
+    const dryCtx = listCtx((line) => dryLogs.push(line));
+    dryCtx.argv.verb = "remove";
+    dryCtx.argv.rest = ["gone"];
+    dryCtx.argv.flags = { scope: "user", "dry-run": true };
+    await runSkill(dryCtx, { registry: registry(), registrationControlPlane: dryControl });
+    expect(dryLogs).toContain(`would leave a broken symlink at ${nativePath}; delete it by hand.`);
+
+    const daemonLogs: string[] = [];
+    const daemonCtx = listCtx((line) => daemonLogs.push(line));
+    daemonCtx.argv.verb = "remove";
+    daemonCtx.argv.rest = ["gone"];
+    daemonCtx.argv.flags = { scope: "user", yes: true };
+    await runSkill(daemonCtx, {
+      registry: registry(),
+      registrationControlPlane: {
+        async remove() {
+          throw new Error("local remove should not run when the daemon answers");
+        },
+      } as unknown as SkillRegistrationControlPlane,
+      daemonRequest: async () =>
+        Response.json({
+          transactionId: "remote",
+          changedPaths: ["/home/u/.ratel/config.json"],
+          revisions: {},
+          backupManifest: null,
+          result: {
+            action: "remove",
+            target: { scope: "user" },
+            id: "gone",
+            brokenNativeLink,
+          },
+        }),
+    });
+    expect(daemonLogs).toContain(`left a broken symlink at ${nativePath}; delete it by hand.`);
   });
 
   it("lists the effective catalog for a registered project id", async () => {

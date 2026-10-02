@@ -7,7 +7,7 @@ import type { ContextSnapshotResolver } from "./context-snapshot.js";
 import { skillStorageEnabled } from "./feature-flags.js";
 import { nodeFs } from "./io.js";
 import { isPlainObject } from "./json.js";
-import type { SkillSource } from "./lib/config.js";
+import type { SkillHostPolicy, SkillSource } from "./lib/config.js";
 import { parseConfig, parseSkillMd, type SkillEntry } from "./lib/index.js";
 import { loadSkillBundle } from "./lib/skills/load.js";
 import type { SkillRegistrationView } from "./lib/skills/resolve.js";
@@ -30,7 +30,7 @@ import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { planSkillCopyMaterialization } from "./skill-copy-adoption.js";
 import { rewriteSkillDocument, stripBundledResourceIndex } from "./skill-document.js";
-import { prepareSkillHostPolicyRestore } from "./skill-host-policy.js";
+import { nativeSkillPath, prepareSkillHostPolicyRestore } from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
 import {
   configuredSkillStoragePath,
@@ -99,17 +99,30 @@ export interface SkillRegistrationControlPlane {
   remove(request: RemoveSkillRegistrationRequest): Promise<SkillRegistrationCommit>;
 }
 
+/**
+ * A native symlink removal could not safely act on. `unresolved` means the link
+ * does not resolve. `copy-missing` means the link resolves and the managed copy
+ * is gone. `copyKept` is true only when that copy is still on disk.
+ */
+export interface BrokenNativeLink {
+  path: string;
+  kind: "unresolved" | "copy-missing";
+  copyKept: boolean;
+}
+
 export interface SkillRegistrationReview {
   action: "create" | "add-scope" | "edit" | "remove";
   target: RatelScopeRef;
   id: string;
   files: MutationPreview["files"];
+  brokenNativeLink?: BrokenNativeLink;
 }
 
 export interface SkillRegistrationResult {
   action: SkillRegistrationReview["action"];
   target: RatelScopeRef;
   id: string;
+  brokenNativeLink?: BrokenNativeLink;
 }
 
 export type SkillRegistrationCommit = PreparedChangeCommit<SkillRegistrationResult>;
@@ -599,7 +612,30 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         contents: `${JSON.stringify(document, null, 2)}\n`,
       },
     ];
-    if (request.target.scope === "user" && registration.hostPolicy) {
+    const projectRootsByPath = new Map<string, string>();
+    if (request.target.scope !== "user") {
+      const project = await this.options.projectRegistry.resolve(request.target.projectId);
+      projectRootsByPath.set(current.path, project.canonicalRoot);
+    }
+
+    let copyPath: string | undefined;
+    if (registration.mode === "copy") {
+      copyPath = await this.ownedCopyPath(request.target, request.id, registration);
+    }
+    const takeover =
+      request.target.scope === "user" &&
+      registration.mode === "copy" &&
+      registration.hostPolicy &&
+      copyPath
+        ? await resolveTakeoverNativePath({
+            homeDir: this.options.homeDir,
+            id: request.id,
+            hostPolicy: registration.hostPolicy,
+            copyPath,
+          })
+        : ({ kind: "none" } as const);
+
+    if (takeover.kind === "none" && request.target.scope === "user" && registration.hostPolicy) {
       try {
         const restore = await prepareSkillHostPolicyRestore({
           homeDir: this.options.homeDir,
@@ -614,14 +650,28 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         );
       }
     }
-    const projectRootsByPath = new Map<string, string>();
-    if (request.target.scope !== "user") {
-      const project = await this.options.projectRegistry.resolve(request.target.projectId);
-      projectRootsByPath.set(current.path, project.canonicalRoot);
+
+    // Unlink the Ratel-made native symlink before deleting the copy so apply-time
+    // realpath of the link still resolves. copyReal was resolved once above.
+    if (takeover.kind === "linked") {
+      operations.push({
+        kind: "delete-artifact",
+        path: takeover.nativePath,
+        expectedSymlinkTarget: takeover.copyReal,
+      });
     }
+
+    const brokenNativeLink =
+      takeover.kind === "broken"
+        ? {
+            path: takeover.nativePath,
+            kind: takeover.reason,
+            copyKept: takeover.copyKept,
+          }
+        : undefined;
+
     let deletion: { copyPath: string; removedTarget: RatelScopeRef; removedId: string } | undefined;
-    if (request.deleteOwnedCopy && registration.mode === "copy") {
-      const copyPath = await this.ownedCopyPath(request.target, request.id, registration);
+    if (request.deleteOwnedCopy && copyPath && takeover.kind !== "broken") {
       await assertOwnedCopy(copyPath, request.id);
       await this.assertNoReverseReferences(copyPath, request.target, request.id);
       operations.push({ kind: "delete-artifact", path: copyPath });
@@ -638,6 +688,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       operations,
       projectRootsByPath,
       deletion,
+      ...(brokenNativeLink ? { brokenNativeLink } : {}),
       verifyPreview: (mutation) => {
         if (mutation.baseRevisions[current.path] !== current.documentRevision) {
           throw new MutationConflictError(
@@ -689,6 +740,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     verifyPreview: (mutation: Readonly<PreparedMutation>) => void;
     precondition?: () => Promise<void>;
     deletion?: { copyPath: string; removedTarget: RatelScopeRef; removedId: string };
+    brokenNativeLink?: BrokenNativeLink;
   }): Promise<PreparedChange<SkillRegistrationReview>> {
     const allowedPaths = new Set(input.operations.map(({ path }) => path));
     return this.options.preparedChanges.prepare({
@@ -703,6 +755,7 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
           target: input.target,
           id: input.id,
           files: mutation.preview.files,
+          ...(input.brokenNativeLink ? { brokenNativeLink: input.brokenNativeLink } : {}),
         };
       },
       invariants: {
@@ -765,7 +818,12 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         }
         return backup.finalize(action);
       },
-      result: { action: input.action, target: input.target, id: input.id },
+      result: {
+        action: input.action,
+        target: input.target,
+        id: input.id,
+        ...(input.brokenNativeLink ? { brokenNativeLink: input.brokenNativeLink } : {}),
+      },
     });
   }
 
@@ -845,6 +903,71 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
         }
       }
     }
+  }
+}
+
+type TakeoverState =
+  | { kind: "none" }
+  | { kind: "linked"; nativePath: string; copyReal: string }
+  | {
+      kind: "broken";
+      nativePath: string;
+      reason: BrokenNativeLink["kind"];
+      copyKept: boolean;
+    };
+
+/**
+ * Exact match against the copy, not skill-discovery's linksInto, which matches a
+ * prefix: a link nested under the copy must read as not-a-takeover rather than
+ * reach delete-artifact and fail on expectedSymlinkTarget.
+ *
+ * `broken` is a symlink we cannot safely act on: its realpath is ENOENT, or the
+ * copy's realpath is ENOENT while the link still resolves. `none` is a missing
+ * native path, a non-symlink, or a symlink that resolves to something other than
+ * the copy. Non-ENOENT errors propagate, so an unreadable path cannot be
+ * classified as none or broken and skip the unlink.
+ *
+ * `none` still runs host-policy restore, so a symlink that resolves into a
+ * directory Ratel does not own is edited through that link. Pre-existing: before
+ * takeover, restore read and wrote whatever occupied the native path, with no
+ * symlink check at all. Skipping restore for `broken` does not make `none` safe
+ * in that respect. Tracked as RL-63.
+ */
+async function resolveTakeoverNativePath(input: {
+  homeDir: string;
+  id: string;
+  hostPolicy: SkillHostPolicy;
+  copyPath: string;
+}): Promise<TakeoverState> {
+  const nativePath = nativeSkillPath(input.homeDir, input.id, input.hostPolicy.source);
+  let info: Awaited<ReturnType<typeof lstat>>;
+  try {
+    info = await lstat(nativePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "none" };
+    throw error;
+  }
+  if (!info.isSymbolicLink()) return { kind: "none" };
+
+  const copyReal = await realpathOrMissing(input.copyPath);
+  const linkReal = await realpathOrMissing(nativePath);
+  if (linkReal === undefined) {
+    return { kind: "broken", nativePath, reason: "unresolved", copyKept: copyReal !== undefined };
+  }
+  if (copyReal === undefined) {
+    return { kind: "broken", nativePath, reason: "copy-missing", copyKept: false };
+  }
+  if (linkReal === copyReal) return { kind: "linked", nativePath, copyReal };
+  return { kind: "none" };
+}
+
+/** ENOENT is a missing path. Every other error propagates. */
+async function realpathOrMissing(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
 }
 

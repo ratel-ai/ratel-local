@@ -1,4 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +16,7 @@ import { createContextSnapshotResolver } from "./context-snapshot.js";
 import { createMutationEngine, documentRevision } from "./mutation-engine.js";
 import { createPreparedChangeCoordinator } from "./prepared-change-coordinator.js";
 import { createProjectRegistry } from "./project-registry.js";
+import { createSkillDiscovery } from "./skill-discovery.js";
 import { createSkillRegistrationControlPlane } from "./skill-registration-control.js";
 
 describe("SkillRegistrationControlPlane", () => {
@@ -125,6 +135,239 @@ describe("SkillRegistrationControlPlane", () => {
       skills: { entries: {}, dirs: [] },
     });
     expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
+  });
+
+  async function putTakeover(id: string) {
+    const copyPath = await putOwnedCopy(id);
+    const nativePath = join(homeDir, ".claude", "skills", id);
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    return { copyPath, nativePath };
+  }
+
+  it("deletes a taken-over skill: registration, managed copy, and native symlink", async () => {
+    const { copyPath, nativePath } = await putTakeover("taken");
+    const { control, configPath } = await fixture(
+      {
+        taken: {
+          mode: "copy",
+          path: copyPath,
+          source: "claude",
+          origin: "local-managed",
+          hostPolicy: { mode: "manual-only", source: "claude" },
+        },
+      },
+      { skillStorage: true },
+    );
+
+    await control.remove({
+      target: { scope: "user" },
+      id: "taken",
+      deleteOwnedCopy: true,
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: { entries: {}, dirs: [] },
+    });
+    await expect(lstat(copyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("remove-scope of a taken-over skill unlinks the native path and keeps the copy", async () => {
+    const { copyPath, nativePath } = await putTakeover("kept");
+    const { control, configPath } = await fixture(
+      {
+        kept: {
+          mode: "copy",
+          path: copyPath,
+          source: "claude",
+          origin: "local-managed",
+          hostPolicy: { mode: "manual-only", source: "claude" },
+        },
+      },
+      { skillStorage: true },
+    );
+
+    await control.remove({
+      target: { scope: "user" },
+      id: "kept",
+      deleteOwnedCopy: false,
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: { entries: {}, dirs: [] },
+    });
+    await expect(lstat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
+    expect(await realpath(copyPath)).toBe(
+      await realpath(join(homeDir, ".ratel", "skills", "kept")),
+    );
+
+    const discovery = createSkillDiscovery({ homeDir, skillStorage: true });
+    const candidates = (await discovery.discover({ kind: "global" })).candidates.filter(
+      ({ id }) => id === "kept",
+    );
+    expect(candidates.map(({ source }) => source)).toEqual(["ratel"]);
+  });
+
+  it.each([
+    ["remove", true, true],
+    ["remove-scope", false, true],
+    ["remove", true, false],
+    ["remove-scope", false, false],
+  ] as const)("%s clears a taken-over skill after the managed copy was deleted outside Ratel (deleteOwnedCopy=%s, skillStorage=%s)", async (verb, deleteOwnedCopy, skillStorage) => {
+    const { copyPath, nativePath } = await putTakeover("gone");
+    const previous = process.env.RATEL_FEATURE_SKILL_STORAGE;
+    if (!skillStorage) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+    try {
+      const { control, configPath } = await fixture(
+        {
+          gone: {
+            mode: "copy",
+            path: copyPath,
+            source: "claude",
+            origin: "local-managed",
+            hostPolicy: { mode: "manual-only", source: "claude" },
+          },
+        },
+        skillStorage ? { skillStorage: true } : {},
+      );
+      await rm(copyPath, { recursive: true, force: true });
+
+      const commit = await control.remove({
+        target: { scope: "user" },
+        id: "gone",
+        deleteOwnedCopy,
+      });
+
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+        skills: { entries: {}, dirs: [] },
+      });
+      expect((await lstat(nativePath)).isSymbolicLink()).toBe(true);
+      expect(commit.result.brokenNativeLink).toEqual({
+        path: nativePath,
+        kind: "unresolved",
+        copyKept: false,
+      });
+      expect(verb === "remove" || verb === "remove-scope").toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
+      else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
+    }
+  });
+
+  it.each([
+    true,
+    false,
+  ] as const)("removes a taken-over skill whose native symlink points at a missing path (deleteOwnedCopy=%s)", async (deleteOwnedCopy) => {
+    const { copyPath, nativePath } = await putTakeover("orphan-link");
+    await rm(nativePath, { force: true });
+    await symlink(join(homeDir, ".ratel", "skills", "does-not-exist"), nativePath);
+    const { control, configPath } = await fixture(
+      {
+        "orphan-link": {
+          mode: "copy",
+          path: copyPath,
+          source: "claude",
+          origin: "local-managed",
+          hostPolicy: { mode: "manual-only", source: "claude" },
+        },
+      },
+      { skillStorage: true },
+    );
+
+    const commit = await control.remove({
+      target: { scope: "user" },
+      id: "orphan-link",
+      deleteOwnedCopy,
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: { entries: {}, dirs: [] },
+    });
+    expect((await lstat(nativePath)).isSymbolicLink()).toBe(true);
+    expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
+    expect(commit.result.brokenNativeLink).toEqual({
+      path: nativePath,
+      kind: "unresolved",
+      copyKept: true,
+    });
+  });
+
+  it("reports a symlink that still resolves when the managed copy is gone", async () => {
+    const { copyPath, nativePath } = await putTakeover("elsewhere");
+    const other = join(homeDir, "other-skill");
+    await mkdir(other, { recursive: true });
+    await writeFile(join(other, "SKILL.md"), "other\n");
+    await rm(nativePath, { force: true });
+    await symlink(other, nativePath);
+    await rm(copyPath, { recursive: true, force: true });
+    const { control, configPath } = await fixture(
+      {
+        elsewhere: {
+          mode: "copy",
+          path: copyPath,
+          source: "claude",
+          origin: "local-managed",
+          hostPolicy: { mode: "manual-only", source: "claude" },
+        },
+      },
+      { skillStorage: true },
+    );
+
+    const commit = await control.remove({
+      target: { scope: "user" },
+      id: "elsewhere",
+      deleteOwnedCopy: true,
+    });
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: { entries: {}, dirs: [] },
+    });
+    expect((await lstat(nativePath)).isSymbolicLink()).toBe(true);
+    expect(commit.result.brokenNativeLink).toEqual({
+      path: nativePath,
+      kind: "copy-missing",
+      copyKept: false,
+    });
+  });
+
+  it("flag-off remove still deletes an ordinary copy and invents no symlink", async () => {
+    const copyPath = await putOwnedCopy("plain");
+    const nativePath = join(homeDir, ".claude", "skills", "plain");
+    const { control } = await fixture({ plain: { mode: "copy" } }, { skillStorage: false });
+
+    await control.remove({
+      target: { scope: "user" },
+      id: "plain",
+      deleteOwnedCopy: true,
+    });
+
+    await expect(lstat(copyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("flag-off remove-scope leaves a non-symlinked native directory alone", async () => {
+    const copyPath = await putOwnedCopy("still-there");
+    const nativePath = join(homeDir, ".claude", "skills", "still-there");
+    await mkdir(nativePath, { recursive: true });
+    await writeFile(join(nativePath, "SKILL.md"), "native body\n");
+    const { control } = await fixture(
+      {
+        "still-there": { mode: "copy" },
+      },
+      { skillStorage: false },
+    );
+
+    await control.remove({
+      target: { scope: "user" },
+      id: "still-there",
+      deleteOwnedCopy: false,
+    });
+
+    expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
+    expect((await lstat(nativePath)).isSymbolicLink()).toBe(false);
+    expect(await readFile(join(nativePath, "SKILL.md"), "utf8")).toBe("native body\n");
   });
 
   it("restores the native host policy when removing a global registration", async () => {

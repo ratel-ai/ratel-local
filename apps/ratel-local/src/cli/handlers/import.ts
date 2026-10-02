@@ -586,7 +586,10 @@ async function createScopedSkillImportRuntime(
   opts: { source?: "claude" | "codex"; skillStorage?: boolean },
 ): Promise<ScopedSkillImportRuntime> {
   const homeDir = dirname(dirname(paths.nativeDir));
-  const discovery = createSkillDiscovery({ homeDir });
+  const discovery = createSkillDiscovery({
+    homeDir,
+    ...(opts.skillStorage !== undefined ? { skillStorage: opts.skillStorage } : {}),
+  });
   const discovered = await discovery.discover({ kind: "global" });
   const discoveredCandidates = discovered.candidates
     .filter(({ source }) => source !== "ratel")
