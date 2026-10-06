@@ -173,7 +173,7 @@ describe("SkillRegistrationControlPlane", () => {
     await expect(lstat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("remove-scope of a taken-over skill unlinks the native path and keeps the copy", async () => {
+  it("remove-scope of a taken-over skill keeps the native link and the copy", async () => {
     const { copyPath, nativePath } = await putTakeover("kept");
     const { control, configPath } = await fixture(
       {
@@ -197,11 +197,8 @@ describe("SkillRegistrationControlPlane", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
       skills: { entries: {}, dirs: [] },
     });
-    await expect(lstat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await realpath(nativePath)).toBe(await realpath(copyPath));
     expect(await readFile(join(copyPath, "SKILL.md"), "utf8")).toContain("Body");
-    expect(await realpath(copyPath)).toBe(
-      await realpath(join(homeDir, ".ratel", "skills", "kept")),
-    );
 
     const discovery = createSkillDiscovery({ homeDir, skillStorage: true });
     const candidates = (await discovery.discover({ kind: "global" })).candidates.filter(

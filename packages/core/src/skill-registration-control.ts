@@ -115,6 +115,8 @@ export interface SkillRegistrationReview {
   target: RatelScopeRef;
   id: string;
   files: MutationPreview["files"];
+  /** Absolute paths that this remove will delete (native link and/or owned copy). */
+  deletes?: string[];
   brokenNativeLink?: BrokenNativeLink;
 }
 
@@ -653,7 +655,9 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
 
     // Unlink the Ratel-made native symlink before deleting the copy so apply-time
     // realpath of the link still resolves. copyReal was resolved once above.
-    if (takeover.kind === "linked") {
+    // remove-scope keeps the link: the registration goes, the host still finds
+    // the skill through the symlink into the kept managed copy.
+    if (takeover.kind === "linked" && request.deleteOwnedCopy) {
       operations.push({
         kind: "delete-artifact",
         path: takeover.nativePath,
@@ -750,11 +754,15 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       skillIds: [input.id],
       buildPreview: (mutation) => {
         input.verifyPreview(mutation);
+        const deletes = input.operations
+          .filter((operation) => operation.kind === "delete-artifact")
+          .map((operation) => operation.path);
         return {
           action: input.action,
           target: input.target,
           id: input.id,
           files: mutation.preview.files,
+          ...(deletes.length > 0 ? { deletes } : {}),
           ...(input.brokenNativeLink ? { brokenNativeLink: input.brokenNativeLink } : {}),
         };
       },
