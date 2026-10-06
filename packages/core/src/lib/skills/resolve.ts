@@ -4,6 +4,7 @@ import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
 import type { RatelScopeRef } from "../../context.js";
+import { skillStorageEnabled } from "../../feature-flags.js";
 import { type NativeSkillSource, nativeSkillPath } from "../../skill-host-policy.js";
 import { isSafeSkillId } from "../../skill-id.js";
 import {
@@ -84,7 +85,7 @@ interface ValidCandidate {
 export async function resolveConfiguredSkills(
   input: ResolveConfiguredSkillsInput,
 ): Promise<ResolvedSkillCatalog> {
-  const skillStorage = input.skillStorage === true;
+  const skillStorage = input.skillStorage ?? skillStorageEnabled();
   const registrations: SkillRegistrationView[] = [];
   const diagnostics: SkillDiagnostic[] = [];
   const candidates: ValidCandidate[] = [];

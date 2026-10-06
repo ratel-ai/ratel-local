@@ -9,6 +9,7 @@ import type {
   RuntimeContextRef,
   RuntimeRevision,
 } from "./context.js";
+import { skillStorageEnabled } from "./feature-flags.js";
 import { ratelConfigPath } from "./hierarchy.js";
 import { isPlainObject } from "./json.js";
 import {
@@ -139,6 +140,7 @@ export function createContextSnapshotResolver(
   options: ContextSnapshotResolverOptions,
 ): ContextSnapshotResolver {
   const maxReadAttempts = options.maxReadAttempts ?? 3;
+  const skillStorage = options.skillStorage ?? skillStorageEnabled();
   return {
     async resolve(context) {
       let pulled: Promise<CloudCatalogPull> | undefined;
@@ -180,7 +182,7 @@ export function createContextSnapshotResolver(
           homeDir: options.homeDir,
           ...(projectRoot ? { projectRoot } : {}),
           scopes,
-          ...(options.skillStorage ? { skillStorage: true } : {}),
+          skillStorage,
         });
         const afterReads = await Promise.all(targets.map(readDocument));
         if (!sameReadSet(reads, afterReads)) continue;
@@ -189,7 +191,7 @@ export function createContextSnapshotResolver(
           homeDir: options.homeDir,
           ...(projectRoot ? { projectRoot } : {}),
           scopes,
-          ...(options.skillStorage ? { skillStorage: true } : {}),
+          skillStorage,
         });
         if (skills.fingerprint !== firstSkills.fingerprint) continue;
 

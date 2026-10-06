@@ -210,7 +210,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           "usage: ratel skill add-scope <id> --scope user|project|local [--mode reference|copy]",
         );
       }
-      const runtime = createSkillReadRuntime(ctx, options);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         ctx.env.projectRoot,
@@ -233,7 +234,6 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           "skill add-scope preparation",
         );
       } else {
-        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
         control =
           options.registrationControlPlane ??
           (await createRegistrationControlPlane(ctx, runtime, skillStorage));
@@ -282,7 +282,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       if (ctx.argv.rest.length !== 1) {
         throw new Error(`usage: ratel skill ${verb} <id> --scope user|project|local`);
       }
-      const runtime = createSkillReadRuntime(ctx, options);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         ctx.env.projectRoot,
@@ -296,11 +297,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       };
       const control =
         options.registrationControlPlane ??
-        (await createRegistrationControlPlane(
-          ctx,
-          runtime,
-          await resolveSkillStorageFlag(ctx, options.daemonRequest),
-        ));
+        (await createRegistrationControlPlane(ctx, runtime, skillStorage));
       if (dryRun) {
         const change = await control.prepareRemove(request);
         ctx.log(`would update ${change.preview.files.map(({ path }) => path).join(", ")}`);
@@ -407,7 +404,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       const dirs = dirsFlag(ctx.argv.flags.dir);
       let skills: Skill[] | undefined;
       if (!dirs) {
-        const runtime = createSkillReadRuntime(ctx, options);
+        const runtime = createSkillReadRuntime(ctx, options, undefined);
         const context = await resolveSkillContext(
           ctx.argv.flags.project,
           cwd ?? ctx.env.projectRoot,
@@ -445,7 +442,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         const dirs = dirsFlag(ctx.argv.flags.dir);
         let skills: Skill[] | undefined;
         if (!dirs) {
-          const runtime = createSkillReadRuntime(ctx, options);
+          const runtime = createSkillReadRuntime(ctx, options, undefined);
           const context = await resolveSkillContext(
             ctx.argv.flags.project,
             input.cwd ?? ctx.env.projectRoot,
@@ -634,7 +631,7 @@ async function createImportControlPlane(
 function createSkillReadRuntime(
   ctx: HandlerCtx,
   options: SkillHandlerOptions,
-  skillStorage = false,
+  skillStorage: boolean | undefined,
 ): SkillReadRuntime {
   const registry = options.registry ?? createProjectRegistry({ homeDir: ctx.env.homeDir });
   const resolver =
@@ -642,7 +639,7 @@ function createSkillReadRuntime(
     createContextSnapshotResolver({
       homeDir: ctx.env.homeDir,
       projectRegistry: registry,
-      ...(skillStorage ? { skillStorage: true } : {}),
+      ...(skillStorage !== undefined ? { skillStorage } : {}),
     });
   const discovery =
     options.discovery ??
@@ -652,7 +649,7 @@ function createSkillReadRuntime(
         (await registry.list())
           .filter((project) => project.status === "available")
           .map((project) => project.canonicalRoot),
-      ...(skillStorage ? { skillStorage: true } : {}),
+      ...(skillStorage !== undefined ? { skillStorage } : {}),
     });
   return { registry, resolver, discovery };
 }

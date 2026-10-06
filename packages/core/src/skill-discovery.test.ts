@@ -2,11 +2,15 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { SKILL_STORAGE_FEATURE_ENV } from "./feature-flags.js";
 import { createSkillDiscovery, StaleSkillCandidateError } from "./skill-discovery.js";
 
 const roots: string[] = [];
+const previousSkillStorageEnv = process.env[SKILL_STORAGE_FEATURE_ENV];
 
 afterEach(async () => {
+  if (previousSkillStorageEnv === undefined) delete process.env[SKILL_STORAGE_FEATURE_ENV];
+  else process.env[SKILL_STORAGE_FEATURE_ENV] = previousSkillStorageEnv;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -95,18 +99,36 @@ describe("SkillDiscovery", () => {
       ["claude", "plain"],
       ["ratel", "legacy"],
     ];
-    for (const discovery of [
-      createSkillDiscovery({ homeDir }),
-      createSkillDiscovery({ homeDir, skillStorage: false }),
-    ]) {
-      const result = await discovery.discover({ kind: "global" });
-      expect(result.candidates.map(({ source, id }) => [source, id])).toEqual(bothRows);
-    }
+    const off = await createSkillDiscovery({ homeDir, skillStorage: false }).discover({
+      kind: "global",
+    });
+    expect(off.candidates.map(({ source, id }) => [source, id])).toEqual(bothRows);
 
     const gated = await createSkillDiscovery({ homeDir, skillStorage: true }).discover({
       kind: "global",
     });
     expect(gated.candidates.map(({ source, id }) => [source, id])).toEqual([
+      ["claude", "elsewhere"],
+      ["claude", "plain"],
+      ["ratel", "legacy"],
+    ]);
+  });
+
+  it("skips a native link into ~/.ratel/skills when the option is omitted and the env flag is on", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "ratel-discovery-home-"));
+    const outside = await mkdtemp(join(tmpdir(), "ratel-discovery-outside-"));
+    roots.push(homeDir, outside);
+    const managed = join(homeDir, ".ratel", "skills", "legacy");
+    await putSkill(managed, "legacy");
+    await putSkill(join(homeDir, ".claude", "skills", "plain"), "plain");
+    await putSkill(join(outside, "elsewhere"), "elsewhere");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await symlink(managed, join(homeDir, ".claude", "skills", "legacy"));
+    await symlink(join(outside, "elsewhere"), join(homeDir, ".claude", "skills", "elsewhere"));
+
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
+    const result = await createSkillDiscovery({ homeDir }).discover({ kind: "global" });
+    expect(result.candidates.map(({ source, id }) => [source, id])).toEqual([
       ["claude", "elsewhere"],
       ["claude", "plain"],
       ["ratel", "legacy"],

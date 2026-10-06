@@ -2,11 +2,15 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { SKILL_STORAGE_FEATURE_ENV } from "../../feature-flags.js";
 import { resolveConfiguredSkills } from "./resolve.js";
 
 const cleanups: string[] = [];
+const previousSkillStorageEnv = process.env[SKILL_STORAGE_FEATURE_ENV];
 
 afterEach(async () => {
+  if (previousSkillStorageEnv === undefined) delete process.env[SKILL_STORAGE_FEATURE_ENV];
+  else process.env[SKILL_STORAGE_FEATURE_ENV] = previousSkillStorageEnv;
   await Promise.all(cleanups.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -893,6 +897,44 @@ describe("resolveConfiguredSkills", () => {
     ]);
     expect(catalog.diagnostics[0]?.message).not.toMatch(/^ENOENT/);
     expect(catalog.diagnostics[0]?.message).toContain(nativePath);
+  });
+
+  it("resolves skillStorage from the environment when the option is omitted", async () => {
+    const homeDir = await tempDir();
+    const ownedDir = join(homeDir, ".ratel", "skills", "owned");
+    await writeSkill(ownedDir, "owned", "Owned", "Body.");
+    await writeFile(
+      join(ownedDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "owned" })}\n`,
+      "utf8",
+    );
+    const scopes = [
+      {
+        ref: { scope: "user" as const },
+        config: {
+          entries: { owned: { mode: "copy" as const, source: "ratel" } },
+          dirs: [],
+        },
+      },
+    ];
+
+    delete process.env[SKILL_STORAGE_FEATURE_ENV];
+    const envOff = await resolveConfiguredSkills({ homeDir, scopes });
+    expect(envOff.registrations[0]?.origin).toBeUndefined();
+    expect(envOff.registrations[0]?.availability).toBeUndefined();
+
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
+    const envOn = await resolveConfiguredSkills({ homeDir, scopes });
+    expect(envOn.registrations[0]?.origin).toBe("local-managed");
+    expect(envOn.registrations[0]?.availability).toBe("available");
+
+    const explicitFalse = await resolveConfiguredSkills({
+      homeDir,
+      skillStorage: false,
+      scopes,
+    });
+    expect(explicitFalse.registrations[0]?.origin).toBeUndefined();
+    expect(explicitFalse.registrations[0]?.availability).toBeUndefined();
   });
 });
 

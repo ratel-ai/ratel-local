@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, sep } from "node:path";
+import { skillStorageEnabled } from "./feature-flags.js";
 import { parseSkillMd } from "./lib/skills/load.js";
 import { isSafeSkillId } from "./skill-id.js";
 
@@ -87,9 +88,11 @@ export function createSkillDiscovery(options: SkillDiscoveryOptions): SkillDisco
 class FilesystemSkillDiscovery implements SkillDiscovery {
   private readonly cache = new Map<string, CachedCandidate>();
   private readonly now: () => number;
+  private readonly skillStorage: boolean;
 
   constructor(private readonly options: SkillDiscoveryOptions) {
     this.now = options.now ?? Date.now;
+    this.skillStorage = options.skillStorage ?? skillStorageEnabled();
   }
 
   async discover(context: SkillDiscoveryContext): Promise<SkillDiscoveryResult> {
@@ -148,7 +151,7 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
         // own exposure of a managed copy (scanned under its own root). With the
         // flag off, a link left by an older install is still a native skill.
         if (
-          this.options.skillStorage &&
+          this.skillStorage &&
           source.source !== "ratel" &&
           (await linksInto(path, canonicalManagedRoot))
         ) {
