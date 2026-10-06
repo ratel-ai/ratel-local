@@ -61,9 +61,10 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     preparedChanges,
   });
   let issueCount = 0;
+  let skillStorage = false;
   const legacyManifestPath = join(controlDir, "skill-manifest.json");
   try {
-    const skillStorage = await resolveSkillStorageFlag(ctx);
+    skillStorage = await resolveSkillStorageFlag(ctx);
     const migration = await prepareLegacySkillMigration({
       homeDir: ctx.env.homeDir,
       configControlPlane,
@@ -209,11 +210,13 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
         .map((diagnostic) => diagnostic.path as string),
     ),
   );
-  for (const orphan of await findOrphanNativeSkillLinks(ctx.env.homeDir, reportedNativePaths)) {
-    issueCount += 1;
-    output.error(
-      `skill-native-link-broken [skill:${orphan.id}]: ${orphan.path} is a broken symlink to ${orphan.target}. Action: delete the symlink by hand; restore does not run from doctor.`,
-    );
+  if (skillStorage) {
+    for (const orphan of await findOrphanNativeSkillLinks(ctx.env.homeDir, reportedNativePaths)) {
+      issueCount += 1;
+      output.error(
+        `skill-native-link-broken [skill:${orphan.id}]: ${orphan.path} is a broken symlink to ${orphan.target}. Action: delete the symlink by hand; restore does not run from doctor.`,
+      );
+    }
   }
 
   if (issueCount > 0) throw new DoctorFailure(issueCount);

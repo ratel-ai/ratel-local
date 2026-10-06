@@ -1,7 +1,12 @@
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProjectRegistry, type MutationJournalV1, nodeFs } from "@ratel-ai/ratel-local-core";
+import {
+  createProjectRegistry,
+  type MutationJournalV1,
+  nodeFs,
+  SKILL_STORAGE_FEATURE_ENV,
+} from "@ratel-ai/ratel-local-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { silentPromptAdapter } from "../prompts.js";
 import { daemonPaths } from "./daemon.js";
@@ -10,8 +15,11 @@ import type { HandlerCtx } from "./types.js";
 
 describe("runDoctor", () => {
   const homes: string[] = [];
+  const previousSkillStorageEnv = process.env[SKILL_STORAGE_FEATURE_ENV];
 
   afterEach(async () => {
+    if (previousSkillStorageEnv === undefined) delete process.env[SKILL_STORAGE_FEATURE_ENV];
+    else process.env[SKILL_STORAGE_FEATURE_ENV] = previousSkillStorageEnv;
     await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
   });
 
@@ -439,6 +447,7 @@ describe("runDoctor", () => {
   });
 
   it("reports a dangling native skill symlink after the registration is gone", async () => {
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
     const homeDir = await temporaryHome();
     const copyPath = join(homeDir, ".ratel", "skills", "taken");
     const nativePath = join(homeDir, ".claude", "skills", "taken");
@@ -458,6 +467,23 @@ describe("runDoctor", () => {
           line.includes("broken symlink"),
       ),
     ).toBe(true);
+  });
+
+  it("ignores a dangling native skill symlink when skill storage is off", async () => {
+    delete process.env[SKILL_STORAGE_FEATURE_ENV];
+    const homeDir = await temporaryHome();
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(join(homeDir, ".ratel", "config.json"), "{}\n");
+    const logs: string[] = [];
+
+    await runDoctor(context(homeDir, logs));
+
+    expect(logs.some((line) => line.includes("skill-native-link-broken"))).toBe(false);
+    expect(logs.at(-1)).toBe("[ok] doctor: ok (1 context checked)");
   });
 
   async function temporaryHome(): Promise<string> {
