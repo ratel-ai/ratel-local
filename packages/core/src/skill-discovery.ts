@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { skillStorageEnabled } from "./feature-flags.js";
 import { parseSkillMd } from "./lib/skills/load.js";
+import { canonicalManagedSkillsRoot, isInsideManagedRoot } from "./managed-skills-root.js";
 import { isSafeSkillId } from "./skill-id.js";
 
 export type DiscoveredSkillSource = "claude" | "codex-current" | "codex-legacy" | "ratel";
@@ -128,7 +129,7 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
     const managedRoot = join(this.options.homeDir, ".ratel", "skills");
     // Links are compared against the canonical root: a symlinked home would
     // otherwise never match.
-    const canonicalManagedRoot = await realpath(managedRoot).catch(() => managedRoot);
+    const canonicalManagedRoot = await canonicalManagedSkillsRoot(this.options.homeDir);
     const sources: Array<{ source: DiscoveredSkillSource; path: string }> = [
       { source: "claude", path: join(this.options.homeDir, ".claude", "skills") },
       { source: "codex-current", path: join(this.options.homeDir, ".agents", "skills") },
@@ -332,8 +333,7 @@ async function readDirectory(
 async function linksInto(path: string, root: string): Promise<boolean> {
   try {
     if (!(await lstat(path)).isSymbolicLink()) return false;
-    const canonical = await realpath(path);
-    return canonical === root || canonical.startsWith(`${root}${sep}`);
+    return isInsideManagedRoot(await realpath(path), root);
   } catch {
     return false;
   }

@@ -37,7 +37,7 @@ All notable changes to this package are documented here. The format is based on 
 - Fixed concurrent `ratel-local cloud add` and `cloud remove` dropping other profiles in `~/.ratel/cloud.json`: each write waits for a file lock, then re-reads, so the first profile that lands keeps `default` and neither save overwrites the other.
 - Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now keeps the stored key and refuses the save when there is none to keep.
 - If a taken-over skill's managed copy was already deleted outside Ratel, or its native path is a symlink that no longer resolves, `skill remove` and `skill remove-scope` succeed, drop the registration, and leave the native symlink in place for the user to delete.
-- With `RATEL_FEATURE_SKILL_STORAGE=1`, `ratel doctor` reports a dangling native skill symlink under `~/.claude/skills`, `~/.agents/skills`, or `~/.codex/skills` that points into `~/.ratel/skills`. It names the broken symlink and does not remove it.
+- With `RATEL_FEATURE_SKILL_STORAGE=1`, `ratel doctor` reports a dangling native skill symlink under `~/.claude/skills`, `~/.agents/skills`, or `~/.codex/skills` that points into `~/.ratel/skills`, including when `$HOME` is itself a symlink. It names the broken symlink and does not remove it.
 
 ## [0.9.0] - 2026-09-04
 

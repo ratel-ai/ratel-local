@@ -1,7 +1,8 @@
 import type { Dirent } from "node:fs";
 import { access, readdir, readlink, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
+  canonicalManagedSkillsRoot,
   createConfigControlPlane,
   createContextSnapshotResolver,
   createMutationEngine,
@@ -10,6 +11,7 @@ import {
   describeRecoveredTransaction,
   InvalidContextSnapshotError,
   inventoryLegacyOAuthStores,
+  isInsideManagedRoot,
   prepareLegacySkillMigration,
   type ResolvedContextSnapshot,
   type RuntimeContextRef,
@@ -231,7 +233,7 @@ async function findOrphanNativeSkillLinks(
   homeDir: string,
   alreadyReported: ReadonlySet<string>,
 ): Promise<Array<{ id: string; path: string; target: string }>> {
-  const managedRoot = join(homeDir, ".ratel", "skills");
+  const managedRoot = await canonicalManagedSkillsRoot(homeDir);
   const found: Array<{ id: string; path: string; target: string }> = [];
   for (const relativeRoot of NATIVE_SKILL_ROOTS) {
     const root = join(homeDir, relativeRoot);
@@ -253,15 +255,7 @@ async function findOrphanNativeSkillLinks(
         continue;
       }
       const absoluteTarget = isAbsolute(target) ? target : resolve(dirname(path), target);
-      const fromManaged = relative(managedRoot, absoluteTarget);
-      if (
-        fromManaged === "" ||
-        fromManaged === ".." ||
-        fromManaged.startsWith(`..${sep}`) ||
-        isAbsolute(fromManaged)
-      ) {
-        continue;
-      }
+      if (!isInsideManagedRoot(absoluteTarget, managedRoot)) continue;
       try {
         await realpath(path);
         continue;

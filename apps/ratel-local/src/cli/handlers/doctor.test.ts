@@ -1,4 +1,14 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -484,6 +494,31 @@ describe("runDoctor", () => {
 
     expect(logs.some((line) => line.includes("skill-native-link-broken"))).toBe(false);
     expect(logs.at(-1)).toBe("[ok] doctor: ok (1 context checked)");
+  });
+
+  it("reports a dangling managed link when $HOME is itself a symlink", async () => {
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
+    const realHome = await realpath(await temporaryHome());
+    const linkHome = join(await temporaryHome(), "home-link");
+    await symlink(realHome, linkHome);
+    await mkdir(join(realHome, ".ratel", "skills"), { recursive: true });
+    await mkdir(join(realHome, ".claude", "skills"), { recursive: true });
+    const canonicalCopy = join(realHome, ".ratel", "skills", "taken");
+    const nativePath = join(linkHome, ".claude", "skills", "taken");
+    await symlink(canonicalCopy, nativePath);
+    await writeFile(join(linkHome, ".ratel", "config.json"), "{}\n");
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(linkHome, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    expect(
+      logs.some(
+        (line) =>
+          line.startsWith("[error] skill-native-link-broken [skill:taken]:") &&
+          line.includes(nativePath) &&
+          line.includes("broken symlink"),
+      ),
+    ).toBe(true);
   });
 
   async function temporaryHome(): Promise<string> {
