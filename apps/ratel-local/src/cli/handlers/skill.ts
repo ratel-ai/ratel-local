@@ -298,22 +298,26 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       const control =
         options.registrationControlPlane ??
         (await createRegistrationControlPlane(ctx, runtime, skillStorage));
+      const change = await control.prepareRemove(request);
+      const deletes = change.preview.deletes ?? [];
       if (dryRun) {
-        const change = await control.prepareRemove(request);
-        ctx.log(`would update ${change.preview.files.map(({ path }) => path).join(", ")}`);
+        ctx.log(
+          formatRemoveDryRun(
+            change.preview.files.map(({ path }) => path),
+            deletes,
+          ),
+        );
         logBrokenNativeLink(ctx, change.preview.brokenNativeLink, true);
         control.cancel(change.changeId);
         return;
       }
       if (!assumeYes) {
         const answer = await ctx.prompts.confirm({
-          message:
-            verb === "remove"
-              ? `Remove ${request.id} from ${target.scope} and delete any owned copy?`
-              : `Remove ${request.id} from ${target.scope}?`,
+          message: formatRemoveConfirm(request.id, target.scope, deletes),
           initialValue: false,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {
+          control.cancel(change.changeId);
           ctx.log(`${verb} cancelled`);
           return;
         }
@@ -328,12 +332,13 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         },
       );
       if (remote) {
+        control.cancel(change.changeId);
         const commit = await requireDaemonJson<SkillRegistrationCommit>(remote, `skill ${verb}`);
         ctx.log(`updated ${commit.changedPaths.join(", ")}`);
         logBrokenNativeLink(ctx, commit.result?.brokenNativeLink, false);
         return;
       }
-      const commit = await control.remove(request);
+      const commit = await control.commit(change.changeId);
       ctx.log(`updated ${commit.changedPaths.join(", ")}`);
       logBrokenNativeLink(ctx, commit.result?.brokenNativeLink, false);
       return;
@@ -726,6 +731,19 @@ function importMode(value: FlagValue | undefined): "reference" | "copy" {
   throw new Error("--mode must be reference|copy");
 }
 
+function formatRemoveDryRun(updatedPaths: readonly string[], deletes: readonly string[]): string {
+  const parts: string[] = [];
+  if (deletes.length > 0) parts.push(`would delete ${deletes.join(", ")}`);
+  const remaining = updatedPaths.filter((path) => !deletes.includes(path));
+  if (remaining.length > 0) parts.push(`would update ${remaining.join(", ")}`);
+  return parts.length > 0 ? parts.join("; ") : "would make no file changes";
+}
+
+function formatRemoveConfirm(id: string, scope: string, deletes: readonly string[]): string {
+  if (deletes.length === 0) return `Remove ${id} from ${scope}?`;
+  return `Remove ${id} from ${scope} and permanently delete ${deletes.join(", ")}?`;
+}
+
 function logBrokenNativeLink(
   ctx: HandlerCtx,
   link: BrokenNativeLink | undefined,
@@ -738,7 +756,7 @@ function logBrokenNativeLink(
     ctx.log(`${verb} a broken symlink at ${link.path}; delete it by hand.${copyNote}`);
     return;
   }
-  ctx.log(`${verb} a symlink at ${link.path}; the managed copy is gone, so it was not removed`);
+  ctx.log(`${verb} a symlink at ${link.path}; the managed copy is gone, so it was not removed.`);
 }
 
 async function selectImportCandidates(
