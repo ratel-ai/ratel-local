@@ -127,8 +127,8 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
 
   private async discoverGlobal(context: Extract<SkillDiscoveryContext, { kind: "global" }>) {
     const managedRoot = join(this.options.homeDir, ".ratel", "skills");
-    // Links are compared against the canonical root: a symlinked home would
-    // otherwise never match.
+    // linksInto resolves the link, so both sides are canonical: a symlinked home
+    // would otherwise never match.
     const canonicalManagedRoot = await canonicalManagedSkillsRoot(this.options.homeDir);
     const sources: Array<{ source: DiscoveredSkillSource; path: string }> = [
       { source: "claude", path: join(this.options.homeDir, ".claude", "skills") },

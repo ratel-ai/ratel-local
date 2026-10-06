@@ -116,6 +116,7 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     projectRegistry: registry,
   });
   const snapshots: ResolvedContextSnapshot[] = [];
+  const reportedNativePaths = new Set<string>();
   const resolveContext = async (
     context: RuntimeContextRef,
     label: string,
@@ -125,6 +126,16 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
       const snapshot = await resolver.resolve(context);
       snapshots.push(snapshot);
       for (const diagnostic of snapshot.diagnostics) {
+        if (
+          diagnostic.code === "skill-native-link-broken" &&
+          diagnostic.path &&
+          reportedNativePaths.has(diagnostic.path)
+        ) {
+          continue;
+        }
+        if (diagnostic.code === "skill-native-link-broken" && diagnostic.path) {
+          reportedNativePaths.add(diagnostic.path);
+        }
         output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
         if (diagnostic.severity === "error") issueCount += 1;
       }
@@ -132,6 +143,16 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     } catch (error) {
       if (error instanceof InvalidContextSnapshotError) {
         for (const diagnostic of error.diagnostics) {
+          if (
+            diagnostic.code === "skill-native-link-broken" &&
+            diagnostic.path &&
+            reportedNativePaths.has(diagnostic.path)
+          ) {
+            continue;
+          }
+          if (diagnostic.code === "skill-native-link-broken" && diagnostic.path) {
+            reportedNativePaths.add(diagnostic.path);
+          }
           output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
           if (diagnostic.severity === "error") issueCount += 1;
         }
@@ -205,13 +226,6 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     issueCount += 1;
   }
 
-  const reportedNativePaths = new Set(
-    snapshots.flatMap(({ diagnostics }) =>
-      diagnostics
-        .filter((diagnostic) => diagnostic.code === "skill-native-link-broken" && diagnostic.path)
-        .map((diagnostic) => diagnostic.path as string),
-    ),
-  );
   if (skillStorage) {
     for (const orphan of await findOrphanNativeSkillLinks(ctx.env.homeDir, reportedNativePaths)) {
       issueCount += 1;
@@ -233,7 +247,11 @@ async function findOrphanNativeSkillLinks(
   homeDir: string,
   alreadyReported: ReadonlySet<string>,
 ): Promise<Array<{ id: string; path: string; target: string }>> {
-  const managedRoot = await canonicalManagedSkillsRoot(homeDir);
+  // Import writes the link target with the caller's (possibly symlinked) homeDir,
+  // so match against both the raw and the canonical managed root.
+  const rawManagedRoot = join(homeDir, ".ratel", "skills");
+  const canonicalManagedRoot = await canonicalManagedSkillsRoot(homeDir);
+  const managedRoots = Array.from(new Set([rawManagedRoot, canonicalManagedRoot]));
   const found: Array<{ id: string; path: string; target: string }> = [];
   for (const relativeRoot of NATIVE_SKILL_ROOTS) {
     const root = join(homeDir, relativeRoot);
@@ -255,7 +273,9 @@ async function findOrphanNativeSkillLinks(
         continue;
       }
       const absoluteTarget = isAbsolute(target) ? target : resolve(dirname(path), target);
-      if (!isInsideManagedRoot(absoluteTarget, managedRoot)) continue;
+      if (!managedRoots.some((managedRoot) => isInsideManagedRoot(absoluteTarget, managedRoot))) {
+        continue;
+      }
       try {
         await realpath(path);
         continue;

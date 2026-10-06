@@ -456,6 +456,42 @@ describe("runDoctor", () => {
     ).toBe(true);
   });
 
+  it("reports one broken native skill link once across multiple contexts", async () => {
+    const homeDir = await temporaryHome();
+    const projectRoot = join(homeDir, "repo");
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await mkdir(join(projectRoot, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({
+        skills: {
+          entries: {
+            taken: {
+              mode: "copy",
+              path: copyPath,
+              source: "claude",
+              hostPolicy: { mode: "manual-only", source: "claude" },
+            },
+          },
+          dirs: [],
+        },
+      })}\n`,
+    );
+    await writeFile(join(projectRoot, ".ratel", "config.json"), "{}\n");
+    await createProjectRegistry({ homeDir }).registerRoot(projectRoot);
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(homeDir, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    const brokenLines = logs.filter((line) => line.includes("skill-native-link-broken"));
+    expect(brokenLines).toHaveLength(1);
+    expect(brokenLines[0]).toContain(nativePath);
+  });
+
   it("reports a dangling native skill symlink after the registration is gone", async () => {
     process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
     const homeDir = await temporaryHome();
@@ -503,9 +539,11 @@ describe("runDoctor", () => {
     await symlink(realHome, linkHome);
     await mkdir(join(realHome, ".ratel", "skills"), { recursive: true });
     await mkdir(join(realHome, ".claude", "skills"), { recursive: true });
-    const canonicalCopy = join(realHome, ".ratel", "skills", "taken");
+    // Import writes the target with the caller's (symlinked) homeDir, not the
+    // canonical path. That is the form doctor must still match.
+    const importFormCopy = join(linkHome, ".ratel", "skills", "taken");
     const nativePath = join(linkHome, ".claude", "skills", "taken");
-    await symlink(canonicalCopy, nativePath);
+    await symlink(importFormCopy, nativePath);
     await writeFile(join(linkHome, ".ratel", "config.json"), "{}\n");
     const logs: string[] = [];
 
