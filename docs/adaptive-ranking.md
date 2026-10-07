@@ -50,7 +50,7 @@ continues to work.
 
 ## Session isolation
 
-Ratel Local pins SDK `0.13.0-rc.5`, which keys pending online-learning state by
+Ratel Local pins SDK `0.13.0-rc.10`, which keys pending online-learning state by
 `turnId`. Each MCP server connection generates a unique correlation ID and passes
 it to the SDK for `search_capabilities`, `invoke_tool`, and `get_skill_content`.
 The ID stays stable for the connection, including when tool and skill catalogs
@@ -64,7 +64,9 @@ connection's pending search. Both HTTP daemon sessions and direct stdio servers
 use this boundary; no client changes or new tool arguments are required.
 
 MCP does not provide a user-turn boundary here, so the correlation scope is the
-connection, not an individual user message. Within one connection, searches and
-invocations still follow the SDK's latest-search pairing rules. Independent
+connection, not an individual user message. Within one connection, an invoke is
+credited to the newest search that offered the invoked capability, so two
+searches before an invoke no longer hand the earlier query's evidence to the
+later one. Independent
 parallel agents must use separate MCP connections. Learned graph history remains
 shared within the runtime context so subsequent sessions benefit from it.

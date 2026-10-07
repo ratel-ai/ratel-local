@@ -109,6 +109,23 @@ describe("MCP adaptive ranking session isolation", () => {
     });
   }
 
+  it("credits an invoke to the earlier of two searches when only that one offered it", async () => {
+    const { graph, catalog, skills } = await catalogs();
+    const a = await connect(catalog, skills);
+    try {
+      await a.client.callTool({ name: "search_capabilities", arguments: { query: BUILD_QUERY } });
+      await a.client.callTool({ name: "search_capabilities", arguments: { query: FILE_QUERY } });
+      await a.client.callTool({
+        name: "invoke_tool",
+        arguments: { toolId: "build_status", args: {} },
+      });
+      expect(learnedCapabilities(graph, BUILD_QUERY)).toEqual(["build_status"]);
+      expect(learnedCapabilities(graph, FILE_QUERY)).toEqual([]);
+    } finally {
+      await a.close();
+    }
+  });
+
   it("does not let a new connection consume a disconnected client's pending search", async () => {
     const { graph, catalog, skills } = await catalogs();
     const a = await connect(catalog, skills);
