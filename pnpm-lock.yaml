@@ -42,8 +42,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@ratel-ai/sdk':
-        specifier: 0.13.0-rc.10
-        version: 0.13.0-rc.10(zod@4.4.3)
+        specifier: 0.13.0-rc.11
+        version: 0.13.0-rc.11(zod@4.4.3)
       '@ratel-ai/telemetry':
         specifier: 0.1.2
         version: 0.1.2
@@ -76,8 +76,8 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
       '@ratel-ai/sdk':
-        specifier: 0.13.0-rc.10
-        version: 0.13.0-rc.10(zod@4.4.3)
+        specifier: 0.13.0-rc.11
+        version: 0.13.0-rc.11(zod@4.4.3)
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -1219,40 +1219,40 @@ packages:
       '@types/react':
         optional: true
 
-  '@ratel-ai/sdk-darwin-arm64@0.13.0-rc.10':
-    resolution: {integrity: sha512-AqlgQXonGLBX7bKjFX4Q7a8FZj6yVkYT+xO7Jt1Csl2fsFfPbyY+IwtsrTUK3I0U4kME41tZaamgzUGXbcMOfg==}
+  '@ratel-ai/sdk-darwin-arm64@0.13.0-rc.11':
+    resolution: {integrity: sha512-0Sm197O/Mqp6sZGw92xT2fJty1dRf1n7q8EZA5ATN2exy0GaeiPgrdJplWwPq8sFGr0rCY0VGUDTOS4zFmbxXA==}
     engines: {node: '>=20.0.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@ratel-ai/sdk-darwin-x64@0.13.0-rc.10':
-    resolution: {integrity: sha512-i0dQLN4S1gqybbhZ2bYx2PJGPFySpU6IcGe3i6QEYRvEk2oUpp/HkQBmSUbhzJT01BYectZfNC+/pgA0zvc7HQ==}
+  '@ratel-ai/sdk-darwin-x64@0.13.0-rc.11':
+    resolution: {integrity: sha512-ycwvnBGi/UBTPfxa3FgS4s6uTNdO469/5LA5kbIslD6nvc/cDF8KRswNUhuuLup2T9BfZth9BoC+kwz1EmfSjQ==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@ratel-ai/sdk-linux-arm64-gnu@0.13.0-rc.10':
-    resolution: {integrity: sha512-1PjDS0VqDYr/4qG0YhsX6BsD8UtnBMRbVW2244+VMcey/QOAvAHKpzI1EWZah+PFVmf5/+HDiC2p5TcfbUB/eA==}
+  '@ratel-ai/sdk-linux-arm64-gnu@0.13.0-rc.11':
+    resolution: {integrity: sha512-U24AoGhazTLvcHmwVz250x3A9gXR6FzvGYGoy+ufwVVV8F+gSJzpBlXhgMIHhuuT/HGTXskGmgP0VcZJQ04eqg==}
     engines: {node: '>=20.0.0'}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@ratel-ai/sdk-linux-x64-gnu@0.13.0-rc.10':
-    resolution: {integrity: sha512-akyFuq20PM0Ob12hNXp2H1fMUh0hQr9ig640/SfLaakmqjsQojl8ff4WVm847v//sCw4V2XPFAzwOHoZsxf6Lg==}
+  '@ratel-ai/sdk-linux-x64-gnu@0.13.0-rc.11':
+    resolution: {integrity: sha512-nTX3xBE3V2h9Y6FzEd7uiWkQMVOR6cbknqpN1l6Mv0TWZZGg/QFv9pcv1jGg8sUbbei4zWz73w14l+5NVPdwrw==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@ratel-ai/sdk-win32-x64-msvc@0.13.0-rc.10':
-    resolution: {integrity: sha512-xENfX2DTr9SxYn/bk6umHzESzz/G5p1lZWatbHMT80RgLQF+a82yVofxViQqcpyweA0zAXWuiEAp2Fma1mcifQ==}
+  '@ratel-ai/sdk-win32-x64-msvc@0.13.0-rc.11':
+    resolution: {integrity: sha512-J7pDke0wise7c2Yavqpupr3l1c7qQRihJY39txLAYN2b95ztKJiHnPiW9to509vMLumDFNeM5rUYWDKos0bLAw==}
     engines: {node: '>=20.0.0'}
     cpu: [x64]
     os: [win32]
 
-  '@ratel-ai/sdk@0.13.0-rc.10':
-    resolution: {integrity: sha512-T1234AKCXlmq7rEBnNEeNB3t7DnQvT/bJYXPFeq5sMo5Vjzd3c+z/sfYEaR8w7prmWJ6AljKeRJxds8Ay6dJXw==}
+  '@ratel-ai/sdk@0.13.0-rc.11':
+    resolution: {integrity: sha512-IQsOZsL4PvLi3lZfdWBSDaXSvH9VsZ3tfCylJxa9c6iybZxLuwsXFK5sl/QTpIS0Q7AISUDLRRRB7vHKCCX+1Q==}
     engines: {node: '>=20.6.0'}
 
   '@ratel-ai/telemetry-otlp@0.1.1':
@@ -4884,22 +4884,22 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.15
 
-  '@ratel-ai/sdk-darwin-arm64@0.13.0-rc.10':
+  '@ratel-ai/sdk-darwin-arm64@0.13.0-rc.11':
     optional: true
 
-  '@ratel-ai/sdk-darwin-x64@0.13.0-rc.10':
+  '@ratel-ai/sdk-darwin-x64@0.13.0-rc.11':
     optional: true
 
-  '@ratel-ai/sdk-linux-arm64-gnu@0.13.0-rc.10':
+  '@ratel-ai/sdk-linux-arm64-gnu@0.13.0-rc.11':
     optional: true
 
-  '@ratel-ai/sdk-linux-x64-gnu@0.13.0-rc.10':
+  '@ratel-ai/sdk-linux-x64-gnu@0.13.0-rc.11':
     optional: true
 
-  '@ratel-ai/sdk-win32-x64-msvc@0.13.0-rc.10':
+  '@ratel-ai/sdk-win32-x64-msvc@0.13.0-rc.11':
     optional: true
 
-  '@ratel-ai/sdk@0.13.0-rc.10(zod@4.4.3)':
+  '@ratel-ai/sdk@0.13.0-rc.11(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@opentelemetry/api': 1.9.1
@@ -4908,11 +4908,11 @@ snapshots:
       '@types/json-schema': 7.0.15
       canonicalize: 4.0.0
     optionalDependencies:
-      '@ratel-ai/sdk-darwin-arm64': 0.13.0-rc.10
-      '@ratel-ai/sdk-darwin-x64': 0.13.0-rc.10
-      '@ratel-ai/sdk-linux-arm64-gnu': 0.13.0-rc.10
-      '@ratel-ai/sdk-linux-x64-gnu': 0.13.0-rc.10
-      '@ratel-ai/sdk-win32-x64-msvc': 0.13.0-rc.10
+      '@ratel-ai/sdk-darwin-arm64': 0.13.0-rc.11
+      '@ratel-ai/sdk-darwin-x64': 0.13.0-rc.11
+      '@ratel-ai/sdk-linux-arm64-gnu': 0.13.0-rc.11
+      '@ratel-ai/sdk-linux-x64-gnu': 0.13.0-rc.11
+      '@ratel-ai/sdk-win32-x64-msvc': 0.13.0-rc.11
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color

@@ -50,7 +50,7 @@ continues to work.
 
 ## Session isolation
 
-Ratel Local pins SDK `0.13.0-rc.10`, which keys pending online-learning state by
+Ratel Local pins SDK `0.13.0-rc.11`, which keys pending online-learning state by
 `turnId`. Each MCP server connection generates a unique correlation ID and passes
 it to the SDK for `search_capabilities`, `invoke_tool`, and `get_skill_content`.
 The ID stays stable for the connection, including when tool and skill catalogs
