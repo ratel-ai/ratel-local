@@ -637,14 +637,27 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
           })
         : ({ kind: "none" } as const);
 
-    if (takeover.kind === "none" && request.target.scope === "user" && registration.hostPolicy) {
+    // none: restore the native file. linked + remove-scope: restore inside the
+    // kept copy (the host still loads it through the symlink). linked + full
+    // remove and broken skip restore: the copy is deleted or unusable.
+    const restoreHostPolicy =
+      request.target.scope === "user" &&
+      registration.hostPolicy &&
+      (takeover.kind === "none" || (takeover.kind === "linked" && !request.deleteOwnedCopy));
+    if (restoreHostPolicy && registration.hostPolicy) {
       try {
         const restore = await prepareSkillHostPolicyRestore({
           homeDir: this.options.homeDir,
           id: request.id,
           policy: registration.hostPolicy,
         });
-        if (restore) operations.push(restore);
+        if (restore) {
+          operations.push(
+            takeover.kind === "linked" && copyPath
+              ? rebaseHostPolicyOperationOntoCopy(takeover.nativePath, copyPath, restore)
+              : restore,
+          );
+        }
       } catch (error) {
         throw new SkillRegistrationValidationError(
           "invalid_registration",
@@ -655,8 +668,8 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
 
     // Unlink the Ratel-made native symlink before deleting the copy so apply-time
     // realpath of the link still resolves. copyReal was resolved once above.
-    // remove-scope keeps the link: the registration goes, the host still finds
-    // the skill through the symlink into the kept managed copy.
+    // remove-scope keeps the link and restores host policy in the copy: the
+    // registration goes, the host still finds the skill through the symlink.
     if (takeover.kind === "linked" && request.deleteOwnedCopy) {
       operations.push({
         kind: "delete-artifact",
@@ -977,6 +990,26 @@ async function realpathOrMissing(path: string): Promise<string | undefined> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
+}
+
+/** Rebase a host-policy restore from the native tree onto the managed copy.
+ * Mirrors skill-import's policyFileForCopy for both replace-file and delete-artifact.
+ */
+function rebaseHostPolicyOperationOntoCopy(
+  nativePath: string,
+  copyPath: string,
+  operation: MutationInputOperation,
+): MutationInputOperation {
+  const relativePath = relative(nativePath, operation.path);
+  if (
+    relativePath.length === 0 ||
+    isAbsolute(relativePath) ||
+    relativePath === ".." ||
+    relativePath.startsWith(`..${sep}`)
+  ) {
+    throw new Error(`host policy does not apply inside the skill: ${operation.path}`);
+  }
+  return { ...operation, path: join(copyPath, relativePath) };
 }
 
 function buildSkillDocument(request: CreateSkillRegistrationRequest): string {
