@@ -56,7 +56,7 @@ describe("runConnectorProxy", () => {
     await remote.server.close();
   });
 
-  it("forwards host turn correlation in arguments and _meta to the daemon unchanged", async () => {
+  it("forwards the _ratel argument and _meta to the daemon unchanged", async () => {
     const remote = await backend();
     const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
     const connector = await runConnectorProxy({
@@ -70,7 +70,7 @@ describe("runConnectorProxy", () => {
     await host.connect(hostTransport);
 
     const _ratel = { session: "s1", turn: "t1", agent: "a1" };
-    const _meta = { "x-codex-turn-metadata": { session_id: "s1", turn_id: "t1" } };
+    const _meta = { "example/request-id": "r1" };
     await host.callTool({
       name: "search_capabilities",
       arguments: { query: "docs", _ratel },

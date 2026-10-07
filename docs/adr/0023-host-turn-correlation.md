@@ -28,8 +28,8 @@ found:
 - Codex ignores `updatedInput` without `permissionDecision: "allow"`, and in
   `codex exec` that `allow` did not bypass a required approval.
 - Claude Code subagents share the parent's `session_id` **and** `prompt_id`.
-- Codex already sends `session_id`, `turn_id` and `thread_id` in every MCP
-  call's `_meta["x-codex-turn-metadata"]`, with no hook.
+- Codex also sends the same ids in an undocumented
+  `_meta["x-codex-turn-metadata"]` object. It is not a supported contract.
 - Every failure mode (missing, disabled, untrusted, crashing or timed-out hooks)
   leaves the call unmodified.
 
@@ -79,10 +79,10 @@ dist-tag.
      plugin and user server names. It returns `updatedInput` =
      `{ ...tool_input, _ratel }` with no `permissionDecision`, and overwrites a
      model-supplied value.
-   - **Codex:** the server reads `_meta["x-codex-turn-metadata"]`, taking only
-     `session_id`, `turn_id`, and `thread_id` as the agent when
-     `parent_thread_id` is present. A hook with `allow` is the fallback, only
-     after the interactive approval flow is verified.
+   - **Codex:** the same hook and matcher. Codex ignores `updatedInput`
+     without `permissionDecision: "allow"`, so the hook must return it. Before
+     this ships, verify in the interactive TUI that `allow` does not skip an
+     approval the user would otherwise see. In `codex exec` it did not.
 
 ## Consequences
 
@@ -93,8 +93,9 @@ dist-tag.
   changes only the `turn_id` stamped on trace events.
 - A client that sends `_ratel` without a hook (a model, a script) influences
   only local attribution, at the same trust level as its tool choices.
-- The Codex path relies on undocumented metadata and must be re-checked on
-  Codex upgrades. Its absence degrades to per-connection pairing.
+- The Codex hook depends on `allow` leaving approvals alone, which is verified
+  only headless so far. If the TUI check fails, Codex keeps per-connection
+  pairing until there is a hook path that does not touch permissions.
 - Once the stripping ships, `_ratel` is a reserved argument name on every Ratel
   gateway tool.
 
@@ -103,9 +104,10 @@ dist-tag.
 - **A turn id minted in `UserPromptSubmit`:** a prompt submitted while older
   calls are still running relabels them, because the id lives in shared state
   instead of each call.
-- **Codex `allow` + `updatedInput` as the primary path:** it works, but it
-  touches the approval path for no gain over `_meta`, and the interactive
-  approval behaviour is unverified.
+- **Reading Codex's `_meta["x-codex-turn-metadata"]`:** it would need no hook,
+  but it is undocumented, so Ratel would depend on a field Codex may change or
+  drop. It also carries workspace paths and git remotes that Ratel has no use
+  for.
 - **Declaring `_ratel` in `inputSchema`:** no host requires it, and it puts the
   field in the model's view.
 - **The SDK turn scope for every call:** see decision 5.

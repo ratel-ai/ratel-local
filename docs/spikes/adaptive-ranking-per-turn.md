@@ -1,6 +1,9 @@
 # Spike: per-turn correlation for adaptive ranking
 
-Date: 2026-10-07. Hosts: Claude Code 2.1.289, Codex CLI 0.148.0. Feeds
+Date: 2026-10-07. Hosts: Claude Code 2.1.289 and 2.1.292 (latest), Codex CLI
+0.148.0 and 0.160.1 (latest). The full suite ran on all four versions with
+identical results. The latest versions ran through `npx`, leaving the installed
+CLIs untouched. Feeds
 [ADR 0023](../adr/0023-host-turn-correlation.md).
 
 ## Question
@@ -62,7 +65,7 @@ plugin and marketplace files were not touched.
 | Subagents | They share the parent's `session_id`, and each gets its **own** `turn_id` and `agent_id` (`agent_type: "default"`). Turn ids alone keep them apart; `agent` is harmless. |
 | Hook crash, non-JSON output, or a malformed `_ratel` | The call ran unmodified. |
 | Untrusted hook | Without persisted trust (or the bypass flag) the hook did not run at all, and the call proceeded without `_ratel`. Plugin hooks also need `features.plugin_hooks`, and trust is pinned to a hash of each hook definition, so changing a shipped hook asks the user to review it again. |
-| Native ids in `_meta`? | **Yes, with no hook.** Every MCP `tools/call` carried `_meta["x-codex-turn-metadata"]` with `session_id`, `turn_id` and `thread_id`, plus `parent_thread_id` and `subagent_kind` for a subagent. A subagent's `thread_id` equals its hook `agent_id`. The same object also carries workspace paths, git remotes and commit hashes, model, and sandbox mode, so Ratel should read only the three ids and drop the rest. It is undocumented, as the `x-` prefix suggests, so treat it as best-effort and verify it on each Codex upgrade. |
+| Native ids in `_meta`? | **Yes, with no hook.** Every MCP `tools/call` carried `_meta["x-codex-turn-metadata"]` with `session_id`, `turn_id` and `thread_id`, plus `parent_thread_id` and `subagent_kind` for a subagent. A subagent's `thread_id` equals its hook `agent_id`. The same object also carries workspace paths, git remotes and commit hashes, model, and sandbox mode, so Ratel should read only the three ids and drop the rest. It is undocumented, as the `x-` prefix suggests, so **Ratel does not rely on it**. |
 
 ## Shared conclusions
 
@@ -81,8 +84,8 @@ plugin and marketplace files were not touched.
   two MCP sessions, which the per-connection id cannot do (see the daemon test
   in `daemon.test.ts`).
 - **Ratel's connector.** The shipped plugin runs `ratel connect`, a stdio
-  bridge to the daemon. It forwards `request.params` unchanged, so both `_ratel`
-  and Codex's `_meta` reach the daemon (`proxy.test.ts`).
+  bridge to the daemon. It forwards `request.params` unchanged, so `_ratel` (and
+  `_meta`) reaches the daemon (`proxy.test.ts`).
 - **Spoofing.** Without a hook, the model could write `_ratel` itself. Because
   the field is not declared, it has no reason to. A wrong id only misattributes
   local learning, the same trust level as the model's own tool choices. The hook
@@ -103,8 +106,8 @@ plugin and marketplace files were not touched.
    tool-name forms. It returns `updatedInput` with `_ratel` from `session_id`,
    `prompt_id` and `agent_id`, and no `permissionDecision`. It is fail-open and
    overwrites any model-supplied value.
-3. **Codex:** prefer reading `_meta["x-codex-turn-metadata"]` on the server:
-   no hook, no approval question, no trust prompt. Fall back to a hook with
-   `allow` + `updatedInput` only if that metadata goes away, and verify the
-   interactive approval flow first.
+3. **Codex:** the same hook and matcher, returning `permissionDecision:
+   "allow"` because Codex ignores `updatedInput` without it. First verify in the
+   interactive TUI that `allow` does not skip an approval the user would
+   otherwise see. Do not read the undocumented `x-codex-turn-metadata`.
 4. Hook wiring in the shipped plugin is a separate change, pending approval.
