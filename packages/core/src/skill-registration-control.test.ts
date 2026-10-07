@@ -9,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createConfigControlPlane } from "./config-control-plane.js";
 import { createContextSnapshotResolver } from "./context-snapshot.js";
@@ -212,8 +212,9 @@ describe("SkillRegistrationControlPlane", () => {
       ),
     ).toBe(true);
     expect(
-      commit.backupManifest?.entries.some((entry) =>
-        entry.originalPath.startsWith(join(nativePath, "")),
+      commit.backupManifest?.entries.some(
+        (entry) =>
+          entry.originalPath === nativePath || entry.originalPath.startsWith(`${nativePath}${sep}`),
       ),
     ).toBe(false);
 

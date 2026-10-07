@@ -640,16 +640,17 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
     // none: restore the native file. linked + remove-scope: restore inside the
     // kept copy (the host still loads it through the symlink). linked + full
     // remove and broken skip restore: the copy is deleted or unusable.
-    const restoreHostPolicy =
+    const hostPolicyToRestore =
       request.target.scope === "user" &&
-      registration.hostPolicy &&
-      (takeover.kind === "none" || (takeover.kind === "linked" && !request.deleteOwnedCopy));
-    if (restoreHostPolicy && registration.hostPolicy) {
+      (takeover.kind === "none" || (takeover.kind === "linked" && !request.deleteOwnedCopy))
+        ? registration.hostPolicy
+        : undefined;
+    if (hostPolicyToRestore) {
       try {
         const restore = await prepareSkillHostPolicyRestore({
           homeDir: this.options.homeDir,
           id: request.id,
-          policy: registration.hostPolicy,
+          policy: hostPolicyToRestore,
         });
         if (restore) {
           operations.push(
