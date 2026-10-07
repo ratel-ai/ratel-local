@@ -21,6 +21,7 @@ import type { CloudTraceSettings } from "../../cloud/trace-settings.js";
 import { connectorHeaders } from "../../daemon/access.js";
 import {
   ADAPTIVE_RANKING_FEATURE_ENV,
+  ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   SKILL_STORAGE_FEATURE_ENV,
@@ -1163,6 +1164,104 @@ describe("runDaemon", () => {
         } else {
           await expect(readFile(graphPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         }
+      } finally {
+        await rm(homeDir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const perTurn of [false, true]) {
+    it(`pairs by host turn across HTTP sessions only when per-turn is enabled (${perTurn})`, async () => {
+      const fs = new MemFs();
+      const homeDir = await mkdtemp(join(tmpdir(), "ratel-daemon-per-turn-"));
+      const logs: string[] = [];
+      const upstreamArgs: unknown[] = [];
+      const upstream = new Server(
+        { name: "adaptive", version: "1.0.0" },
+        { capabilities: { tools: {} } },
+      );
+      upstream.setRequestHandler(ListToolsRequestSchema, async () => ({
+        tools: [
+          {
+            name: "build_status",
+            description: "Inspect the current build status",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }));
+      upstream.setRequestHandler(CallToolRequestSchema, async (req) => {
+        upstreamArgs.push(req.params.arguments);
+        return { content: [] };
+      });
+      const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+      await upstream.connect(serverTransport);
+
+      const result = await runDaemon(
+        daemonArgs(),
+        makeCtx(fs, { homeDir }),
+        {
+          readConfig: async () => ({
+            mcpServers: { adaptive: { type: "stdio", command: "noop" } },
+          }),
+          processEnv: {
+            [ADAPTIVE_RANKING_FEATURE_ENV]: "1",
+            ...(perTurn ? { [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: "1" } : {}),
+          },
+          transportFactory: () => clientTransport,
+        },
+        (message) => logs.push(message),
+        { open: () => {}, ensureToken: async () => "daemon-test-token" },
+      );
+      const connect = async () => {
+        const client = new Client({ name: "per-turn-test", version: "1.0.0" });
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL("/mcp", daemonUrlFromLogs(logs)), {
+            requestInit: { headers: connectorHeaders("daemon-test-token") },
+          }),
+        );
+        return client;
+      };
+      const _ratel = { session: "host-session", turn: "host-turn-1" };
+      const first = await connect();
+      const second = await connect();
+
+      try {
+        const statusResponse = await fetch(new URL("/api/daemon/status", daemonUrlFromLogs(logs)));
+        expect((await statusResponse.json()) as { adaptiveRankingPerTurn?: boolean }).toMatchObject(
+          { adaptiveRankingPerTurn: perTurn },
+        );
+        await first.callTool({
+          name: "search_capabilities",
+          arguments: { query: "is the build passing", _ratel },
+        });
+        // The same host turn continues on a second MCP session (a reconnect).
+        await second.callTool({
+          name: "invoke_tool",
+          arguments: { toolId: "adaptive__build_status", args: {}, _ratel },
+        });
+        expect(upstreamArgs).toEqual([{}]);
+      } finally {
+        await first.close();
+        await second.close();
+        await result.shutdown?.();
+        await upstream.close();
+      }
+
+      const graphPath = join(homeDir, ".ratel", "adaptive-ranking", "global.json");
+      try {
+        // Nothing learned means nothing to persist, so the graph file may not exist.
+        const raw = await readFile(graphPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return '{"intents":[]}';
+          throw error;
+        });
+        const wire = JSON.parse(raw) as {
+          intents: { members: string[]; tools: Record<string, number> }[];
+        };
+        const learned = Object.keys(
+          wire.intents.find((intent) => intent.members.includes("is the build passing"))?.tools ??
+            {},
+        );
+        expect(learned).toEqual(perTurn ? ["adaptive__build_status"] : []);
       } finally {
         await rm(homeDir, { recursive: true, force: true });
       }

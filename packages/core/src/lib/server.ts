@@ -17,6 +17,7 @@ import {
 } from "@ratel-ai/sdk";
 import { isPlainObject } from "../json.js";
 import { type AuthRunner, authTool } from "./tools/auth.js";
+import { extractTurnCorrelation, turnCorrelationKey } from "./turn-correlation.js";
 
 export interface CreateMcpServerOptions {
   name: string;
@@ -28,6 +29,12 @@ export interface CreateMcpServerOptions {
   runAuthFlow?: AuthRunner;
   /** When non-empty, the search returns a `skills` bucket and `get_skill_content` is registered. */
   skillCatalog?: SkillCatalog;
+  /**
+   * Derive the SDK turn id from the host's `_ratel` correlation argument when a
+   * call carries a valid one, instead of the per-connection id. The argument is
+   * stripped from every call either way. Off by default.
+   */
+  perTurnCorrelation?: boolean;
 }
 
 export interface McpServerHandle {
@@ -41,11 +48,13 @@ export async function createMcpServer(
   options: CreateMcpServerOptions,
 ): Promise<McpServerHandle> {
   const { name, version, transport, upstreamServers, runAuthFlow, skillCatalog } = options;
+  const perTurnCorrelation = options.perTurnCorrelation === true;
   // A server instance belongs to one MCP connection, while its catalogs may be
   // shared by many. MCP supplies no user-turn boundary, so use a connection-local
   // correlation key for the SDK's pending search/invoke pairing. A fresh key on
-  // reconnect prevents a new client from consuming an old client's search.
-  const turnId = randomUUID();
+  // reconnect prevents a new client from consuming an old client's search. A
+  // host hook can supply its own turn boundary instead (`perTurnCorrelation`).
+  const connectionTurnId = randomUUID();
   const hasSkills = skillCatalog !== undefined && skillCatalog.size() > 0;
   const searchUpstreamServers = upstreamServers?.map((upstream) =>
     upstream.description !== undefined && upstream.description === upstream.instructions
@@ -103,7 +112,13 @@ export async function createMcpServer(
     if (!tool) {
       throw new Error(`unknown gateway tool: ${req.params.name}`);
     }
-    const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+    // Strip the reserved correlation argument before any tool sees it, whether
+    // or not the feature is on: invoke_tool would otherwise forward it upstream.
+    const { args, correlation } = extractTurnCorrelation(
+      (req.params.arguments ?? {}) as Record<string, unknown>,
+    );
+    const turnId =
+      perTurnCorrelation && correlation ? turnCorrelationKey(correlation) : connectionTurnId;
     let out: unknown;
     try {
       out = await tool.execute(args, undefined, turnId);

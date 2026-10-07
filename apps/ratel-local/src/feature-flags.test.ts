@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ADAPTIVE_RANKING_FEATURE_ENV,
+  ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   featureFlagOverridesFromEnv,
@@ -11,6 +12,7 @@ import {
 
 const OFF = {
   adaptiveRanking: false,
+  adaptiveRankingPerTurn: false,
   cloudTelemetry: false,
   cloudCatalog: false,
   skillStorage: false,
@@ -34,6 +36,7 @@ describe("feature flags", () => {
       }),
     ).toEqual({
       adaptiveRanking: false,
+      adaptiveRankingPerTurn: false,
       cloudTelemetry: true,
       cloudCatalog: true,
       skillStorage: true,
@@ -111,6 +114,28 @@ describe("feature flags", () => {
     });
     expect(featureFlagOverridesFromEnv({ [ADAPTIVE_RANKING_FEATURE_ENV]: "0" })).toEqual({
       [ADAPTIVE_RANKING_FEATURE_ENV]: false,
+    });
+  });
+
+  it("keeps per-turn adaptive ranking off by default and independent of adaptive ranking", () => {
+    expect(featureFlagsFromEnv({}).adaptiveRankingPerTurn).toBe(false);
+    expect(
+      featureFlagsFromEnv({ [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: "true" })
+        .adaptiveRankingPerTurn,
+    ).toBe(false);
+    expect(featureFlagsFromEnv({ [ADAPTIVE_RANKING_FEATURE_ENV]: "1" })).toEqual({
+      ...OFF,
+      adaptiveRanking: true,
+    });
+    expect(featureFlagsFromEnv({ [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: "1" })).toEqual({
+      ...OFF,
+      adaptiveRankingPerTurn: true,
+    });
+    expect(featureFlagServiceEnvironment({ adaptiveRankingPerTurn: true })).toEqual({
+      [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: "1",
+    });
+    expect(featureFlagOverridesFromEnv({ [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: "0" })).toEqual({
+      [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: false,
     });
   });
 });
