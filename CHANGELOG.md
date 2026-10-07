@@ -30,6 +30,7 @@ All notable changes to this package are documented here. The format is based on 
 - With `RATEL_FEATURE_SKILL_STORAGE=1`, a skill registration gains `origin` and `availability` in the configured JSON views, and writes persist `origin` and the copy `path` in `skills.entries` (absolute for user scope, project-relative otherwise). A persisted `path` is honored on read regardless of the flag, so entries written with it on keep resolving after it is turned off.
 
 ### Fixed
+- Adaptive ranking now learns only from the agent's own `search_capabilities` searches (`origins: "agent"`), for both the tool and skill catalogs. A direct or diagnostic search against the gateway catalog no longer opens a learning window that a later invoke could be credited to.
 - Isolated online adaptive-ranking search/invocation pairing per MCP connection using the SDK `turnId`, including skill loads and reconnects, so parallel sessions sharing a catalog cannot teach edges from each other’s searches.
 - Fixed concurrent `ratel-local cloud add` and `cloud remove` dropping other profiles in `~/.ratel/cloud.json`: each write waits for a file lock, then re-reads, so the first profile that lands keeps `default` and neither save overwrites the other.
 - Fixed the daemon UI writing a `RATEL_API_KEY` key into `~/.ratel/cloud-traces.json`. When a daemon was started with that variable, saving the Ratel Cloud endpoint in Settings without entering a key stored that key on disk. A blank field now keeps the stored key and refuses the save when there is none to keep.

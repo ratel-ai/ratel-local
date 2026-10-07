@@ -168,8 +168,12 @@ export async function buildGatewayFromConfig(
   const catalog = new ToolCatalog(catalogOptions);
   const skillCatalog = await buildSkillCatalog(config, options, catalogOptions, log);
   if (options.adaptiveRankingGraph) {
-    catalog.experimentalEnableAdaptiveRanking(options.adaptiveRankingGraph);
-    skillCatalog.experimentalEnableAdaptiveRanking(options.adaptiveRankingGraph);
+    // Only the agent's own `search_capabilities` calls open a learning window;
+    // direct or diagnostic searches must not be credited with what it invokes.
+    catalog.experimentalEnableAdaptiveRanking(options.adaptiveRankingGraph, { origins: "agent" });
+    skillCatalog.experimentalEnableAdaptiveRanking(options.adaptiveRankingGraph, {
+      origins: "agent",
+    });
   }
   const handles = new Map<string, McpServerHandle>();
   const upstreamServers: UpstreamServerInfo[] = [];
