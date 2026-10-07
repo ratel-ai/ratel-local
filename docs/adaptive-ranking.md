@@ -50,7 +50,7 @@ continues to work.
 
 ## Session isolation
 
-Ratel Local pins SDK `0.13.0-rc.5`, which keys pending online-learning state by
+Ratel Local pins SDK `0.13.0-rc.11`, which keys pending online-learning state by
 `turnId`. Each MCP server connection generates a unique correlation ID and passes
 it to the SDK for `search_capabilities`, `invoke_tool`, and `get_skill_content`.
 The ID stays stable for the connection, including when tool and skill catalogs
@@ -63,8 +63,44 @@ invocation. A reconnect generates a fresh ID and cannot consume the previous
 connection's pending search. Both HTTP daemon sessions and direct stdio servers
 use this boundary; no client changes or new tool arguments are required.
 
-MCP does not provide a user-turn boundary here, so the correlation scope is the
-connection, not an individual user message. Within one connection, searches and
-invocations still follow the SDK's latest-search pairing rules. Independent
-parallel agents must use separate MCP connections. Learned graph history remains
-shared within the runtime context so subsequent sessions benefit from it.
+MCP does not provide a user-turn boundary here, so by default the correlation
+scope is the connection, not an individual user message. Within one connection,
+an invoke is credited to the newest search that offered the invoked capability,
+so two searches before an invoke no longer hand the earlier query's evidence to
+the later one. Independent parallel agents must use separate MCP connections.
+Learned graph history remains shared within the runtime context so subsequent
+sessions benefit from it.
+
+## Per-turn correlation (experimental)
+
+A second, off-by-default flag narrows pairing from the connection to the host's
+own user turn:
+
+```bash
+RATEL_FEATURE_ADAPTIVE_RANKING=1 RATEL_FEATURE_ADAPTIVE_RANKING_PER_TURN=1 ratel daemon restart
+```
+
+When it is on, a gateway call may carry a reserved top-level argument with the
+host's native ids:
+
+```json
+{ "query": "why is the build broken", "_ratel": { "session": "…", "turn": "…", "agent": "…" } }
+```
+
+The two hosts supply these ids:
+
+- **Claude Code:** `session_id`, `prompt_id`, and `agent_id` inside a subagent.
+- **Codex:** `session_id`, `turn_id`, and the subagent's id.
+
+Ratel turns them into one id and runs the call inside the SDK's turn scope. A
+search then pairs only with invokes from the same host turn, even across an MCP
+reconnect, and subagents stay apart from the main thread and from each other.
+Every trace event the call records carries the turn id, and the turn's first
+call records one `turn_start` event. No user message is attached. A call without a valid `_ratel` keeps
+per-connection pairing.
+
+Ratel always removes `_ratel` before a tool runs, whether the flag is on or off,
+so upstream servers never receive it. It is not part of any tool's input schema.
+The shipped plugin does not send it yet: host hook wiring is a separate change.
+The [spike](spikes/adaptive-ranking-per-turn.md) records how each host behaves,
+and [ADR 0023](adr/0023-host-turn-correlation.md) records the design.

@@ -94,6 +94,14 @@ async function startEmbeddingEndpoint(
   };
 }
 
+function learnedCapabilities(graph: IntentGraph, query: string): string[] {
+  const wire = JSON.parse(graph.toJson()) as {
+    intents: { members: string[]; tools: Record<string, number>; skills: Record<string, number> }[];
+  };
+  const intent = wire.intents.find((intent) => intent.members.includes(query));
+  return [...Object.keys(intent?.tools ?? {}), ...Object.keys(intent?.skills ?? {})];
+}
+
 function deterministicEmbedding(text: string): number[] {
   const normalized = text.toLowerCase();
   if (/(weather|forecast|rain|climate|umbrella)/.test(normalized)) return [1, 0, 0];
@@ -114,6 +122,43 @@ describe("buildGatewayFromConfig", () => {
     expect(handle.skillCatalog.experimentalAdaptiveRankingStatus.status).toBe("active");
     await handle.close();
   });
+
+  for (const kind of ["tool", "skill"] as const) {
+    it(`learns a ${kind} only from agent searches, not direct ones`, async () => {
+      const graph = new IntentGraph();
+      const upstream = await startUpstream([
+        { name: "build_status", description: "Inspect why the build is broken." },
+      ]);
+      const handle = await buildGatewayFromConfig(
+        { mcpServers: { ci: { type: "stdio", command: "noop" } } },
+        {
+          adaptiveRankingGraph: graph,
+          transportFactory: () => upstream.clientTransport,
+          resolvedSkills: [
+            { id: "ci-triage", name: "ci-triage", description: "Diagnose a broken build." },
+          ],
+        },
+      );
+      const learn = async (query: string, origin: "direct" | "agent", turnId: string) => {
+        await handle.catalog.searchAsync(query, 5, origin, undefined, turnId);
+        await handle.skillCatalog.searchAsync(query, 5, origin, undefined, turnId);
+        if (kind === "tool") await handle.catalog.invoke("ci__build_status", {}, undefined, turnId);
+        else handle.skillCatalog.invoke("ci-triage", turnId);
+      };
+      try {
+        await learn("why is the build broken", "direct", "direct-turn");
+        expect(learnedCapabilities(graph, "why is the build broken")).toEqual([]);
+
+        await learn("which build step failed", "agent", "agent-turn");
+        expect(learnedCapabilities(graph, "which build step failed")).toEqual([
+          kind === "tool" ? "ci__build_status" : "ci-triage",
+        ]);
+      } finally {
+        await handle.close();
+        await upstream.server.close();
+      }
+    });
+  }
 
   it("uses the same semantic endpoint for tool and skill catalogs and recalls paraphrases", async () => {
     const endpoint = await startEmbeddingEndpoint();

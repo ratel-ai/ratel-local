@@ -40,6 +40,13 @@ export type { LoadSkillsOptions } from "./skills/load.js";
 export { defaultSkillDirs, loadSkills, parseSkillMd, SkillLoadError } from "./skills/load.js";
 export * from "./skills/resolve.js";
 export { AUTH_TOOL_ID } from "./tools/auth.js";
+export type { TurnCorrelation } from "./turn-correlation.js";
+export {
+  extractTurnCorrelation,
+  TURN_CORRELATION_ARG,
+  TURN_CORRELATION_MAX_ID_LENGTH,
+  turnCorrelationKey,
+} from "./turn-correlation.js";
 export type { ToolTokenEstimate, UsageEstimatorOptions } from "./usage.js";
 export {
   DEFAULT_BYTES_PER_TOKEN,

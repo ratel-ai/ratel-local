@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import type { EmbeddingSpec, SearchMethod } from "@ratel-ai/sdk";
+import type { BuiltInSearchMethod, EmbeddingSpec } from "@ratel-ai/sdk";
 import { isPlainObject } from "../json.js";
 import { isSafeSkillId } from "../skill-id.js";
 import type { SkillOrigin } from "../skill-registration.js";
@@ -60,7 +60,8 @@ export interface SkillsConfig {
 }
 
 export interface RetrievalConfig {
-  method: SearchMethod;
+  /** A config file cannot carry a ranking function, so the SDK's `"custom"` is excluded. */
+  method: BuiltInSearchMethod;
   /**
    * Omit for the SDK's pinned built-in model. Explicit sources are validated
    * here so dense retrieval never starts with an ambiguous or unsafe model
@@ -154,7 +155,7 @@ function parseRetrieval(raw: unknown): RetrievalConfig {
   };
 }
 
-function parseRetrievalMethod(raw: unknown): SearchMethod {
+function parseRetrievalMethod(raw: unknown): BuiltInSearchMethod {
   if (raw === "bm25" || raw === "semantic" || raw === "hybrid") return raw;
   throw new ConfigError("`retrieval.method` must be one of bm25|semantic|hybrid");
 }

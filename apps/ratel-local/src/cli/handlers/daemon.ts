@@ -81,6 +81,7 @@ import {
 import { DAEMON_INSTALL_PATH_ENV } from "../../daemon/subprocess-environment.js";
 import {
   ADAPTIVE_RANKING_FEATURE_ENV,
+  ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   type FeatureFlags,
@@ -149,6 +150,7 @@ export interface DaemonStatusBody extends DaemonState {
   /** Absent on daemons older than the restart-reconfiguration support. */
   cloudTelemetry?: boolean;
   adaptiveRanking?: boolean;
+  adaptiveRankingPerTurn?: boolean;
   cloudCatalog?: boolean;
   skillStorage?: boolean;
 }
@@ -624,6 +626,7 @@ export async function runDaemonServer(
     registry,
     serverName: options.serverName ?? "ratel",
     serverVersion,
+    perTurnCorrelation: featureFlags.adaptiveRankingPerTurn,
     log,
   });
   const stateForPort = (serverPort: number): DaemonState => ({
@@ -757,6 +760,7 @@ export async function runDaemonServer(
           activeProjectGatewayCount: poolStats.activeProjectGatewayCount,
           cloudTelemetry: featureFlags.cloudTelemetry,
           adaptiveRanking: featureFlags.adaptiveRanking,
+          adaptiveRankingPerTurn: featureFlags.adaptiveRankingPerTurn,
           cloudCatalog: featureFlags.cloudCatalog,
           skillStorage: featureFlags.skillStorage,
           ...(retrievalHealthEnabled ? { retrievalHealth: poolStats.retrievalHealth } : {}),
@@ -1088,6 +1092,7 @@ async function reconfigureInstalledServiceFeatureFlags(
 
 const FLAG_STATUS_FIELD = {
   [ADAPTIVE_RANKING_FEATURE_ENV]: "adaptiveRanking",
+  [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: "adaptiveRankingPerTurn",
   [CLOUD_TELEMETRY_FEATURE_ENV]: "cloudTelemetry",
   [CLOUD_CATALOG_FEATURE_ENV]: "cloudCatalog",
   [SKILL_STORAGE_FEATURE_ENV]: "skillStorage",

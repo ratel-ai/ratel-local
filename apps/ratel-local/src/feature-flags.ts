@@ -1,6 +1,8 @@
 import { SKILL_STORAGE_FEATURE_ENV } from "@ratel-ai/ratel-local-core";
 
 export const ADAPTIVE_RANKING_FEATURE_ENV = "RATEL_FEATURE_ADAPTIVE_RANKING";
+/** Pair adaptive-ranking searches and invokes per host turn, from the `_ratel` argument. */
+export const ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV = "RATEL_FEATURE_ADAPTIVE_RANKING_PER_TURN";
 export const CLOUD_TELEMETRY_FEATURE_ENV = "RATEL_FEATURE_CLOUD_TELEMETRY";
 export const CLOUD_CATALOG_FEATURE_ENV = "RATEL_FEATURE_CLOUD_CATALOG";
 export { SKILL_STORAGE_FEATURE_ENV };
@@ -8,6 +10,7 @@ export { SKILL_STORAGE_FEATURE_ENV };
 /** Every daemon-wide flag an installed service may carry. */
 export const SERVICE_FEATURE_FLAG_ENVS = [
   ADAPTIVE_RANKING_FEATURE_ENV,
+  ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV,
   CLOUD_TELEMETRY_FEATURE_ENV,
   CLOUD_CATALOG_FEATURE_ENV,
   SKILL_STORAGE_FEATURE_ENV,
@@ -15,6 +18,7 @@ export const SERVICE_FEATURE_FLAG_ENVS = [
 
 export interface FeatureFlags {
   adaptiveRanking: boolean;
+  adaptiveRankingPerTurn: boolean;
   cloudTelemetry: boolean;
   cloudCatalog: boolean;
   skillStorage: boolean;
@@ -32,6 +36,7 @@ export type ServiceFeatureFlagOverrides = Readonly<
 export function featureFlagsFromEnv(env: NodeJS.ProcessEnv): FeatureFlags {
   return {
     adaptiveRanking: env[ADAPTIVE_RANKING_FEATURE_ENV] === "1",
+    adaptiveRankingPerTurn: env[ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV] === "1",
     cloudTelemetry: env[CLOUD_TELEMETRY_FEATURE_ENV] === "1",
     cloudCatalog: env[CLOUD_CATALOG_FEATURE_ENV] === "1",
     skillStorage: env[SKILL_STORAGE_FEATURE_ENV] === "1",
@@ -44,6 +49,7 @@ export function featureFlagServiceEnvironment(
 ): Record<string, string> {
   return {
     ...(flags.adaptiveRanking ? { [ADAPTIVE_RANKING_FEATURE_ENV]: "1" } : {}),
+    ...(flags.adaptiveRankingPerTurn ? { [ADAPTIVE_RANKING_PER_TURN_FEATURE_ENV]: "1" } : {}),
     ...(flags.cloudTelemetry ? { [CLOUD_TELEMETRY_FEATURE_ENV]: "1" } : {}),
     ...(flags.cloudCatalog ? { [CLOUD_CATALOG_FEATURE_ENV]: "1" } : {}),
     ...(flags.skillStorage ? { [SKILL_STORAGE_FEATURE_ENV]: "1" } : {}),

@@ -14,14 +14,18 @@ async function backend() {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{ name: "search_capabilities", inputSchema: { type: "object" } }],
   }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => ({
-    content: [{ type: "text", text: JSON.stringify(request.params.arguments ?? {}) }],
-  }));
+  const calls: unknown[] = [];
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    calls.push(request.params);
+    return {
+      content: [{ type: "text", text: JSON.stringify(request.params.arguments ?? {}) }],
+    };
+  });
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   const client = new Client({ name: "connector", version: "1.0.0" });
   await client.connect(clientTransport);
-  return { client, server };
+  return { client, server, calls };
 }
 
 describe("runConnectorProxy", () => {
@@ -46,6 +50,35 @@ describe("runConnectorProxy", () => {
       arguments: { query: "docs" },
     });
     expect(result.content).toEqual([{ type: "text", text: '{"query":"docs"}' }]);
+
+    await host.close();
+    await connector.shutdown();
+    await remote.server.close();
+  });
+
+  it("forwards the _ratel argument and _meta to the daemon unchanged", async () => {
+    const remote = await backend();
+    const [connectorTransport, hostTransport] = InMemoryTransport.createLinkedPair();
+    const connector = await runConnectorProxy({
+      serverTransport: connectorTransport,
+      connectBackend: async () => remote.client,
+      daemonStatus: async () => ({ state: "running" }),
+      startDaemon: async () => {},
+      serverVersion: "1.0.0",
+    });
+    const host = new Client({ name: "host", version: "1.0.0" });
+    await host.connect(hostTransport);
+
+    const _ratel = { session: "s1", turn: "t1", agent: "a1" };
+    const _meta = { "example/request-id": "r1" };
+    await host.callTool({
+      name: "search_capabilities",
+      arguments: { query: "docs", _ratel },
+      _meta,
+    });
+    expect(remote.calls).toEqual([
+      expect.objectContaining({ arguments: { query: "docs", _ratel }, _meta }),
+    ]);
 
     await host.close();
     await connector.shutdown();

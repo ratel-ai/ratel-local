@@ -30,6 +30,8 @@ export interface CreateMcpHttpRouteOptions {
   registry: InMemoryMcpClientRegistry;
   serverName: string;
   serverVersion: string;
+  /** Pair adaptive-ranking searches and invokes by the host's `_ratel` turn ids. */
+  perTurnCorrelation?: boolean;
   log?: (message: string) => void;
 }
 
@@ -128,6 +130,7 @@ export function createMcpHttpRoute(opts: CreateMcpHttpRouteOptions): McpHttpRout
         upstreamServers: lease.gateway.upstreamServers,
         runAuthFlow: lease.gateway.runAuthFlow,
         skillCatalog: lease.gateway.skillCatalog,
+        ...(opts.perTurnCorrelation ? { perTurnCorrelation: true } : {}),
       });
       let disposed = false;
       const unsubscribe = lease.subscribeListChanged(handle.notifyToolListChanged);
