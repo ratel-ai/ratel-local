@@ -96,7 +96,8 @@ plugin and marketplace files were not touched.
 
 1. **Ratel side:** ship the `_ratel` argument behind
    `RATEL_FEATURE_ADAPTIVE_RANKING_PER_TURN` (done in this change). Do not
-   declare it in `inputSchema`. Always strip it.
+   declare it in `inputSchema`. Always strip it. Run each correlated call in the
+   SDK turn scope under the composite id.
 2. **Claude Code:** add a `PreToolUse` hook, matched only to Ratel's gateway
    tools (`search_capabilities`, `invoke_tool`, `get_skill_content`) under both
    tool-name forms. It returns `updatedInput` with `_ratel` from `session_id`,

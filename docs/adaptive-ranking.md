@@ -92,9 +92,11 @@ The two hosts supply these ids:
 - **Claude Code:** `session_id`, `prompt_id`, and `agent_id` inside a subagent.
 - **Codex:** `session_id`, `turn_id`, and the subagent's id.
 
-Ratel turns them into one SDK turn id. A search then pairs only with invokes from
-the same host turn, even across an MCP reconnect, and subagents stay apart from
-the main thread and from each other. A call without a valid `_ratel` keeps
+Ratel turns them into one id and runs the call inside the SDK's turn scope. A
+search then pairs only with invokes from the same host turn, even across an MCP
+reconnect, and subagents stay apart from the main thread and from each other.
+Every trace event the call records carries the turn id, and the turn's first
+call records one `turn_start` event. No user message is attached. A call without a valid `_ratel` keeps
 per-connection pairing.
 
 Ratel always removes `_ratel` before a tool runs, whether the flag is on or off,

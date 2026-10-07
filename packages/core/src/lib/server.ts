@@ -117,11 +117,17 @@ export async function createMcpServer(
     const { args, correlation } = extractTurnCorrelation(
       (req.params.arguments ?? {}) as Record<string, unknown>,
     );
-    const turnId =
-      perTurnCorrelation && correlation ? turnCorrelationKey(correlation) : connectionTurnId;
+    // A host turn runs inside the SDK turn scope: every event it records, gateway
+    // errors included, carries the turn id, and one `turn_start` opens it. The
+    // per-connection fallback is not a user turn, so it passes the id explicitly
+    // and opens no scope.
+    const hostTurnId =
+      perTurnCorrelation && correlation ? turnCorrelationKey(correlation) : undefined;
     let out: unknown;
     try {
-      out = await tool.execute(args, undefined, turnId);
+      out = await (hostTurnId === undefined
+        ? tool.execute(args, undefined, connectionTurnId)
+        : catalog.turn(() => tool.execute(args), { id: hostTurnId }));
     } catch (error) {
       if (!(error instanceof EmbedderError) || req.params.name !== SEARCH_CAPABILITIES_ID) {
         throw error;

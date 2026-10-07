@@ -35,7 +35,8 @@ found:
 
 SDK `0.13.0-rc.10` adds a turn scope, `turn(fn, { id })` (SDK ADR 0026). It also
 credits an invoke to the search that offered the capability, rather than to the
-latest search in the turn.
+latest search in the turn. Ratel Local pins `0.13.0-rc.11`, the current `rc`
+dist-tag.
 
 ## Decision
 
@@ -48,7 +49,7 @@ latest search in the turn.
    call before the tool runs, whether or not the feature is on. Nothing upstream
    ever sees it, including through `invoke_tool`'s flattened-arguments path.
 3. **Behind a flag.** With `RATEL_FEATURE_ADAPTIVE_RANKING_PER_TURN=1`, a valid
-   field becomes the SDK turn id
+   field becomes the id of an SDK turn
    `rt1:<session>:<turn>[:<agent>]`. Each component is percent-encoded, so the
    `:` separator cannot occur inside one and the encoding is injective. The
    component count tells the main thread from a subagent, and every agent in
@@ -56,17 +57,22 @@ latest search in the turn.
    absent or malformed, the per-connection UUID stays.
 4. **Not declared** in any `inputSchema`. Neither host needs it, and declaring
    it would invite the model to fill it in.
-5. **Explicit `turnId`, not the SDK turn scope.** Bump to `0.13.0-rc.10` for
-   its attribution fix, and keep passing the id to `tool.execute(args, undefined,
-   turnId)`. Reasons:
-   - The fallback has no real turn. Wrapping a connection in `turn()` would emit
-     a `turn_start` per connection and present a connection to Ratel Cloud as a
-     turn. An explicit id serves both paths with one mechanism.
-   - An explicit `turnId` already wins over a scope, and the gateway tools
-     already thread it to every search and invoke.
-   - A scope's extras (`turn_start`, `end_user_id`, `userMessage`) are Cloud
-     telemetry, behind their own flag and consent. Adopting them later is a
-     wrap around `execute`, applied only when the composite id exists.
+5. **The SDK turn scope for host turns, an explicit `turnId` for the
+   fallback.** A call with a host turn id runs as
+   `catalog.turn(() => tool.execute(args), { id })`. Reasons:
+   - Every event the call records carries the turn id, on both catalogs,
+     including events the gateway tools record without a `turnId` argument,
+     such as `gateway_error`.
+   - The call opens the turn with one `turn_start`. Reopening an id already
+     started emits nothing, so a turn's many calls, even across MCP sessions,
+     open it once. Ratel Cloud can then group runs by the host's real turn.
+   - It passes no `userMessage` or `endUserId`, so nothing new leaves the
+     machine beyond the ids.
+
+   The per-connection fallback is not a user turn. Wrapping it in `turn()`
+   would show a connection to Ratel Cloud as a turn, so it keeps passing the
+   id explicitly to `tool.execute(args, undefined, turnId)` and opens no
+   scope.
 6. **Host wiring** is a separate change and follows the spike:
    - **Claude Code:** a fail-open `PreToolUse` hook, matched only to
      `search_capabilities`, `invoke_tool` and `get_skill_content` under both
@@ -102,7 +108,10 @@ latest search in the turn.
   approval behaviour is unverified.
 - **Declaring `_ratel` in `inputSchema`:** no host requires it, and it puts the
   field in the model's view.
-- **The SDK turn scope as the only mechanism:** see decision 5.
+- **The SDK turn scope for every call:** see decision 5.
+- **An explicit `turnId` for host turns as well:** pairing would be the same,
+  but events recorded without a `turnId` argument would lose the turn, and
+  Ratel Cloud would get no `turn_start`.
 - **A per-search id echoed back by the model:** it depends on the model copying
-  an opaque id correctly. The rc.10 attribution fix already handles several
+  an opaque id correctly. The SDK's attribution fix (since rc.10) already handles several
   searches in one turn.

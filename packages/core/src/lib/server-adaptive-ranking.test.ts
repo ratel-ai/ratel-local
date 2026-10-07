@@ -3,6 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { IntentGraph, SkillCatalog, ToolCatalog } from "@ratel-ai/sdk";
 import { describe, expect, it } from "vitest";
 import { createMcpServer } from "./server.js";
+import { turnCorrelationKey } from "./turn-correlation.js";
 
 const BUILD_QUERY = "why is the build broken";
 const FILE_QUERY = "read a file from disk";
@@ -42,8 +43,19 @@ async function connect(
 async function catalogs() {
   const graph = new IntentGraph();
   const upstreamArgs: Record<string, unknown>[] = [];
-  const catalog = new ToolCatalog();
-  const skills = new SkillCatalog();
+  const lines: string[] = [];
+  const trace = {
+    kind: "callback" as const,
+    sessionId: "test",
+    onEvent: (l: string) => lines.push(l),
+  };
+  const catalog = new ToolCatalog({ trace });
+  const skills = new SkillCatalog({ trace });
+  // The callback sink delivers asynchronously; let queued lines land first.
+  const events = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return lines.map((line) => JSON.parse(line) as { type: string; turn_id?: string });
+  };
   await catalog.register([
     {
       id: "build_status",
@@ -81,7 +93,7 @@ async function catalogs() {
   ]);
   catalog.experimentalEnableAdaptiveRanking(graph);
   skills.experimentalEnableAdaptiveRanking(graph);
-  return { graph, catalog, skills, upstreamArgs };
+  return { graph, catalog, skills, upstreamArgs, events };
 }
 
 describe("MCP adaptive ranking session isolation", () => {
@@ -332,6 +344,59 @@ describe("MCP adaptive ranking per-turn correlation", () => {
           undefined,
         ]);
         expect(upstreamArgs).toEqual([{ verbose: true }, { verbose: true }, { verbose: true }]);
+      } finally {
+        await a.close();
+      }
+    });
+  }
+
+  it("opens one SDK turn per host turn and stamps every event in it", async () => {
+    const { catalog, skills, events } = await catalogs();
+    const a = await connect(catalog, skills, { perTurnCorrelation: true });
+    const b = await connect(catalog, skills, { perTurnCorrelation: true });
+    try {
+      await a.client.callTool({
+        name: "search_capabilities",
+        arguments: correlated({ query: BUILD_QUERY }, TURN_1),
+      });
+      await b.client.callTool({
+        name: "invoke_tool",
+        arguments: correlated({ toolId: "no_such_tool", args: {} }, TURN_1),
+      });
+      await a.client.callTool({
+        name: "get_skill_content",
+        arguments: correlated({ skillId: "ci-triage" }, TURN_2),
+      });
+      const turn1 = turnCorrelationKey({ session: SESSION, turn: TURN_1 });
+      const turn2 = turnCorrelationKey({ session: SESSION, turn: TURN_2 });
+      const seen = await events();
+      expect(seen.filter((e) => e.type === "turn_start").map((e) => e.turn_id)).toEqual([
+        turn1,
+        turn2,
+      ]);
+      expect(seen.find((e) => e.type === "gateway_error")?.turn_id).toBe(turn1);
+      expect(seen.find((e) => e.type === "skill_invoke")?.turn_id).toBe(turn2);
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  });
+
+  for (const perTurnCorrelation of [false, true]) {
+    it(`opens no SDK turn for per-connection pairing (flag ${perTurnCorrelation ? "on" : "off"})`, async () => {
+      const { catalog, skills, events } = await catalogs();
+      const a = await connect(catalog, skills, { perTurnCorrelation });
+      try {
+        await a.client.callTool({
+          name: "search_capabilities",
+          arguments: perTurnCorrelation
+            ? { query: BUILD_QUERY }
+            : correlated({ query: BUILD_QUERY }, TURN_1),
+        });
+        const seen = await events();
+        expect(seen.filter((e) => e.type === "turn_start")).toEqual([]);
+        const search = seen.find((e) => e.type === "search");
+        expect(search?.turn_id).toMatch(/^[0-9a-f-]{36}$/);
       } finally {
         await a.close();
       }
