@@ -16,6 +16,7 @@ export * from "./legacy-skill-migration.js";
 export * from "./lib/index.js";
 export * from "./local-git-exclude.js";
 export * from "./locate-bin.js";
+export * from "./managed-skills-root.js";
 export * from "./mutation-engine.js";
 export * from "./oauth-legacy-migration.js";
 export * from "./operations.js";

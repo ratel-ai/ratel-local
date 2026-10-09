@@ -306,6 +306,10 @@ describe("runSkill — snapshot-backed reads", () => {
 
     expect(calls).toEqual([
       {
+        path: "/api/daemon/status",
+        init: undefined,
+      },
+      {
         path: `/api/skills?projectId=${PROJECT_ID}`,
         init: undefined,
       },
@@ -397,17 +401,36 @@ describe("runSkill — snapshot-backed reads", () => {
   ] as const)("%s targets an explicit scoped registration", async (verb, deleteOwnedCopy) => {
     const calls: unknown[] = [];
     const registrationControlPlane = {
-      async previewRemove() {
-        throw new Error("previewRemove should be encapsulated by remove");
+      async prepareRemove(request: unknown) {
+        calls.push({ prepare: request });
+        return {
+          changeId: "change-remove",
+          kind: "skill.remove",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          preview: {
+            action: "remove" as const,
+            target: { scope: "project" as const, projectId: PROJECT_ID },
+            id: "project-review",
+            files: [],
+          },
+        };
       },
-      async apply() {
-        throw new Error("apply should be encapsulated by remove");
+      async commit(changeId: string) {
+        calls.push({ commit: changeId });
+        return {
+          transactionId: "tx",
+          changedPaths: [],
+          revisions: {},
+          backupManifest: null,
+          result: {
+            action: "remove",
+            target: { scope: "project", projectId: PROJECT_ID },
+            id: "project-review",
+          },
+        };
       },
-      async remove(request) {
-        calls.push(request);
-        return { transactionId: "tx", changedPaths: [], revisions: {} };
-      },
-    } satisfies SkillRegistrationControlPlane;
+      cancel() {},
+    } as unknown as SkillRegistrationControlPlane;
     const ctx = listCtx(() => {});
     ctx.argv.verb = verb;
     ctx.argv.rest = ["project-review"];
@@ -417,11 +440,241 @@ describe("runSkill — snapshot-backed reads", () => {
 
     expect(calls).toEqual([
       {
-        target: { scope: "project", projectId: PROJECT_ID },
-        id: "project-review",
-        deleteOwnedCopy,
+        prepare: {
+          target: { scope: "project", projectId: PROJECT_ID },
+          id: "project-review",
+          deleteOwnedCopy,
+        },
       },
+      { commit: "change-remove" },
     ]);
+  });
+
+  it("remove logs a leftover broken symlink from the commit result", async () => {
+    const logs: string[] = [];
+    const nativePath = "/home/u/.claude/skills/gone";
+    const brokenNativeLink = {
+      path: nativePath,
+      kind: "unresolved" as const,
+      copyKept: false,
+    };
+    const registrationControlPlane = {
+      async prepareRemove() {
+        return {
+          changeId: "change-broken",
+          kind: "skill.remove",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          preview: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "gone",
+            files: [{ kind: "file" as const, path: "/home/u/.ratel/config.json" }],
+            brokenNativeLink,
+          },
+        };
+      },
+      async commit() {
+        return {
+          transactionId: "tx",
+          changedPaths: ["/home/u/.ratel/config.json"],
+          revisions: {},
+          backupManifest: null,
+          result: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "gone",
+            brokenNativeLink,
+          },
+        };
+      },
+      cancel() {},
+    } as unknown as SkillRegistrationControlPlane;
+    const ctx = listCtx((line) => logs.push(line));
+    ctx.argv.verb = "remove";
+    ctx.argv.rest = ["gone"];
+    ctx.argv.flags = { scope: "user", yes: true };
+
+    await runSkill(ctx, { registry: registry(), registrationControlPlane });
+
+    expect(logs).toContain(`updated /home/u/.ratel/config.json`);
+    expect(logs).toContain(`left a broken symlink at ${nativePath}; delete it by hand.`);
+  });
+
+  it("remove dry-run and daemon paths report a leftover broken symlink", async () => {
+    const nativePath = "/home/u/.claude/skills/gone";
+    const brokenNativeLink = {
+      path: nativePath,
+      kind: "unresolved" as const,
+      copyKept: false,
+    };
+
+    const dryLogs: string[] = [];
+    const dryControl = {
+      async prepareRemove() {
+        return {
+          changeId: "change-dry",
+          kind: "skill.remove",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          preview: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "gone",
+            files: [{ kind: "file" as const, path: "/home/u/.ratel/config.json" }],
+            deletes: ["/home/u/.ratel/skills/gone", nativePath],
+            brokenNativeLink,
+          },
+        };
+      },
+      cancel() {},
+    } as unknown as SkillRegistrationControlPlane;
+    const dryCtx = listCtx((line) => dryLogs.push(line));
+    dryCtx.argv.verb = "remove";
+    dryCtx.argv.rest = ["gone"];
+    dryCtx.argv.flags = { scope: "user", "dry-run": true };
+    await runSkill(dryCtx, { registry: registry(), registrationControlPlane: dryControl });
+    expect(dryLogs).toContain(
+      `would delete /home/u/.ratel/skills/gone, ${nativePath}; would update /home/u/.ratel/config.json`,
+    );
+    expect(dryLogs).toContain(`would leave a broken symlink at ${nativePath}; delete it by hand.`);
+
+    const daemonLogs: string[] = [];
+    const daemonCtx = listCtx((line) => daemonLogs.push(line));
+    daemonCtx.argv.verb = "remove";
+    daemonCtx.argv.rest = ["gone"];
+    daemonCtx.argv.flags = { scope: "user", yes: true };
+    await runSkill(daemonCtx, {
+      registry: registry(),
+      registrationControlPlane: {
+        async prepareRemove() {
+          return {
+            changeId: "change-daemon-local",
+            kind: "skill.remove",
+            expiresAt: "2026-07-22T12:00:00.000Z",
+            preview: {
+              action: "remove" as const,
+              target: { scope: "user" as const },
+              id: "gone",
+              files: [{ kind: "file" as const, path: "/home/u/.ratel/config.json" }],
+              brokenNativeLink,
+            },
+          };
+        },
+        async remove() {
+          throw new Error("local remove should not run when the daemon answers");
+        },
+        async commit() {
+          throw new Error("local commit should not run when the daemon answers");
+        },
+        cancel() {},
+      } as unknown as SkillRegistrationControlPlane,
+      daemonRequest: async () =>
+        Response.json({
+          transactionId: "remote",
+          changedPaths: ["/home/u/.ratel/config.json"],
+          revisions: {},
+          backupManifest: null,
+          result: {
+            action: "remove",
+            target: { scope: "user" },
+            id: "gone",
+            brokenNativeLink,
+          },
+        }),
+    });
+    expect(daemonLogs).toContain(`left a broken symlink at ${nativePath}; delete it by hand.`);
+  });
+
+  it("the remove prompt names the paths it will delete and a refusal deletes nothing", async () => {
+    const nativePath = "/home/u/.claude/skills/taken";
+    const copyPath = "/home/u/.ratel/skills/taken";
+    const confirms: string[] = [];
+    const logs: string[] = [];
+    const cancelled: string[] = [];
+    const registrationControlPlane = {
+      async prepareRemove() {
+        return {
+          changeId: "change-confirm",
+          kind: "skill.remove",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          preview: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "taken",
+            files: [{ kind: "file" as const, path: "/home/u/.ratel/config.json" }],
+            deletes: [nativePath, copyPath],
+          },
+        };
+      },
+      async commit() {
+        throw new Error("commit must not run when the prompt is refused");
+      },
+      cancel(changeId: string) {
+        cancelled.push(changeId);
+      },
+    } as unknown as SkillRegistrationControlPlane;
+    const ctx = listCtx((line) => logs.push(line));
+    ctx.argv.verb = "remove";
+    ctx.argv.rest = ["taken"];
+    ctx.argv.flags = { scope: "user" };
+    ctx.prompts = {
+      ...ctx.prompts,
+      async confirm({ message }) {
+        confirms.push(message);
+        return false;
+      },
+    };
+
+    await runSkill(ctx, { registry: registry(), registrationControlPlane });
+
+    expect(confirms).toEqual([
+      `Remove taken from user and permanently delete ${nativePath}, ${copyPath}?`,
+    ]);
+    expect(logs).toContain("remove cancelled");
+    expect(cancelled).toEqual(["change-confirm"]);
+  });
+
+  it("the remove-scope prompt claims no deletion when nothing is deleted", async () => {
+    const confirms: string[] = [];
+    const registrationControlPlane = {
+      async prepareRemove() {
+        return {
+          changeId: "change-scope",
+          kind: "skill.remove",
+          expiresAt: "2026-07-22T12:00:00.000Z",
+          preview: {
+            action: "remove" as const,
+            target: { scope: "user" as const },
+            id: "kept",
+            files: [{ kind: "file" as const, path: "/home/u/.ratel/config.json" }],
+          },
+        };
+      },
+      async commit() {
+        return {
+          transactionId: "tx",
+          changedPaths: ["/home/u/.ratel/config.json"],
+          revisions: {},
+          backupManifest: null,
+          result: { action: "remove", target: { scope: "user" }, id: "kept" },
+        };
+      },
+      cancel() {},
+    } as unknown as SkillRegistrationControlPlane;
+    const ctx = listCtx(() => {});
+    ctx.argv.verb = "remove-scope";
+    ctx.argv.rest = ["kept"];
+    ctx.argv.flags = { scope: "user" };
+    ctx.prompts = {
+      ...ctx.prompts,
+      async confirm({ message }) {
+        confirms.push(message);
+        return true;
+      },
+    };
+
+    await runSkill(ctx, { registry: registry(), registrationControlPlane });
+
+    expect(confirms).toEqual(["Remove kept from user?"]);
   });
 
   it("lists the effective catalog for a registered project id", async () => {

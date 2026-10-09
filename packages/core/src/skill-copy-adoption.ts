@@ -35,6 +35,7 @@ export async function planSkillCopyMaterialization(input: {
   sourcePath: string;
   targetPath: string;
   id: string;
+  copyFile?: { relativePath: string; contents: string };
 }): Promise<SkillCopyMaterializationPlan> {
   const sourcePath = await realpath(input.sourcePath);
   await validateCopySourceDirectory(sourcePath);
@@ -45,28 +46,21 @@ export async function planSkillCopyMaterialization(input: {
     targetInfo = await lstat(input.targetPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const additionalFiles =
+      marker === "missing"
+        ? [{ relativePath: ".ratel-skill.json", contents: ownershipMarkerContents(input.id) }]
+        : [];
+    if (input.copyFile) additionalFiles.push(input.copyFile);
     return {
-      operations: [
-        {
-          kind: "copy-directory",
-          sourcePath,
-          path: input.targetPath,
-          additionalFiles:
-            marker === "missing"
-              ? [
-                  {
-                    relativePath: ".ratel-skill.json",
-                    contents: ownershipMarkerContents(input.id),
-                  },
-                ]
-              : [],
-        },
-      ],
+      operations: [{ kind: "copy-directory", sourcePath, path: input.targetPath, additionalFiles }],
     };
   }
 
   if (!targetInfo.isDirectory() || targetInfo.isSymbolicLink()) {
     throw new SkillCopyAdoptionError(`copy target is not a real directory: ${input.targetPath}`);
+  }
+  if (input.copyFile) {
+    throw new SkillCopyAdoptionError(`cannot patch an adopted copy: ${input.targetPath}`);
   }
   const canonicalTarget = await realpath(input.targetPath);
   if (canonicalTarget !== sourcePath) {

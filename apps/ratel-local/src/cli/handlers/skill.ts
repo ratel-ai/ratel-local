@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import {
+  type BrokenNativeLink,
   type ContextSnapshotResolver,
   createConfigControlPlane,
   createContextSnapshotResolver,
@@ -10,7 +11,6 @@ import {
   createSkillDiscovery,
   createSkillImportControlPlane,
   createSkillRegistrationControlPlane,
-  type MutationCommit,
   type PreparedChange,
   type ProjectId,
   ProjectNotFoundError,
@@ -94,7 +94,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
 
   switch (verb) {
     case "import": {
-      const runtime = createSkillReadRuntime(ctx, options);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         ctx.env.projectRoot,
@@ -153,7 +154,6 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
             "skill discovery came from the daemon, but the daemon disappeared before preview",
           );
         }
-        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
         control =
           options.importControlPlane ??
           (await createImportControlPlane(ctx, runtime, skillStorage));
@@ -210,7 +210,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           "usage: ratel skill add-scope <id> --scope user|project|local [--mode reference|copy]",
         );
       }
-      const runtime = createSkillReadRuntime(ctx, options);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         ctx.env.projectRoot,
@@ -233,7 +234,6 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
           "skill add-scope preparation",
         );
       } else {
-        const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
         control =
           options.registrationControlPlane ??
           (await createRegistrationControlPlane(ctx, runtime, skillStorage));
@@ -282,7 +282,8 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       if (ctx.argv.rest.length !== 1) {
         throw new Error(`usage: ratel skill ${verb} <id> --scope user|project|local`);
       }
-      const runtime = createSkillReadRuntime(ctx, options);
+      const skillStorage = await resolveSkillStorageFlag(ctx, options.daemonRequest);
+      const runtime = createSkillReadRuntime(ctx, options, skillStorage);
       const context = await resolveSkillContext(
         ctx.argv.flags.project,
         ctx.env.projectRoot,
@@ -296,26 +297,27 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       };
       const control =
         options.registrationControlPlane ??
-        (await createRegistrationControlPlane(
-          ctx,
-          runtime,
-          await resolveSkillStorageFlag(ctx, options.daemonRequest),
-        ));
+        (await createRegistrationControlPlane(ctx, runtime, skillStorage));
+      const change = await control.prepareRemove(request);
+      const deletes = change.preview.deletes ?? [];
       if (dryRun) {
-        const change = await control.prepareRemove(request);
-        ctx.log(`would update ${change.preview.files.map(({ path }) => path).join(", ")}`);
+        ctx.log(
+          formatRemoveDryRun(
+            change.preview.files.map(({ path }) => path),
+            deletes,
+          ),
+        );
+        logBrokenNativeLink(ctx, change.preview.brokenNativeLink, true);
         control.cancel(change.changeId);
         return;
       }
       if (!assumeYes) {
         const answer = await ctx.prompts.confirm({
-          message:
-            verb === "remove"
-              ? `Remove ${request.id} from ${target.scope} and delete any owned copy?`
-              : `Remove ${request.id} from ${target.scope}?`,
+          message: formatRemoveConfirm(request.id, target.scope, deletes),
           initialValue: false,
         });
         if (ctx.prompts.isCancel(answer) || answer === false) {
+          control.cancel(change.changeId);
           ctx.log(`${verb} cancelled`);
           return;
         }
@@ -330,12 +332,15 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         },
       );
       if (remote) {
-        const commit = await requireDaemonJson<MutationCommit>(remote, `skill ${verb}`);
+        control.cancel(change.changeId);
+        const commit = await requireDaemonJson<SkillRegistrationCommit>(remote, `skill ${verb}`);
         ctx.log(`updated ${commit.changedPaths.join(", ")}`);
+        logBrokenNativeLink(ctx, commit.result?.brokenNativeLink, false);
         return;
       }
-      const commit = await control.remove(request);
+      const commit = await control.commit(change.changeId);
       ctx.log(`updated ${commit.changedPaths.join(", ")}`);
+      logBrokenNativeLink(ctx, commit.result?.brokenNativeLink, false);
       return;
     }
 
@@ -404,7 +409,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
       const dirs = dirsFlag(ctx.argv.flags.dir);
       let skills: Skill[] | undefined;
       if (!dirs) {
-        const runtime = createSkillReadRuntime(ctx, options);
+        const runtime = createSkillReadRuntime(ctx, options, undefined);
         const context = await resolveSkillContext(
           ctx.argv.flags.project,
           cwd ?? ctx.env.projectRoot,
@@ -442,7 +447,7 @@ export async function runSkill(ctx: HandlerCtx, options: SkillHandlerOptions = {
         const dirs = dirsFlag(ctx.argv.flags.dir);
         let skills: Skill[] | undefined;
         if (!dirs) {
-          const runtime = createSkillReadRuntime(ctx, options);
+          const runtime = createSkillReadRuntime(ctx, options, undefined);
           const context = await resolveSkillContext(
             ctx.argv.flags.project,
             input.cwd ?? ctx.env.projectRoot,
@@ -631,7 +636,7 @@ async function createImportControlPlane(
 function createSkillReadRuntime(
   ctx: HandlerCtx,
   options: SkillHandlerOptions,
-  skillStorage = false,
+  skillStorage: boolean | undefined,
 ): SkillReadRuntime {
   const registry = options.registry ?? createProjectRegistry({ homeDir: ctx.env.homeDir });
   const resolver =
@@ -639,7 +644,7 @@ function createSkillReadRuntime(
     createContextSnapshotResolver({
       homeDir: ctx.env.homeDir,
       projectRegistry: registry,
-      ...(skillStorage ? { skillStorage: true } : {}),
+      ...(skillStorage !== undefined ? { skillStorage } : {}),
     });
   const discovery =
     options.discovery ??
@@ -649,6 +654,7 @@ function createSkillReadRuntime(
         (await registry.list())
           .filter((project) => project.status === "available")
           .map((project) => project.canonicalRoot),
+      ...(skillStorage !== undefined ? { skillStorage } : {}),
     });
   return { registry, resolver, discovery };
 }
@@ -723,6 +729,34 @@ function importMode(value: FlagValue | undefined): "reference" | "copy" {
   if (value === undefined) return "reference";
   if (value === "reference" || value === "copy") return value;
   throw new Error("--mode must be reference|copy");
+}
+
+function formatRemoveDryRun(updatedPaths: readonly string[], deletes: readonly string[]): string {
+  const parts: string[] = [];
+  if (deletes.length > 0) parts.push(`would delete ${deletes.join(", ")}`);
+  const remaining = updatedPaths.filter((path) => !deletes.includes(path));
+  if (remaining.length > 0) parts.push(`would update ${remaining.join(", ")}`);
+  return parts.length > 0 ? parts.join("; ") : "would make no file changes";
+}
+
+function formatRemoveConfirm(id: string, scope: string, deletes: readonly string[]): string {
+  if (deletes.length === 0) return `Remove ${id} from ${scope}?`;
+  return `Remove ${id} from ${scope} and permanently delete ${deletes.join(", ")}?`;
+}
+
+function logBrokenNativeLink(
+  ctx: HandlerCtx,
+  link: BrokenNativeLink | undefined,
+  dryRun: boolean,
+): void {
+  if (!link) return;
+  const verb = dryRun ? "would leave" : "left";
+  if (link.kind === "unresolved") {
+    const copyNote = link.copyKept ? " The managed copy was left in place." : "";
+    ctx.log(`${verb} a broken symlink at ${link.path}; delete it by hand.${copyNote}`);
+    return;
+  }
+  ctx.log(`${verb} a symlink at ${link.path}; the managed copy is gone, so it was not removed.`);
 }
 
 async function selectImportCandidates(

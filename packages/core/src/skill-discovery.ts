@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { skillStorageEnabled } from "./feature-flags.js";
 import { parseSkillMd } from "./lib/skills/load.js";
+import { canonicalManagedSkillsRoot, isInsideManagedRoot } from "./managed-skills-root.js";
 import { isSafeSkillId } from "./skill-id.js";
 
 export type DiscoveredSkillSource = "claude" | "codex-current" | "codex-legacy" | "ratel";
@@ -41,6 +43,7 @@ export interface SkillDiscoveryOptions {
   timeoutMs?: number;
   now?: () => number;
   registeredProjectRoots?: () => Promise<string[]>;
+  skillStorage?: boolean;
 }
 
 export interface SkillDiscovery {
@@ -86,9 +89,11 @@ export function createSkillDiscovery(options: SkillDiscoveryOptions): SkillDisco
 class FilesystemSkillDiscovery implements SkillDiscovery {
   private readonly cache = new Map<string, CachedCandidate>();
   private readonly now: () => number;
+  private readonly skillStorage: boolean;
 
   constructor(private readonly options: SkillDiscoveryOptions) {
     this.now = options.now ?? Date.now;
+    this.skillStorage = options.skillStorage ?? skillStorageEnabled();
   }
 
   async discover(context: SkillDiscoveryContext): Promise<SkillDiscoveryResult> {
@@ -121,11 +126,15 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
   }
 
   private async discoverGlobal(context: Extract<SkillDiscoveryContext, { kind: "global" }>) {
+    const managedRoot = join(this.options.homeDir, ".ratel", "skills");
+    // linksInto resolves the link, so both sides are canonical: a symlinked home
+    // would otherwise never match.
+    const canonicalManagedRoot = await canonicalManagedSkillsRoot(this.options.homeDir);
     const sources: Array<{ source: DiscoveredSkillSource; path: string }> = [
       { source: "claude", path: join(this.options.homeDir, ".claude", "skills") },
       { source: "codex-current", path: join(this.options.homeDir, ".agents", "skills") },
       { source: "codex-legacy", path: join(this.options.homeDir, ".codex", "skills") },
-      { source: "ratel", path: join(this.options.homeDir, ".ratel", "skills") },
+      { source: "ratel", path: managedRoot },
     ];
     const diagnostics: SkillDiscoveryDiagnostic[] = [];
     const candidates: SkillCandidate[] = [];
@@ -139,6 +148,16 @@ class FilesystemSkillDiscovery implements SkillDiscovery {
         if (candidates.length >= maxSkills) break;
         const path = join(source.path, entry.name);
         if (!(await isDirectoryOrDirectorySymlink(path, entry))) continue;
+        // While skill storage is on, a native link into ~/.ratel/skills is Ratel's
+        // own exposure of a managed copy (scanned under its own root). With the
+        // flag off, a link left by an older install is still a native skill.
+        if (
+          this.skillStorage &&
+          source.source !== "ratel" &&
+          (await linksInto(path, canonicalManagedRoot))
+        ) {
+          continue;
+        }
         await pushCandidate(candidates, diagnostics, path, source.source, context);
       }
     }
@@ -308,6 +327,15 @@ async function readDirectory(
       diagnostics.push({ path, message: (error as Error).message });
     }
     return undefined;
+  }
+}
+
+async function linksInto(path: string, root: string): Promise<boolean> {
+  try {
+    if (!(await lstat(path)).isSymbolicLink()) return false;
+    return isInsideManagedRoot(await realpath(path), root);
+  } catch {
+    return false;
   }
 }
 

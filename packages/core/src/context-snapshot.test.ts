@@ -3,11 +3,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createContextSnapshotResolver, InvalidContextSnapshotError } from "./context-snapshot.js";
+import { SKILL_STORAGE_FEATURE_ENV } from "./feature-flags.js";
 import { createProjectRegistry } from "./project-registry.js";
 
 const roots: string[] = [];
+const previousSkillStorageEnv = process.env[SKILL_STORAGE_FEATURE_ENV];
 
 afterEach(async () => {
+  if (previousSkillStorageEnv === undefined) delete process.env[SKILL_STORAGE_FEATURE_ENV];
+  else process.env[SKILL_STORAGE_FEATURE_ENV] = previousSkillStorageEnv;
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -321,5 +325,86 @@ describe("ContextSnapshotResolver", () => {
     const snapshot = await resolver.resolve({ kind: "project", projectId: project.id });
     expect(snapshot.skills.effectiveSkills).toEqual([]);
     expect(snapshot.diagnostics).toEqual([]);
+  });
+
+  it("resolves skillStorage from the environment when the option is omitted", async () => {
+    const { homeDir, project } = await fixture();
+    const ownedDir = join(homeDir, ".ratel", "skills", "owned");
+    await mkdir(ownedDir, { recursive: true });
+    await writeFile(
+      join(ownedDir, "SKILL.md"),
+      "---\nname: owned\ndescription: Owned\n---\n\nBody.",
+    );
+    await writeFile(
+      join(ownedDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "owned" })}\n`,
+    );
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      JSON.stringify({
+        skills: {
+          entries: { owned: { mode: "copy", source: "ratel" } },
+          dirs: [],
+        },
+      }),
+    );
+    const registry = createProjectRegistry({ homeDir });
+
+    delete process.env[SKILL_STORAGE_FEATURE_ENV];
+    const envOff = await createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: registry,
+    }).resolve({ kind: "project", projectId: project.id });
+    expect(envOff.skills.registrations[0]?.origin).toBeUndefined();
+    expect(envOff.skills.registrations[0]?.availability).toBeUndefined();
+
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
+    const envOn = await createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: registry,
+    }).resolve({ kind: "project", projectId: project.id });
+    expect(envOn.skills.registrations[0]?.origin).toBe("local-managed");
+    expect(envOn.skills.registrations[0]?.availability).toBe("available");
+
+    const explicitFalse = await createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: registry,
+      skillStorage: false,
+    }).resolve({ kind: "project", projectId: project.id });
+    expect(explicitFalse.skills.registrations[0]?.origin).toBeUndefined();
+    expect(explicitFalse.skills.registrations[0]?.availability).toBeUndefined();
+  });
+
+  it("forwards an explicit skillStorage false through to resolveConfiguredSkills when the env flag is on", async () => {
+    const { homeDir, project } = await fixture();
+    const ownedDir = join(homeDir, ".ratel", "skills", "owned");
+    await mkdir(ownedDir, { recursive: true });
+    await writeFile(
+      join(ownedDir, "SKILL.md"),
+      "---\nname: owned\ndescription: Owned\n---\n\nBody.",
+    );
+    await writeFile(
+      join(ownedDir, ".ratel-skill.json"),
+      `${JSON.stringify({ version: 1, id: "owned" })}\n`,
+    );
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      JSON.stringify({
+        skills: {
+          entries: { owned: { mode: "copy", source: "ratel" } },
+          dirs: [],
+        },
+      }),
+    );
+
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
+    const snapshot = await createContextSnapshotResolver({
+      homeDir,
+      projectRegistry: createProjectRegistry({ homeDir }),
+      skillStorage: false,
+    }).resolve({ kind: "project", projectId: project.id });
+
+    expect(snapshot.skills.registrations[0]?.origin).toBeUndefined();
+    expect(snapshot.skills.registrations[0]?.availability).toBeUndefined();
   });
 });

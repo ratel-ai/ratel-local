@@ -1,7 +1,22 @@
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProjectRegistry, type MutationJournalV1, nodeFs } from "@ratel-ai/ratel-local-core";
+import {
+  createProjectRegistry,
+  type MutationJournalV1,
+  nodeFs,
+  SKILL_STORAGE_FEATURE_ENV,
+} from "@ratel-ai/ratel-local-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { silentPromptAdapter } from "../prompts.js";
 import { daemonPaths } from "./daemon.js";
@@ -10,8 +25,11 @@ import type { HandlerCtx } from "./types.js";
 
 describe("runDoctor", () => {
   const homes: string[] = [];
+  const previousSkillStorageEnv = process.env[SKILL_STORAGE_FEATURE_ENV];
 
   afterEach(async () => {
+    if (previousSkillStorageEnv === undefined) delete process.env[SKILL_STORAGE_FEATURE_ENV];
+    else process.env[SKILL_STORAGE_FEATURE_ENV] = previousSkillStorageEnv;
     await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true })));
   });
 
@@ -398,6 +416,147 @@ describe("runDoctor", () => {
       if (previous === undefined) delete process.env.RATEL_FEATURE_SKILL_STORAGE;
       else process.env.RATEL_FEATURE_SKILL_STORAGE = previous;
     }
+  });
+
+  it("reports a dangling native skill symlink while the registration is present", async () => {
+    const homeDir = await temporaryHome();
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({
+        skills: {
+          entries: {
+            taken: {
+              mode: "copy",
+              path: copyPath,
+              source: "claude",
+              hostPolicy: { mode: "manual-only", source: "claude" },
+            },
+          },
+          dirs: [],
+        },
+      })}\n`,
+    );
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(homeDir, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    expect(
+      logs.some(
+        (line) =>
+          line.includes("skill-native-link-broken") &&
+          line.includes(nativePath) &&
+          line.includes("broken symlink") &&
+          !line.includes("ENOENT"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports one broken native skill link once across multiple contexts", async () => {
+    const homeDir = await temporaryHome();
+    const projectRoot = join(homeDir, "repo");
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await mkdir(join(projectRoot, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(
+      join(homeDir, ".ratel", "config.json"),
+      `${JSON.stringify({
+        skills: {
+          entries: {
+            taken: {
+              mode: "copy",
+              path: copyPath,
+              source: "claude",
+              hostPolicy: { mode: "manual-only", source: "claude" },
+            },
+          },
+          dirs: [],
+        },
+      })}\n`,
+    );
+    await writeFile(join(projectRoot, ".ratel", "config.json"), "{}\n");
+    await createProjectRegistry({ homeDir }).registerRoot(projectRoot);
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(homeDir, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    const brokenLines = logs.filter((line) => line.includes("skill-native-link-broken"));
+    expect(brokenLines).toHaveLength(1);
+    expect(brokenLines[0]).toContain(nativePath);
+  });
+
+  it("reports a dangling native skill symlink after the registration is gone", async () => {
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
+    const homeDir = await temporaryHome();
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(join(homeDir, ".ratel", "config.json"), "{}\n");
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(homeDir, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    expect(
+      logs.some(
+        (line) =>
+          line.startsWith("[error] skill-native-link-broken [skill:taken]:") &&
+          line.includes(nativePath) &&
+          line.includes("broken symlink"),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores a dangling native skill symlink when skill storage is off", async () => {
+    delete process.env[SKILL_STORAGE_FEATURE_ENV];
+    const homeDir = await temporaryHome();
+    const copyPath = join(homeDir, ".ratel", "skills", "taken");
+    const nativePath = join(homeDir, ".claude", "skills", "taken");
+    await mkdir(join(homeDir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(homeDir, ".ratel"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    await writeFile(join(homeDir, ".ratel", "config.json"), "{}\n");
+    const logs: string[] = [];
+
+    await runDoctor(context(homeDir, logs));
+
+    expect(logs.some((line) => line.includes("skill-native-link-broken"))).toBe(false);
+    expect(logs.at(-1)).toBe("[ok] doctor: ok (1 context checked)");
+  });
+
+  it("reports a dangling managed link when $HOME is itself a symlink", async () => {
+    process.env[SKILL_STORAGE_FEATURE_ENV] = "1";
+    const realHome = await realpath(await temporaryHome());
+    const linkHome = join(await temporaryHome(), "home-link");
+    await symlink(realHome, linkHome);
+    await mkdir(join(realHome, ".ratel", "skills"), { recursive: true });
+    await mkdir(join(realHome, ".claude", "skills"), { recursive: true });
+    // Import writes the target with the caller's (symlinked) homeDir, not the
+    // canonical path. That is the form doctor must still match.
+    const importFormCopy = join(linkHome, ".ratel", "skills", "taken");
+    const nativePath = join(linkHome, ".claude", "skills", "taken");
+    await symlink(importFormCopy, nativePath);
+    await writeFile(join(linkHome, ".ratel", "config.json"), "{}\n");
+    const logs: string[] = [];
+
+    await expect(runDoctor(context(linkHome, logs))).rejects.toBeInstanceOf(DoctorFailure);
+
+    expect(
+      logs.some(
+        (line) =>
+          line.startsWith("[error] skill-native-link-broken [skill:taken]:") &&
+          line.includes(nativePath) &&
+          line.includes("broken symlink"),
+      ),
+    ).toBe(true);
   });
 
   async function temporaryHome(): Promise<string> {

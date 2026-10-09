@@ -4,6 +4,8 @@ import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
 import type { RatelScopeRef } from "../../context.js";
+import { skillStorageEnabled } from "../../feature-flags.js";
+import { nativeSkillPath } from "../../skill-host-policy.js";
 import { isSafeSkillId } from "../../skill-id.js";
 import {
   availabilityFromResolveFailure,
@@ -12,7 +14,7 @@ import {
   type SkillAvailability,
   type SkillOrigin,
 } from "../../skill-registration.js";
-import type { SkillsConfig } from "../config.js";
+import type { SkillEntry, SkillsConfig } from "../config.js";
 import { isDirectoryEntry } from "../fs.js";
 import { loadSkillBundle } from "./load.js";
 
@@ -83,7 +85,7 @@ interface ValidCandidate {
 export async function resolveConfiguredSkills(
   input: ResolveConfiguredSkillsInput,
 ): Promise<ResolvedSkillCatalog> {
-  const skillStorage = input.skillStorage === true;
+  const skillStorage = input.skillStorage ?? skillStorageEnabled();
   const registrations: SkillRegistrationView[] = [];
   const diagnostics: SkillDiagnostic[] = [];
   const candidates: ValidCandidate[] = [];
@@ -139,13 +141,15 @@ export async function resolveConfiguredSkills(
           kind: "entry",
           configuredPath,
         };
-        const diagnostic: SkillDiagnostic = {
-          code: "skill-invalid",
-          severity: "error",
-          message: (error as Error).message,
-          id,
-          path: configuredPath,
-        };
+        const diagnostic =
+          (await brokenNativeLinkDiagnostic(input, scoped.ref, id, entry, configuredPath)) ??
+          ({
+            code: "skill-invalid",
+            severity: "error",
+            message: (error as Error).message,
+            id,
+            path: configuredPath,
+          } satisfies SkillDiagnostic);
         diagnostics.push(diagnostic);
         const availability = skillStorage
           ? await availabilityFromResolveFailure(error, configuredPath)
@@ -432,5 +436,38 @@ async function hasMatchingCopyMarker(canonicalPath: string, id: string): Promise
     );
   } catch {
     return false;
+  }
+}
+
+/**
+ * When a user-scoped managed copy is missing and the native host path is a
+ * dangling symlink, name that symlink instead of the raw copy realpath ENOENT.
+ */
+async function brokenNativeLinkDiagnostic(
+  input: ResolveConfiguredSkillsInput,
+  ref: RatelScopeRef,
+  id: string,
+  entry: SkillEntry,
+  configuredPath: string,
+): Promise<SkillDiagnostic | undefined> {
+  if (ref.scope !== "user" || entry.mode !== "copy" || !entry.hostPolicy) return undefined;
+  const nativePath = nativeSkillPath(input.homeDir, id, entry.hostPolicy.source);
+  try {
+    if (!(await lstat(nativePath)).isSymbolicLink()) return undefined;
+  } catch {
+    return undefined;
+  }
+  try {
+    await realpath(nativePath);
+    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+    return {
+      code: "skill-native-link-broken",
+      severity: "error",
+      message: `${nativePath} is a broken symlink; the managed copy at ${configuredPath} is missing`,
+      id,
+      path: nativePath,
+    };
   }
 }

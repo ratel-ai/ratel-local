@@ -463,7 +463,7 @@ export async function runDaemonServer(
       homeDir: ctx.env.homeDir,
       projectRegistry,
       ...(cloudCatalog ? { cloudCatalog } : {}),
-      ...(featureFlags.skillStorage ? { skillStorage: true } : {}),
+      skillStorage: featureFlags.skillStorage,
     });
   const daemonToken = await (opts.ensureToken ?? ensureDaemonToken)(ctx.env.homeDir);
   const generationPool = new InMemoryScopedGatewayPool(async (scope) => {
@@ -555,6 +555,7 @@ export async function runDaemonServer(
         homeDir: ctx.env.homeDir,
         registeredProjectRoots: async () =>
           (await projectRegistry.list()).map(({ canonicalRoot }) => canonicalRoot),
+        skillStorage: featureFlags.skillStorage,
       }))
     : undefined;
   const skillImportControlPlane =

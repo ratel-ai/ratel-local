@@ -1,6 +1,8 @@
-import { access } from "node:fs/promises";
-import { join } from "node:path";
+import type { Dirent } from "node:fs";
+import { access, readdir, readlink, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
+  canonicalManagedSkillsRoot,
   createConfigControlPlane,
   createContextSnapshotResolver,
   createMutationEngine,
@@ -9,6 +11,7 @@ import {
   describeRecoveredTransaction,
   InvalidContextSnapshotError,
   inventoryLegacyOAuthStores,
+  isInsideManagedRoot,
   prepareLegacySkillMigration,
   type ResolvedContextSnapshot,
   type RuntimeContextRef,
@@ -60,9 +63,10 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     preparedChanges,
   });
   let issueCount = 0;
+  let skillStorage = false;
   const legacyManifestPath = join(controlDir, "skill-manifest.json");
   try {
-    const skillStorage = await resolveSkillStorageFlag(ctx);
+    skillStorage = await resolveSkillStorageFlag(ctx);
     const migration = await prepareLegacySkillMigration({
       homeDir: ctx.env.homeDir,
       configControlPlane,
@@ -112,6 +116,21 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     projectRegistry: registry,
   });
   const snapshots: ResolvedContextSnapshot[] = [];
+  const reportedNativePaths = new Set<string>();
+  // One broken native link is one issue, however many contexts resolve it.
+  const reportDiagnostics = (
+    diagnostics: ResolvedContextSnapshot["diagnostics"],
+    label: string,
+  ): void => {
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.code === "skill-native-link-broken" && diagnostic.path) {
+        if (reportedNativePaths.has(diagnostic.path)) continue;
+        reportedNativePaths.add(diagnostic.path);
+      }
+      output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
+      if (diagnostic.severity === "error") issueCount += 1;
+    }
+  };
   const resolveContext = async (
     context: RuntimeContextRef,
     label: string,
@@ -120,17 +139,11 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     try {
       const snapshot = await resolver.resolve(context);
       snapshots.push(snapshot);
-      for (const diagnostic of snapshot.diagnostics) {
-        output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
-        if (diagnostic.severity === "error") issueCount += 1;
-      }
+      reportDiagnostics(snapshot.diagnostics, label);
       output.success(successMessage);
     } catch (error) {
       if (error instanceof InvalidContextSnapshotError) {
-        for (const diagnostic of error.diagnostics) {
-          output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
-          if (diagnostic.severity === "error") issueCount += 1;
-        }
+        reportDiagnostics(error.diagnostics, label);
         return;
       }
       issueCount += 1;
@@ -200,8 +213,65 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     );
     issueCount += 1;
   }
+
+  if (skillStorage) {
+    for (const orphan of await findOrphanNativeSkillLinks(ctx.env.homeDir, reportedNativePaths)) {
+      issueCount += 1;
+      output.error(
+        `skill-native-link-broken [skill:${orphan.id}]: ${orphan.path} is a broken symlink to ${orphan.target}. Action: delete the symlink by hand; restore does not run from doctor.`,
+      );
+    }
+  }
+
   if (issueCount > 0) throw new DoctorFailure(issueCount);
   output.success(
     `doctor: ok (${snapshots.length} ${snapshots.length === 1 ? "context" : "contexts"} checked)`,
   );
+}
+
+const NATIVE_SKILL_ROOTS = [".claude/skills", ".agents/skills", ".codex/skills"] as const;
+
+async function findOrphanNativeSkillLinks(
+  homeDir: string,
+  alreadyReported: ReadonlySet<string>,
+): Promise<Array<{ id: string; path: string; target: string }>> {
+  // Import writes the link target with the caller's (possibly symlinked) homeDir,
+  // so match against both the raw and the canonical managed root.
+  const rawManagedRoot = join(homeDir, ".ratel", "skills");
+  const canonicalManagedRoot = await canonicalManagedSkillsRoot(homeDir);
+  const managedRoots = Array.from(new Set([rawManagedRoot, canonicalManagedRoot]));
+  const found: Array<{ id: string; path: string; target: string }> = [];
+  for (const relativeRoot of NATIVE_SKILL_ROOTS) {
+    const root = join(homeDir, relativeRoot);
+    let entries: Dirent[];
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const path = join(root, entry.name);
+      if (!entry.isSymbolicLink()) continue;
+      if (alreadyReported.has(path)) continue;
+      let target: string;
+      try {
+        target = await readlink(path);
+      } catch {
+        continue;
+      }
+      const absoluteTarget = isAbsolute(target) ? target : resolve(dirname(path), target);
+      if (!managedRoots.some((managedRoot) => isInsideManagedRoot(absoluteTarget, managedRoot))) {
+        continue;
+      }
+      try {
+        await realpath(path);
+        continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") continue;
+      }
+      found.push({ id: entry.name, path, target: absoluteTarget });
+    }
+  }
+  return found;
 }
