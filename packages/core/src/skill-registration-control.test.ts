@@ -395,6 +395,68 @@ describe("SkillRegistrationControlPlane", () => {
     expect(await realpath(nativePath)).toBe(await realpath(copyPath));
   });
 
+  it("remove unlinks a native link into the copy when no host policy is recorded", async () => {
+    const copyPath = await putOwnedCopy("readopted");
+    const nativePath = join(homeDir, ".agents", "skills", "readopted");
+    await mkdir(join(homeDir, ".agents", "skills"), { recursive: true });
+    await symlink(copyPath, nativePath);
+    const { control, configPath } = await fixture(
+      {
+        readopted: {
+          mode: "copy",
+          path: copyPath,
+          origin: "local-managed",
+          source: "ratel",
+        },
+      },
+      { skillStorage: true },
+    );
+
+    const plan = await control.prepareRemove({
+      target: { scope: "user" },
+      id: "readopted",
+      deleteOwnedCopy: true,
+    });
+    expect(plan.preview.deletes).toEqual([nativePath, copyPath]);
+    await control.commit(plan.changeId);
+
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      skills: { entries: {}, dirs: [] },
+    });
+    await expect(lstat(copyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(nativePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("remove leaves a real native directory alone when no host policy is recorded", async () => {
+    const copyPath = await putOwnedCopy("plain-native");
+    const nativePath = join(homeDir, ".claude", "skills", "plain-native");
+    await mkdir(nativePath, { recursive: true });
+    await writeFile(join(nativePath, "SKILL.md"), "---\nname: plain-native\n---\n\nNative\n");
+    const { control } = await fixture(
+      {
+        "plain-native": {
+          mode: "copy",
+          path: copyPath,
+          origin: "local-managed",
+          source: "ratel",
+        },
+      },
+      { skillStorage: true },
+    );
+
+    const plan = await control.prepareRemove({
+      target: { scope: "user" },
+      id: "plain-native",
+      deleteOwnedCopy: true,
+    });
+    expect(plan.preview.deletes).toEqual([copyPath]);
+    await control.commit(plan.changeId);
+
+    await expect(lstat(copyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await lstat(nativePath)).isDirectory()).toBe(true);
+    expect(await readFile(join(nativePath, "SKILL.md"), "utf8")).toContain("Native");
+  });
+
   it.each([
     ["remove", true, true],
     ["remove-scope", false, true],

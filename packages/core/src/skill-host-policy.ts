@@ -136,6 +136,13 @@ export async function prepareSkillHostPolicyRestore(input: {
   return after === before ? undefined : { kind: "replace-file", path, contents: after };
 }
 
+/** Every source nativeSkillPath maps, for a caller that must search them all. */
+export const NATIVE_SKILL_SOURCES: readonly NativeSkillSource[] = [
+  "claude",
+  "codex-current",
+  "codex-legacy",
+];
+
 export function nativeSkillPath(homeDir: string, id: string, source: NativeSkillSource): string {
   if (source === "claude") return join(homeDir, ".claude", "skills", id);
   if (source === "codex-current") return join(homeDir, ".agents", "skills", id);

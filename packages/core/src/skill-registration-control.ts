@@ -30,7 +30,11 @@ import { assertSafeProjectControlPath } from "./project-path-safety.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { planSkillCopyMaterialization } from "./skill-copy-adoption.js";
 import { rewriteSkillDocument, stripBundledResourceIndex } from "./skill-document.js";
-import { nativeSkillPath, prepareSkillHostPolicyRestore } from "./skill-host-policy.js";
+import {
+  NATIVE_SKILL_SOURCES,
+  nativeSkillPath,
+  prepareSkillHostPolicyRestore,
+} from "./skill-host-policy.js";
 import { isSafeSkillId } from "./skill-id.js";
 import {
   configuredSkillStoragePath,
@@ -625,15 +629,12 @@ class FilesystemSkillRegistrationControlPlane implements SkillRegistrationContro
       copyPath = await this.ownedCopyPath(request.target, request.id, registration);
     }
     const takeover =
-      request.target.scope === "user" &&
-      registration.mode === "copy" &&
-      registration.hostPolicy &&
-      copyPath
+      request.target.scope === "user" && registration.mode === "copy" && copyPath
         ? await resolveTakeoverNativePath({
             homeDir: this.options.homeDir,
             id: request.id,
-            hostPolicy: registration.hostPolicy,
             copyPath,
+            ...(registration.hostPolicy ? { hostPolicy: registration.hostPolicy } : {}),
           })
         : ({ kind: "none" } as const);
 
@@ -954,13 +955,19 @@ type TakeoverState =
  * takeover, restore read and wrote whatever occupied the native path, with no
  * symlink check at all. Skipping restore for `broken` does not make `none` safe
  * in that respect. Tracked as RL-63.
+ *
+ * Without a hostPolicy there is no recorded native source, so the search runs
+ * the other way, from the copy.
  */
 async function resolveTakeoverNativePath(input: {
   homeDir: string;
   id: string;
-  hostPolicy: SkillHostPolicy;
+  hostPolicy?: SkillHostPolicy;
   copyPath: string;
 }): Promise<TakeoverState> {
+  if (!input.hostPolicy) {
+    return resolveNativeLinkToCopy(input.homeDir, input.id, input.copyPath);
+  }
   const nativePath = nativeSkillPath(input.homeDir, input.id, input.hostPolicy.source);
   let info: Awaited<ReturnType<typeof lstat>>;
   try {
@@ -980,6 +987,34 @@ async function resolveTakeoverNativePath(input: {
     return { kind: "broken", nativePath, reason: "copy-missing", copyKept: false };
   }
   if (linkReal === copyReal) return { kind: "linked", nativePath, copyReal };
+  return { kind: "none" };
+}
+
+/**
+ * Importing a managed copy again re-adopts it with `source: "ratel"` and no
+ * hostPolicy, so the native source is no longer recorded. Find the native link
+ * that still resolves to the copy, so remove unlinks it in the same transaction
+ * instead of leaving it dangling. A link that no longer resolves is already
+ * broken before the copy goes; doctor's orphan scan names that one.
+ */
+async function resolveNativeLinkToCopy(
+  homeDir: string,
+  id: string,
+  copyPath: string,
+): Promise<TakeoverState> {
+  const copyReal = await realpathOrMissing(copyPath);
+  if (copyReal === undefined) return { kind: "none" };
+  for (const source of NATIVE_SKILL_SOURCES) {
+    const nativePath = nativeSkillPath(homeDir, id, source);
+    const info = await lstat(nativePath).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!info?.isSymbolicLink()) continue;
+    if ((await realpathOrMissing(nativePath)) === copyReal) {
+      return { kind: "linked", nativePath, copyReal };
+    }
+  }
   return { kind: "none" };
 }
 
