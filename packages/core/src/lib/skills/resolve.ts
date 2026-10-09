@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Skill } from "@ratel-ai/sdk";
 import type { RatelScopeRef } from "../../context.js";
 import { skillStorageEnabled } from "../../feature-flags.js";
-import { type NativeSkillSource, nativeSkillPath } from "../../skill-host-policy.js";
+import { nativeSkillPath } from "../../skill-host-policy.js";
 import { isSafeSkillId } from "../../skill-id.js";
 import {
   availabilityFromResolveFailure,
@@ -451,8 +451,7 @@ async function brokenNativeLinkDiagnostic(
   configuredPath: string,
 ): Promise<SkillDiagnostic | undefined> {
   if (ref.scope !== "user" || entry.mode !== "copy" || !entry.hostPolicy) return undefined;
-  const source = entry.hostPolicy.source as NativeSkillSource;
-  const nativePath = nativeSkillPath(input.homeDir, id, source);
+  const nativePath = nativeSkillPath(input.homeDir, id, entry.hostPolicy.source);
   try {
     if (!(await lstat(nativePath)).isSymbolicLink()) return undefined;
   } catch {

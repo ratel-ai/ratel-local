@@ -14,6 +14,7 @@ import {
 } from "./lib/config.js";
 import type { LocalGitExcludeManager } from "./local-git-exclude.js";
 import type {
+  LinkDirectoryInput,
   MutationInputOperation,
   MutationPreview,
   ReplaceFileInput,
@@ -190,7 +191,7 @@ class FilesystemSkillImportControlPlane implements SkillImportControlPlane {
     const appliedTargets = new Map<string, SkillImportTarget[]>();
     const skippedDuplicates: SkippedDuplicateSkillImport[] = [];
     const hostPolicyOperations: MutationInputOperation[] = [];
-    const linkOperations: MutationInputOperation[] = [];
+    const linkOperations: LinkDirectoryInput[] = [];
     const projectRootsByPath = new Map<string, string>();
     const adoptionRevisions = new Map<string, DocumentRevision>();
 

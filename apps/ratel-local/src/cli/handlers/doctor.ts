@@ -117,6 +117,20 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
   });
   const snapshots: ResolvedContextSnapshot[] = [];
   const reportedNativePaths = new Set<string>();
+  // One broken native link is one issue, however many contexts resolve it.
+  const reportDiagnostics = (
+    diagnostics: ResolvedContextSnapshot["diagnostics"],
+    label: string,
+  ): void => {
+    for (const diagnostic of diagnostics) {
+      if (diagnostic.code === "skill-native-link-broken" && diagnostic.path) {
+        if (reportedNativePaths.has(diagnostic.path)) continue;
+        reportedNativePaths.add(diagnostic.path);
+      }
+      output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
+      if (diagnostic.severity === "error") issueCount += 1;
+    }
+  };
   const resolveContext = async (
     context: RuntimeContextRef,
     label: string,
@@ -125,37 +139,11 @@ export async function runDoctor(ctx: HandlerCtx): Promise<void> {
     try {
       const snapshot = await resolver.resolve(context);
       snapshots.push(snapshot);
-      for (const diagnostic of snapshot.diagnostics) {
-        if (
-          diagnostic.code === "skill-native-link-broken" &&
-          diagnostic.path &&
-          reportedNativePaths.has(diagnostic.path)
-        ) {
-          continue;
-        }
-        if (diagnostic.code === "skill-native-link-broken" && diagnostic.path) {
-          reportedNativePaths.add(diagnostic.path);
-        }
-        output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
-        if (diagnostic.severity === "error") issueCount += 1;
-      }
+      reportDiagnostics(snapshot.diagnostics, label);
       output.success(successMessage);
     } catch (error) {
       if (error instanceof InvalidContextSnapshotError) {
-        for (const diagnostic of error.diagnostics) {
-          if (
-            diagnostic.code === "skill-native-link-broken" &&
-            diagnostic.path &&
-            reportedNativePaths.has(diagnostic.path)
-          ) {
-            continue;
-          }
-          if (diagnostic.code === "skill-native-link-broken" && diagnostic.path) {
-            reportedNativePaths.add(diagnostic.path);
-          }
-          output[diagnostic.severity](`${diagnostic.code} [${label}]: ${diagnostic.message}`);
-          if (diagnostic.severity === "error") issueCount += 1;
-        }
+        reportDiagnostics(error.diagnostics, label);
         return;
       }
       issueCount += 1;
